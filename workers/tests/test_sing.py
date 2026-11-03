@@ -179,6 +179,33 @@ def test_the_video_comes_with_the_song(sing):
     assert keyed["song"]["has_video"] is True and keyed["video"] is None
 
 
+def test_the_video_download_waits_for_the_audio_download(sing, monkeypatch):
+    # bilibili answers HTTP 567 to both when the audio and the video download at the same time.
+    if not is_mock():
+        pytest.skip("mock video")
+    server = sys.modules["sing_server"]
+    b = server.state.backend
+    order: list[str] = []
+    fetch, fetch_video = b.fetch, b.fetch_video
+
+    def slow_fetch(*args):
+        order.append("audio start")
+        time.sleep(0.2)
+        fetch(*args)
+        order.append("audio end")
+
+    def video(*args):
+        order.append("video start")
+        return fetch_video(*args)
+
+    monkeypatch.setattr(b, "fetch", slow_fetch)
+    monkeypatch.setattr(b, "fetch_video", video)
+    done = wait(sing, sing.post("/jobs", json={"query": "one download at a time"}).json()["job"]["id"])
+    assert done["state"] == "done", done
+    assert done["song"]["has_video"] is True
+    assert order == ["audio start", "audio end", "video start"]
+
+
 def test_a_song_without_a_video_is_still_ready(sing):
     if not is_mock():
         pytest.skip("mock video")
