@@ -108,6 +108,25 @@ MAX_TEXT_CHARS = int(os.environ.get("TTS_MAX_TEXT_CHARS", "2000"))
 MIN_CHARS = int(os.environ.get("TTS_MIN_SENTENCE_CHARS", "4"))
 MAX_CHARS = int(os.environ.get("TTS_MAX_SENTENCE_CHARS", "80"))
 MAX_SECONDS_PER_CHAR = float(os.environ.get("TTS_MAX_SECONDS_PER_CHAR", "0.35"))
+# Silence between sentences of one request (0 = none, the upstream behaviour).
+SENTENCE_PAUSE_MS = int(os.environ.get("TTS_SENTENCE_PAUSE_MS", "0"))
+
+
+def apply_readings(text: str) -> str:
+    """Swap words for how they should be said, from $VOICES_DIR/readings.json ({"大肥魚": "デブざかな"}).
+    Only the audio changes; subtitles come from Core. Read per request so edits apply at once."""
+    path = os.path.join(os.environ.get("VOICES_DIR", "voices"), "readings.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            readings = json.load(f)
+    except FileNotFoundError:
+        return text
+    except (OSError, ValueError) as e:
+        log.warning("cannot read %s: %s", path, e)
+        return text
+    for word in sorted(readings, key=len, reverse=True):  # longest first
+        text = text.replace(word, readings[word])
+    return text
 # Qwen3-TTS-12Hz: 12 codec frames (= generated tokens) per second of audio.
 TOKENS_PER_SECOND = 12
 
@@ -596,11 +615,13 @@ class ChunkPump:
 
     def _run(self) -> None:
         try:
-            for sentence in self.sentences:
+            for i, sentence in enumerate(self.sentences):
                 if self.cancelled.is_set():
                     return
                 if self._offloading():
                     raise ApiError(503, "offloaded")
+                if i > 0 and SENTENCE_PAUSE_MS > 0 and self.rate:
+                    self._put(("chunk", b"\x00\x00" * (self.rate * SENTENCE_PAUSE_MS // 1000)))
                 with self.eng.lock:
                     if self.cancelled.is_set():
                         return
@@ -693,7 +714,7 @@ async def tts(req: TtsRequest) -> StreamingResponse:
         raise ApiError(400, "text is empty")
     if len(text) > MAX_TEXT_CHARS:
         raise ApiError(413, f"text too long ({len(text)} > {MAX_TEXT_CHARS} chars)")
-    sentences = split_sentences(text, MIN_CHARS, MAX_CHARS)
+    sentences = split_sentences(apply_readings(text), MIN_CHARS, MAX_CHARS)
     if not sentences:
         raise ApiError(400, "text has nothing to speak (punctuation only)")
 

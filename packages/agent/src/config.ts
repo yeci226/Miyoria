@@ -200,6 +200,11 @@ export const VoiceConfigSchema = z.object({
    * instead of being read out.
    */
   text_aside: z.boolean().default(true),
+  /**
+   * Also post what she said (the written text, so Chinese when she speaks Japanese through
+   * `tts_translate`) to the voice channel's text chat, after each spoken reply.
+   */
+  text_echo: z.boolean().default(false),
 });
 export type VoiceConfig = z.output<typeof VoiceConfigSchema>;
 

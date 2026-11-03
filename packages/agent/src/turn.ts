@@ -951,7 +951,11 @@ class Turn {
         Boolean(voiceSink?.speaksIn),
       );
       await this.#produce(router, messages, priority, speech);
-      await this.#postAside(sink, speech.aside, priority);
+      const posts = [
+        ...(cfg.voice.text_echo && speech.spoken.trim() !== "" ? [speech.spoken] : []),
+        ...(cfg.voice.text_aside ? speech.aside : []),
+      ];
+      await this.#postAside(sink, posts, priority);
       if (speech.spoken === "") this.agent.log.debug({ turn: this.turn }, "she stayed quiet");
       return speech.spoken;
     }
@@ -1008,12 +1012,13 @@ class Turn {
   }
 
   /**
-   * Links and code from her spoken reply, posted to the voice channel's text chat (same channel
-   * id; `voice.text_aside`). Best effort: a failure is only logged.
+   * What she said (`voice.text_echo`) and the links and code from her spoken reply
+   * (`voice.text_aside`), posted to the voice channel's text chat (same channel id).
+   * Best effort: a failure is only logged.
    */
   async #postAside(sink: ActionSink, aside: readonly string[], priority: Priority): Promise<void> {
     const cfg = this.agent.config;
-    if (!cfg.voice.text_aside || aside.length === 0 || this.flags.interrupted) return;
+    if (aside.length === 0 || this.flags.interrupted) return;
     const text = truncate(filterOutgoing(aside.join("\n")), Math.max(cfg.max_message_chars, 1));
     if (text === "") return;
     const chat: ContextKey = { ...this.key, kind: "channel" };

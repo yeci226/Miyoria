@@ -138,6 +138,7 @@ describe("config", () => {
         speak_ttl_ms: 30_000,
         text_chat: true,
         text_aside: true,
+        text_echo: false,
       },
       history: { backfill: 20, reply_chain: 3, timeout_ms: 3000 },
       vision: {
