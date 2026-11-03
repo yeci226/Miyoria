@@ -480,6 +480,8 @@ describe("sing module", () => {
     expect(h.sup.services.require(VoiceFloorKey).holder("g1")).toBe("song");
     expect(h.sup.services.require(VoiceFloorKey).holder("g2")).toBeNull();
     expect(await h.section()).toContain("正在唱:#1");
+    // Someone asking for another song meanwhile: she queues it, a link is enough.
+    expect(await h.section()).toMatch(/再點歌.*sing_request.*連結/);
 
     await settle(1500);
     const play = h.voice.plays[0] as Play;
