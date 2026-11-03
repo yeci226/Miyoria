@@ -15,9 +15,13 @@ import {
   type ContextKey,
   type Event,
   type JsonValue,
+  type MessageRef,
   type Mind,
   MindKey,
   type MindSuggestion,
+  type PlatformSink,
+  PlatformSinks,
+  PlatformSinksKey,
   type PlaybackState,
   type PlayChunk,
   type PlayHandle,
@@ -228,6 +232,34 @@ class FakeVoice implements VoicePlayer {
   }
 }
 
+/** Her Discord messages: sends and edits (the lyrics card). */
+class FakeSink implements PlatformSink {
+  readonly platform = "discord";
+  readonly sent: string[] = [];
+  readonly edits: string[] = [];
+  async send(context: ContextKey, message: { text: string }): Promise<MessageRef> {
+    this.sent.push(message.text);
+    return { context, id: String(this.sent.length) };
+  }
+  async react(): Promise<void> {}
+  async typing(): Promise<void> {}
+  async edit(_message: MessageRef, text: string): Promise<void> {
+    this.edits.push(text);
+  }
+}
+
+/** A platform that cannot edit messages. */
+class SendOnlySink implements PlatformSink {
+  readonly platform = "discord";
+  readonly sent: string[] = [];
+  async send(context: ContextKey, message: { text: string }): Promise<MessageRef> {
+    this.sent.push(message.text);
+    return { context, id: "1" };
+  }
+  async react(): Promise<void> {}
+  async typing(): Promise<void> {}
+}
+
 class FakeMind implements Mind {
   accepting = true;
   readonly suggestions: MindSuggestion[] = [];
@@ -286,6 +318,8 @@ class Harness {
   readonly queue: RequestQueue;
   readonly registry: ActuatorRegistry;
   readonly events: Event[] = [];
+  readonly sink = new FakeSink();
+  readonly sinks = new PlatformSinks();
 
   private constructor(withMind: boolean, store: MemorySettingsStore | null) {
     const s = this.sup.services;
@@ -299,6 +333,8 @@ class Harness {
     s.provide("app", CommandRegistryKey, this.commands);
     s.provide("app", PromptContributorsKey, this.prompts);
     s.provide("app", RequestQueueKey, this.queue);
+    this.sinks.register(this.sink);
+    s.provide("app", PlatformSinksKey, this.sinks);
     s.provide("voice.link", VoicePlayerKey, this.voice);
     if (withMind) s.provide("mind", MindKey, this.mind);
     const sub = this.sup.bus.subscribe("*");
@@ -503,6 +539,46 @@ describe("sing module", () => {
     await settle(6000 + 400);
     expect(h.voice.plays).toHaveLength(1);
     expect(h.mind.suggestions.filter((s) => s.reason === "song_ready")).toHaveLength(0);
+  });
+
+  async function singCommanded(config: JsonValue = {}): Promise<Harness> {
+    const harness = await Harness.create(config);
+    await harness.command("queue song request", { song: "Song A" });
+    harness.worker.finish("j1", "Song A", 1);
+    await settle(200);
+    await harness.join();
+    await settle(6000 + 400);
+    expect(harness.voice.plays).toHaveLength(1);
+    await settle(5000);
+    expect(harness.cues().at(-1)).toMatchObject({ state: "ended", outcome: "finished" });
+    return harness;
+  }
+
+  it("[modules.sing] lyrics_card posts a card in her voice channel and finishes it", async () => {
+    h = await singCommanded({ lyrics_card: true });
+    expect(h.sink.sent).toHaveLength(1);
+    expect(h.sink.sent[0]).toContain("🎵 **Song A**");
+    expect(h.sink.edits.at(-1)).toContain("✅ 唱完了");
+  });
+
+  it("posts no lyrics card by default", async () => {
+    h = await singCommanded();
+    expect(h.sink.sent).toHaveLength(0);
+    expect(h.sink.edits).toHaveLength(0);
+  });
+
+  it("posts no lyrics card on a platform that cannot edit", async () => {
+    const sendOnly = new SendOnlySink();
+    h = await Harness.create({ lyrics_card: true });
+    h.sinks.register(sendOnly);
+    await h.command("queue song request", { song: "Song A" });
+    h.worker.finish("j1", "Song A", 1);
+    await settle(200);
+    await h.join();
+    await settle(6000 + 400 + 5000);
+    expect(h.cues().at(-1)).toMatchObject({ state: "ended", outcome: "finished" });
+    expect(sendOnly.sent).toHaveLength(0);
+    expect(h.sink.sent).toHaveLength(0);
   });
 
   it("the start cue carries the song's video inside the worker's cache", async () => {

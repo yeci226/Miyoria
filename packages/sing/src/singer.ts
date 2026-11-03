@@ -33,6 +33,7 @@ import {
   isJsonObject,
   type JsonValue,
   MindKey,
+  PlatformSinksKey,
   type PlaybackState,
   SONG_PREPARE_TOPIC,
   SONG_TOPIC,
@@ -48,8 +49,15 @@ import {
   VoicePlayerKey,
   WorldStateKey,
 } from "@miyoria/types";
-import { type SingWorker, SingWorkerError, type SongQuery, type WorkerJob } from "./client.js";
+import {
+  type SingWorker,
+  SingWorkerError,
+  type SongMeta,
+  type SongQuery,
+  type WorkerJob,
+} from "./client.js";
 import type { SingConfig } from "./config.js";
+import { LyricsCard } from "./lyrics-card.js";
 import { singSong, sleep } from "./player.js";
 import { type NewSong, SetList, type SongEntry, type SongNo, songLabel } from "./setlist.js";
 
@@ -101,6 +109,8 @@ interface Playing {
   stop: AbortController;
   /** The song itself started streaming (before that she is still saying her opening). */
   audible: boolean;
+  /** Its lyrics card in the voice channel's text chat, when there is one. */
+  card: LyricsCard | null;
 }
 
 /** She was told she is off to prepare a song; the worker waits for her to finish saying so. */
@@ -491,7 +501,7 @@ export class Singer implements VoiceFloor, SpeechPause {
   #begin(entry: SongEntry, guild: string, turn: TurnId | null, expectMs: number): void {
     const stop = new AbortController();
     entry.state = "playing";
-    this.#playing = { entry, guild, stop, audible: false };
+    this.#playing = { entry, guild, stop, audible: false, card: null };
     this.ctx.spawn(`song-${entry.no}`, async (signal) => {
       const both = AbortSignal.any([signal, stop.signal]);
       let outcome: PlaybackState | "error" = "interrupted";
@@ -513,13 +523,20 @@ export class Singer implements VoiceFloor, SpeechPause {
     const song = entry.song;
     if (!song) throw new SingError("the song has no audio");
     log.info({ no: entry.no, song: song.id, guild }, "singing");
-    if (this.#playing?.entry === entry) this.#playing.audible = true;
+    const card = this.#lyricsCard(song, guild);
+    if (this.#playing?.entry === entry) {
+      this.#playing.audible = true;
+      this.#playing.card = card;
+    }
     return singSong(
       {
         worker: this.worker,
         voice,
         clock: this.ctx.clock,
-        cue: (cue) => this.#cue(cue),
+        cue: (cue) => {
+          this.#cue(cue);
+          card?.onCue(cue);
+        },
         leadMs: this.cfg.lead_ms,
         fadeMs: this.cfg.fade_ms,
         lyrics: this.cfg.lyrics,
@@ -533,8 +550,13 @@ export class Singer implements VoiceFloor, SpeechPause {
   }
 
   #ended(entry: SongEntry, guild: string, outcome: PlaybackState | "error"): void {
+    const card = this.#playing?.entry === entry ? this.#playing.card : null;
     if (this.#playing?.entry === entry) this.#playing = null;
-    if (entry.song) this.#cue({ state: "ended", song: entry.song.id, outcome });
+    if (entry.song) {
+      const cue: SongCue = { state: "ended", song: entry.song.id, outcome };
+      this.#cue(cue);
+      card?.onCue(cue);
+    }
     const finished = outcome === "finished";
     this.list.finish(entry, finished || outcome === "interrupted" ? "done" : "failed", entry.error);
     this.#finishQueueItem(entry, finished);
@@ -860,6 +882,16 @@ export class Singer implements VoiceFloor, SpeechPause {
       return;
     }
     this.ctx.publish({ type: "agent_initiative", data: { context: where, reason, hint, about } });
+  }
+
+  /** The lyrics card of a song about to play (`[modules.sing] lyrics_card`), or `null`. */
+  #lyricsCard(song: SongMeta, guild: string): LyricsCard | null {
+    if (!this.cfg.lyrics_card) return null;
+    const context = this.voiceContext(guild);
+    if (context === null) return null;
+    const sink = this.ctx.services.get(PlatformSinksKey)?.get(context.platform);
+    if (!sink?.edit) return null;
+    return new LyricsCard({ sink, context, song, clock: this.ctx.clock, log });
   }
 
   #cue(cue: SongCue): void {

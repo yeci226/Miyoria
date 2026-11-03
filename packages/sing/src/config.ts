@@ -72,6 +72,8 @@ export const SingConfigSchema = z.object({
   fade_ms: z.number().int().nonnegative().default(1500),
   /** Lyrics lines (when the worker found synced lyrics) become overlay subtitles. */
   lyrics: z.boolean().default(true),
+  /** While she sings, one card in her voice channel's text chat shows the current lyrics line. */
+  lyrics_card: z.boolean().default(false),
   /**
    * The song's original video (when the worker has one) is shown, muted, on the stream while
    * she sings: the start cue carries its path for the Stage node, which plays it in OBS.
