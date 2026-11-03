@@ -1,9 +1,9 @@
 import type { ContextKey } from "@miyoria/types";
 import { describe, expect, test } from "vitest";
-import { DiscordSink, type RestLike, type RestRequest } from "../src/sink.js";
+import { DiscordSendError, DiscordSink, type RestLike, type RestRequest } from "../src/sink.js";
 
 interface Call {
-  method: "post" | "put";
+  method: "post" | "put" | "patch";
   route: string;
   options: RestRequest | undefined;
 }
@@ -22,6 +22,22 @@ class FakeRest implements RestLike {
   async put(route: `/${string}`, options?: RestRequest): Promise<unknown> {
     this.calls.push({ method: "put", route, options });
     if (this.failWith) throw this.failWith;
+    return undefined;
+  }
+
+  async patch(route: `/${string}`, options?: RestRequest): Promise<unknown> {
+    this.calls.push({ method: "patch", route, options });
+    if (this.failWith) throw this.failWith;
+    return { id: "edited" };
+  }
+}
+
+/** A REST client without `patch` (older fakes, other adapters). */
+class PostOnlyRest implements RestLike {
+  async post(): Promise<unknown> {
+    return { id: "1" };
+  }
+  async put(): Promise<unknown> {
     return undefined;
   }
 }
@@ -180,5 +196,33 @@ describe("DiscordSink.describe", () => {
     expect(await new DiscordSink(new FakeRest()).describe(voice)).toBeNull();
     expect(await new DiscordSink(rest(names)).describe({ ...voice, platform: "cli" })).toBeNull();
     expect(await new DiscordSink(rest(names)).describe({ ...voice, channel: "x" })).toBeNull();
+  });
+
+  test("edits_a_message_without_pings", async () => {
+    const rest = new FakeRest();
+    const sink = new DiscordSink(rest);
+    await sink.edit(
+      { context: channel, id: "222" },
+      "## @everyone 唱歌 <@&9> sk-abcdefghijklmnopqrstuvwx",
+    );
+    expect(rest.calls).toHaveLength(1);
+    expect(rest.calls[0]?.method).toBe("patch");
+    expect(rest.calls[0]?.route).toBe("/channels/200/messages/222");
+    expect(rest.calls[0]?.options?.body).toEqual({
+      content: "## everyone 唱歌  [已遮蔽]",
+      allowed_mentions: { parse: [] },
+    });
+  });
+
+  test("edit_cuts_long_text_to_one_message", async () => {
+    const rest = new FakeRest();
+    await new DiscordSink(rest).edit({ context: channel, id: "222" }, "x".repeat(2500));
+    const body = rest.calls[0]?.options?.body as { content: string };
+    expect(body.content.length).toBe(2000);
+  });
+
+  test("edit_without_rest_patch_throws", async () => {
+    const sink = new DiscordSink(new PostOnlyRest());
+    await expect(sink.edit({ context: channel, id: "222" }, "x")).rejects.toThrow(DiscordSendError);
   });
 });

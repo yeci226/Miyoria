@@ -214,6 +214,11 @@ export interface PlatformSink {
   react(message: MessageRef, emoji: string, signal?: AbortSignal): Promise<void>;
   typing(context: ContextKey, signal?: AbortSignal): Promise<void>;
   /**
+   * Replaces the text of a message she sent (e.g. the lyrics card while she sings). Optional;
+   * platforms that cannot edit leave it out and callers skip what needs it.
+   */
+  edit?(message: MessageRef, text: string, signal?: AbortSignal): Promise<void>;
+  /**
    * Human name of a context, e.g. `"Miyoria / 雜談"` (server / channel), for the admin panel.
    * `null` when unknown. Optional.
    */

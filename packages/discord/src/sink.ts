@@ -22,6 +22,8 @@ export interface RestLike {
   put(route: `/${string}`, options?: RestRequest): Promise<unknown>;
   /** Only `describe` reads; without it contexts have no names. */
   get?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
+  /** Only `edit` uses it; without it messages cannot be edited. */
+  patch?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
 }
 
 function nameOf(value: unknown): string | null {
@@ -117,6 +119,24 @@ export class DiscordSink implements PlatformSink, ReplySink {
           Routes.channelMessageOwnReaction(channel, id, encodeURIComponent(emoji)),
           { signal },
         );
+      },
+    );
+  }
+
+  /** New text for one of her messages: filtered like `send`, one message long, no pings at all. */
+  async edit(message: MessageRef, text: string, signal?: AbortSignal): Promise<void> {
+    const patch = this.#rest.patch?.bind(this.#rest);
+    if (!patch) throw new DiscordSendError("this REST client cannot edit messages");
+    const channel = channelOf(message.context);
+    const id = snowflake(message.id, "message");
+    const content = filterOutgoing(text).slice(0, MAX_MESSAGE_LEN);
+    await inContext(
+      `editing message ${message.id} in ${contextKeyString(message.context)}`,
+      async () => {
+        await patch(Routes.channelMessage(channel, id), {
+          body: { content, allowed_mentions: { parse: [] } },
+          signal,
+        });
       },
     );
   }
