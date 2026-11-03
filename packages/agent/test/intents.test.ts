@@ -19,10 +19,12 @@ import {
   type PlatformSink,
   PlatformSinks,
   PlatformSinksKey,
+  type PlaybackState,
   type Principal,
   type SelfState,
   SelfStateKey,
   type TalkativenessInput,
+  type TurnId,
   toTimestamp,
   type VoiceParticipant,
 } from "@miyoria/types";
@@ -36,6 +38,7 @@ import {
   incoming,
   nextTs,
   noCheck,
+  Paced,
   SlowProvider,
   stopHarnesses,
   toolCall,
@@ -86,7 +89,7 @@ interface Rig {
 }
 
 /** Agent with an app registry (tools shared), the `test.wave` tool and a DM-capable sink. */
-async function rig(mode: string, config: JsonValue, chat: MockProvider | SlowProvider) {
+async function rig(mode: string, config: JsonValue, chat: MockProvider | SlowProvider | Paced) {
   const tools = new ToolRegistry();
   const services = new ServiceRegistry();
   const sinks = new PlatformSinks();
@@ -151,6 +154,10 @@ function intent(capability: string, context: ContextKey | null, extra: Partial<I
     expires_at: toTimestamp(now + 120_000),
     ...extra,
   } satisfies Intent;
+}
+
+function playback(turn: TurnId, state: PlaybackState, text: string): Event {
+  return { type: "voice_playback", data: { context: VOICE, turn, state, text } };
 }
 
 function member(id: string, isSelf: boolean): VoiceParticipant {
@@ -243,21 +250,61 @@ describe("intents", () => {
   });
 
   it("wait for a turn in flight and drop when expired", async () => {
+    // The turn in flight stays quiet (an empty reply after 2s).
+    const chat = new Paced([[[2000, done()]]]);
+    const r = await rig("always", noCheck(), chat);
+    const c = channel("c");
+    r.h.say(incoming(c, "Owen", "在嗎"));
+    await wait(1600);
+    expect(chat.requests.length).toBe(1);
+    expect((await r.intents.submit(intent("chat.start", c))).status).toBe("started");
+    await wait(500);
+    expect(chat.requests.length, "does not interrupt the turn").toBe(1);
+    await wait(2000);
+    expect(chat.requests.length, "starts once the context is free").toBe(2);
+    expect(JSON.stringify(chat.requests[1]?.messages)).toContain("你的打算");
+
+    const stale = intent("chat.start", c, { expires_at: toTimestamp(Date.now() - 1) });
+    expect(await r.intents.submit(stale)).toMatchObject({ status: "dropped", detail: "expired" });
+  });
+
+  it("are dropped when she answered there while they waited", async () => {
     const chat = new SlowProvider(2000);
     const r = await rig("always", noCheck(), chat);
     const c = channel("c");
     r.h.say(incoming(c, "Owen", "在嗎"));
     await wait(1600);
-    expect(chat.calls).toBe(1);
-    expect((await r.intents.submit(intent("chat.start", c))).status).toBe("started");
-    await wait(500);
-    expect(chat.calls, "does not interrupt her reply").toBe(1);
-    await wait(2000);
-    expect(chat.calls, "starts once the context is free").toBe(2);
-    expect(JSON.stringify(chat.requests[1]?.messages)).toContain("你的打算");
+    const waiting = await r.intents.submit(intent("chat.start", c));
+    expect(waiting.status).toBe("started");
+    await wait(3000);
+    expect(r.h.sink.texts()).toEqual(["reply 1"]);
+    expect(chat.calls, "decided before her answer: not said after it").toBe(1);
+    const trace = r.h.traces().find((t) => t.turn === waiting.turn);
+    expect(trace?.reasons).toEqual(["intent:chat.start", "skipped: she just answered here"]);
+  });
 
-    const stale = intent("chat.start", c, { expires_at: toTimestamp(Date.now() - 1) });
-    expect(await r.intents.submit(stale)).toMatchObject({ status: "dropped", detail: "expired" });
+  it("wait in voice until her speech played", async () => {
+    const chat = new MockProvider("chat").reply("好啊。等我一下。").reply("欸,你們在聊什麼");
+    const config = { attention: { llm_check: false }, voice: { default_mode: "always" } };
+    const r = await rig("ambient", config, chat);
+    r.h.publish(joined());
+    await wait(10);
+    r.h.publish(utterance("Owen", "要唱歌嗎"));
+    await wait(3000);
+    expect(r.h.sink.speeches().map(([t]) => t)).toEqual(["好啊。", "等我一下。"]);
+    const turn = r.h.sink.speakActions()[0]?.turn as TurnId;
+    r.h.publish(playback(turn, "started", "好啊。"));
+    await wait(10);
+    expect((await r.intents.submit(intent("chat.start", VOICE))).status).toBe("started");
+    await wait(100);
+    r.h.publish(playback(turn, "finished", "好啊。"));
+    r.h.publish(playback(turn, "started", "等我一下。"));
+    await wait(100);
+    expect(chat.requests().length, "not over her own speech").toBe(1);
+    r.h.publish(playback(turn, "finished", "等我一下。"));
+    await wait(100);
+    expect(chat.requests().length, "starts once she is done").toBe(2);
+    expect(r.h.sink.speeches().at(-1)?.[0]).toBe("欸,你們在聊什麼");
   });
 
   it("respect the approach and DM opt-outs and the channel mode", async () => {

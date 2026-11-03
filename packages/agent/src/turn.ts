@@ -372,6 +372,7 @@ class Speech {
       throw new TurnError(`submitting speech: ${errorMessage(error)}`, { cause: error });
     }
     this.flags.queued = true;
+    this.flags.sentences += 1;
     this.spoken += text;
   }
 }

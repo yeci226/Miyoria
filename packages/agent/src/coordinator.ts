@@ -13,9 +13,11 @@
 // than the ambient cooldown.
 //
 // An intent (something her mind loop decided) waits instead: it never interrupts a turn in
-// flight, waiting messages or her queued speech (nor, in voice, someone still talking) and
-// starts once the context is free, unless it expired meanwhile. A newer intent replaces a
-// waiting one. New input cancels an intent turn whose reply was not committed, like any turn.
+// flight, waiting messages or her speech still queued or playing (nor, in voice, someone still
+// talking) and starts once the context is free, unless it expired meanwhile. A turn that
+// answered there in the meantime drops it: what she meant to say was decided before that
+// answer. A newer intent replaces a waiting one. New input cancels an intent turn whose reply
+// was not committed, like any turn.
 
 import { errorMessage } from "@miyoria/kernel";
 import {
@@ -42,6 +44,10 @@ export interface TurnFlags {
   committed: boolean;
   /** Voice: at least one sentence was submitted. */
   queued: boolean;
+  /** Voice: sentences submitted. */
+  sentences: number;
+  /** Voice: sentences whose playback ended (finished, interrupted or failed). */
+  played: number;
   /** Voice: her speech was interrupted; submit no further sentences. */
   interrupted: boolean;
 }
@@ -49,6 +55,8 @@ export interface TurnFlags {
 interface Running {
   turn: TurnId;
   inputs: IncomingMessage[];
+  /** One of her intents (not an answer to messages or an initiative). */
+  intent: boolean;
   flags: TurnFlags;
   controller: AbortController;
   promise: Promise<void>;
@@ -63,12 +71,21 @@ interface Unplayed {
   since: number;
 }
 
+/** A finished voice turn whose speech has not all played yet. */
+interface Speaking {
+  turn: TurnId;
+  flags: TurnFlags;
+  /** Clock ms of the turn's end or its last playback event. */
+  heard: number;
+}
+
 type Wake =
   | { type: "stop" }
   | { type: "input"; input: Input }
   | { type: "deadline" }
   | { type: "turn_done" }
-  | { type: "idle" };
+  | { type: "idle" }
+  | { type: "tick" };
 
 /** Debounce window (clock ms): when it opened and when the turn should start. */
 interface Window {
@@ -102,12 +119,27 @@ export class Coordinator {
     let window: Window | null = null;
     let running: Running | null = null;
     let unplayed: Unplayed | null = null;
+    let speaking: Speaking | null = null;
     /** Her intent waiting for the context to be free. */
     let waiting: IntentTurn | null = null;
+    /** Clock ms until which her speech of `speaking` still holds `waiting` back. */
+    const speechHold = (now: number): number | null => {
+      if (speaking === null || waiting === null) return null;
+      const f = speaking.flags;
+      if (f.interrupted || f.played >= f.sentences) return null;
+      const until = speaking.heard + cfg.voice.speak_ttl_ms;
+      return now < until ? until : null;
+    };
     for (;;) {
       // Voice contexts live until she leaves the channel.
       const idle = pending.length === 0 && running === null && waiting === null && !voice;
-      const wake = await this.#next(signal, running, running === null ? window : null, idle);
+      const wake = await this.#next(
+        signal,
+        running,
+        running === null ? window : null,
+        idle,
+        speechHold(this.#now),
+      );
       const now = this.#now;
       switch (wake.type) {
         case "stop": {
@@ -135,6 +167,7 @@ export class Coordinator {
                     "speech not played yet, regenerating",
                   );
                   await this.#cancel(u.turn);
+                  if (speaking?.turn === u.turn) speaking = null;
                   pending = [...u.inputs, ...pending];
                   window = null;
                 }
@@ -163,7 +196,13 @@ export class Coordinator {
               }
               break;
             case "playback": {
-              const flags = running && running.turn === input.turn ? running.flags : null;
+              const flags =
+                running && running.turn === input.turn
+                  ? running.flags
+                  : speaking && speaking.turn === input.turn
+                    ? speaking.flags
+                    : null;
+              if (speaking && speaking.turn === input.turn) speaking.heard = now;
               if (await this.#playback(input.turn, input.state, flags, unplayed)) unplayed = null;
               break;
             }
@@ -207,8 +246,17 @@ export class Coordinator {
           if (voice && flags.queued && !flags.committed && !flags.interrupted) {
             unplayed = { turn: r.turn, inputs: r.inputs, since: now };
           }
+          if (voice && flags.queued && !flags.interrupted) {
+            speaking = { turn: r.turn, flags, heard: now };
+          }
+          if (waiting !== null && !r.intent && (flags.committed || flags.queued)) {
+            this.#agent.intentSkipped(this.#key, waiting, "she just answered here");
+            waiting = null;
+          }
           break;
         }
+        case "tick":
+          break;
         case "idle":
           if (this.#agent.retire(this.#key, this.#inbox)) {
             this.#agent.log.debug(
@@ -221,7 +269,8 @@ export class Coordinator {
       }
       if (waiting !== null && running === null && pending.length === 0) {
         const speechQueued = unplayed !== null && now < unplayed.since + cfg.voice.speak_ttl_ms;
-        if (!speechQueued && !(voice && this.#session.someoneSpeaking())) {
+        const playing = speechHold(now) !== null;
+        if (!speechQueued && !playing && !(voice && this.#session.someoneSpeaking())) {
           const w = waiting;
           waiting = null;
           running = this.#intent(w, signal);
@@ -252,6 +301,8 @@ export class Coordinator {
     running: Running | null,
     window: Window | null,
     idle: boolean,
+    /** Clock ms to wake at, so a waiting intent is looked at again (`null`: none). */
+    tickAt: number | null,
   ): Promise<Wake> {
     let idleFired = false;
     for (;;) {
@@ -262,6 +313,7 @@ export class Coordinator {
       if (this.#inbox.closed) return { type: "stop" };
       if (window && this.#now >= window.deadline) return { type: "deadline" };
       if (idleFired) return { type: "idle" };
+      if (tickAt !== null && this.#now >= tickAt) return { type: "tick" };
 
       const timers: ReturnType<typeof setTimeout>[] = [];
       let onAbort: (() => void) | undefined;
@@ -275,6 +327,10 @@ export class Coordinator {
       if (running) waits.push(running.promise);
       if (window) {
         const ms = Math.max(window.deadline - this.#now, 0);
+        waits.push(new Promise<void>((resolve) => timers.push(setTimeout(resolve, ms))));
+      }
+      if (tickAt !== null) {
+        const ms = Math.max(tickAt - this.#now, 0);
         waits.push(new Promise<void>((resolve) => timers.push(setTimeout(resolve, ms))));
       }
       if (idle) {
@@ -357,12 +413,19 @@ export class Coordinator {
       { type: "agent_turn_started", data: { turn, context: this.#key } },
       { turn },
     );
-    const flags: TurnFlags = { committed: false, queued: false, interrupted: false };
+    const flags: TurnFlags = {
+      committed: false,
+      queued: false,
+      sentences: 0,
+      played: 0,
+      interrupted: false,
+    };
     const controller = new AbortController();
     if (signal.aborted) controller.abort(signal.reason);
     const running: Running = {
       turn,
       inputs,
+      intent: intent !== null,
       flags,
       controller,
       promise: Promise.resolve(),
@@ -399,6 +462,7 @@ export class Coordinator {
     unplayed: Unplayed | null,
   ): Promise<boolean> {
     if (flags) {
+      if (state !== "started") flags.played += 1;
       if (state === "started" || state === "finished") {
         flags.committed = true;
       } else if (state === "interrupted") {
