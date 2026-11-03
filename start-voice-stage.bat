@@ -16,7 +16,7 @@ start "Miyoria TTS :8002" /D "%ROOT%\workers\tts" cmd /k "set HOST=%TAILNET_IP%&
 
 rem Songs: yt-dlp -> Demucs -> Seed-VC in her voice. While converting it asks TTS and ASR to free the GPU
 rem (she is silent for a few minutes) and reloads them after. Songs are cached in data\songs.
-start "Miyoria Sing :8005" /D "%ROOT%\workers\sing" cmd /k "set HOST=%TAILNET_IP%&& set SING_VIDEO=0&& set SING_OFFLOAD_URLS=http://%TAILNET_IP%:8002,http://%TAILNET_IP%:8001&& set HF_HUB_DISABLE_SYMLINKS_WARNING=1&& ..\.venv-sing\Scripts\python.exe server.py"
+start "Miyoria Sing :8005" /D "%ROOT%\workers\sing" cmd /k "set HOST=%TAILNET_IP%&& set SING_VIDEO=0&& set SING_GPU_CHILD=1&& set SING_OFFLOAD_URLS=http://%TAILNET_IP%:8002,http://%TAILNET_IP%:8001&& set HF_HUB_DISABLE_SYMLINKS_WARNING=1&& ..\.venv-sing\Scripts\python.exe server.py"
 
 rem Voice node: the self account in Discord voice (needs SELF_TOKEN in apps\voice-node\.env)
 start "Miyoria voice node" /D "%ROOT%\apps\voice-node" cmd /k "corepack pnpm start"
