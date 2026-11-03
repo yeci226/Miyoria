@@ -23,6 +23,14 @@ export {
   type SingPermissions,
   SingPermissionsSchema,
 } from "./config.js";
+export {
+  type CardView,
+  LyricsCard,
+  type LyricsCardDeps,
+  MIN_EDIT_MS,
+  PROGRESS_MS,
+  renderCard,
+} from "./lyrics-card.js";
 export { SingerKey, SingModule } from "./module.js";
 export { paced, singSong, sleep, songVideoPath } from "./player.js";
 export { PROMPT_KEY, SingPrompt } from "./prompt.js";
