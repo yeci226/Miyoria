@@ -75,12 +75,19 @@ export type ChannelLookup =
 
 export async function resolveVoiceChannel(guild: Guild, channelId: string): Promise<ChannelLookup> {
   let channel;
+  let why = "";
   try {
     channel = guild.channels.cache.get(channelId) ?? (await guild.channels.fetch(channelId));
-  } catch {
+  } catch (err) {
     channel = null;
+    // Discord's reason (Missing Access vs Unknown Channel vs a dead token) is the whole diagnosis
+    const e = err as { message?: string; code?: unknown; httpStatus?: unknown };
+    const parts = [e.message ?? String(err)];
+    if (e.code !== undefined) parts.push(`code ${String(e.code)}`);
+    if (e.httpStatus !== undefined) parts.push(`HTTP ${String(e.httpStatus)}`);
+    why = ` (${parts.join(", ")})`;
   }
-  if (!channel) return { ok: false, error: `channel ${channelId} not found in guild ${guild.id}` };
+  if (!channel) return { ok: false, error: `channel ${channelId} not found in guild ${guild.id}${why}` };
   if (!channel.isVoice()) return { ok: false, error: `channel ${channelId} is not a voice channel` };
   const vc = channel as VoiceBasedChannel;
   if (!vc.joinable) {
