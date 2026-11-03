@@ -66,6 +66,8 @@ Environment
     SING_JS_RUNTIMES       yt-dlp JavaScript runtimes for YouTube (default deno,node)
     SING_LYRICS            0 = no lrclib lookup                   (default 1)
     SING_KEEP_MODELS       1 = keep models in VRAM between jobs   (default 0)
+    SING_GPU_CHILD         1 = GPU stages in a child process that ends with the job, so the idle
+                           worker holds no CUDA context (default 0; ignored with SING_KEEP_MODELS=1)
     SING_VIDEO             0 = no videos                          (default 1)
     SING_VIDEO_MAX_HEIGHT  tallest video                          (default 1080)
     SING_VIDEO_MAX_MB      largest video                          (default 300)
@@ -108,6 +110,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from engine import Cancelled, JobError, allowed_url, env_float, env_int  # noqa: E402
 from exclusive import Exclusive, http_post, parse_urls  # noqa: E402
+from gpu_child import GpuChild  # noqa: E402
 from songs import (  # noqa: E402
     PLAY_RATE,
     SONG_FILES,
@@ -262,14 +265,43 @@ def make_backend(store: Store) -> Any:
     raise RuntimeError(f"unknown SING_BACKEND={name!r} (expected seed-vc | mock)")
 
 
+def gpu_child_on() -> bool:
+    """``SING_GPU_CHILD=1``: each job runs its GPU stages in a child process (not with kept models)."""
+    return os.environ.get("SING_GPU_CHILD", "0") == "1" and os.environ.get("SING_KEEP_MODELS", "0") != "1"
+
+
+class _GpuRouted:
+    """A job's backend with its GPU stages (``separate``, ``f0_stats``, ``ref_f0``, ``convert``) in
+    the job's ``GpuChild``; everything else (downloads, mix, lyrics, video) stays here."""
+
+    def __init__(self, b: Any, child: GpuChild) -> None:
+        self.b = b
+        self.child = child
+        self.separate, self.f0_stats, self.convert = child.separate, child.f0_stats, child.convert
+        self.ref_f0 = child.ref_f0
+
+    @property
+    def device(self) -> str:
+        return self.child.device or self.b.device
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self.b, item)
+
+
 class _RealAdapter:
     """Gives ``RealBackend`` the same method shapes as the mock (paths in, files out)."""
 
     def __init__(self, b: Any) -> None:
         self.b = b
         self.name = b.name
-        self.device = b.device
         self.model_name = b.model_name
+
+    @property
+    def device(self) -> str:
+        # In child mode the main process does not import torch to find out.
+        if gpu_child_on():
+            return os.environ.get("SING_DEVICE") or "gpu-child"
+        return self.b.device
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self.b, item)
@@ -334,6 +366,7 @@ class Job:
     video: "VideoFetch | None" = None
     exclusive: Exclusive | None = None
     go: threading.Event = field(default_factory=threading.Event)
+    gpu: GpuChild | None = None
 
     def public(self, store: Store, position: int | None) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -428,13 +461,12 @@ def _source_from_request(job: Job) -> Source:
     return src
 
 
-def _auto_shift(sdir: Path, auto_key: bool) -> tuple[int, int, dict[str, Any]]:
+def _auto_shift(sdir: Path, auto_key: bool, b: Any) -> tuple[int, int, dict[str, Any]]:
     """(octave −12 / 0 / +12 for her voice, whole-song key, info): the octave whose median lands
     closest to her singing median without the song's top going over her ceiling, and with
     ``auto_key`` a transposition down (or a little up) when the top is still out of her range."""
     from pitch import choose_key, parse_note
 
-    b = state.backend
     stats = b.f0_stats(sdir / "vocals.wav")
     ref_hz = b.ref_f0()
     info: dict[str, Any] = {"ref_median_hz": ref_hz}
@@ -637,6 +669,9 @@ def run_job(job: Job) -> None:
     finally:
         if job.video is not None:
             job.video.stop()
+        # The GPU child ends first: its CUDA context is VRAM the offloaded workers want back.
+        if job.gpu is not None:
+            job.gpu.close()
         # Also after a failure or a cancel; the job is only over once they are back.
         _give_gpu_back(job)
         if job.exclusive is not None:
@@ -685,6 +720,9 @@ def _run_job(job: Job) -> None:
         return
 
     _peak_vram_reset()
+    if gpu_child_on():
+        job.gpu = GpuChild(os.environ.get("SING_GPU_CHILD_FACTORY", "engine:make_gpu_steps"))
+        b = _GpuRouted(b, job.gpu)
     sdir.mkdir(parents=True, exist_ok=True)
     store.write_source_info(src)
     if req.force:
@@ -711,6 +749,8 @@ def _run_job(job: Job) -> None:
         try:
             return convert_on_gpu()
         finally:
+            if job.gpu is not None:
+                job.gpu.close()
             _give_gpu_back(job)
 
     def convert_on_gpu() -> dict[str, Any]:
@@ -718,7 +758,7 @@ def _run_job(job: Job) -> None:
             shift, auto_key, info = req.pitch, 0, {"auto": False, "octave_shift": None}
         else:
             # An explicit key is the requester's choice: only the octave stays automatic.
-            shift, auto_key, info = _auto_shift(sdir, auto_key=req.key == 0)
+            shift, auto_key, info = _auto_shift(sdir, auto_key=req.key == 0, b=b)
             info["auto"] = True
         song_key = req.key + auto_key
         shift += song_key
@@ -751,7 +791,7 @@ def _run_job(job: Job) -> None:
         "engine": {"backend": b.name, "model": b.model_name, "device": b.device,
                    "diffusion_steps": env_int("SING_DIFFUSION_STEPS", 30)},
         "timings": timings,
-        "peak_vram_mb": _peak_vram_mb(),
+        "peak_vram_mb": job.gpu.peak_vram_mb() if job.gpu is not None else _peak_vram_mb(),
         "created_at": now_iso(),
     }
     store.write_meta(sid, meta)

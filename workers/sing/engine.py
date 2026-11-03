@@ -207,12 +207,12 @@ class RealBackend:
     name = "seed-vc"
 
     def __init__(self, store: Store) -> None:
-        import torch
-
+        # No torch here: with SING_GPU_CHILD the main process builds this one too, for downloads
+        # and the mix, and must not touch CUDA. The device is found when a GPU step first runs.
         self.store = store
-        self.device = os.environ.get("SING_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
+        self._device: str | None = os.environ.get("SING_DEVICE") or None
         self.separator = os.environ.get("SING_SEPARATOR_MODEL", "htdemucs")
-        self.separate_device = os.environ.get("SING_SEPARATE_DEVICE", self.device)
+        self._separate_device: str | None = os.environ.get("SING_SEPARATE_DEVICE") or None
         self.steps = env_int("SING_DIFFUSION_STEPS", 30)
         self.cfg_rate = env_float("SING_CFG_RATE", 0.7)
         self.keep = os.environ.get("SING_KEEP_MODELS", "0") == "1"
@@ -231,6 +231,18 @@ class RealBackend:
         self._ref: Any = None
         self._ref_f0: float | None = None
         self.transposer = "rubberband" if ffmpeg_has_filter("rubberband") else "librosa"
+
+    @property
+    def device(self) -> str:
+        if self._device is None:
+            import torch
+
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        return self._device
+
+    @property
+    def separate_device(self) -> str:
+        return self._separate_device or self.device
 
     # ── resolve / fetch ──────────────────────────────────────────────────
 
@@ -506,6 +518,48 @@ class RealBackend:
 
         return np.stack([librosa.effects.pitch_shift(x[:, c], sr=sr, n_steps=semitones) for c in range(x.shape[1])],
                         axis=1)
+
+
+class GpuSteps:
+    """``RealBackend``'s GPU stages with paths in: what the GPU child (gpu_child.py) runs."""
+
+    def __init__(self, b: RealBackend) -> None:
+        self.b = b
+
+    def device(self) -> str:
+        return self.b.device
+
+    def peak_vram_mb(self) -> int | None:
+        torch = sys.modules.get("torch")
+        if torch is not None and torch.cuda.is_available():
+            return round(torch.cuda.max_memory_allocated() / 2**20)
+        return None
+
+    def separate(self, source_wav: Path, vocals_out: Path, inst_out: Path, progress: Progress) -> None:
+        self.b.separate(source_wav, vocals_out, inst_out, progress)
+
+    def f0_stats(self, path: Path) -> tuple[float, float] | None:
+        x, sr = read_audio(path)
+        return self.b.f0_stats(x.mean(axis=1), sr)
+
+    def ref_f0(self) -> float | None:
+        return self.b.ref_f0()
+
+    def convert(self, vocals_wav: Path, out_wav: Path, shift: int, progress: Progress,
+                cancelled: Callable[[], bool]) -> None:
+        self.b.convert(vocals_wav, out_wav, shift, progress, cancelled)
+
+
+def make_real_backend() -> RealBackend:
+    """A ``RealBackend`` on the worker's song store (``SING_DATA_DIR`` / ``SING_LIBRARY_DIR``)."""
+    root = Path(os.environ.get("SING_DATA_DIR", Path(__file__).resolve().parent.parent.parent / "data" / "songs"))
+    lib = os.environ.get("SING_LIBRARY_DIR")
+    return RealBackend(Store(root, Path(lib) if lib else None))
+
+
+def make_gpu_steps() -> GpuSteps:
+    """The GPU child's factory (``engine:make_gpu_steps``)."""
+    return GpuSteps(make_real_backend())
 
 
 REF_MAX_S = 25.0  # what the conversion uses of the reference at most
