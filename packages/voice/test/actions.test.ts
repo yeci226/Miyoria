@@ -9,6 +9,8 @@ import {
   BaseAuthorizer,
   type ContextKey,
   type Event,
+  PlatformSinks,
+  PlatformSinksKey,
   Principals,
   type StreamCurtain,
   StreamCurtainKey,
@@ -192,10 +194,68 @@ describe("leaving on her own", () => {
   });
 });
 
+describe("voice status", () => {
+  function withSink(s: ReturnType<typeof setup>) {
+    const set: [ContextKey, string][] = [];
+    const sinks = new PlatformSinks();
+    sinks.register({
+      platform: "discord",
+      send: async (context) => ({ context, id: "1" }),
+      react: async () => {},
+      typing: async () => {},
+      setVoiceStatus: async (context, status) => {
+        set.push([context, status]);
+      },
+    });
+    s.services.provide("test", PlatformSinksKey, sinks);
+    return set;
+  }
+
+  const onHerOwn = (s: ReturnType<typeof setup>, status: string) =>
+    s.registry.invoke({
+      principal: Principals.self(CTX),
+      capability: "voice.status",
+      args: { status },
+      why: "想讓大家知道在幹嘛",
+      turn: null,
+    });
+
+  it("she sets and clears the status of the voice channel she is in", async () => {
+    const s = setup([]);
+    const set = withSink(s);
+    s.link.inVoice = "vc1";
+    expect((await onHerOwn(s, "🎤 在唱歌")).status).toBe("done");
+    expect((await onHerOwn(s, "")).status).toBe("done");
+    const vc: ContextKey = { platform: "discord", scope: "g1", channel: "vc1", kind: "voice" };
+    expect(set).toEqual([
+      [vc, "🎤 在唱歌"],
+      [vc, ""],
+    ]);
+  });
+
+  it("fails when she is not in voice; people need voice.status to ask", async () => {
+    const s = setup([]);
+    const set = withSink(s);
+    const out = await onHerOwn(s, "聊天中");
+    expect(out).toMatchObject({ status: "failed", error: expect.stringMatching(/not in a voice/) });
+    s.link.inVoice = "vc1";
+    await expect(s.tools.get("voice_status")?.call(s.ctx, { status: "x" })).rejects.toThrow(
+      /not allowed/,
+    );
+    expect(set).toEqual([]);
+  });
+});
+
 describe("voice capabilities", () => {
   it("voice_join follows the requester; leave, go live and stop go through the gate", async () => {
     const s = setup(["voice.join", "voice.leave", "voice.golive"]);
-    expect(s.tools.names()).toEqual(["stream_start", "stream_stop", "voice_join", "voice_leave"]);
+    expect(s.tools.names()).toEqual([
+      "stream_start",
+      "stream_stop",
+      "voice_join",
+      "voice_leave",
+      "voice_status",
+    ]);
     expect(await s.tools.get("voice_join")?.call(s.ctx, { why: "Owen 叫我" })).toContain(
       "joined voice channel",
     );

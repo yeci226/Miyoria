@@ -1,5 +1,6 @@
 // Capabilities of the voice node: `voice.join`, `voice.leave`, `stream.start` and `stream.stop`
-// (Discord Go Live; OBS follows `voice.golive` on the Stage side). Registered in the actuator
+// (Discord Go Live; OBS follows `voice.golive` on the Stage side), and `voice.status` (the voice
+// channel's status line, set by the bot account). Registered in the actuator
 // registry by the voice module; `/voice ...` and her tools both call them through the gate.
 //
 // Leaving on her own (principal `self`) is refused while she still has songs to sing there, and
@@ -11,13 +12,14 @@ import { type Capability, CapabilityError, defineCapability } from "@miyoria/act
 import { errorMessage } from "@miyoria/kernel";
 import {
   actLane,
+  PlatformSinksKey,
   type Principal,
   StreamCurtainKey,
   type VoiceFloor,
   type WorldState,
 } from "@miyoria/types";
 import { z } from "zod";
-import type { VoiceLink } from "./link/link.js";
+import { type VoiceLink, voiceContext } from "./link/link.js";
 
 /** Joining her voice channel failed while starting Go Live. */
 export class GoLiveJoinError extends CapabilityError {
@@ -29,7 +31,9 @@ const Id = z.string().trim().min(1).max(64);
 const GuildArgs = z.object({ guild: Id.nullish() });
 const JoinArgs = GuildArgs.extend({ channel: Id.nullish() });
 const GoLiveArgs = GuildArgs.extend({ source: z.string().trim().min(1).nullish() });
+const StatusArgs = GuildArgs.extend({ status: z.string().trim().max(500) });
 type GuildArgs = z.output<typeof GuildArgs>;
+type StatusArgs = z.output<typeof StatusArgs>;
 type JoinArgs = z.output<typeof JoinArgs>;
 type GoLiveArgs = z.output<typeof GoLiveArgs>;
 
@@ -250,5 +254,39 @@ export function voiceCapabilities(
     },
   });
 
-  return [join, leave, start, stop] as Capability[];
+  // The status line goes through the bot account's sink (its REST client), not the voice node.
+  const status = defineCapability<StatusArgs>({
+    name: "voice.status",
+    summary: "改語音頻道狀態",
+    risk: "low",
+    args: StatusArgs,
+    permission: "voice.status",
+    tool: {
+      name: "voice_status",
+      description:
+        "改你現在所在語音頻道的「頻道狀態」(頻道名稱下面那一行字,大家都看得到),例如「🎤 唱歌中」「聊天中」。status 空字串 = 清掉。",
+      properties: {
+        status: { type: "string", description: "狀態文字(最多 500 字,空字串清掉)" },
+        guild: GUILD_PROPERTY,
+      },
+      required: ["status"],
+    },
+    scope: guildOf,
+    lane,
+    async execute(args, ctx) {
+      const guild = requireGuild(args, ctx.principal);
+      const channel = link.channel(guild);
+      if (channel === null) throw new CapabilityError("she is not in a voice channel there");
+      const platform = ctx.principal.context?.platform ?? "discord";
+      const sink = ctx.services.get(PlatformSinksKey)?.get(platform);
+      if (!sink?.setVoiceStatus) throw new CapabilityError("this platform has no voice status");
+      await sink.setVoiceStatus(voiceContext(platform, guild, channel), args.status, ctx.signal);
+      return {
+        text: args.status === "" ? "voice status cleared" : "voice status set",
+        data: { channel, status: args.status },
+      };
+    },
+  });
+
+  return [join, leave, start, stop, status] as Capability[];
 }

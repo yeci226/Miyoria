@@ -858,6 +858,7 @@ extensions/minecraft/
 | `stage.scene` | `stage_scene` | `StageLink.setScene`:`role`(場景用途,帶它的轉場)或 `name`(只能用節點回報的 `scenes`);場景導演也用它(principal `director`) | 低 | stage.link |
 | `stage.stream` | — | OBS 開始 / 停止直播(指令與面板用;停之前先放結尾幕) | 中 | stage.link |
 | `voice.join` / `voice.leave` | `voice_join` / `voice_leave` | `VoiceLink`(預設進 requester 所在的語音頻道) | 中 | voice |
+| `voice.status` | `voice_status` | 她所在語音頻道的頻道狀態(bot 帳號的 `PlatformSink.setVoiceStatus`;空字串清掉,最多 500 字) | 低 | voice |
 | `stream.start` / `stream.stop` | `stream_start` / `stream_stop` | Go Live(OBS 跟著 `voice.golive`);不在語音時先進 requester 的頻道;停之前先放結尾幕 | 中 | voice |
 | `game.start` / `game.stop` / `game.goal` | `game_start` / `game_stop` / `game_goal` | `GameControl`;`game.start` 先確認遊戲開著,可帶 `goal` 與 `stream`(以同一個 principal 呼叫 `stream.start`) | 中 | game |
 | `game.act` | — | 遊戲導演的 adapter 動作(`game_<id>_act`),也是她在遊戲聊天室打字的路(`chat` 一律先清理) | 低 | game |
