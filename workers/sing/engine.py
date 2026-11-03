@@ -77,6 +77,22 @@ def allowed_url(url: str) -> bool:
 # ── audio helpers (numpy) ────────────────────────────────────────────────────
 
 
+def ydl_options(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """yt-dlp options for resolving and downloading, ``extra`` on top."""
+    return {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "format": "bestaudio/best",
+        "socket_timeout": 20,
+        # YouTube needs a JS runtime for its player challenges; Node is there for Miyoria anyway.
+        "js_runtimes": {r.strip(): {} for r in os.environ.get("SING_JS_RUNTIMES", "deno,node").split(",") if r.strip()},
+        # Every request asks for a byte range: bilibili's CDN answers a plain GET with HTTP 567.
+        "http_chunk_size": 10 * 1024 * 1024,
+        **(extra or {}),
+    }
+
+
 def ffmpeg_to_wav(src: Path, dst: Path, rate: int = SR, channels: int = 2, max_s: float | None = None) -> None:
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src)]
     if max_s:
@@ -249,17 +265,7 @@ class RealBackend:
     def _ydl(self, extra: dict[str, Any] | None = None):
         from yt_dlp import YoutubeDL
 
-        opts: dict[str, Any] = {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "format": "bestaudio/best",
-            "socket_timeout": 20,
-            # YouTube needs a JS runtime for its player challenges; Node is there for Miyoria anyway.
-            "js_runtimes": {r.strip(): {} for r in os.environ.get("SING_JS_RUNTIMES", "deno,node").split(",") if r.strip()},
-        }
-        opts.update(extra or {})
-        return YoutubeDL(opts)
+        return YoutubeDL(ydl_options(extra))
 
     def _source_of(self, info: dict[str, Any], kind: str) -> Source:
         from lyrics import guess_artist_title

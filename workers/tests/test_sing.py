@@ -179,6 +179,15 @@ def test_the_video_comes_with_the_song(sing):
     assert keyed["song"]["has_video"] is True and keyed["video"] is None
 
 
+def test_downloads_ask_for_byte_ranges():
+    # bilibili's CDN answers a GET without a Range header with HTTP 567; yt-dlp sends Range on
+    # every request only with http_chunk_size.
+    import engine
+
+    assert engine.ydl_options()["http_chunk_size"] >= 1024 * 1024
+    assert engine.ydl_options({"quiet": False})["quiet"] is False
+
+
 def test_a_song_without_a_video_is_still_ready(sing):
     if not is_mock():
         pytest.skip("mock video")
