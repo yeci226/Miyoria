@@ -24,7 +24,12 @@ export interface RestLike {
   get?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
   /** Only `edit` uses it; without it messages cannot be edited. */
   patch?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
+  /** Only `delete` uses it; without it messages cannot be deleted. */
+  delete?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
 }
+
+/** Discord's longest voice channel status. */
+const MAX_VOICE_STATUS = 500;
 
 function nameOf(value: unknown): string | null {
   if (typeof value !== "object" || value === null || !("name" in value)) return null;
@@ -139,6 +144,31 @@ export class DiscordSink implements PlatformSink, ReplySink {
         });
       },
     );
+  }
+
+  async delete(message: MessageRef, signal?: AbortSignal): Promise<void> {
+    const del = this.#rest.delete?.bind(this.#rest);
+    if (!del) throw new DiscordSendError("this REST client cannot delete messages");
+    const channel = channelOf(message.context);
+    const id = snowflake(message.id, "message");
+    await inContext(
+      `deleting message ${message.id} in ${contextKeyString(message.context)}`,
+      async () => {
+        await del(Routes.channelMessage(channel, id), { signal });
+      },
+    );
+  }
+
+  /** The voice channel's status line: filtered like `send`, at most 500 characters. */
+  async setVoiceStatus(context: ContextKey, status: string, signal?: AbortSignal): Promise<void> {
+    const channel = channelOf(context);
+    const text = [...filterOutgoing(status).trim()].slice(0, MAX_VOICE_STATUS).join("");
+    await inContext(`setting the voice status of ${contextKeyString(context)}`, async () => {
+      await this.#rest.put(`/channels/${channel}/voice-status`, {
+        body: { status: text },
+        signal,
+      });
+    });
   }
 
   async typing(context: ContextKey, signal?: AbortSignal): Promise<void> {

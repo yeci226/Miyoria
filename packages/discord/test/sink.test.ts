@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { DiscordSendError, DiscordSink, type RestLike, type RestRequest } from "../src/sink.js";
 
 interface Call {
-  method: "post" | "put" | "patch";
+  method: "post" | "put" | "patch" | "delete";
   route: string;
   options: RestRequest | undefined;
 }
@@ -29,6 +29,12 @@ class FakeRest implements RestLike {
     this.calls.push({ method: "patch", route, options });
     if (this.failWith) throw this.failWith;
     return { id: "edited" };
+  }
+
+  async delete(route: `/${string}`, options?: RestRequest): Promise<unknown> {
+    this.calls.push({ method: "delete", route, options });
+    if (this.failWith) throw this.failWith;
+    return undefined;
   }
 }
 
@@ -167,6 +173,44 @@ describe("DiscordSink", () => {
     await expect(sink.typing(channel)).rejects.toThrow("typing in discord:1:200");
     await expect(sink.react({ context: channel, id: "5" }, "x")).rejects.toThrow(
       "reacting to message 5 in discord:1:200",
+    );
+  });
+});
+
+test("deletes one of her messages", async () => {
+  const rest = new FakeRest();
+  await new DiscordSink(rest).delete({ context: channel, id: "42" });
+  expect(rest.calls.map((c) => [c.method, c.route])).toEqual([
+    ["delete", "/channels/200/messages/42"],
+  ]);
+  await expect(
+    new DiscordSink(new PostOnlyRest()).delete({ context: channel, id: "42" }),
+  ).rejects.toThrow(/cannot delete/);
+});
+
+describe("DiscordSink.setVoiceStatus", () => {
+  const voice: ContextKey = { platform: "discord", scope: "1", channel: "200", kind: "voice" };
+
+  test("puts the status, at most 500 characters; empty clears it", async () => {
+    const rest = new FakeRest();
+    const sink = new DiscordSink(rest);
+    await sink.setVoiceStatus(voice, `  🎤 ${"啦".repeat(600)}  `);
+    await sink.setVoiceStatus(voice, "");
+    expect(rest.calls.map((c) => [c.method, c.route])).toEqual([
+      ["put", "/channels/200/voice-status"],
+      ["put", "/channels/200/voice-status"],
+    ]);
+    const first = (rest.calls[0]?.options?.body as { status?: string } | undefined)?.status ?? "";
+    expect([...first]).toHaveLength(500);
+    expect(first.startsWith("🎤 啦")).toBe(true);
+    expect(rest.calls[1]?.options?.body).toEqual({ status: "" });
+  });
+
+  test("names the channel when Discord refuses", async () => {
+    const rest = new FakeRest();
+    rest.failWith = new Error("Missing Permissions");
+    await expect(new DiscordSink(rest).setVoiceStatus(voice, "x")).rejects.toThrow(
+      /voice status of discord:1:voice:200/,
     );
   });
 });
