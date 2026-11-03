@@ -72,7 +72,10 @@ export const SingConfigSchema = z.object({
   fade_ms: z.number().int().nonnegative().default(1500),
   /** Lyrics lines (when the worker found synced lyrics) become overlay subtitles. */
   lyrics: z.boolean().default(true),
-  /** While she sings, one card in her voice channel's text chat shows the current lyrics line. */
+  /**
+   * While she sings a song with synced lyrics, one card shows the current line: in the channel
+   * she last typed in on that server, else her voice channel's text chat.
+   */
   lyrics_card: z.boolean().default(false),
   /**
    * The song's original video (when the worker has one) is shown, muted, on the stream while

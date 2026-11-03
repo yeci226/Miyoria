@@ -109,7 +109,7 @@ interface Playing {
   stop: AbortController;
   /** The song itself started streaming (before that she is still saying her opening). */
   audible: boolean;
-  /** Its lyrics card in the voice channel's text chat, when there is one. */
+  /** Its lyrics card, when there is one. */
   card: LyricsCard | null;
 }
 
@@ -154,6 +154,8 @@ export class Singer implements VoiceFloor, SpeechPause {
   readonly #skipVotes = new Map<SongNo, Set<string>>();
   /** Voice channels she is in. */
   #voices: ContextKey[] = [];
+  /** Where she last sent a message, per `platform:guild` (the lyrics card goes there). */
+  readonly #lastTyped = new Map<string, ContextKey>();
   /** Her speech playbacks running per guild. */
   readonly #speaking = new Map<string, number>();
   readonly #turnsDone: TurnId[] = [];
@@ -687,6 +689,11 @@ export class Singer implements VoiceFloor, SpeechPause {
         else this.#speaking.set(guild, Math.max(0, n - 1));
         return;
       }
+      case "action_completed": {
+        const c = event.data.message?.context;
+        if (event.data.ok && c?.scope != null) this.#lastTyped.set(`${c.platform}:${c.scope}`, c);
+        return;
+      }
       case "agent_turn_completed":
         this.#turnsDone.push(event.data.turn);
         if (this.#turnsDone.length > TURNS_REMEMBERED) this.#turnsDone.shift();
@@ -884,11 +891,17 @@ export class Singer implements VoiceFloor, SpeechPause {
     this.ctx.publish({ type: "agent_initiative", data: { context: where, reason, hint, about } });
   }
 
-  /** The lyrics card of a song about to play (`[modules.sing] lyrics_card`), or `null`. */
+  /**
+   * The lyrics card of a song about to play (`[modules.sing] lyrics_card`), or `null`: none for a
+   * song without synced lyrics; it goes where she last typed in that server, else her voice
+   * channel's text chat.
+   */
   #lyricsCard(song: SongMeta, guild: string): LyricsCard | null {
     if (!this.cfg.lyrics_card) return null;
-    const context = this.voiceContext(guild);
-    if (context === null) return null;
+    if (!song.lyrics?.synced || song.lyrics.lines.length === 0) return null;
+    const voice = this.voiceContext(guild);
+    if (voice === null) return null;
+    const context = this.#lastTyped.get(`${voice.platform}:${guild}`) ?? voice;
     const sink = this.ctx.services.get(PlatformSinksKey)?.get(context.platform);
     if (!sink?.edit) return null;
     return new LyricsCard({ sink, context, song, clock: this.ctx.clock, log });

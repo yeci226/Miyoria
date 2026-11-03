@@ -102,6 +102,7 @@ export class SingModule implements Module {
       "voice.left",
       "voice.playback",
       "agent.turn.completed",
+      "action.completed",
       "queue.item_activated",
     ]);
     ctx.spawn("events", async () => {

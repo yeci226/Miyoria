@@ -1,4 +1,5 @@
-// The lyrics card: one message in the voice channel's text chat while she sings. It shows the
+// The lyrics card: one message while she sings (where she last typed on that server, else the
+// voice channel's text chat; only for songs with synced lyrics). It shows the
 // song, the current lyrics line and the progress, and is edited in place: at most once every
 // MIN_EDIT_MS (Discord allows about 5 edits per 5 s per channel), only the newest state, one
 // request at a time. When the song ends it is edited a last time and left as a record.

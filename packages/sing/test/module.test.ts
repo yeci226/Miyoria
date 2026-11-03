@@ -74,13 +74,16 @@ function meta(id: string, title: string, seconds = 1): SongMeta {
     title,
     artist: "Artist",
     duration_s: seconds,
-    lyrics: {
-      synced: true,
-      lines: [
-        { t: 0.2, text: "first line" },
-        { t: 0.6, text: "" },
-      ],
-    },
+    // Titles with "Instrumental" have no lyrics.
+    lyrics: title.includes("Instrumental")
+      ? null
+      : {
+          synced: true,
+          lines: [
+            { t: 0.2, text: "first line" },
+            { t: 0.6, text: "" },
+          ],
+        },
     play: { sample_rate: RATE, samples: RATE * seconds },
     pitch: {},
     timings: {},
@@ -236,9 +239,11 @@ class FakeVoice implements VoicePlayer {
 class FakeSink implements PlatformSink {
   readonly platform = "discord";
   readonly sent: string[] = [];
+  readonly sentTo: ContextKey[] = [];
   readonly edits: string[] = [];
   async send(context: ContextKey, message: { text: string }): Promise<MessageRef> {
     this.sent.push(message.text);
+    this.sentTo.push(context);
     return { context, id: String(this.sent.length) };
   }
   async react(): Promise<void> {}
@@ -541,10 +546,15 @@ describe("sing module", () => {
     expect(h.mind.suggestions.filter((s) => s.reason === "song_ready")).toHaveLength(0);
   });
 
-  async function singCommanded(config: JsonValue = {}): Promise<Harness> {
+  async function singCommanded(
+    config: JsonValue = {},
+    title = "Song A",
+    before: (h: Harness) => Promise<void> = async () => {},
+  ): Promise<Harness> {
     const harness = await Harness.create(config);
-    await harness.command("queue song request", { song: "Song A" });
-    harness.worker.finish("j1", "Song A", 1);
+    await before(harness);
+    await harness.command("queue song request", { song: title });
+    harness.worker.finish("j1", title, 1);
     await settle(200);
     await harness.join();
     await settle(6000 + 400);
@@ -558,6 +568,27 @@ describe("sing module", () => {
     h = await singCommanded({ lyrics_card: true });
     expect(h.sink.sent).toHaveLength(1);
     expect(h.sink.sent[0]).toContain("🎵 **Song A**");
+    expect(h.sink.edits.at(-1)).toContain("✅ 唱完了");
+    expect(h.sink.sentTo).toEqual([VOICE]);
+  });
+
+  it("posts no lyrics card for a song without lyrics", async () => {
+    h = await singCommanded({ lyrics_card: true }, "Instrumental");
+    expect(h.sink.sent).toHaveLength(0);
+    expect(h.sink.edits).toHaveLength(0);
+  });
+
+  it("posts the lyrics card where she last typed in that server", async () => {
+    const sent = (context: ContextKey): Event => ({
+      type: "action_completed",
+      data: { action: "a1", turn: null, ok: true, error: null, message: { context, id: "m1" } },
+    });
+    const otherGuild: ContextKey = { ...TEXT, scope: "g2", channel: "text9" };
+    h = await singCommanded({ lyrics_card: true }, "Song A", async (harness) => {
+      await harness.publish(sent(TEXT));
+      await harness.publish(sent(otherGuild));
+    });
+    expect(h.sink.sentTo).toEqual([TEXT]);
     expect(h.sink.edits.at(-1)).toContain("✅ 唱完了");
   });
 
