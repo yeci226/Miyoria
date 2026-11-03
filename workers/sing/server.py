@@ -28,7 +28,7 @@ Pipeline per job (one job at a time; models load per stage and are freed after i
     mix       converted vocal at the original vocal's level + instrumental (moved by the key with
               Rubber Band when ffmpeg has it), loudness-normalised to SING_TARGET_LUFS, peak ≤ -1 dBFS
     lyrics    lrclib.net synced LRC by title / artist / duration (best effort)
-    video     (in parallel, once the audio is downloaded) the link's video, video only, H.264 <= 1080p
+    video     (in parallel, from the download on) the link's video, video only, H.264 <= 1080p
               preferred, into video.mp4 for the stream to show while she sings; library entries
               use a video next to the audio. The song is ready once both are done; a video that
               fails or is still not there SING_VIDEO_WAIT_S after the audio leaves the song
@@ -760,20 +760,17 @@ def _run_job(job: Job) -> None:
     if req.force:
         for old in list(sdir.glob("video.*")):
             old.unlink(missing_ok=True)
+    _start_video(job, src, sdir)
     have_stems = (sdir / "vocals.wav").exists() and (sdir / "instrumental.wav").exists()
-    redo = not have_stems or req.force
-    if redo:
+    if not have_stems or req.force:
         if src.kind == "library":
             timed("download", lambda: b.fetch_library(src, sdir))
         elif not (sdir / "source.wav").exists() or req.force:
             timed("download", lambda: b.fetch(src, sdir / "source.wav", lambda f: _set(job, "download", f)))
-    # Only after the audio download: bilibili answers HTTP 567 to both when two run at once. The
-    # video still downloads next to the long stages (separate, convert).
-    _start_video(job, src, sdir)
-    if redo and not (src.kind == "library" and src.split):
-        _take_gpu(job)
-        timed("separate", lambda: b.separate(sdir / "source.wav", sdir / "vocals.wav", sdir / "instrumental.wav",
-                                             lambda f: _set(job, "separate", f)))
+        if not (src.kind == "library" and src.split):
+            _take_gpu(job)
+            timed("separate", lambda: b.separate(sdir / "source.wav", sdir / "vocals.wav", sdir / "instrumental.wav",
+                                                 lambda f: _set(job, "separate", f)))
 
     out = store.song_dir(sid)
     out.mkdir(parents=True, exist_ok=True)
