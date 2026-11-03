@@ -1,5 +1,5 @@
-// The lyrics card: one message in the voice channel's text chat while she sings, showing the
-// current line, edited at most every MIN_EDIT_MS and finished when the song ends.
+// The lyrics card: one message while she sings, showing the current line, edited at most every
+// MIN_EDIT_MS and deleted (or blanked) when the song ends.
 
 import type { Logger } from "@miyoria/kernel";
 import { type ContextKey, type MessageRef, type SongCue, systemClock } from "@miyoria/types";
@@ -20,7 +20,6 @@ const view = (over: Partial<CardView> = {}): CardView => ({
   lyrics: "synced",
   elapsedMs: 84_000,
   durationMs: 238_000,
-  ended: null,
   ...over,
 });
 
@@ -36,11 +35,6 @@ describe("renderCard", () => {
   it("shows a note between lines and a notice without lyrics", () => {
     expect(renderCard(view({ line: null })).split("\n")[1]).toBe("## 🎶");
     expect(renderCard(view({ line: null, lyrics: "none" })).split("\n")[1]).toBe("## (沒找到歌詞)");
-  });
-
-  it("shows how the song ended", () => {
-    expect(renderCard(view({ ended: "finished" }))).toBe("✅ 唱完了:**Sakura no Uta** — Hana");
-    expect(renderCard(view({ ended: "stopped" }))).toBe("⏹️ 沒唱完:**Sakura no Uta** — Hana");
   });
 
   it("escapes markdown and line breaks in untrusted text", () => {
@@ -121,8 +115,17 @@ describe("LyricsCard", () => {
     vi.useRealTimers();
   });
 
-  function card(fail: { send?: boolean; edit?: boolean } = {}) {
-    const sink = fakeSink(fail);
+  function card(fail: { send?: boolean; edit?: boolean } = {}, canDelete = false) {
+    const base = fakeSink(fail);
+    const deleted: string[] = [];
+    const sink = canDelete
+      ? Object.assign(base, {
+          deleted,
+          async delete(m: MessageRef): Promise<void> {
+            deleted.push(m.id);
+          },
+        })
+      : Object.assign(base, { deleted });
     const log = fakeLog();
     const c = new LyricsCard({ sink, context: ctx, song, clock: systemClock, log });
     return { sink, log, c };
@@ -175,26 +178,29 @@ describe("LyricsCard", () => {
     expect(sink.edits[0]?.text).toContain("`0:10 / 3:58`");
   });
 
-  it("finishes the card and never edits it again", async () => {
-    const { sink, c } = card();
-    c.onCue(started);
-    await vi.advanceTimersByTimeAsync(0);
-    c.onCue(line(0, "a"));
-    c.onCue(ended("finished"));
-    await vi.advanceTimersByTimeAsync(MIN_EDIT_MS);
-    expect(sink.edits.at(-1)?.text).toBe("✅ 唱完了:**Sakura no Uta** — Hana");
-    const count = sink.edits.length;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(sink.edits).toHaveLength(count);
+  it("deletes the card when the song ends and never touches it again", async () => {
+    for (const outcome of ["finished", "interrupted"]) {
+      const { sink, c } = card({}, true);
+      c.onCue(started);
+      await vi.advanceTimersByTimeAsync(0);
+      c.onCue(line(0, "a"));
+      c.onCue(ended(outcome));
+      await vi.advanceTimersByTimeAsync(MIN_EDIT_MS);
+      expect(sink.deleted).toEqual(["m1"]);
+      const count = sink.edits.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sink.edits).toHaveLength(count);
+      expect(sink.deleted).toEqual(["m1"]);
+    }
   });
 
-  it("says the song was not finished when it was stopped", async () => {
+  it("blanks the card when the platform cannot delete", async () => {
     const { sink, c } = card();
     c.onCue(started);
     await vi.advanceTimersByTimeAsync(0);
-    c.onCue(ended("interrupted"));
+    c.onCue(ended("finished"));
     await vi.advanceTimersByTimeAsync(MIN_EDIT_MS);
-    expect(sink.edits.at(-1)?.text).toBe("⏹️ 沒唱完:**Sakura no Uta** — Hana");
+    expect(sink.edits.map((e) => e.text)).toEqual(["** **"]);
   });
 
   it("does nothing for a song that ends before it started", async () => {

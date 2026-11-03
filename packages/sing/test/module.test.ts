@@ -251,6 +251,10 @@ class FakeSink implements PlatformSink {
   async edit(_message: MessageRef, text: string): Promise<void> {
     this.edits.push(text);
   }
+  readonly deleted: string[] = [];
+  async delete(message: MessageRef): Promise<void> {
+    this.deleted.push(message.id);
+  }
 }
 
 /** A platform that cannot edit messages. */
@@ -564,11 +568,11 @@ describe("sing module", () => {
     return harness;
   }
 
-  it("[modules.sing] lyrics_card posts a card in her voice channel and finishes it", async () => {
+  it("[modules.sing] lyrics_card posts a card in her voice channel and deletes it", async () => {
     h = await singCommanded({ lyrics_card: true });
     expect(h.sink.sent).toHaveLength(1);
     expect(h.sink.sent[0]).toContain("🎵 **Song A**");
-    expect(h.sink.edits.at(-1)).toContain("✅ 唱完了");
+    expect(h.sink.deleted).toEqual(["1"]);
     expect(h.sink.sentTo).toEqual([VOICE]);
   });
 
@@ -589,7 +593,7 @@ describe("sing module", () => {
       await harness.publish(sent(otherGuild));
     });
     expect(h.sink.sentTo).toEqual([TEXT]);
-    expect(h.sink.edits.at(-1)).toContain("✅ 唱完了");
+    expect(h.sink.deleted).toEqual(["1"]);
   });
 
   it("posts no lyrics card by default", async () => {

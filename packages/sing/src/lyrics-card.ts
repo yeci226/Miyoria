@@ -2,7 +2,7 @@
 // voice channel's text chat; only for songs with synced lyrics). It shows the
 // song, the current lyrics line and the progress, and is edited in place: at most once every
 // MIN_EDIT_MS (Discord allows about 5 edits per 5 s per channel), only the newest state, one
-// request at a time. When the song ends it is edited a last time and left as a record.
+// request at a time. When the song ends it is deleted (blanked where the platform cannot delete).
 
 import type { Logger } from "@miyoria/kernel";
 import type { Clock, ContextKey, MessageRef, PlatformSink, SongCue } from "@miyoria/types";
@@ -23,8 +23,10 @@ export interface CardView {
   lyrics: "synced" | "none";
   elapsedMs: number;
   durationMs: number | null;
-  ended: "finished" | "stopped" | null;
 }
+
+/** What a card becomes on a platform that cannot delete it (Discord shows nothing for it). */
+const BLANK = "** **";
 
 /** One line, at most MAX_TEXT characters, with Discord markdown and mentions made literal. */
 function plain(text: string): string {
@@ -40,8 +42,6 @@ function clockText(ms: number): string {
 export function renderCard(view: CardView): string {
   const artist = view.artist === null ? "" : plain(view.artist);
   const head = `**${plain(view.title) || "?"}**${artist === "" ? "" : ` — ${artist}`}`;
-  if (view.ended === "finished") return `✅ 唱完了:${head}`;
-  if (view.ended === "stopped") return `⏹️ 沒唱完:${head}`;
   const line = view.line === null ? "" : plain(view.line);
   const shown = line !== "" ? line : view.lyrics === "none" ? "(沒找到歌詞)" : "🎶";
   const progress =
@@ -52,7 +52,7 @@ export function renderCard(view: CardView): string {
 }
 
 export interface LyricsCardDeps {
-  sink: Pick<PlatformSink, "send" | "edit">;
+  sink: Pick<PlatformSink, "send" | "edit" | "delete">;
   context: ContextKey;
   song: SongMeta;
   clock: Clock;
@@ -70,7 +70,7 @@ export class LyricsCard {
   #offsetMs = 0;
   #durationMs: number | null;
   #line: string | null = null;
-  #ended: CardView["ended"] = null;
+  #ended = false;
   #ref: MessageRef | null = null;
   #lastWriteAt = Number.NEGATIVE_INFINITY;
   #dirty = false;
@@ -86,7 +86,7 @@ export class LyricsCard {
 
   /** Never throws and never waits: writes happen on their own schedule. */
   onCue(cue: SongCue): void {
-    if (this.#dead || this.#ended !== null) return;
+    if (this.#dead || this.#ended) return;
     switch (cue.state) {
       case "started":
         if (this.#started) return;
@@ -103,7 +103,7 @@ export class LyricsCard {
         return;
       case "ended":
         if (!this.#started) return;
-        this.#ended = cue.outcome === "finished" ? "finished" : "stopped";
+        this.#ended = true;
         this.#clearProgress();
         this.#schedule();
         return;
@@ -119,7 +119,6 @@ export class LyricsCard {
       lyrics: lyrics?.synced && lyrics.lines.length > 0 ? "synced" : "none",
       elapsedMs: this.#d.clock.now() - this.#startedAt + this.#offsetMs,
       durationMs: this.#durationMs,
-      ended: this.#ended,
     };
   }
 
@@ -163,25 +162,32 @@ export class LyricsCard {
     this.#dirty = false;
     this.#inFlight = true;
     this.#lastWriteAt = this.#d.clock.now();
-    const text = renderCard(this.#view());
-    edit.call(this.#d.sink, this.#ref, text).then(
+    const { sink } = this.#d;
+    const ref = this.#ref;
+    // Song over: the card goes away (blanked where the platform cannot delete).
+    const write = !this.#ended
+      ? edit.call(sink, ref, renderCard(this.#view()))
+      : sink.delete
+        ? sink.delete(ref)
+        : edit.call(sink, ref, BLANK);
+    write.then(
       () => {
         this.#inFlight = false;
         this.#afterWrite();
       },
-      (error: unknown) => this.#fail("editing the lyrics card", error),
+      (error: unknown) => this.#fail("updating the lyrics card", error),
     );
   }
 
   /** After a write: the last one retires the card; otherwise keep the progress ticking. */
   #afterWrite(): void {
     if (this.#dead) return;
-    if (this.#ended !== null && !this.#dirty) {
+    if (this.#ended && !this.#dirty) {
       this.#retire();
       return;
     }
     if (this.#dirty) this.#schedule();
-    if (this.#ended === null) {
+    if (!this.#ended) {
       this.#clearProgress();
       this.#progress = setTimeout(() => {
         this.#progress = null;
