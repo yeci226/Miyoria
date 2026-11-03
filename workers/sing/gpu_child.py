@@ -109,12 +109,16 @@ class GpuChild:
     def _start(self) -> None:
         ctx = mp.get_context("spawn")
         parent, child = ctx.Pipe()
-        self._cancel = ctx.Event()
-        self._proc = ctx.Process(target=_child_main, args=(child, self._cancel, self.factory),
-                                 name="sing-gpu", daemon=True)
-        self._proc.start()
-        child.close()
-        self._conn = parent
+        cancel = ctx.Event()
+        proc = ctx.Process(target=_child_main, args=(child, cancel, self.factory), name="sing-gpu", daemon=True)
+        try:
+            proc.start()
+        except BaseException:
+            parent.close()
+            raise
+        finally:
+            child.close()
+        self._proc, self._conn, self._cancel = proc, parent, cancel
         msg = self._recv(None)
         if msg[0] == "error":
             self.close()

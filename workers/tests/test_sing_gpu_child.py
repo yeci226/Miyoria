@@ -130,6 +130,24 @@ def test_job_gives_gpu_back_when_child_dies(server, monkeypatch):
     assert multiprocessing.active_children() == []
 
 
+def test_job_gives_gpu_back_even_when_closing_the_child_fails(server, monkeypatch):
+    mod, c = server
+    given: list[str] = []
+    original_give, original_close = mod._give_gpu_back, mod.GpuChild.close
+
+    def failing_close(self):
+        original_close(self)
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr(mod, "_give_gpu_back", lambda job: (given.append(job.id), original_give(job)))
+    monkeypatch.setattr(mod.GpuChild, "close", failing_close)
+    job = c.post("/jobs", json={"query": "close fails"}).json()["job"]
+    done = _wait(c, job["id"])
+    assert done["state"] == "failed"
+    assert given.count(job["id"]) == 2  # after the conversion, and again at the end of the job
+    assert multiprocessing.active_children() == []
+
+
 SCRIPT = r"""
 import importlib.util, json, os, sys, time, wave
 from pathlib import Path

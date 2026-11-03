@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -110,7 +111,7 @@ class Store:
     def meta(self, sid: str) -> dict[str, Any] | None:
         p = self.song_dir(sid) / "meta.json"
         try:
-            meta = json.loads(p.read_text("utf-8"))
+            meta = json.loads(_busy_retry(lambda: p.read_text("utf-8")))
         except (OSError, ValueError):
             return None
         d = self.song_dir(sid)
@@ -123,7 +124,7 @@ class Store:
         d.mkdir(parents=True, exist_ok=True)
         tmp = d / "meta.json.tmp"
         tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), "utf-8")
-        os.replace(tmp, d / "meta.json")
+        _busy_retry(lambda: os.replace(tmp, d / "meta.json"))
 
     def songs(self) -> list[dict[str, Any]]:
         out = []
@@ -274,3 +275,16 @@ def _split_name(stem: str) -> tuple[str | None, str]:
         a, t = stem.split(" - ", 1)
         return a.strip() or None, t.strip() or stem
     return None, stem
+
+
+def _busy_retry(fn, tries: int = 20, pause_s: float = 0.025):
+    """``fn()``, tried again on ``PermissionError``: on Windows a file being replaced cannot be read
+    for a moment, nor replaced while it is being read (a lyrics refill writes a song's meta while
+    a request reads it). Reading it as missing would make the song again from scratch."""
+    for i in range(tries):
+        try:
+            return fn()
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(pause_s)

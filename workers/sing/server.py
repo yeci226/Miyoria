@@ -98,6 +98,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 from fastapi import FastAPI, Request
@@ -403,6 +404,8 @@ class State:
     running: str | None = None
     thread: threading.Thread | None = None
     stopping: threading.Event
+    #: Cached songs whose lyrics are being looked up again.
+    refilling: set[str]
     offload_post = staticmethod(http_post)  # replaced in tests
 
 
@@ -499,15 +502,46 @@ def _video_on() -> bool:
     return os.environ.get("SING_VIDEO", "1") != "0"
 
 
-#: A cached song without lyrics is looked up again after this long (lrclib may have been busy).
-LYRICS_RECHECK_S = 600
+#: A cached song without lyrics is looked up again (lrclib may have been busy): 10 minutes after
+#: the first lookup, an hour after the second, then once a day (most of those lrclib just lacks).
+LYRICS_RECHECK_S = (600, 3600, 86400)
 
 
 def _needs_lyrics(meta: dict[str, Any]) -> bool:
-    """A cached song without lyrics whose last lookup is older than ``LYRICS_RECHECK_S``."""
+    """A cached song without lyrics whose last lookup is older than its ``LYRICS_RECHECK_S`` wait."""
     if os.environ.get("SING_LYRICS", "1") == "0" or meta.get("lyrics") is not None:
         return False
-    return time.time() - float(meta.get("lyrics_checked_at") or 0) > LYRICS_RECHECK_S
+    checks = int(meta.get("lyrics_checks") or 0)
+    wait = LYRICS_RECHECK_S[min(max(checks - 1, 0), len(LYRICS_RECHECK_S) - 1)]
+    return time.time() - float(meta.get("lyrics_checked_at") or 0) > wait
+
+
+def _refill_lyrics(sid: str, meta: dict[str, Any], query: str | None) -> None:
+    """Looks up a cached song's lyrics again on the side, so the request is still answered at once
+    (not queued behind a song being made); the next request for it has them."""
+    with state.lock:
+        if sid in state.refilling:
+            return
+        state.refilling.add(sid)
+
+    def work() -> None:
+        try:
+            src = SimpleNamespace(title=meta.get("title") or "", artist=meta.get("artist"))
+            found = state.backend.lyrics(src, meta.get("duration_s"), query)
+            fresh = state.store.meta(sid) or meta
+            if fresh.get("lyrics") is None:
+                fresh["lyrics"] = _lyrics_meta(found, state.store.song_dir(sid))
+            fresh["lyrics_checked_at"] = time.time()
+            fresh["lyrics_checks"] = int(fresh.get("lyrics_checks") or 0) + 1
+            state.store.write_meta(sid, fresh)
+            log.info("song %s: lyrics looked up again (%s)", sid, "found" if fresh["lyrics"] else "none")
+        except Exception:  # noqa: BLE001  (lyrics are best effort)
+            log.exception("song %s: looking up its lyrics again failed", sid)
+        finally:
+            with state.lock:
+                state.refilling.discard(sid)
+
+    threading.Thread(target=work, name="sing-lyrics", daemon=True).start()
 
 
 def _lyrics_meta(found: dict[str, Any] | None, out: Path) -> dict[str, Any] | None:
@@ -670,10 +704,12 @@ def run_job(job: Job) -> None:
         if job.video is not None:
             job.video.stop()
         # The GPU child ends first: its CUDA context is VRAM the offloaded workers want back.
-        if job.gpu is not None:
-            job.gpu.close()
         # Also after a failure or a cancel; the job is only over once they are back.
-        _give_gpu_back(job)
+        try:
+            if job.gpu is not None:
+                job.gpu.close()
+        finally:
+            _give_gpu_back(job)
         if job.exclusive is not None:
             job.exclusive.join()
 
@@ -712,11 +748,7 @@ def _run_job(job: Job) -> None:
             cached.update(_attach_video(job, src, sdir, store.song_dir(sid), cached.setdefault("timings", {})))
             store.write_meta(sid, cached)
         if _needs_lyrics(cached):
-            # lrclib may have been busy when it was made: look again.
-            found = timed("lyrics", lambda: b.lyrics(src, cached.get("duration_s"), req.query))
-            cached["lyrics"] = _lyrics_meta(found, store.song_dir(sid))
-            cached["lyrics_checked_at"] = time.time()
-            store.write_meta(sid, cached)
+            _refill_lyrics(sid, cached, req.query)
         return
 
     _peak_vram_reset()
@@ -749,9 +781,11 @@ def _run_job(job: Job) -> None:
         try:
             return convert_on_gpu()
         finally:
-            if job.gpu is not None:
-                job.gpu.close()
-            _give_gpu_back(job)
+            try:
+                if job.gpu is not None:
+                    job.gpu.close()
+            finally:
+                _give_gpu_back(job)
 
     def convert_on_gpu() -> dict[str, Any]:
         if req.pitch is not None:
@@ -785,6 +819,7 @@ def _run_job(job: Job) -> None:
         "pitch": pitch_info,
         "lyrics": lyrics_meta,
         "lyrics_checked_at": time.time(),
+        "lyrics_checks": 1,
         **video,
         "play": {"sample_rate": PLAY_RATE, "samples": mixed.get("samples"), "format": "s16le", "channels": 1},
         "mix": mixed,
@@ -847,6 +882,7 @@ async def lifespan(app: FastAPI):
     state.jobs, state.order = {}, []
     state.pending = queue.Queue()
     state.lock = threading.Lock()
+    state.refilling = set()
     state.stopping = threading.Event()
     t0 = time.perf_counter()
     state.backend = make_backend(state.store)
@@ -896,10 +932,11 @@ async def submit(req: JobRequest) -> JSONResponse:
         meta = state.store.meta(sid) if sid else None
         info = state.store.source_info(key or "") if meta is not None else None
         # (A song from before videos existed goes through the queue to get its video.)
-        # (So does one without lyrics, after a while: lrclib may have been busy.)
-        if meta is not None and not _needs_video(meta, (info or {}).get("kind")) and not _needs_lyrics(meta):
+        if meta is not None and not _needs_video(meta, (info or {}).get("kind")):
             job.state, job.stage, job.progress, job.cached = "done", "done", 1.0, True
             job.song_id, job.source, job.finished_at = sid, info, now_iso()
+            if _needs_lyrics(meta):
+                _refill_lyrics(sid, meta, req.query)
     with state.lock:
         state.jobs[job.id] = job
         state.order.append(job.id)

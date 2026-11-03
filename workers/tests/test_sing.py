@@ -475,14 +475,68 @@ def test_cached_song_without_lyrics_gets_them_later(sing, monkeypatch):
     meta_path.write_text(json.dumps(meta), "utf-8")
     found["value"] = {"provider": "mock", "synced": True, "lrc": "[00:00.50]now found", "plain": None,
                       "track": "lyricless song", "artist": None}
+    # Still answered from the cache at once (not queued behind a song being made); the lyrics
+    # are looked up on the side and the next request has them.
     again = sing.post("/jobs", json={"query": "lyricless song"}).json()["job"]
-    assert again["state"] in ("queued", "running")  # not answered from the cache at once
-    done = wait(sing, again["id"])
-    assert done["state"] == "done" and done["cached"] is True
-    assert done["song"]["lyrics"]["synced"] is True
-    assert done["song"]["lyrics"]["lines"] == [{"t": 0.5, "text": "now found"}]
+    assert again["state"] == "done" and again["cached"] is True
+    song = _wait_meta(meta_path, lambda m: m.get("lyrics") is not None)
+    assert song["lyrics"]["synced"] is True
+    assert song["lyrics"]["lines"] == [{"t": 0.5, "text": "now found"}]
     assert (root / sid / "lyrics.lrc").exists()
     assert len(calls) == 2
+    assert sing.get(f"/songs/{sid}").json()["song"]["lyrics"]["synced"] is True
+
+
+def _wait_meta(path: Path, ok, timeout: float = 10) -> dict:
+    import json
+
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            meta = json.loads(path.read_text("utf-8"))
+        except (PermissionError, ValueError):  # being replaced (Windows)
+            meta = {}
+        if ok(meta):
+            return meta
+        time.sleep(0.05)
+    raise AssertionError("meta.json did not change")
+
+
+def test_a_song_lrclib_does_not_have_is_looked_up_less_and_less(sing, monkeypatch):
+    if not is_mock():
+        pytest.skip("edits the cache")
+    import json
+
+    server = sys.modules["sing_server"]
+    calls: list[str | None] = []
+    monkeypatch.setattr(server.state.backend, "lyrics", lambda src, duration, query=None: calls.append(query))
+    first = wait(sing, sing.post("/jobs", json={"query": "never on lrclib"}).json()["job"]["id"])
+    meta_path = Path(os.environ["SING_DATA_DIR"]) / first["song_id"] / "meta.json"
+    assert json.loads(meta_path.read_text("utf-8"))["lyrics_checks"] == 1
+
+    def ago(minutes: float) -> None:
+        meta = json.loads(meta_path.read_text("utf-8"))
+        meta["lyrics_checked_at"] = time.time() - minutes * 60
+        meta_path.write_text(json.dumps(meta), "utf-8")
+
+    def ask() -> None:
+        assert sing.post("/jobs", json={"query": "never on lrclib"}).json()["job"]["state"] == "done"
+
+    ago(11)
+    ask()
+    _wait_meta(meta_path, lambda m: m.get("lyrics_checks") == 2)
+    assert len(calls) == 2
+    ago(11)  # after a second miss: an hour
+    ask()
+    time.sleep(0.3)
+    assert len(calls) == 2
+    ago(61)
+    ask()
+    _wait_meta(meta_path, lambda m: m.get("lyrics_checks") == 3)
+    ago(61)  # then a day
+    ask()
+    time.sleep(0.3)
+    assert len(calls) == 3
 
 
 # ── pitch: F0 cleanup and the auto key ───────────────────────────────────────
