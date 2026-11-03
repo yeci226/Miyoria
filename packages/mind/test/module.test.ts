@@ -58,6 +58,15 @@ function dataText(provider: MockProvider, n = 0): string {
 }
 
 describe("mind module", () => {
+  it("thinks with reasoning only when [llm.thinking] mind is on", async () => {
+    const provider = new MockProvider("p").reply(FULL_REPLY);
+    await rig(provider, { thinking: { mind: true } }).then((r) =>
+      r.publish(salient("Owen 進了語音頻道「聊天室」")),
+    );
+    await wait(4000);
+    expect(provider.requests()[0]?.thinking).toBe(true);
+  });
+
   it("thinks about a salient change and acts on it, within bounds", async () => {
     const provider = new MockProvider("p").reply(FULL_REPLY);
     const r = await rig(provider);
@@ -68,7 +77,8 @@ describe("mind module", () => {
     expect(provider.requests().length).toBe(1);
     const request = provider.requests()[0];
     expect(request?.json_mode).toBe(true);
-    expect(request?.thinking).toBe(true);
+    // Not forced on: `[llm.thinking] mind` decides, and this rig sets none.
+    expect(request?.thinking).toBe(false);
     expect(request?.model).toBe("mind");
     // Names, the world summary and what happened are data; the system role has none of it.
     for (const derived of ["Owen", "Minecraft", "聊天室", "海豚"]) {

@@ -816,7 +816,7 @@ export class MindLoop implements Mind {
                 {
                   messages,
                   json_mode: true,
-                  thinking: true,
+                  // No `thinking` here: `[llm.thinking] mind` decides (the example config has it on).
                   max_tokens: cfg.max_tokens,
                   session: `mind-${d.profile}`,
                 },

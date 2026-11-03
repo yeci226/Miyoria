@@ -234,6 +234,8 @@ export interface RigOptions {
   withIntents?: boolean;
   /** Provides more app services before start. */
   extra?: (sup: Supervisor) => void;
+  /** `[llm.thinking]` of the router (default: none, so no purpose thinks). */
+  thinking?: Record<string, boolean>;
 }
 
 const running: Supervisor[] = [];
@@ -273,7 +275,9 @@ export async function rig(provider: MockProvider, options: RigOptions = {}): Pro
   const intents = new FakeIntents();
   const purposes = new Map<string, ModelRef[]>([["chat", [parseModelRef("p:chat")]]]);
   if (!options.chatOnly) purposes.set("mind", [parseModelRef("p:mind")]);
-  const router = new LlmRouter(new Map([["p", provider]]), purposes);
+  const router = new LlmRouter(new Map([["p", provider]]), purposes, {
+    thinking: new Map(Object.entries(options.thinking ?? {})),
+  });
   await sup.register(new Stub("llm", (ctx) => ctx.provide(LlmRouterKey, router)), null, true);
   await sup.register(new Stub("world", (ctx) => ctx.provide(WorldStateKey, world)), null, true);
   await sup.register(

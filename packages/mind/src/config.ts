@@ -13,7 +13,7 @@ const count = () => z.number().int().nonnegative();
  * ```
  */
 export const MindConfigSchema = z.object({
-  /** LLM purpose of her thoughts (thinking on; falls back to `chat` with a warning). */
+  /** LLM purpose of her thoughts (thinking per `[llm.thinking]`; falls back to `chat` with a warning). */
   purpose: z.string().default("mind"),
   /** At most this many thoughts in any rolling hour (every trigger counts). */
   max_calls_per_hour: count().default(12),
