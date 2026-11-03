@@ -382,6 +382,109 @@ def test_guess_artist_title(raw, uploader, expected):
     assert guess_artist_title(raw, uploader) == expected
 
 
+def _lrclib(answers):
+    """An httpx client whose lrclib answers come from ``answers(params) -> (status, json)``."""
+    import httpx
+
+    seen: list[dict[str, str]] = []
+
+    def handler(request):
+        params = dict(request.url.params)
+        seen.append(params)
+        status, body = answers(params)
+        return httpx.Response(status, json=body)
+
+    return httpx.Client(base_url="https://lrclib.test", transport=httpx.MockTransport(handler)), seen
+
+
+_HIT = [{"trackName": "Song", "artistName": "A", "duration": 100, "syncedLyrics": "[00:01.00]hi",
+         "plainLyrics": "hi"}]
+
+
+def test_lyrics_retries_after_503():
+    from lyrics import lookup
+
+    calls = iter([(503, {}), (200, _HIT)])
+    client, seen = _lrclib(lambda _p: next(calls))
+    slept: list[float] = []
+    found = lookup("Song", None, 100, client=client, sleep=slept.append)
+    assert found is not None and found["synced"] is True
+    assert slept == [1.0] and len(seen) == 2
+
+
+def test_lyrics_gives_up_after_3_attempts():
+    from lyrics import lookup
+
+    client, seen = _lrclib(lambda _p: (503, {}))
+    slept: list[float] = []
+    assert lookup("Song", None, 100, client=client, sleep=slept.append) is None
+    assert len(seen) == 3 and slept == [1.0, 3.0]
+
+
+@pytest.mark.parametrize("answer", [(404, {}), (200, [])])
+def test_lyrics_no_retry_on_404_or_empty(answer):
+    from lyrics import lookup
+
+    client, seen = _lrclib(lambda _p: answer)
+    slept: list[float] = []
+    assert lookup("Song", None, 100, client=client, sleep=slept.append) is None
+    assert len(seen) == 1 and slept == []
+    client, seen = _lrclib(lambda _p: answer)
+    assert lookup("Song", "A", 100, client=client, sleep=slept.append) is None
+    assert len(seen) == 2 and seen[1] == {"q": "A Song"} and slept == []
+
+
+def test_lyrics_falls_back_to_query():
+    from lyrics import lookup
+
+    client, seen = _lrclib(lambda p: (200, _HIT) if p.get("q") == "櫻之詩" else (200, []))
+    found = lookup("Sakura no Uta MV", "Channel", 100, query="櫻之詩", client=client, sleep=lambda _s: None)
+    assert found is not None and found["synced"] is True
+    assert seen[-1] == {"q": "櫻之詩"}
+
+
+def test_cached_song_without_lyrics_gets_them_later(sing, monkeypatch):
+    if not is_mock():
+        pytest.skip("edits the cache")
+    import json
+
+    server = sys.modules["sing_server"]
+    b = server.state.backend
+    calls: list[str | None] = []
+    found: dict = {"value": None}
+
+    def fake_lyrics(src, duration, query=None):
+        calls.append(query)
+        return found["value"]
+
+    monkeypatch.setattr(b, "lyrics", fake_lyrics)
+    first = wait(sing, sing.post("/jobs", json={"query": "lyricless song"}).json()["job"]["id"])
+    assert first["state"] == "done" and first["song"]["lyrics"] is None
+    assert calls == ["lyricless song"]
+    sid = first["song_id"]
+    root = Path(os.environ["SING_DATA_DIR"])
+    meta_path = root / sid / "meta.json"
+    assert json.loads(meta_path.read_text("utf-8"))["lyrics_checked_at"] > time.time() - 60
+
+    # Within 10 minutes: a plain cache hit, no new lookup.
+    assert sing.post("/jobs", json={"query": "lyricless song"}).json()["job"]["state"] == "done"
+    assert len(calls) == 1
+
+    meta = json.loads(meta_path.read_text("utf-8"))
+    meta["lyrics_checked_at"] = time.time() - 11 * 60
+    meta_path.write_text(json.dumps(meta), "utf-8")
+    found["value"] = {"provider": "mock", "synced": True, "lrc": "[00:00.50]now found", "plain": None,
+                      "track": "lyricless song", "artist": None}
+    again = sing.post("/jobs", json={"query": "lyricless song"}).json()["job"]
+    assert again["state"] in ("queued", "running")  # not answered from the cache at once
+    done = wait(sing, again["id"])
+    assert done["state"] == "done" and done["cached"] is True
+    assert done["song"]["lyrics"]["synced"] is True
+    assert done["song"]["lyrics"]["lines"] == [{"t": 0.5, "text": "now found"}]
+    assert (root / sid / "lyrics.lrc").exists()
+    assert len(calls) == 2
+
+
 # ── pitch: F0 cleanup and the auto key ───────────────────────────────────────
 
 

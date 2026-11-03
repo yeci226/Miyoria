@@ -240,7 +240,7 @@ class MockBackend:
         (out / "play_vocals.pcm").write_bytes(vocals.tobytes())
         return {"vocal_gain": 1.0, "lufs": -16.0, "samples": len(mix), "duration_s": round(len(mix) / PLAY_RATE, 2)}
 
-    def lyrics(self, src: Source, duration: float | None) -> dict[str, Any] | None:
+    def lyrics(self, src: Source, duration: float | None, query: str | None = None) -> dict[str, Any] | None:
         if os.environ.get("SING_LYRICS", "1") == "0":
             return None
         lines = [f"[00:{i:02d}.00]mock line {i + 1}" for i in range(max(1, int(self.seconds)))]
@@ -292,12 +292,12 @@ class _RealAdapter:
         return mix_song(sdir / "vocals.wav", converted, sdir / "instrumental.wav", key, out, self.b,
                         env_float("SING_TARGET_LUFS", -16.0))
 
-    def lyrics(self, src: Source, duration: float | None) -> dict[str, Any] | None:
+    def lyrics(self, src: Source, duration: float | None, query: str | None = None) -> dict[str, Any] | None:
         if os.environ.get("SING_LYRICS", "1") == "0":
             return None
         from lyrics import lookup
 
-        return lookup(src.title, src.artist, duration)
+        return lookup(src.title, src.artist, duration, query=query)
 
 
 # ── jobs ─────────────────────────────────────────────────────────────────────
@@ -465,6 +465,31 @@ def _peak_vram_mb() -> int | None:
 
 def _video_on() -> bool:
     return os.environ.get("SING_VIDEO", "1") != "0"
+
+
+#: A cached song without lyrics is looked up again after this long (lrclib may have been busy).
+LYRICS_RECHECK_S = 600
+
+
+def _needs_lyrics(meta: dict[str, Any]) -> bool:
+    """A cached song without lyrics whose last lookup is older than ``LYRICS_RECHECK_S``."""
+    if os.environ.get("SING_LYRICS", "1") == "0" or meta.get("lyrics") is not None:
+        return False
+    return time.time() - float(meta.get("lyrics_checked_at") or 0) > LYRICS_RECHECK_S
+
+
+def _lyrics_meta(found: dict[str, Any] | None, out: Path) -> dict[str, Any] | None:
+    """The ``lyrics`` part of a song's meta from a lookup result (writes ``lyrics.lrc``)."""
+    if not found:
+        return None
+    from lyrics import parse_lrc
+
+    lines = parse_lrc(found["lrc"]) if found.get("lrc") else []
+    if found.get("lrc"):
+        (out / "lyrics.lrc").write_text(found["lrc"], "utf-8")
+    return {"provider": found["provider"], "synced": bool(lines), "track": found.get("track"),
+            "artist": found.get("artist"), "lines": lines,
+            "plain": None if lines else (found.get("plain") or "")[:4000]}
 
 
 def _needs_video(meta: dict[str, Any], kind: str | None) -> bool:
@@ -651,6 +676,12 @@ def _run_job(job: Job) -> None:
             _start_video(job, src, sdir)
             cached.update(_attach_video(job, src, sdir, store.song_dir(sid), cached.setdefault("timings", {})))
             store.write_meta(sid, cached)
+        if _needs_lyrics(cached):
+            # lrclib may have been busy when it was made: look again.
+            found = timed("lyrics", lambda: b.lyrics(src, cached.get("duration_s"), req.query))
+            cached["lyrics"] = _lyrics_meta(found, store.song_dir(sid))
+            cached["lyrics_checked_at"] = time.time()
+            store.write_meta(sid, cached)
         return
 
     _peak_vram_reset()
@@ -701,17 +732,8 @@ def _run_job(job: Job) -> None:
     mixed = timed("mix", lambda: b.mix(sdir, converted, pitch_info["song_key"], out))
     converted.unlink(missing_ok=True)
     duration = mixed.get("duration_s") or src.duration_s
-    found = timed("lyrics", lambda: b.lyrics(src, duration))
-    lyrics_meta: dict[str, Any] | None = None
-    if found:
-        from lyrics import parse_lrc
-
-        lines = parse_lrc(found["lrc"]) if found.get("lrc") else []
-        if found.get("lrc"):
-            (out / "lyrics.lrc").write_text(found["lrc"], "utf-8")
-        lyrics_meta = {"provider": found["provider"], "synced": bool(lines), "track": found.get("track"),
-                       "artist": found.get("artist"), "lines": lines,
-                       "plain": None if lines else (found.get("plain") or "")[:4000]}
+    found = timed("lyrics", lambda: b.lyrics(src, duration, req.query))
+    lyrics_meta = _lyrics_meta(found, out)
     video = _attach_video(job, src, sdir, out, timings)
     timings["total_s"] = round(time.perf_counter() - t_job, 2)
     meta = {
@@ -722,6 +744,7 @@ def _run_job(job: Job) -> None:
         "source": src.public(),
         "pitch": pitch_info,
         "lyrics": lyrics_meta,
+        "lyrics_checked_at": time.time(),
         **video,
         "play": {"sample_rate": PLAY_RATE, "samples": mixed.get("samples"), "format": "s16le", "channels": 1},
         "mix": mixed,
@@ -833,7 +856,8 @@ async def submit(req: JobRequest) -> JSONResponse:
         meta = state.store.meta(sid) if sid else None
         info = state.store.source_info(key or "") if meta is not None else None
         # (A song from before videos existed goes through the queue to get its video.)
-        if meta is not None and not _needs_video(meta, (info or {}).get("kind")):
+        # (So does one without lyrics, after a while: lrclib may have been busy.)
+        if meta is not None and not _needs_video(meta, (info or {}).get("kind")) and not _needs_lyrics(meta):
             job.state, job.stage, job.progress, job.cached = "done", "done", 1.0, True
             job.song_id, job.source, job.finished_at = sid, info, now_iso()
     with state.lock:

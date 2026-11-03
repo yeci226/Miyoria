@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+import time
+from typing import Any, Callable
 
 log = logging.getLogger("miyoria.sing.lyrics")
 
@@ -90,34 +91,68 @@ def _score(item: dict[str, Any], title: str, artist: str | None, duration: float
     return s
 
 
+def _search(c: Any, params: dict[str, str], attempts: int, backoff: tuple[float, ...],
+            sleep: Callable[[float], None]) -> list[Any]:
+    """One lrclib search; 5xx, 429 and network errors are tried again (``attempts`` in all)."""
+    import httpx
+
+    for attempt in range(attempts):
+        last = attempt == attempts - 1
+        try:
+            r = c.get("/api/search", params=params)
+        except httpx.TransportError:
+            if last:
+                raise
+        else:
+            if r.status_code == 200:
+                items = r.json()
+                return items if isinstance(items, list) else []
+            if not (r.status_code >= 500 or r.status_code == 429) or last:
+                log.info("lyrics search answered %s", r.status_code)
+                return []
+        sleep(backoff[min(attempt, len(backoff) - 1)])
+    return []
+
+
 def lookup(
     title: str,
     artist: str | None,
     duration: float | None,
     *,
+    query: str | None = None,
+    attempts: int = 3,
+    backoff: tuple[float, ...] = (1.0, 3.0),
+    sleep: Callable[[float], None] = time.sleep,
     base_url: str = LRCLIB_URL,
     timeout: float = 10.0,
     client: Any = None,
 ) -> dict[str, Any] | None:
     """Best lrclib.net match: ``{"provider", "synced", "lrc", "plain", "track", "artist"}`` or None.
 
-    Prefers synced lyrics whose duration is within 15 s of the song. Network errors → None.
+    Searches by title (and artist), then ``artist title``, then the request as typed (``query``:
+    a video title often is not the song's name). Busy answers are tried again. Prefers synced
+    lyrics whose duration is within 15 s of the song. Network errors → None.
     """
     import httpx
 
     headers = {"User-Agent": "Miyoria song worker (https://github.com/miyoria)"}
     own = client is None
     c = client or httpx.Client(base_url=base_url, timeout=timeout, headers=headers)
+
+    def search(params: dict[str, str]) -> list[Any]:
+        return _search(c, params, attempts, backoff, sleep)
+
     try:
         params: dict[str, str] = {"track_name": title}
         if artist:
             params["artist_name"] = artist
-        r = c.get("/api/search", params=params)
-        items = r.json() if r.status_code == 200 else []
+        items = search(params)
         if not items and artist:
-            r = c.get("/api/search", params={"q": f"{artist} {title}"})
-            items = r.json() if r.status_code == 200 else []
-        if not isinstance(items, list) or not items:
+            items = search({"q": f"{artist} {title}"})
+        q = (query or "").strip()
+        if not items and q and q.lower() not in (title.lower(), f"{artist} {title}".lower()):
+            items = search({"q": q})
+        if not items:
             return None
         best = max(items, key=lambda it: _score(it, title, artist, duration))
         if duration and best.get("duration") and abs(float(best["duration"]) - duration) > 15:
