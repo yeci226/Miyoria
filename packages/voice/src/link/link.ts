@@ -21,18 +21,32 @@ import { z } from "zod";
 import {
   CLOSE,
   decodeAudio,
+  decodeSnapshot,
+  decodeWatchAudio,
   type NodeMessage,
   NodeMessageSchema,
   TAG_CAPTURE,
+  TAG_SNAPSHOT,
+  TAG_WATCH_AUDIO,
   VERSION,
   type WireParticipant,
 } from "../protocol.js";
 import { BoundedQueue, deferred, Watch } from "../util.js";
-import { Conn, closeSocket, type GoLiveStatus, newConnState, VoiceLinkError } from "./conn.js";
+import {
+  Conn,
+  closeSocket,
+  type GoLiveStatus,
+  newConnState,
+  VoiceLinkError,
+  type WatchStatus,
+} from "./conn.js";
 import { type LeveledChunk, type Playback, startPlayback } from "./playback.js";
 
 /** Topic of Go Live state changes (`custom` event). */
 export const GOLIVE_TOPIC = "voice.golive";
+
+/** Topic of watch state changes (`custom` event). */
+export const WATCH_TOPIC = "voice.watch";
 
 export const DEFAULT_BIND = "127.0.0.1:7879";
 
@@ -184,6 +198,9 @@ export class VoiceLink {
   #conns: Conn[] = [];
   #audioSubs: BoundedQueue<AudioEvent>[] = [];
   #audioDropped = 0;
+  #watchAudioSubs: BoundedQueue<Int16Array>[] = [];
+  #watchAudioDropped = 0;
+  #nextSnapshot = 1;
   readonly #knownSelf = new Map<string, AccountRef>();
   #nextConn = 1;
   #nextPlay = 1;
@@ -400,6 +417,96 @@ export class VoiceLink {
         reason: status.reason,
       }),
     );
+  }
+
+  /** Asks the node to watch `userId`'s Go Live in `guild`. Progress arrives as `voice.watch`. */
+  async watchStart(guild: string, userId: string): Promise<void> {
+    await this.#connFor(guild).sendJson({ type: "watch_start", guild, user_id: userId });
+  }
+
+  /** Asks the node to stop watching in `guild`. */
+  async watchStop(guild: string): Promise<void> {
+    await this.#connFor(guild).sendJson({ type: "watch_stop", guild });
+  }
+
+  /** The last watch state the node reported for `guild`. */
+  watchStatus(guild: string): WatchStatus | null {
+    for (const c of this.#conns.toReversed()) {
+      const s = c.state.watch.get(guild);
+      if (s) return { ...s };
+    }
+    return null;
+  }
+
+  /**
+   * Asks the node for a JPEG of the watched stream in `guild`. Rejects after `timeoutMs`, when
+   * `signal` aborts, when the node reports a failure or when it disconnects; a frame that arrives
+   * after that is dropped.
+   */
+  async snapshot(guild: string, timeoutMs: number, signal: AbortSignal): Promise<Buffer> {
+    const conn = this.#connFor(guild);
+    signal.throwIfAborted();
+    const id = this.#nextSnapshot;
+    this.#nextSnapshot = (this.#nextSnapshot + 1) >>> 0;
+    const answer = deferred<Buffer>();
+    // The state is replaced on disconnect, so keep the map the entry went into.
+    const snapshots = conn.state.snapshots;
+    snapshots.set(id, { resolve: answer.resolve, reject: answer.reject });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    const interrupted = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new VoiceLinkError("voice node did not send a snapshot in time")),
+        Math.max(1, timeoutMs),
+      );
+      onAbort = () => reject(new VoiceLinkError("snapshot aborted"));
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    interrupted.catch(() => undefined);
+    try {
+      await conn.sendJson({ type: "watch_snapshot", id });
+      return await Promise.race([answer.promise, interrupted]);
+    } finally {
+      clearTimeout(timer);
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+      snapshots.delete(id);
+    }
+  }
+
+  #publishWatch(platform: PlatformId, guild: string, status: WatchStatus): void {
+    this.#publishEvent(
+      customEvent(WATCH_TOPIC, {
+        platform,
+        guild,
+        user_id: status.user_id,
+        state: status.state,
+        error: status.error,
+        reason: status.reason,
+      }),
+    );
+  }
+
+  /**
+   * Receives the PCM (s16le mono 16 kHz) of the watched stream from now on. The queue is
+   * bounded; frames are dropped (with a warning) while it is full.
+   */
+  subscribeWatchAudio(signal?: AbortSignal): BoundedQueue<Int16Array> {
+    const queue = new BoundedQueue<Int16Array>(this.#audioBuffer, signal);
+    this.#watchAudioSubs.push(queue);
+    return queue;
+  }
+
+  #emitWatchAudio(samples: Int16Array): void {
+    this.#watchAudioSubs = this.#watchAudioSubs.filter((q) => {
+      if (q.closed) return false;
+      if (!q.push(samples)) {
+        const n = this.#watchAudioDropped++;
+        if (n % 100 === 0) {
+          this.#log.warn({ dropped: n + 1 }, "watch audio subscriber is full, dropping frames");
+        }
+      }
+      return true;
+    });
   }
 
   /**
@@ -699,6 +806,32 @@ export class VoiceLink {
         this.#publishGolive(platform, msg.guild, status);
         return;
       }
+      case "watch": {
+        const status: WatchStatus = {
+          user_id: msg.user_id,
+          state: msg.state,
+          error: msg.error,
+          reason: msg.reason,
+        };
+        const current = st.watch.get(msg.guild);
+        // A stop from a user she is no longer watching must not clear the new watch.
+        const stale =
+          current !== undefined &&
+          current.user_id !== msg.user_id &&
+          (msg.state === "stopped" || msg.state === "failed");
+        if (!stale) st.watch.set(msg.guild, status);
+        this.#log.info(
+          { guild: msg.guild, state: status.state, error: status.error, stale },
+          "watch state",
+        );
+        this.#publishWatch(platform, msg.guild, status);
+        return;
+      }
+      case "watch_snapshot_failed": {
+        st.snapshots.get(msg.id)?.reject(new VoiceLinkError(`snapshot failed: ${msg.error}`));
+        st.snapshots.delete(msg.id);
+        return;
+      }
       case "error": {
         this.#log.warn({ message: msg.message }, "voice node error");
         st.pendingJoins.shift()?.reject(msg.message);
@@ -708,6 +841,19 @@ export class VoiceLink {
   }
 
   #handleAudio(conn: Conn, data: Uint8Array): void {
+    if (data[0] === TAG_SNAPSHOT) {
+      const snap = decodeSnapshot(data);
+      const pending = snap ? conn.state.snapshots.get(snap.id) : undefined;
+      if (snap && pending) {
+        conn.state.snapshots.delete(snap.id);
+        pending.resolve(snap.jpeg);
+      }
+      return;
+    }
+    if (data[0] === TAG_WATCH_AUDIO) {
+      this.#emitWatchAudio(decodeWatchAudio(data));
+      return;
+    }
     const frame = decodeAudio(data);
     if (!frame) return;
     if (frame.tag !== TAG_CAPTURE) {
@@ -740,6 +886,16 @@ export class VoiceLink {
           });
         }
       }
+      for (const [guild, status] of state.watch) {
+        if (status.state === "starting" || status.state === "live") {
+          this.#publishWatch(platform, guild, {
+            ...status,
+            state: "stopped",
+            error: null,
+            reason: "voice node disconnected",
+          });
+        }
+      }
       for (const [guild, g] of state.guilds) {
         this.#publishEvent({
           type: "voice_left",
@@ -752,6 +908,9 @@ export class VoiceLink {
     }
     this.#log.info({ account: conn.account.id, code: conn.closeCode() }, "voice node disconnected");
     for (const p of state.pendingJoins) p.reject("voice node disconnected");
+    for (const p of state.snapshots.values())
+      p.reject(new VoiceLinkError("voice node disconnected"));
+    state.snapshots.clear();
   }
 }
 

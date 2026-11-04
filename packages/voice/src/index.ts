@@ -29,7 +29,12 @@ export {
   consentKey,
   defaultAllowed,
 } from "./consent.js";
-export { type GoLiveState, type GoLiveStatus, VoiceLinkError } from "./link/conn.js";
+export {
+  type GoLiveState,
+  type GoLiveStatus,
+  VoiceLinkError,
+  type WatchStatus,
+} from "./link/conn.js";
 export {
   type AudioEvent,
   DEFAULT_BIND,
@@ -42,6 +47,7 @@ export {
   VoiceLinkKey,
   type VoiceLinkOptions,
   voiceContext,
+  WATCH_TOPIC,
 } from "./link/link.js";
 export { VOICE_LINK_PATH, VoiceLinkModule } from "./link/module.js";
 export { Playback, type Stoppable } from "./link/playback.js";

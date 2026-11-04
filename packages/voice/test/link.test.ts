@@ -9,7 +9,7 @@ import {
   VoicePlayerKey,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
-import { type AudioEvent, GOLIVE_TOPIC, type GoLiveRequest } from "../src/index.js";
+import { type AudioEvent, GOLIVE_TOPIC, type GoLiveRequest, WATCH_TOPIC } from "../src/index.js";
 import type { BoundedQueue } from "../src/util.js";
 import { Harness, nextEvent, SELF_ID, sleepMs, TOKEN, waitUntil } from "./harness.js";
 
@@ -463,6 +463,202 @@ describe("voice.link", () => {
     expect(payload.reason).toBe("voice node disconnected");
     await waitUntil(() => !link.isConnected());
     expect(link.golive("g1")).toBeNull();
+  });
+
+  // ── watching a stream ──────────────────────────────────────────────────────
+
+  function snapshotFrame(id: number, jpeg: Buffer): Buffer {
+    const head = Buffer.alloc(5);
+    head[0] = 0x04;
+    head.writeUInt32LE(id, 1);
+    return Buffer.concat([head, jpeg]);
+  }
+
+  async function requestedSnapshot(node: Awaited<ReturnType<Harness["node"]>>): Promise<number> {
+    const msg = await node.recvType("watch_snapshot");
+    return msg.id as number;
+  }
+
+  it("watch_start_and_status", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const events = h.subscribe([WATCH_TOPIC]);
+
+    expect(link.watchStatus("g1")).toBeNull();
+    await link.watchStart("g1", "u1");
+    expect(await node.recvJson()).toEqual({ type: "watch_start", guild: "g1", user_id: "u1" });
+    node.sendJson({ type: "watch", guild: "g1", user_id: "u1", state: "live" });
+    const ev = data((await nextEvent(events)).event, "custom");
+    expect(ev.topic).toBe(WATCH_TOPIC);
+    expect(ev.payload).toEqual({
+      platform: "discord",
+      guild: "g1",
+      user_id: "u1",
+      state: "live",
+      error: null,
+      reason: null,
+    });
+    expect(link.watchStatus("g1")).toEqual({
+      user_id: "u1",
+      state: "live",
+      error: null,
+      reason: null,
+    });
+
+    await link.watchStop("g1");
+    expect(await node.recvJson()).toEqual({ type: "watch_stop", guild: "g1" });
+  });
+
+  it("watch_without_a_node_fails", async () => {
+    const h = await start();
+    const link = h.link();
+    expect(await rejection(link.watchStart("g1", "u1"))).toContain("no voice node");
+    await rejection(link.watchStop("g1"));
+    await rejection(link.snapshot("g1", 1000, new AbortController().signal));
+  });
+
+  it("stale_stop_does_not_clear_the_new_watch", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const events = h.subscribe([WATCH_TOPIC]);
+
+    node.sendJson({ type: "watch", guild: "g1", user_id: "u2", state: "live" });
+    await nextEvent(events);
+    node.sendJson({ type: "watch", guild: "g1", user_id: "u1", state: "stopped", reason: "old" });
+    const stale = data((await nextEvent(events)).event, "custom").payload as Record<
+      string,
+      unknown
+    >;
+    expect(stale.user_id).toBe("u1");
+    expect(link.watchStatus("g1")?.user_id).toBe("u2");
+    expect(link.watchStatus("g1")?.state).toBe("live");
+
+    node.sendJson({ type: "watch", guild: "g1", user_id: "u2", state: "failed", error: "boom" });
+    await nextEvent(events);
+    expect(link.watchStatus("g1")).toEqual({
+      user_id: "u2",
+      state: "failed",
+      error: "boom",
+      reason: null,
+    });
+  });
+
+  it("snapshot_resolves_with_jpeg", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const jpeg = Buffer.from([0xff, 0xd8, 1, 2, 3, 0xff, 0xd9]);
+    const pending = link.snapshot("g1", 5000, new AbortController().signal);
+    const id = await requestedSnapshot(node);
+    node.ws.send(snapshotFrame(id, jpeg), { binary: true });
+    expect((await pending).equals(jpeg)).toBe(true);
+  });
+
+  it("snapshot_rejects_on_failed_message", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const pending = rejection(link.snapshot("g1", 5000, new AbortController().signal));
+    const id = await requestedSnapshot(node);
+    node.sendJson({ type: "watch_snapshot_failed", id, error: "no frame yet" });
+    expect(await pending).toContain("no frame yet");
+  });
+
+  it("snapshot_times_out", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const first = rejection(link.snapshot("g1", 50, new AbortController().signal));
+    const oldId = await requestedSnapshot(node);
+    expect(await first).toContain("in time");
+
+    // A late frame is dropped and is not paired with the next request.
+    const second = link.snapshot("g1", 5000, new AbortController().signal);
+    const newId = await requestedSnapshot(node);
+    expect(newId).not.toBe(oldId);
+    node.ws.send(snapshotFrame(oldId, Buffer.from([9, 9])), { binary: true });
+    const jpeg = Buffer.from([1, 2, 3]);
+    node.ws.send(snapshotFrame(newId, jpeg), { binary: true });
+    expect((await second).equals(jpeg)).toBe(true);
+  });
+
+  it("snapshot_rejects_when_aborted_and_drops_the_late_frame", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const abort = new AbortController();
+    const pending = rejection(link.snapshot("g1", 5000, abort.signal));
+    const id = await requestedSnapshot(node);
+    abort.abort();
+    expect(await pending).toContain("abort");
+    node.ws.send(snapshotFrame(id, Buffer.from([1])), { binary: true });
+    const next = link.snapshot("g1", 5000, new AbortController().signal);
+    const nextId = await requestedSnapshot(node);
+    node.ws.send(snapshotFrame(nextId, Buffer.from([2])), { binary: true });
+    expect([...(await next)]).toEqual([2]);
+  });
+
+  it("snapshot_rejects_at_once_when_node_disconnects", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const events = h.subscribe([WATCH_TOPIC]);
+    node.sendJson({ type: "watch", guild: "g1", user_id: "u1", state: "live" });
+    await nextEvent(events);
+
+    const started = Date.now();
+    const pending = rejection(link.snapshot("g1", 5000, new AbortController().signal));
+    await requestedSnapshot(node);
+    node.drop();
+    expect(await pending).toContain("disconnected");
+    expect(Date.now() - started).toBeLessThan(3000);
+    const payload = data((await nextEvent(events)).event, "custom").payload as Record<
+      string,
+      unknown
+    >;
+    expect(payload.state).toBe("stopped");
+    expect(payload.user_id).toBe("u1");
+    expect(payload.reason).toBe("voice node disconnected");
+  });
+
+  it("watch_audio_is_not_capture_audio", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const capture = link.subscribeAudio();
+    const watched = link.subscribeWatchAudio();
+
+    const frame = Buffer.alloc(1 + 4);
+    frame[0] = 0x05;
+    frame.writeInt16LE(7, 1);
+    frame.writeInt16LE(-3, 3);
+    node.ws.send(frame, { binary: true });
+    const got = await Promise.race([watched.recv(), sleepMs(5_000).then(() => null)]);
+    expect([...(got ?? [])]).toEqual([7, -3]);
+    await sleepMs(50);
+    expect(capture.length).toBe(0);
+  });
+
+  it("old_snapshot_id_is_ignored_after_switch", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const abort = new AbortController();
+    const old = rejection(link.snapshot("g1", 5000, abort.signal));
+    const oldId = await requestedSnapshot(node);
+    abort.abort();
+    await old;
+
+    const fresh = link.snapshot("g1", 5000, new AbortController().signal);
+    const freshId = await requestedSnapshot(node);
+    expect(freshId).not.toBe(oldId);
+    node.sendJson({ type: "watch_snapshot_failed", id: oldId, error: "old" });
+    node.ws.send(snapshotFrame(oldId, Buffer.from([0])), { binary: true });
+    const jpeg = Buffer.from([5, 6]);
+    node.ws.send(snapshotFrame(freshId, jpeg), { binary: true });
+    expect((await fresh).equals(jpeg)).toBe(true);
   });
 
   // ── TS-specific ─────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 
 import type { AccountRef, PlaybackState, VoiceParticipant } from "@miyoria/types";
 import WebSocket from "ws";
-import { type CoreMessage, coreMessageJson } from "../protocol.js";
+import { type CoreMessage, coreMessageJson, type WireWatchState } from "../protocol.js";
 import { aborted, type Watch } from "../util.js";
 
 /** Last Go Live state of one guild. */
@@ -20,6 +20,22 @@ export interface GoLiveStatus {
  * voice), `failed` (could not start, or died; see `GoLiveStatus.error`).
  */
 export type GoLiveState = "starting" | "live" | "stopped" | "failed";
+
+/** Last watch state of one guild. */
+export interface WatchStatus {
+  /** Whose stream she is watching (or was). */
+  user_id: string;
+  state: WireWatchState;
+  /** Why it failed (`failed`). */
+  error: string | null;
+  /** Why it ended (`stopped`). */
+  reason: string | null;
+}
+
+export interface PendingSnapshot {
+  resolve(jpeg: Buffer): void;
+  reject(error: Error): void;
+}
 
 export interface GuildState {
   channel: string;
@@ -41,6 +57,10 @@ export interface ConnState {
   streams: Map<number, { id: number; guild: string }>;
   /** Go Live state reported by the node, per guild. */
   golive: Map<string, GoLiveStatus>;
+  /** Watch state reported by the node, per guild. */
+  watch: Map<string, WatchStatus>;
+  /** Snapshot requests waiting for their frame, per request id. */
+  snapshots: Map<number, PendingSnapshot>;
 }
 
 export function newConnState(): ConnState {
@@ -50,6 +70,8 @@ export function newConnState(): ConnState {
     plays: new Map(),
     streams: new Map(),
     golive: new Map(),
+    watch: new Map(),
+    snapshots: new Map(),
   };
 }
 
