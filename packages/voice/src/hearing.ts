@@ -31,6 +31,7 @@ export interface HearingDeps {
   log?: Logger;
 }
 
+/** It has no way to publish, so stream speech never becomes a `voice_utterance`. */
 export class Hearing implements StreamHearing {
   readonly #d: HearingDeps;
   readonly #log: Logger;

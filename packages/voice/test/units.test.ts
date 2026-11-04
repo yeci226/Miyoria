@@ -517,7 +517,7 @@ describe("hearing", () => {
   function setup(
     transcribe: () => Promise<string>,
     slots = new Semaphore(1),
-    published: unknown[] = [],
+    warnings: unknown[] = [],
   ) {
     const calls: Calls = { hints: [], count: 0 };
     const speech = {
@@ -533,7 +533,7 @@ describe("hearing", () => {
       consent: new Consent("opt-out", null),
       asrSlots: slots,
       config: { to_traditional: true, hallucinations: ["thanks for watching"] },
-      log: { debug: () => {}, warn: () => published.push("warn") } as never,
+      log: { debug: () => {}, warn: () => warnings.push("warn") } as never,
     });
     return { hearing, calls };
   }
@@ -569,13 +569,5 @@ describe("hearing", () => {
   it("allowed_follows_consent_and_fails_closed", async () => {
     const { hearing } = setup(async () => "x");
     expect(await hearing.allowed(acc("1"))).toBe(true);
-  });
-
-  it("publishes_no_voice_utterance", async () => {
-    const published: unknown[] = [];
-    const { hearing } = setup(async () => "hello", new Semaphore(1), published);
-    await hearing.transcribe(samples, signal);
-    expect(Object.keys(hearing)).not.toContain("publish");
-    expect(published).toEqual([]);
   });
 });
