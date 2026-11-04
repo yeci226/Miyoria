@@ -1,8 +1,10 @@
+import { runInNewContext } from "node:vm";
 // The tools Core's `share` module calls: reading the feed and capturing one post.
 
 import { describe, expect, it } from "vitest";
 import type { Browser, Pictures } from "../src/adapter.js";
 import type { Post, RawPost } from "../src/feed.js";
+import { READ_POSTS } from "../src/browser.js";
 import { worthReading } from "../src/feed.js";
 import threads from "../src/index.js";
 import { ShareTools } from "../src/share.js";
@@ -96,6 +98,18 @@ function post(extra: Partial<Post>): Post {
     ...extra,
   };
 }
+
+describe("READ_POSTS", () => {
+  it("clears the marks of an earlier read, so a stale block is never captured", () => {
+    const attrs = new Map([["data-miyoria-post", "3"]]);
+    const stale = { removeAttribute: (name: string) => attrs.delete(name) };
+    const document = {
+      querySelectorAll: (selector: string) => (selector === "time" ? [] : [stale]),
+    };
+    expect(runInNewContext(READ_POSTS, { document })).toEqual([]);
+    expect(attrs.size).toBe(0);
+  });
+});
 
 describe("worthReading", () => {
   it("keeps a normal post, and a short one with a picture", () => {

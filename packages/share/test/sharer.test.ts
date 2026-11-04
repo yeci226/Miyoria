@@ -135,6 +135,7 @@ function rig(replies: (string | Error)[], config: Partial<ShareConfig> = {}): Ri
     },
     now: () => clock.now,
     warn: () => {},
+    info: () => {},
   };
   const sharer = new Sharer(
     ShareConfigSchema.parse({ quiet_hours: "", browse_gap_mins: 0, ...config }),
@@ -204,6 +205,15 @@ describe("a round", () => {
     r.feed.captures["/@u/post/1"] = { jpeg: "AQID", description: "海邊的夕陽" };
     await round(r);
     expect(JSON.stringify(r.model.requests[0]?.messages)).toContain("海邊的夕陽");
+  });
+
+  it("says how far a round got", async () => {
+    const rounds: unknown[] = [];
+    const r = rig(['{"picks":["p1"]}']);
+    r.deps.info = (_message, fields) => rounds.push(fields);
+    r.decided.hits = [];
+    await round(r);
+    expect(rounds).toEqual([{ read: 1, looked: 1, picked: 1, places: 1, eligible: 1, matched: 0 }]);
   });
 
   it("no pick ends the round with one model call and removes the pictures", async () => {

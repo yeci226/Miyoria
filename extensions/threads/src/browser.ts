@@ -29,9 +29,10 @@ export function defaultProfileDir(env: NodeJS.ProcessEnv = process.env): string 
  * ancestor that still holds only that one `<time>`. Independent of Threads' generated class
  * names. Marks each block with `data-miyoria-post` so it can be scrolled to.
  */
-const READ_POSTS = `(() => {
+export const READ_POSTS = `(() => {
   const out = [];
   let i = 0;
+  for (const old of document.querySelectorAll("[data-miyoria-post]")) old.removeAttribute("data-miyoria-post");
   for (const t of document.querySelectorAll("time")) {
     let el = t;
     while (el.parentElement && el.parentElement.querySelectorAll("time").length === 1) el = el.parentElement;
