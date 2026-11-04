@@ -27,6 +27,8 @@ interface SetupOver {
   goLive?: boolean;
   toJpeg?: (h: Buffer, s: AbortSignal) => Promise<Buffer>;
   pipeline?: () => CapturePipeline;
+  attach?: WatchHost["attach"];
+  holdEngine?: boolean;
 }
 
 function setup(over: SetupOver = {}) {
@@ -40,17 +42,19 @@ function setup(over: SetupOver = {}) {
     run: (plan, hooks, signal) =>
       new Promise<string>((resolve, reject) => {
         runs.push({ plan, hooks, signal, end: resolve, fail: reject });
-        signal.addEventListener("abort", () => resolve("aborted"), { once: true });
+        if (!over.holdEngine) signal.addEventListener("abort", () => resolve("aborted"), { once: true });
       }),
     requestKeyframe,
   };
   const host: WatchHost = {
-    attach: async (guild, userId) => ({ guild, channel: "vc", userId, sessionId: "s" }),
+    attach: over.attach ?? (async (guild, userId) => ({ guild, channel: "vc", userId, sessionId: "s" })),
     goLiveActive: () => over.goLive ?? false,
   };
   const toJpeg = vi.fn(over.toJpeg ?? (async (h: Buffer) => Buffer.concat([Buffer.from("J:"), h])));
+  const dispose = vi.fn();
   const pipeline = vi.fn(
-    over.pipeline ?? (() => ({ push: (p: Buffer) => [Buffer.from(`pcm:${p.toString()}`)] }) as unknown as CapturePipeline),
+    over.pipeline ??
+      (() => ({ push: (p: Buffer) => [Buffer.from(`pcm:${p.toString()}`)], dispose }) as unknown as CapturePipeline),
   );
   const m = new WatchManager({
     engine,
@@ -63,7 +67,7 @@ function setup(over: SetupOver = {}) {
     pipeline,
     attemptMs: 1600,
   });
-  return { m, runs, events, done, failed, audio, requestKeyframe, toJpeg, pipeline };
+  return { m, runs, events, done, failed, audio, requestKeyframe, toJpeg, pipeline, dispose };
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -190,6 +194,68 @@ describe("WatchManager lifecycle", () => {
     await flush();
     expect(t.runs[0]?.signal.aborted).toBe(false);
     expect(t.audio).toHaveLength(0);
+  });
+});
+
+describe("WatchManager teardown", () => {
+  it("start_after_stop_for_the_same_target_restarts", async () => {
+    const t = setup({ holdEngine: true });
+    t.m.start({ guild: "g", user_id: "u" });
+    await flush();
+    t.runs[0]?.hooks.onLive();
+    t.m.stop("g", "bye");
+    t.m.start({ guild: "g", user_id: "u" });
+    expect(t.events.map((e) => e.state)).toEqual(["starting", "live"]);
+    t.runs[0]?.end("done");
+    await flush();
+    expect(t.events.map((e) => e.state)).toEqual(["starting", "live", "stopped", "starting"]);
+    expect(t.runs).toHaveLength(2);
+  });
+
+  it("stop_fails_pending_snapshots_and_kills_conversion_at_once", async () => {
+    let sig: AbortSignal | undefined;
+    const t = setup({
+      holdEngine: true,
+      toJpeg: (_h, s) => {
+        sig = s;
+        return new Promise<Buffer>(() => {});
+      },
+    });
+    t.m.start({ guild: "g", user_id: "u" });
+    await flush();
+    t.m.snapshot(1);
+    t.runs[0]?.hooks.onKeyframe(Buffer.from("k"));
+    t.m.snapshot(2);
+    t.m.stop("g", "bye");
+    expect(t.failed).toEqual([
+      [1, "watch ended"],
+      [2, "watch ended"],
+    ]);
+    expect(sig?.aborted).toBe(true);
+  });
+
+  it("disposes_one_pipeline_per_job", async () => {
+    const t = setup();
+    t.m.start({ guild: "g", user_id: "u1" });
+    await flush();
+    t.m.start({ guild: "g", user_id: "u2" });
+    await flush();
+    expect(t.dispose).toHaveBeenCalledTimes(1);
+    t.runs[1]?.end("over");
+    await flush();
+    expect(t.dispose).toHaveBeenCalledTimes(2);
+  });
+
+  it("disposes_the_pipeline_when_attach_fails", async () => {
+    const t = setup({
+      attach: async () => {
+        throw new Error("no voice");
+      },
+    });
+    t.m.start({ guild: "g", user_id: "u" });
+    await flush();
+    expect(t.events.at(-1)).toMatchObject({ state: "failed", error: "no voice" });
+    expect(t.dispose).toHaveBeenCalledTimes(1);
   });
 });
 

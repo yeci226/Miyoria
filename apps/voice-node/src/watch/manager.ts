@@ -106,7 +106,7 @@ export class WatchManager {
       return;
     }
     const sameAsCurrent = job.guild === msg.guild && job.userId === msg.user_id;
-    if (sameAsCurrent && !this.queued) {
+    if (sameAsCurrent && !this.queued && !job.abort.signal.aborted) {
       this.send({ guild: job.guild, userId: job.userId, state: job.state });
       return;
     }
@@ -174,6 +174,15 @@ export class WatchManager {
   private stopJob(job: Job, reason: string): void {
     if (job.stopReason === undefined) job.stopReason = reason;
     job.abort.abort();
+    this.failPending(job);
+  }
+
+  /** Ends the snapshot cycle (killing any ffmpeg) and fails every pending id. */
+  private failPending(job: Job): void {
+    this.endCycle(job);
+    const ids = [...job.pending];
+    job.pending.clear();
+    for (const id of ids) this.safe(() => this.o.snapshotFailed(id, "watch ended"));
   }
 
   private isCurrent(job: Job): boolean {
@@ -207,8 +216,9 @@ export class WatchManager {
   private async run(job: Job): Promise<void> {
     const { signal } = job.abort;
     let final: WatchEvent;
+    let pipeline: CapturePipeline | undefined;
     try {
-      const pipeline = this.o.pipeline();
+      pipeline = this.o.pipeline();
       const plan = await this.o.host.attach(job.guild, job.userId, signal);
       if (signal.aborted) throw new Error("aborted");
       const reason = await this.o.engine.run(plan, this.hooks(job, pipeline), signal);
@@ -228,11 +238,10 @@ export class WatchManager {
     // Tear down before anything else can see the job as finished.
     job.abort.abort();
     job.state = final.state;
-    this.endCycle(job);
-    const pending = [...job.pending];
-    job.pending.clear();
+    this.failPending(job);
+    const pl = pipeline;
+    if (pl) this.safe(() => pl.dispose());
     this.job = undefined;
-    for (const id of pending) this.safe(() => this.o.snapshotFailed(id, "watch ended"));
     this.send(final);
 
     const next = this.queued;
