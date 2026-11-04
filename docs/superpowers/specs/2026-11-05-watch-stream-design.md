@@ -122,7 +122,6 @@ Node → Core:
 | `connection.ts` | Discord 串流連線。**動到函式庫私有欄位的程式全部關在這裡** |
 | `rtp.ts` | RTP 解析、H.264 組包、PLI |
 | `snapshot.ts` | 要關鍵影格、解密、轉 JPEG |
-| `audio.ts` | Opus 解碼、混成單聲道、轉 16 kHz |
 
 截圖流程:
 
@@ -215,7 +214,7 @@ ASR 和人聲共用同一個並行上限,人聲優先,串流語音排不上時�
 防止亂跳:
 
 - `on_own` 時,一場至少看 `min_watch_secs` 才能換人。
-- 不論誰發起,每小時最多 `starts_per_hour` 次。
+- 不論誰發起,每小時最多 `starts_per_hour` 次。動作閘門沒有每小時限制,由 `packages/watch` 自己用滾動紀錄計數。
 
 心智快照新增兩項:
 
@@ -229,11 +228,11 @@ ASR 和人聲共用同一個並行上限,人聲優先,串流語音排不上時�
 - 開播者設定 `watch:off`。
 - 連續 `max_snapshot_failures` 次截圖失敗。
 - 單場滿 `max_watch_mins`。
-- `[llm.budget]` 用完。
+- `[llm.budget]` 用完,也就是 `router.budgetState()` 回傳 `exhausted`。
 
 ## 同意與通知
 
-- `PersonPrivacy` 新增 `watch`,預設 `true`,由 `/me privacy watch:off` 關閉。
+- `PrivacyChoices` 新增 `watch`,預設 `true`,由 `/me privacy watch:off` 關閉。
 - 開始看時檢查一次,之後每次截圖前都檢查。關閉後不再截新圖,最多約 30 秒內退出觀看。
 - 開始看某人時,在該語音頻道的文字區發卡片,說明她正在看誰、畫面會送到模型,以及怎麼關閉。
 - 同一個人 `notice_hours` 小時內只通知一次。
