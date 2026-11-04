@@ -129,6 +129,7 @@ export class ShareModule implements Module {
         settings,
         now,
         warn: (message, error) => ctx.log.warn({ error: String(error ?? "") }, message),
+        info: (message, fields) => ctx.log.info(fields, message),
       },
       resolve(this.#options.baseDir, "data/threads-share"),
     );

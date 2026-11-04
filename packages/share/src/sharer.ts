@@ -51,6 +51,7 @@ export interface SharerDeps {
   settings: { load(): Promise<unknown>; save(value: JsonValue): Promise<void> };
   now(): number;
   warn(message: string, error?: unknown): void;
+  info(message: string, fields: Record<string, number>): void;
 }
 
 const THREADS = "https://www.threads.com";
@@ -196,7 +197,17 @@ export class Sharer {
         kept = picked;
         return;
       }
-      const matches = await this.#match(this.#eligible(deps.contexts()), picked);
+      const places = deps.contexts();
+      const eligible = this.#eligible(places);
+      const matches = await this.#match(eligible, picked);
+      deps.info("a round on Threads", {
+        read: out.posts.length,
+        looked: looked.length,
+        picked: picked.length,
+        places: places.length,
+        eligible: eligible.length,
+        matched: matches.length,
+      });
       if (matches.length > 0) await this.#share(picked, matches, signal);
     } catch (error) {
       deps.warn("a round on Threads failed", error);
