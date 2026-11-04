@@ -247,7 +247,7 @@ export class DiscordWatchEngine implements WatchEngine {
       const onVideo = (packet: RtpPacket): void => {
         videoSsrc = packet.ssrc;
         const frame = assembler.push(packet);
-        if (!frame || !frame.keyframe) return; // Other frames are dropped without a decrypt.
+        if (!frame?.keyframe) return; // Other frames are dropped without a decrypt.
         const data = open(frame.data, "video");
         if (!data) return;
         if (!gotKeyframe) {

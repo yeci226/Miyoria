@@ -31,8 +31,14 @@ function setup(over: { streaming?: boolean; channel?: string; ready?: boolean; i
   const sent: NodeMessage[] = [];
   const binary: Buffer[] = [];
   const link = Object.assign(new EventEmitter(), {
-    send: (m: NodeMessage) => (sent.push(m), true),
-    sendAudio: (b: Buffer) => (binary.push(b), true),
+    send: (m: NodeMessage) => {
+      sent.push(m);
+      return true;
+    },
+    sendAudio: (b: Buffer) => {
+      binary.push(b);
+      return true;
+    },
   });
   const voiceStates = new Map<string, { channelId: string; streaming: boolean }>();
   voiceStates.set("u1", { channelId: over.channel ?? "vc", streaming: over.streaming ?? true });
