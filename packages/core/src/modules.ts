@@ -3,7 +3,7 @@
 //
 // Boot order (legacy `boot.rs`): llm, speech, voice.link, voice, scheduler, agent, commands,
 // auth, actions, social, mood, world, self, memory, initiative, mind, knowledge, conversation,
-// reflect, queue, game, game.chat, sing, share (opt-in), mcp,
+// reflect, queue, game, game.chat, sing, share (opt-in), watch (opt-in), mcp,
 // stage.link, sandbox (opt-in), recorder, Discord bot, Admin API, terminal chat, then the
 // extension host and one `ext.<id>` per extension.
 
@@ -55,6 +55,7 @@ import {
 import { openStore as openStoreBackend, type Store } from "@miyoria/store";
 import { isJsonObject } from "@miyoria/types";
 import { VoiceLinkModule, VoiceModule } from "@miyoria/voice";
+import { WatchModule } from "@miyoria/watch";
 import { WorldModule } from "@miyoria/world";
 import {
   buildCoreWith,
@@ -147,6 +148,10 @@ async function coreModules({ config, profile, profileId, baseDir }: ModuleDeps):
       persona: (services) =>
         services.get(PersonaHandleKey)?.personaPrompt() ?? profile.personaPrompt(),
       owners: () => authOwners(config),
+    }),
+    new WatchModule({
+      persona: (services) =>
+        services.get(PersonaHandleKey)?.personaPrompt() ?? profile.personaPrompt(),
     }),
     McpModule.fromAppConfig(config),
     new StageLinkModule(),

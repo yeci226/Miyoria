@@ -29,6 +29,7 @@ export const MODULE_IDS: readonly string[] = [
   "game.chat",
   "sing",
   "share",
+  "watch",
   "mcp",
   "stage.link",
   "sandbox",
@@ -50,7 +51,7 @@ export const NEEDS_TOKEN: readonly string[] = [
  * High-risk modules that are off unless their section says `enabled = true` (a missing section
  * or a missing `enabled` key means disabled).
  */
-export const OPT_IN_MODULES: readonly string[] = ["sandbox", "share"];
+export const OPT_IN_MODULES: readonly string[] = ["sandbox", "share", "watch"];
 
 /** Whether the config file enables module `id` (`OPT_IN_MODULES` need `enabled = true`). */
 export function moduleEnabled(config: Config, id: string): boolean {

@@ -18,6 +18,7 @@ import {
   levelHint,
   parseChannelMode,
   Session,
+  UNCAPPED_INITIATIVES,
 } from "../src/index.js";
 import { tacc, tctx, tmsg } from "./fixtures.js";
 
@@ -179,5 +180,9 @@ describe("channel levels", () => {
     expect(levelHint("quiet", VOICE)).toBeNull();
     expect(levelHint("quiet", tctx("dm"))).toBeNull();
     expect(levelHint("always", TEXT)).toBeNull();
+  });
+
+  it("leave what she says about a stream to the watch's own gate", () => {
+    expect(UNCAPPED_INITIATIVES).toContain("watch");
   });
 });

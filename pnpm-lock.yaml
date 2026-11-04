@@ -653,6 +653,9 @@ importers:
       '@miyoria/voice':
         specifier: workspace:*
         version: link:../voice
+      '@miyoria/watch':
+        specifier: workspace:*
+        version: link:../watch
       '@miyoria/world':
         specifier: workspace:*
         version: link:../world

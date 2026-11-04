@@ -21,6 +21,11 @@ export class WatchRefused extends Error {
   override name = "WatchRefused";
 }
 
+/** Why she does not watch someone whose `watch` is off, including the one who asked. */
+export function notWatchable(name: string): string {
+  return `${safeName(name)} 沒有開放讓你看他的直播,或是現在確認不了。要他自己先用 /me privacy 把 watch 打開,你才能看。`;
+}
+
 export interface WatcherDeps {
   source(target: WatchTarget): WatchSource;
   model: Completer;
@@ -208,9 +213,7 @@ export class Watcher {
       );
     }
     if (!(await this.#allowed(target.account))) {
-      throw new WatchRefused(
-        `${safeName(target.name)} 沒有開放讓你看他的直播,或是現在確認不了。要他自己先用 /me privacy 把 watch 打開,你才能看。`,
-      );
+      throw new WatchRefused(notWatchable(target.name));
     }
     if (signal.aborted) throw stopped();
     if (this.#run !== null) await this.#finish(this.#run, "switching", false);

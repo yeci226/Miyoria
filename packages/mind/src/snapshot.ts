@@ -43,7 +43,13 @@ import type { AgendaRef, CapabilityInfo, PersonRef, PlaceRef } from "./prompt.js
 const log = getLogger("mind.snapshot");
 
 /** Capabilities that are not hers to start (the panel's "say", the director's game moves). */
-export const NOT_FOR_HER: readonly string[] = ["speak", "game.act", "stage.stream", "message.dm"];
+export const NOT_FOR_HER: readonly string[] = [
+  "speak",
+  "game.act",
+  "stage.stream",
+  "message.dm",
+  "watch.look",
+];
 
 const MAX_PLACES = 8;
 const MAX_PEOPLE = 10;

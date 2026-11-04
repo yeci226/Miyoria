@@ -56,6 +56,7 @@
     "@miyoria/tools": "workspace:*",
     "@miyoria/types": "workspace:*",
     "@miyoria/voice": "workspace:*",
+    "@miyoria/watch": "workspace:*",
     "@miyoria/world": "workspace:*"
   },
   "devDependencies": {

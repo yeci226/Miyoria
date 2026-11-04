@@ -102,9 +102,10 @@ export function cappedTalk(ceiling: Ceiling, level: number | null): number {
 
 /**
  * Initiative reasons that are not her starting a conversation: the game director's live
- * commentary and the result of something she was asked to do.
+ * commentary, the result of something she was asked to do, and what she says about a stream she
+ * is watching (paced by the watch's own `speakGate`).
  */
-export const UNCAPPED_INITIATIVES: readonly string[] = ["game", "action_result"];
+export const UNCAPPED_INITIATIVES: readonly string[] = ["game", "action_result", "watch"];
 
 /** The level in words, for notices, the panel and her prompt. */
 export function modeLabel(mode: ChannelMode): string {

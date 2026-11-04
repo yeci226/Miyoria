@@ -68,7 +68,7 @@ export const MindConfigSchema = z.object({
    */
   blocked_retry_mins: count().default(30),
   /** Prompt contributors asked for what she remembers about the people and place involved. */
-  contributors: z.array(z.string()).default(["memory"]),
+  contributors: z.array(z.string()).default(["memory", "watch"]),
 });
 
 export type MindConfig = z.output<typeof MindConfigSchema>;

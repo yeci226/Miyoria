@@ -203,6 +203,15 @@ describe("settings", () => {
     expect(moduleEnabled(Config.fromToml(""), "share")).toBe(false);
     expect(moduleEnabled(Config.fromToml("[modules.share]\nenabled = true"), "share")).toBe(true);
   });
+
+  it("watch_is_opt_in", () => {
+    expect(MODULE_IDS.indexOf("watch")).toBe(MODULE_IDS.indexOf("share") + 1);
+    expect(moduleEnabled(Config.fromToml(""), "watch")).toBe(false);
+    expect(moduleEnabled(Config.fromToml("[modules.watch]\nsnapshot_secs = 10"), "watch")).toBe(
+      false,
+    );
+    expect(moduleEnabled(Config.fromToml("[modules.watch]\nenabled = true"), "watch")).toBe(true);
+  });
 });
 
 // ---- recorder and terminal chat ------------------------------------------------------------

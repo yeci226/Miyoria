@@ -118,6 +118,8 @@ const SOLO: Record<string, string> = {
   "sing.play": "唱一首已經準備好的歌",
   "voice.leave": "離開語音去休息,晚點有人再回來(還有歌沒唱完、或剛有人叫你回來時不行)",
   "share.browse": "去滑一下 Threads,看到想分享的就發",
+  "watch.start": "去看語音頻道裡朋友開的直播,正在看別人時等於換人(這不是開你自己的台)",
+  "watch.stop": "不看現在這場直播了",
 };
 
 const THREADS_GAME = ";game = threads 滑 Threads 看大家的貼文講感想";
