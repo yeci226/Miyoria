@@ -134,6 +134,17 @@ export class Semaphore {
     this.#permits = Math.max(1, permits);
   }
 
+  /** Takes a permit if one is free right now (never queues); returns its release function. */
+  tryAcquire(): (() => void) | null {
+    if (this.#permits <= 0) return null;
+    this.#permits--;
+    return once(() => {
+      const next = this.#waiters.shift();
+      if (next) next();
+      else this.#permits++;
+    });
+  }
+
   /** Waits for a permit; returns its release function. Rejects when `signal` aborts first. */
   acquire(signal?: AbortSignal): Promise<() => void> {
     if (signal?.aborted) return Promise.reject(signal.reason);

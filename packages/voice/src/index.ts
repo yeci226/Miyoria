@@ -29,6 +29,7 @@ export {
   consentKey,
   defaultAllowed,
 } from "./consent.js";
+export { Hearing, type HearingDeps, type StreamHearing, StreamHearingKey } from "./hearing.js";
 export {
   type GoLiveState,
   type GoLiveStatus,

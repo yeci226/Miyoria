@@ -1,6 +1,7 @@
 // Ports of the Rust unit tests in `protocol.rs`, `vad.rs`, `segment.rs`, `text.rs`,
 // `consent.rs`, `barge.rs` and `config.rs`.
 
+import type { AsrHint, SpeechService } from "@miyoria/speech";
 import { MemorySettingsStore, type SettingsStore } from "@miyoria/store";
 import type { AccountRef, JsonObject } from "@miyoria/types";
 import { parse as parseToml } from "smol-toml";
@@ -17,9 +18,11 @@ import {
   echoesHint,
   encodeAudio,
   energyDb,
+  Hearing,
   isHallucination,
   NodeMessageSchema,
   Segmenter,
+  Semaphore,
   type Stoppable,
   stripTags,
   TAG_PLAYBACK,
@@ -488,5 +491,91 @@ describe("watch messages", () => {
     const backing = new Uint8Array([9, 0x05, 1, 0, 0xff, 0xff, 7]);
     const frame = backing.subarray(1); // byteOffset 1: not 2-aligned
     expect([...decodeWatchAudio(frame)]).toEqual([1, -1]);
+  });
+});
+
+// ------------------------------------------------------------------ hearing
+
+describe("semaphore", () => {
+  it("try_acquire_returns_null_when_all_permits_are_taken", async () => {
+    const sem = new Semaphore(1);
+    const release = sem.tryAcquire();
+    expect(release).not.toBeNull();
+    expect(sem.tryAcquire()).toBeNull();
+    release?.();
+    const again = sem.tryAcquire();
+    expect(again).not.toBeNull();
+    again?.();
+  });
+});
+
+describe("hearing", () => {
+  interface Calls {
+    hints: AsrHint[];
+    count: number;
+  }
+  function setup(
+    transcribe: () => Promise<string>,
+    slots = new Semaphore(1),
+    published: unknown[] = [],
+  ) {
+    const calls: Calls = { hints: [], count: 0 };
+    const speech = {
+      transcribe: async (_a: unknown, hint: AsrHint) => {
+        calls.count++;
+        calls.hints.push(hint);
+        const text = await transcribe();
+        return ["fake", { text, language: null, emotion: null, audio_events: [] }];
+      },
+    } as unknown as SpeechService;
+    const hearing = new Hearing({
+      speech,
+      consent: new Consent("opt-out", null),
+      asrSlots: slots,
+      config: { to_traditional: true, hallucinations: ["thanks for watching"] },
+      log: { debug: () => {}, warn: () => published.push("warn") } as never,
+    });
+    return { hearing, calls };
+  }
+  const samples = new Int16Array(16_000);
+  const signal = new AbortController().signal;
+
+  it("busy_asr_drops_stream_speech", async () => {
+    const slots = new Semaphore(1);
+    const { hearing, calls } = setup(async () => "hello", slots);
+    const held = slots.tryAcquire();
+    expect(await hearing.transcribe(samples, signal)).toBeNull();
+    expect(calls.count).toBe(0);
+    held?.();
+    expect(await hearing.transcribe(samples, signal)).toBe("hello");
+    expect(slots.tryAcquire()).not.toBeNull(); // the permit was released
+  });
+
+  it("transcript_is_cleaned", async () => {
+    const a = setup(async () => "Thanks for watching");
+    expect(await a.hearing.transcribe(samples, signal)).toBeNull();
+    const b = setup(async () => "这个软件");
+    expect(await b.hearing.transcribe(samples, signal)).toBe("這個軟體");
+    expect(b.calls.hints[0]).toEqual({ language: null, prompt: null });
+  });
+
+  it("asr_failure_returns_null", async () => {
+    const slots = new Semaphore(1);
+    const { hearing } = setup(() => Promise.reject(new Error("asr down")), slots);
+    expect(await hearing.transcribe(samples, signal)).toBeNull();
+    expect(slots.tryAcquire()).not.toBeNull();
+  });
+
+  it("allowed_follows_consent_and_fails_closed", async () => {
+    const { hearing } = setup(async () => "x");
+    expect(await hearing.allowed(acc("1"))).toBe(true);
+  });
+
+  it("publishes_no_voice_utterance", async () => {
+    const published: unknown[] = [];
+    const { hearing } = setup(async () => "hello", new Semaphore(1), published);
+    await hearing.transcribe(samples, signal);
+    expect(Object.keys(hearing)).not.toContain("publish");
+    expect(published).toEqual([]);
   });
 });

@@ -24,6 +24,7 @@ import { BargeIn } from "./barge.js";
 import { registerCommands, unregisterCommands } from "./commands.js";
 import { VoiceConfigSchema, VoiceProfile } from "./config.js";
 import { Consent } from "./consent.js";
+import { Hearing, StreamHearingKey } from "./hearing.js";
 import { type VoiceLink, VoiceLinkKey } from "./link/link.js";
 import { VoiceLinkModule } from "./link/module.js";
 import { Listener } from "./listen.js";
@@ -94,6 +95,8 @@ export class VoiceModule implements Module {
     );
 
     if (speech.hasAsr()) {
+      const asrSlots = new Semaphore(Math.max(1, config.asr_concurrency));
+      ctx.provide(StreamHearingKey, new Hearing({ speech, consent, asrSlots, config }));
       const listener = new Listener({
         ctx,
         link,
@@ -101,7 +104,7 @@ export class VoiceModule implements Module {
         consent,
         config,
         barge,
-        asrSlots: new Semaphore(Math.max(1, config.asr_concurrency)),
+        asrSlots,
       });
       const audio = link.subscribeAudio(ctx.signal);
       ctx.spawn("listen", (signal) => listener.run(audio, signal));
