@@ -183,6 +183,7 @@ export class Sharer {
         return;
       }
       this.#limits.noteFound();
+      if (signal.aborted) return;
       const links = await pickPosts(deps.model, deps.persona(), out.posts, signal);
       const picked = out.posts.filter((p) => links.includes(p.link));
       if (picked.length === 0 || signal.aborted) return;

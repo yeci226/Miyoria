@@ -188,6 +188,8 @@ agent 組 prompt 時,對每個已註冊的 prompt key 送出。逾時 `prompt_ti
 
 ### `tools.register` / `tools.unregister`
 
+名稱以 `internal.` 開頭的工具(登記成 `internal_...`)只給 Core 的模組呼叫,不會提供給模型。
+
 ```json
 {"jsonrpc":"2.0","id":3,"method":"tools.register","params":{
   "name":"weather.now","description":"查詢某個城市現在的天氣",

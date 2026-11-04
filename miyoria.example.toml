@@ -193,6 +193,20 @@ dirs = ["extensions"]
 # prepare_notice = true      # worker 做歌要整張顯示卡時(SING_OFFLOAD_URLS),她先說「我去準備一下歌喔」再讓它開始
 # prepare_notice_gap_secs = 180   # 連點好幾首時這段時間內不再說第二次
 
+# 她閒著時自己滑 Threads,把截圖和評語發到文字頻道(要有 extensions/threads,見它的 README)。
+# 只有貼文對得上那個頻道的記憶和筆記才發;上限、頻道、時段都由程式把關,模型繞不過去。
+# [modules.share]
+# enabled = true
+# when = "anytime"           # anytime:想發就發;active:等頻道有人聊天才發
+# max_per_day = 3            # 一天最多發幾則
+# min_gap_mins = 120         # 兩則至少隔多久
+# browse_per_day = 6         # 一天最多滑幾輪
+# posts = 10                 # 一輪最多看幾則
+# quiet_hours = "01:00-08:00"   # 這段時間不滑也不發,空字串 = 關閉
+# channels = []              # 頻道 id;空 = 她自己挑
+# exclude = []               # 永遠不發的頻道 id
+# keep_hours = 24            # active 模式下貼文最多等多久
+
 # 遊戲內聊天變成獨立的對話(每個世界 / 伺服器一段歷史)。玩家在 Discord 用 /me link 拿代碼,
 # 在遊戲聊天室打 `!link <代碼>` 就跟 Discord 帳號連在一起;沒連的玩家是陌生人。
 # 她在遊戲裡的回話很短、不會下指令;直播中又在語音裡時也用語音說(她可以用 game_chat_reply 自己改)

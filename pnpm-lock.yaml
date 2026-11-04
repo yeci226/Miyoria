@@ -623,6 +623,9 @@ importers:
       '@miyoria/self':
         specifier: workspace:*
         version: link:../self
+      '@miyoria/share':
+        specifier: workspace:*
+        version: link:../share
       '@miyoria/sing':
         specifier: workspace:*
         version: link:../sing

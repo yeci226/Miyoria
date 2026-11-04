@@ -47,6 +47,7 @@
     "@miyoria/sandbox": "workspace:*",
     "@miyoria/scheduler": "workspace:*",
     "@miyoria/self": "workspace:*",
+    "@miyoria/share": "workspace:*",
     "@miyoria/sing": "workspace:*",
     "@miyoria/social": "workspace:*",
     "@miyoria/speech": "workspace:*",

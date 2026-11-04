@@ -200,6 +200,8 @@ describe("settings", () => {
       expect(moduleEnabled(Config.fromToml(toml), "sandbox"), toml).toBe(on);
     }
     expect(moduleEnabled(Config.fromToml(""), "agent")).toBe(true);
+    expect(moduleEnabled(Config.fromToml(""), "share")).toBe(false);
+    expect(moduleEnabled(Config.fromToml("[modules.share]\nenabled = true"), "share")).toBe(true);
   });
 });
 

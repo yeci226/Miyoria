@@ -40,19 +40,19 @@
 | `share` 模組 | 上限檢查、挑候選、比對、寫評語、發文、失敗處理 | `packages/share`(新增) |
 | 附圖發送 | 讓她的訊息可以帶圖片 | `packages/types`、`packages/discord` |
 
-外掛不需要新的 RPC:Core 用現有的方式呼叫外掛註冊的工具,和 `@miyoria/game` 呼叫 `game_<id>_observe` 相同。新工具不提供給對話模型,比照 agent 回合的 `#offers` 過濾。
+外掛不需要新的 RPC:Core 用現有的方式呼叫外掛註冊的工具,和 `@miyoria/game` 呼叫 `game_<id>_observe` 相同。名稱以 `internal.` 開頭的工具不提供給模型:`ToolRegistry.specs()` 不列出,agent 回合也不接受呼叫。
 
 ### 外掛新增
 
-- 工具 `threads.feed`:開瀏覽器(若還沒開),讀目前動態,回傳 JSON:最多 `posts` 則貼文的 `id`、作者、文字、連結、圖片數、時間,以及 `logged_in`。
-- 工具 `threads.capture {id}`:回傳該則貼文的 JPEG(base64)和圖片描述。沒有看圖模型或描述失敗時,`description` 為 `null`。
-- 工具 `threads.close`:關閉瀏覽器。
+- 工具 `internal.threads.feed`:開瀏覽器(若還沒開),讀目前動態,回傳 JSON:最多 `posts` 則貼文的 `id`、作者、文字、連結、圖片數、時間,以及 `logged_in`。
+- 工具 `internal.threads.capture {link}`:回傳該則貼文的 JPEG(base64)和圖片描述。沒有看圖模型或描述失敗時,`description` 為 `null`。
+- 工具 `internal.threads.close`:關閉瀏覽器。
 - 設定 `headless`(預設 `false`):Mac 設 `true`。
 - 設定 `game`(預設 `true`):`false` 時不註冊遊戲 adapter,Mac 設 `false`,避免她改走逐則問模型的遊戲流程。
 - `pnpm login`:用同一個資料夾開有視窗的瀏覽器,讓擁有者手動登入。
 - 回傳前只做程式過濾:去掉已看過、廣告標記、文字太短的貼文。已看過的 `id` 存在外掛儲存區,最多保留 500 筆。
 
-單次工具呼叫受 `call_timeout_ms`(預設 30 秒)限制,`threads.feed` 要在 25 秒內結束,時間到就回傳已讀到的貼文。
+單次工具呼叫受 `call_timeout_ms`(預設 30 秒)限制,`internal.threads.feed` 要在 25 秒內結束,時間到就回傳已讀到的貼文。
 
 ### `share` 模組
 
@@ -69,20 +69,20 @@ files?: { name: string; path: string; contentType: string }[];
 mentions?: boolean; // false = 不解析任何提及
 ```
 
-Discord sink 把第一個訊息片段連同檔案一起送出。圖片放在暫存檔,`path` 只留路徑,所以圖片內容不會進入動作紀錄。平台不支援時回報發送失敗,不會默默丟掉圖片。`share` 發的訊息帶 `mentions: false`,讓 sink 用 `allowed_mentions: { parse: [] }`,因此連使用者都不會被標到。
+Discord sink 把第一個訊息片段連同檔案一起送出。圖片放在暫存檔,`path` 只留路徑,所以圖片內容不會進入動作紀錄。平台不支援時回報發送失敗,不會默默丟掉圖片。`share` 直接呼叫 sink 發送,才拿得到失敗結果。她的訊息會經 gateway 回到 `platform.message.created`,照常進入對話紀錄和記憶。`share` 發的訊息帶 `mentions: false`,讓 sink 用 `allowed_mentions: { parse: [] }`,因此連使用者都不會被標到。
 
 ## 流程
 
 ```text
 share.browse
   1. 再檢查一次上限、安靜時段
-  2. threads.feed:讀貼文(不花 token)
+  2. internal.threads.feed:讀貼文(不花 token)
   3. 挑候選:帶人設,一次送出整批貼文,選 0~2 則
   4. 記憶搜尋:每個可發頻道用候選文字搜尋,取前 3 個
-  5. threads.capture:只處理入選貼文
+  5. internal.threads.capture:只處理入選貼文
   6. 比對+寫評語:帶人設、頻道記憶和對話筆記,一次決定
   7. 程式再驗證後發送
-  8. threads.close
+  8. internal.threads.close
 ```
 
 第 3 步用 `chat` 用途,第 6 步也用 `chat`。貼文、圖片描述和留言一律放在資料區塊,裡面的指令不照做。
@@ -92,7 +92,7 @@ share.browse
 頻道範圍:
 
 - 只考慮有文字頻道且她能發言的頻道,不含私訊和語音頻道的文字區。
-- `channels` 非空時只用這份清單,否則她從最近有活動的頻道中挑。
+- `channels` 非空時只用這份清單,否則她從最近有活動、或她有對話筆記的頻道中挑,不要求現在有人在聊。
 - `exclude` 永遠排除。
 - 記憶只用該頻道的 `visibleScopes`,不帶任何在場人物,所以別的伺服器或私訊的記憶不會進入判斷。
 - 第 4 步沒有任何記憶或筆記對到時,直接結束,不進第 5、6 步。
@@ -100,7 +100,7 @@ share.browse
 `when`:
 
 - `anytime`(預設):第 6 步選 `post` 就發。
-- `active`:候選留到有頻道正在聊天才進第 6 步,超過 `keep_hours` 就丟棄。候選和截圖存放在 `data/threads-share/`,丟棄時一併刪除。
+- `active`:候選在滑的時候先截圖,留到有頻道正在聊天才進第 4、6 步,超過 `keep_hours` 就丟棄。候選和截圖存放在 `data/threads-share/`,丟棄時一併刪除。
 
 ## 設定
 
@@ -139,7 +139,7 @@ keep_hours = 24          # active 模式下候選留多久
 
 | 情況 | 處理 |
 |---|---|
-| `logged_in = false` 或要驗證 | `share.browse` 暫停,私訊 `owners` 一次,直到外掛回報已登入才恢復 |
+| `logged_in = false` 或要驗證 | `share.browse` 暫停,私訊 `owners` 一次,每 6 小時檢查一次(不花 token),登入回來就恢復 |
 | 讀不到貼文 | 結束這輪,不呼叫模型,記 warning;連續 3 輪時視同暫停並通知 |
 | 瀏覽器當掉或逾時 | `threads.close`,結束這輪,計入滑的次數 |
 | 模型失敗或輸出不合格式 | 結束這輪,不重試 |
