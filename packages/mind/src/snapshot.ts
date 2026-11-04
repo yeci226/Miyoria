@@ -58,6 +58,8 @@ const MAX_AGENDA = 8;
 const CONTRIBUTOR_TIMEOUT_MS = 1500;
 const LABEL_TIMEOUT_MS = 500;
 const MAX_MEMORY_CHARS = 2500;
+/** The contributor of what she sees and hears on a stream: for the prompt only, never recorded. */
+const WATCH_CONTRIBUTOR = "watch";
 const MAX_DOCUMENT_CHARS = 1500;
 const MAX_LESSONS = 8;
 
@@ -68,6 +70,8 @@ export interface Gathered {
   people: PersonRef[];
   agenda: AgendaRef[];
   memories: string | null;
+  /** The stream she watches (rendered section). Goes into the prompt and nowhere else. */
+  watch: string | null;
   /** Her documents about the people and place involved and herself (rendered outline). */
   documents: string | null;
   /** Lessons that apply here. */
@@ -320,6 +324,7 @@ export async function gather(input: GatherInput): Promise<Gathered> {
 
   // ---- memories
   let memories: string | null = null;
+  let watch: string | null = null;
   const registry = services.get(PromptContributorsKey);
   if (registry && focus !== null && focus.kind !== "dm" && input.contributors.length > 0) {
     const query = [...input.triggers.map((t) => t.detail), ...input.suggestions.map((s) => s.hint)]
@@ -341,6 +346,7 @@ export async function gather(input: GatherInput): Promise<Gathered> {
       now: toTimestamp(input.now),
     };
     const sections: PromptSection[] = [];
+    const stream: PromptSection[] = [];
     for (const contributor of registry.all()) {
       if (!input.contributors.includes(contributor.key)) continue;
       const controller = new AbortController();
@@ -350,22 +356,26 @@ export async function gather(input: GatherInput): Promise<Gathered> {
           CONTRIBUTOR_TIMEOUT_MS,
         );
         if (got === undefined) controller.abort();
-        else sections.push(...got);
+        else (contributor.key === WATCH_CONTRIBUTOR ? stream : sections).push(...got);
       } catch (error) {
         log.debug({ contributor: contributor.key, err: errorMessage(error) }, "contributor failed");
       }
     }
     // Bodies are cut before wrapping, so every block stays closed.
-    const per = Math.floor(MAX_MEMORY_CHARS / Math.max(sections.length, 1));
-    const rendered = sections
-      .filter((s) => s.body.trim() !== "")
-      .map((s) => {
-        const body = [...s.body.trim()];
-        const cut = body.length > per ? `${body.slice(0, per).join("")}…` : body.join("");
-        return dataBlock(s.key, s.title, cut);
-      })
-      .join("\n\n");
-    memories = rendered === "" ? null : rendered;
+    const per = Math.floor(MAX_MEMORY_CHARS / Math.max(sections.length + stream.length, 1));
+    const render = (list: readonly PromptSection[]): string | null => {
+      const rendered = list
+        .filter((s) => s.body.trim() !== "")
+        .map((s) => {
+          const body = [...s.body.trim()];
+          const cut = body.length > per ? `${body.slice(0, per).join("")}…` : body.join("");
+          return dataBlock(s.key, s.title, cut);
+        })
+        .join("\n\n");
+      return rendered === "" ? null : rendered;
+    };
+    memories = render(sections);
+    watch = render(stream);
   }
 
   // ---- her own notes: documents, lessons, the conversation's recap
@@ -393,6 +403,7 @@ export async function gather(input: GatherInput): Promise<Gathered> {
     people,
     agenda,
     memories,
+    watch,
     documents,
     lessons,
     recap: recap === null || recap.trim() === "" ? null : recap,

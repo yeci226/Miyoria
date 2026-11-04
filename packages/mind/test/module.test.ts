@@ -7,6 +7,8 @@ import {
   type JsonValue,
   KnowledgeKey,
   LessonsKey,
+  PromptContributors,
+  PromptContributorsKey,
   SelfStateKey,
   type Thought,
   toTimestamp,
@@ -426,6 +428,33 @@ describe("mind module", () => {
     ).toEqual(["二"]);
     const saved = (await store.list("p", THOUGHT_PREFIX)).values().next().value as JsonValue;
     expect((saved as unknown as Thought).thought).toBe("二");
+  });
+
+  it("sees the stream she watches, and none of it reaches the store", async () => {
+    const store = new MemorySettingsStore();
+    const provider = new MockProvider("p").reply('{"thought": "嗯"}');
+    const contributors = new PromptContributors();
+    const section = (key: string, title: string, body: string) => ({
+      key,
+      contribute: async () => [{ key, title, body, order: 1 }],
+    });
+    contributors.register(section("memory", "你記得的事", "Owen 喜歡拉麵"));
+    contributors.register(section("watch", "你正在看的直播", "你正在看 Owen 的直播,他在打王"));
+    const r = await rig(provider, {
+      store,
+      extra: (sup) => sup.services.provide("app", PromptContributorsKey, contributors),
+    });
+    r.publish(salient("Owen 進語音了"));
+    await wait(5000);
+    expect(dataText(provider)).toContain("Owen 喜歡拉麵");
+    expect(dataText(provider)).toContain("他在打王");
+
+    const saved = JSON.stringify([...(await store.list("p", THOUGHT_PREFIX)).values()]);
+    expect(saved).toContain("Owen 喜歡拉麵");
+    expect(saved).not.toContain("你正在看");
+    expect(saved).not.toContain("他在打王");
+    expect(JSON.stringify(r.mind().thoughts())).not.toContain("他在打王");
+    expect(JSON.stringify(r.thoughts())).not.toContain("他在打王");
   });
 
   it("sees her documents, lessons and the recap, and changes documents as herself", async () => {

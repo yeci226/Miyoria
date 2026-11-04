@@ -746,6 +746,7 @@ export class MindLoop implements Mind {
         agenda: snap.agenda,
         recent: d.journal.recent(RECENT_THOUGHTS),
         memories: snap.memories,
+        watch: snap.watch,
         documents: snap.documents,
         lessons: snap.lessons,
         recap: snap.recap,
