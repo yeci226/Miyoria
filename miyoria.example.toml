@@ -191,6 +191,7 @@ dirs = ["extensions"]
 # video = true               # 唱的時候在直播畫面放原曲影片(靜音);Stage 用 [stage.obs] song_video_source 播
 # video_dir = "data/songs"   # worker 的 SING_DATA_DIR(直播機上的路徑),不在裡面的影片不會送
 # prepare_notice = true      # worker 做歌要整張顯示卡時(SING_OFFLOAD_URLS),她先說「我去準備一下歌喔」再讓它開始
+# only_on_request = false   # 只唱別人點的:她不會自己挑歌或開唱,點的歌好了就唱,她也看不到歌單,重啟後不留
 # prepare_notice_gap_secs = 180   # 連點好幾首時這段時間內不再說第二次
 
 # 她閒著時自己滑 Threads,把截圖和評語發到文字頻道(要有 extensions/threads,見它的 README)。

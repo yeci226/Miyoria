@@ -589,6 +589,79 @@ describe("sing module", () => {
     expect(await h.singer.voteSkip(BOB)).toBeNull();
   });
 
+  describe("only_on_request", () => {
+    const ask = () =>
+      h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "Long", by: "Amy" });
+
+    it("does not let her pick a song on her own", async () => {
+      h = await Harness.create({ only_on_request: true });
+      const own = await h.invoke(Principals.self(VOICE), "sing.request", { query: "Long" });
+      expect(own.status).toBe("denied");
+      expect(h.worker.submitted).toHaveLength(0);
+    });
+
+    it("does not let her start a song on her own", async () => {
+      h = await Harness.create({ only_on_request: true });
+      await h.join();
+      await ask();
+      const own = await h.invoke(Principals.self(VOICE), "sing.play", { song: 1 });
+      expect(own.status).toBe("denied");
+    });
+
+    it("offers her mind no singing, and her turns no way to start a song", async () => {
+      h = await Harness.create({ only_on_request: true });
+      expect(h.registry.get("sing.request")?.available?.()).toBe(false);
+      expect(h.registry.get("sing.play")?.available?.()).toBe(false);
+      expect(h.registry.get("sing.play")?.tool).toBeUndefined();
+      expect(h.registry.get("sing.request")?.tool?.description).not.toContain("sing_start");
+    });
+
+    it("still offers them with the setting off", async () => {
+      h = await Harness.create();
+      expect(h.registry.get("sing.play")?.available?.()).not.toBe(false);
+      expect(h.registry.get("sing.play")?.tool?.name).toBe("sing_start");
+    });
+
+    it("sings what someone asked for, without leaving it to her mind", async () => {
+      h = await Harness.create({ only_on_request: true });
+      await h.join();
+      const asked = await ask();
+      expect(asked.status === "done" && asked.result.text).toContain("好了她就會唱");
+      h.worker.finish("j1", "Long", 1);
+      await settle(150);
+      expect(h.mind.suggestions.filter((s) => s.reason === "song_ready")).toHaveLength(0);
+      await settle(7000);
+      expect(h.voice.plays).toHaveLength(1);
+    }, 15_000);
+
+    it("shows her no list, only the song she is singing", async () => {
+      h = await Harness.create({ only_on_request: true });
+      await h.join();
+      await ask();
+      expect(await h.section()).toBe("");
+      h.worker.finish("j1", "Long", 1);
+      await settle(150);
+      expect(h.singer.playing()?.no).toBe(1);
+      const body = await h.section();
+      expect(body).toContain("要開始唱");
+      expect(body).not.toContain("#");
+    });
+
+    it("forgets the list when Core restarts", async () => {
+      const store = new MemorySettingsStore();
+      await store.set("_global", SETLIST_KEY, { version: 1, next: 9, entries: [] });
+      h = await Harness.create({ only_on_request: true }, true, { store });
+      await ask();
+      await h.singer.save();
+      expect(h.singer.list.all()[0]?.no).toBe(1);
+      expect(await store.get("_global", SETLIST_KEY)).toEqual({
+        version: 1,
+        next: 9,
+        entries: [],
+      });
+    });
+  });
+
   describe("sing.play by name", () => {
     /** Song #1 "Long", ready, requested by Amy. */
     async function ready(): Promise<void> {

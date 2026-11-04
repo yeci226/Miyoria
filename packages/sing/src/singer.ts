@@ -859,7 +859,7 @@ export class Singer implements VoiceFloor, SpeechPause {
    */
   async restore(): Promise<void> {
     const store = this.ctx.services.get(SettingsStoreKey);
-    if (!store) return;
+    if (!store || this.cfg.only_on_request) return;
     try {
       const raw = await store.get(STORE_PROFILE, SETLIST_KEY);
       if (raw === null) return;
@@ -880,7 +880,7 @@ export class Singer implements VoiceFloor, SpeechPause {
   /** Writes the set list when it changed since the last write. */
   async save(): Promise<void> {
     const store = this.ctx.services.get(SettingsStoreKey);
-    if (!store) return;
+    if (!store || this.cfg.only_on_request) return;
     const snapshot = this.list.snapshot();
     const json = JSON.stringify(snapshot);
     if (json === this.#saved) return;

@@ -76,7 +76,7 @@ export class SingModule implements Module {
     const videoDir = cfg.video ? resolve(this.#baseDir, cfg.video_dir) : null;
     const singer = new Singer(cfg, ctx, worker, videoDir);
     const actuators = actuatorsFor(ctx);
-    const capabilities = singCapabilities(singer, cfg.permissions).map((c) =>
+    const capabilities = singCapabilities(singer, cfg.permissions, cfg.only_on_request).map((c) =>
       actuators.register(c),
     );
 
@@ -92,7 +92,7 @@ export class SingModule implements Module {
     );
     commands.attach(ctx);
     const prompts = ctx.services.get(PromptContributorsKey) ?? null;
-    prompts?.register(new SingPrompt(singer));
+    prompts?.register(new SingPrompt(singer, cfg.only_on_request));
     ctx.provide(SingerKey, singer);
     ctx.provide(VoiceFloorKey, singer);
     ctx.provide(SpeechPauseKey, singer);

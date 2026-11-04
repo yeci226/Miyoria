@@ -41,6 +41,12 @@ export const SingConfigSchema = z.object({
    * Without a running mind module, `decide` behaves like `auto`.
    */
   start: z.enum(["decide", "auto"]).default("decide"),
+  /**
+   * She sings only what someone asks for: she cannot pick or start a song herself, a requested
+   * song starts as soon as it is ready and she is free, her prompt shows no set list (only the
+   * song she is singing), and the list is not kept across restarts.
+   */
+  only_on_request: z.boolean().default(false),
   /** A ready song she has not started is brought up to her again after this long. */
   remind_secs: z.number().nonnegative().default(60),
   /** After this many reminders (while she is in voice) the song starts on its own. */

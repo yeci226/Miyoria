@@ -50,7 +50,16 @@ function byOf(p: Principal, by: string | null | undefined): string {
   return p.kind === "command" ? "指令" : "聊天室的人";
 }
 
-export function singCapabilities(singer: Singer, perms: SingPermissions): Capability[] {
+const NOBODY_ASKED = "she only sings what someone asks for";
+
+/** `onlyOnRequest` (`[modules.sing] only_on_request`): nothing here is hers to start alone. */
+export function singCapabilities(
+  singer: Singer,
+  perms: SingPermissions,
+  onlyOnRequest = false,
+): Capability[] {
+  const nobodyAsked = (p: Principal) => (onlyOnRequest && p.kind === "self" ? NOBODY_ASKED : null);
+
   const request = defineCapability<RequestArgs>({
     name: "sing.request",
     summary: "準備一首歌(用她的聲音翻唱)",
@@ -59,11 +68,15 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
     permission: perms.request,
     // Downloading and converting take a minute of GPU time each.
     limits: { per_day: 40, per_person_per_day: 8, cooldown_ms: 0 },
+    available: () => !onlyOnRequest,
+    check: (_args, principal) => nobodyAsked(principal),
     tool: {
       name: "sing_request",
       description:
         "準備一首歌給你唱(在背景下載、分離人聲、轉成你的聲音,通常要一到兩分鐘;已經唱過的歌馬上好)。" +
-        "有人點歌、你想唱的時候用;準備的時候照常聊天,好了會告訴你,再用 sing_start 開唱。" +
+        (onlyOnRequest
+          ? "有人點歌的時候用;準備的時候照常聊天,好了就會開始唱,不用再做別的。"
+          : "有人點歌、你想唱的時候用;準備的時候照常聊天,好了會告訴你,再用 sing_start 開唱。") +
         "一次點好幾首就每首各用一次 sing_request。" +
         "query 寫歌名(加上歌手更準),也可以是 YouTube 連結。" +
         "歌不適合可以拒絕,但已經唱過不是拒絕的理由:唱過的歌有人點就再唱一次。",
@@ -83,7 +96,7 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
           requester: p.requester,
           requester_name: byOf(p, args.by),
           context: p.context,
-          forced: forced(p),
+          forced: forced(p) || onlyOnRequest,
         },
         ctx.signal,
       );
@@ -104,15 +117,22 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
     risk: "low",
     args: PlayArgs,
     permission: perms.play,
-    tool: {
-      name: "sing_start",
-      description:
-        "唱一首已經準備好的歌(在你所在的語音頻道;你這句話說完才開始,唱的時候你不能說話)。" +
-        "song 是歌單上的編號或歌名,省略 = 最早準備好的那首;剛唱過的歌也可以再唱一次。" +
-        "不在歌單上的歌要先用 sing_request 準備。開唱前用一句話開場。",
-      properties: { song: { type: "string", description: "歌單編號或歌名(可省略)" } },
-    },
-    check(args) {
+    available: () => !onlyOnRequest,
+    ...(onlyOnRequest
+      ? {}
+      : {
+          tool: {
+            name: "sing_start",
+            description:
+              "唱一首已經準備好的歌(在你所在的語音頻道;你這句話說完才開始,唱的時候你不能說話)。" +
+              "song 是歌單上的編號或歌名,省略 = 最早準備好的那首;剛唱過的歌也可以再唱一次。" +
+              "不在歌單上的歌要先用 sing_request 準備。開唱前用一句話開場。",
+            properties: { song: { type: "string", description: "歌單編號或歌名(可省略)" } },
+          },
+        }),
+    check(args, principal) {
+      const notAsked = nobodyAsked(principal);
+      if (notAsked) return notAsked;
       const now = singer.playing();
       if (now) return `already singing ${songLabel(now)}`;
       if (args.song == null && singer.list.ready().length === 0) return "no song is ready";
