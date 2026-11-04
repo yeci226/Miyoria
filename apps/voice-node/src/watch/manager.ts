@@ -29,7 +29,11 @@ export interface WatchHooks {
 }
 
 export interface WatchEngine {
-  /** Resolves with a reason when the streamer stops or the connection ends; rejects if it cannot start or breaks. */
+  /**
+   * Resolves with a reason when the streamer stops or the connection ends; rejects if it cannot start or breaks.
+   * Once `signal` aborts it must return within a second or two, even if Discord never answers: a run that
+   * never returns blocks `stopAll`, shutdown and queued starts.
+   */
   run(plan: WatchPlan, hooks: WatchHooks, signal: AbortSignal): Promise<string>;
   requestKeyframe(): void;
 }
