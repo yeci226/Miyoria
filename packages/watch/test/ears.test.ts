@@ -99,13 +99,17 @@ describe("listenTo", () => {
       yield* speech();
       yield* speech();
     }
-    const started: number[] = [];
-    const transcribe = vi.fn(() => {
-      started.push(started.length);
-      return new Promise<string | null>((r) => setTimeout(() => r("x"), 20));
+    let release!: (v: string | null) => void;
+    const first = new Promise<string | null>((r) => {
+      release = r;
     });
-    await listenTo(twice(), { transcribe }, () => {}, new AbortController().signal);
-    expect(started).toHaveLength(2);
+    let calls = 0;
+    const transcribe = vi.fn(() => (++calls === 1 ? first : Promise.resolve("x")));
+    const p = listenTo(twice(), { transcribe }, () => {}, new AbortController().signal);
+    // The second segment is reached while the first is still pending.
+    await vi.waitFor(() => expect(transcribe).toHaveBeenCalledTimes(2));
+    release("x");
+    await p;
   });
 
   it("returns when aborted even if the audio never yields", async () => {

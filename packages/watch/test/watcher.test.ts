@@ -562,3 +562,119 @@ describe("look", () => {
     expect(h.watcher.view()).not.toBeNull();
   });
 });
+
+describe("a stop always wins", () => {
+  const realSnapshot = (h: ReturnType<typeof harness>) =>
+    h.source.snapshot.mockImplementation(async (signal) => {
+      signal.throwIfAborted(); // like the real source
+      return Buffer.from([1]);
+    });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (e: unknown) => unhandled.push(e);
+  const answers = (h: ReturnType<typeof harness>) =>
+    h.complete.mock.calls.filter(([, req]) => !req.json_mode).length;
+
+  it("look with an already aborted signal does nothing", async () => {
+    unhandled.length = 0;
+    process.on("unhandledRejection", onUnhandled);
+    const h = track(harness({}, {}, { manualSleep: true }));
+    realSnapshot(h);
+    await h.watcher.start(target());
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(1));
+    const snaps = h.source.snapshot.mock.calls.length;
+    const ctl = new AbortController();
+    ctl.abort(new Error("bye"));
+    await expect(h.watcher.look("?", ctl.signal)).rejects.toThrow("bye");
+    await new Promise((r) => setTimeout(r, 10));
+    process.off("unhandledRejection", onUnhandled);
+    expect(h.source.snapshot.mock.calls.length).toBe(snaps);
+    expect(answers(h)).toBe(0);
+    expect(unhandled).toEqual([]);
+  });
+
+  it("a stop while look waits for consent never reaches the snapshot", async () => {
+    unhandled.length = 0;
+    process.on("unhandledRejection", onUnhandled);
+    const h = track(harness({}, {}, { manualSleep: true }));
+    realSnapshot(h);
+    await h.watcher.start(target());
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(1));
+    const snaps = h.source.snapshot.mock.calls.length;
+    const gate = deferred<boolean>();
+    h.watchAllowed.mockImplementationOnce(() => gate.promise);
+    const p = h.watcher.look("?", new AbortController().signal).catch((e: unknown) => e);
+    await h.watcher.stop("bye");
+    gate.resolve(true);
+    expect(await p).toBeInstanceOf(WatchRefused);
+    await new Promise((r) => setTimeout(r, 10));
+    process.off("unhandledRejection", onUnhandled);
+    expect(h.source.snapshot.mock.calls.length).toBe(snaps);
+    expect(unhandled).toEqual([]);
+  });
+
+  it("a caller abort during the second consent wait skips the model", async () => {
+    const h = track(harness({}, {}, { manualSleep: true }));
+    realSnapshot(h);
+    await h.watcher.start(target());
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(1));
+    const ctl = new AbortController();
+    const gate = deferred<boolean>();
+    h.watchAllowed
+      .mockImplementationOnce(async () => true)
+      .mockImplementationOnce(() => gate.promise);
+    const p = h.watcher.look("?", ctl.signal).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(h.watchAllowed.mock.calls.length).toBeGreaterThanOrEqual(3));
+    ctl.abort(new Error("caller left"));
+    gate.resolve(true);
+    expect(await p).toBeInstanceOf(Error);
+    expect(answers(h)).toBe(0);
+  });
+
+  it("stop during start: nothing starts afterwards", async () => {
+    const h = track(harness());
+    const gate = deferred<void>();
+    h.source.start.mockImplementationOnce(() => gate.promise);
+    const p = h.watcher.start(target()).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(h.source.start).toHaveBeenCalled());
+    const stopped = h.watcher.stop("bye");
+    gate.resolve();
+    await stopped;
+    await h.watcher.idle();
+    expect(await p).toBeInstanceOf(WatchRefused);
+    expect(h.watcher.view()).toBeNull();
+    expect(h.source.snapshot).not.toHaveBeenCalled();
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.source.stop).toHaveBeenCalled();
+  });
+
+  it("stop during a switch leaves no watch", async () => {
+    const h = track(harness({}, {}, { manualSleep: true }));
+    await h.watcher.start(target("甲"));
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(1));
+    const gate = deferred<void>();
+    h.source.start.mockImplementationOnce(() => gate.promise);
+    const p = h.watcher.start(target("乙")).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(h.source.start).toHaveBeenCalledTimes(2));
+    const calls = h.source.snapshot.mock.calls.length;
+    await h.watcher.stop("bye");
+    gate.resolve();
+    expect(await p).toBeInstanceOf(WatchRefused);
+    await h.watcher.idle();
+    expect(h.watcher.view()).toBeNull();
+    expect(h.source.snapshot.mock.calls.length).toBe(calls);
+  });
+
+  it("a start that never ends is cancelled by stop", async () => {
+    const h = track(harness());
+    h.source.start.mockImplementationOnce(() => new Promise<void>(() => {}));
+    const p = h.watcher.start(target()).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(h.source.start).toHaveBeenCalled());
+    await h.watcher.stop("bye");
+    expect(await p).toBeInstanceOf(WatchRefused);
+    await h.watcher.idle();
+    expect(h.watcher.view()).toBeNull();
+    // A new start works afterwards.
+    await h.watcher.start(target());
+    expect(h.watcher.view()).not.toBeNull();
+  });
+});

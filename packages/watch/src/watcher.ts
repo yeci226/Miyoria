@@ -69,6 +69,8 @@ const cutTopic = (topic: string): string => [...topic.trim()].slice(0, TOPIC_MAX
 
 /** Rejects when `signal` aborts, so a source that ignores it cannot hold the caller. */
 function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  // `work` has already started; when the abort wins its later failure must not go unhandled.
+  work.catch(noop);
   return new Promise<T>((resolve, reject) => {
     const onAbort = (): void => reject(signal.reason ?? new Error("aborted"));
     if (signal.aborted) return onAbort();
@@ -93,6 +95,8 @@ export class Watcher {
   readonly #inside = new AsyncLocalStorage<Run>();
   #run: Run | null = null;
   #chain: Promise<unknown> = Promise.resolve();
+  /** Starts that have not produced a watch yet; `stop` aborts them. */
+  readonly #pending = new Set<AbortController>();
   #lastSpokeAt: number | null = null;
   #lastVoiceAt: number | null = null;
 
@@ -114,17 +118,22 @@ export class Watcher {
 
   /** Starts watching `target`; a watch in progress is stopped first. */
   start(target: WatchTarget): Promise<void> {
-    const p = this.#chain.then(() => this.#start(target));
+    const ctl = new AbortController();
+    this.#pending.add(ctl);
+    const p = this.#chain
+      .then(() => this.#start(target, ctl))
+      .finally(() => this.#pending.delete(ctl));
     this.#chain = p.catch(noop);
     return p;
   }
 
   async stop(reason: string): Promise<void> {
+    for (const ctl of this.#pending) ctl.abort(new Error(reason));
     const run = this.#run;
-    if (run === null) return;
-    const finishing = this.#finish(run, reason, false);
-    if (this.#inside.getStore() === run) return; // the loop is waiting for us
+    const finishing = run === null ? null : this.#finish(run, reason, false);
+    if (run !== null && this.#inside.getStore() === run) return; // the loop is waiting for us
     await finishing;
+    await this.#chain;
   }
 
   /** A fresh picture and an answer to `question`. */
@@ -139,6 +148,8 @@ export class Watcher {
       throw new WatchRefused("對方不再讓你看他的直播了,所以不看。");
     }
     const scope = AbortSignal.any([run.ctl.signal, signal]);
+    this.#assertLive(run);
+    scope.throwIfAborted();
     const jpeg = await this.#snapshot(run, scope);
     this.#assertLive(run);
     if (!(await this.#allowed(run.target.account))) {
@@ -146,6 +157,7 @@ export class Watcher {
       throw new WatchRefused("對方不再讓你看他的直播了,所以不看。");
     }
     this.#assertLive(run);
+    scope.throwIfAborted();
     const res = await untilAborted(
       this.#deps.model.complete(
         "watch",
@@ -176,12 +188,20 @@ export class Watcher {
 
   /** Resolves when no watch is running. */
   async idle(): Promise<void> {
-    for (let run = this.#run; run !== null; run = this.#run) await run.done;
+    for (;;) {
+      const chain = this.#chain;
+      await chain;
+      const run = this.#run;
+      if (run !== null) await run.done;
+      else if (chain === this.#chain) return;
+    }
   }
 
   // -- start -----------------------------------------------------------------------------
 
-  async #start(target: WatchTarget): Promise<void> {
+  async #start(target: WatchTarget, ctl: AbortController): Promise<void> {
+    const { signal } = ctl;
+    const stopped = (): WatchRefused => new WatchRefused("看直播被停掉了,沒有開始看。");
     if (!this.#canLook()) {
       throw new WatchRefused(
         "你現在沒辦法看圖片(模型不收圖片,或這陣子的預算用完了),所以先不看直播。",
@@ -192,19 +212,25 @@ export class Watcher {
         `${safeName(target.name)} 沒有開放讓你看他的直播,或是現在確認不了。要他自己先用 /me privacy 把 watch 打開,你才能看。`,
       );
     }
+    if (signal.aborted) throw stopped();
     if (this.#run !== null) await this.#finish(this.#run, "switching", false);
+    if (signal.aborted) throw stopped();
 
     const source = this.#deps.source(target);
-    const ctl = new AbortController();
     try {
-      await source.start(target, ctl.signal);
+      await untilAborted(source.start(target, signal), signal);
     } catch (error) {
       ctl.abort();
       await source.stop().catch(noop);
-      throw error;
+      throw signal.aborted && error === signal.reason ? stopped() : error;
+    }
+    if (signal.aborted) {
+      await source.stop().catch(noop);
+      throw stopped();
     }
     const run = this.#create(target, source, ctl);
     this.#run = run;
+    this.#pending.delete(ctl);
     run.loop = this.#inside.run(run, () => this.#loop(run));
     run.listener = this.#inside.run(run, () => this.#listen(run));
     void source.ended().then(
