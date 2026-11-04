@@ -142,6 +142,7 @@ describe("decide", () => {
     );
     expect(model.system()).toContain(PERSONA);
     expect(model.system()).toContain("色情、血腥、仇恨、霸凌、個資");
+    expect(model.system()).toContain("不要提到其他頻道");
     expect(model.system()).not.toContain(EVIL);
     const text = model.all();
     expect(text.indexOf("資料 來源=threads")).toBeLessThan(text.indexOf(EVIL));

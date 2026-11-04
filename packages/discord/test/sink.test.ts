@@ -281,6 +281,10 @@ describe("sending files", () => {
   const image = { name: "post.jpg", path, contentType: "image/jpeg" };
   const here: ContextKey = { platform: "discord", scope: "1", channel: "2", kind: "channel" };
 
+  test("says it can send files", () => {
+    expect(new DiscordSink(new FakeRest()).sendsFiles).toBe(true);
+  });
+
   test("attaches files to the first chunk only", async () => {
     const rest = new FakeRest();
     await new DiscordSink(rest).send(here, {

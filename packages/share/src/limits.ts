@@ -12,6 +12,7 @@ const LimitStateSchema = z.object({
   posts: z.number().int().nonnegative(),
   rounds: z.number().int().nonnegative(),
   last_post_ms: z.number().nullable(),
+  last_round_ms: z.number().nullable().default(null),
   pause: z.enum(["login", "no_posts"]).nullable(),
   empty_rounds: z.number().int().nonnegative(),
 });
@@ -39,7 +40,15 @@ export class Limits {
     const stored = LimitStateSchema.safeParse(state);
     this.#state = stored.success
       ? stored.data
-      : { day: "", posts: 0, rounds: 0, last_post_ms: null, pause: null, empty_rounds: 0 };
+      : {
+          day: "",
+          posts: 0,
+          rounds: 0,
+          last_post_ms: null,
+          last_round_ms: null,
+          pause: null,
+          empty_rounds: 0,
+        };
   }
 
   get paused(): Pause {
@@ -67,16 +76,20 @@ export class Limits {
   }
 
   canBrowse(nowMs: number): boolean {
+    const last = this.#state.last_round_ms;
+    const gap = this.#config.browse_gap_mins * MINUTE_MS;
     return (
       this.canPost(nowMs) &&
       this.#state.pause === null &&
-      this.#state.rounds < this.#config.browse_per_day
+      this.#state.rounds < this.#config.browse_per_day &&
+      (last === null || nowMs - last >= gap)
     );
   }
 
   noteRound(nowMs: number): void {
     this.#roll(nowMs);
     this.#state.rounds++;
+    this.#state.last_round_ms = nowMs;
   }
 
   notePost(nowMs: number): void {

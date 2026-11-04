@@ -75,6 +75,7 @@ async function inContext<T>(what: string, work: () => Promise<T>): Promise<T> {
 
 export class DiscordSink implements PlatformSink, ReplySink {
   readonly platform: PlatformId = PLATFORM;
+  readonly sendsFiles = true;
   readonly #rest: RestLike;
 
   constructor(rest: RestLike) {

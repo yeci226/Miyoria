@@ -108,6 +108,12 @@ describe("matchChannels", () => {
     expect(present).toEqual([]);
   });
 
+  it("keeps only the channels of the best server", async () => {
+    const d = deps({ a: ["貓"], b: ["貓", "貓"], c: ["貓", "貓", "貓"] });
+    const out = await matchChannels([text("a"), text("b"), text("c", "g2")], "貓咪", d, NOW);
+    expect(out.map((m) => m.context.channel)).toEqual(["c"]);
+  });
+
   it("counts conversation notes that share words with the post", async () => {
     const d = deps({}, { a: "大家最近都在聊深海魚", b: "今天討論考試" });
     const out = await matchChannels([text("a"), text("b")], "深海魚好可愛", d, NOW);

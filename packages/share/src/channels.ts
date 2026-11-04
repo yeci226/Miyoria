@@ -99,5 +99,12 @@ export async function matchChannels(
     const name = (await deps.name(context)) ?? context.channel;
     scored.push({ context, name, memories: hits.map((h) => h.record.content), notes, score });
   }
-  return scored.sort((a, b) => b.score - a.score).slice(0, BEST);
+  const best = scored.sort((a, b) => b.score - a.score)[0];
+  // One server at a time: what she remembers of one must not end up in a comment for another.
+  return scored
+    .filter(
+      (m) =>
+        m.context.platform === best?.context.platform && m.context.scope === best?.context.scope,
+    )
+    .slice(0, BEST);
 }

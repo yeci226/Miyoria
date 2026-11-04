@@ -107,6 +107,8 @@ describe("worthReading", () => {
     expect(worthReading(post({ body: "贊助\n買這個超棒的東西喔" }))).toBe(false);
     expect(worthReading(post({ body: "Sponsored\nbuy this great thing now" }))).toBe(false);
     expect(worthReading(post({ link: null }))).toBe(false);
+    expect(worthReading(post({ link: "https://example.com/post/1" }))).toBe(false);
+    expect(worthReading(post({ link: "/@a/post/1?x=1" }))).toBe(false);
     expect(worthReading(post({ body: "太短了" }))).toBe(false);
   });
 });

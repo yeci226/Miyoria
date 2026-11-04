@@ -220,6 +220,8 @@ export interface OutgoingMessage {
  */
 export interface PlatformSink {
   readonly platform: PlatformId;
+  /** Whether `files` reach the people there; a sink without it drops them. */
+  readonly sendsFiles?: boolean;
   send(context: ContextKey, message: OutgoingMessage, signal?: AbortSignal): Promise<MessageRef>;
   react(message: MessageRef, emoji: string, signal?: AbortSignal): Promise<void>;
   typing(context: ContextKey, signal?: AbortSignal): Promise<void>;

@@ -127,15 +127,14 @@ export class Sharer {
       return;
     }
     if (!this.#limits.canPost(now)) return;
-    const contexts = eligibleChannels(
-      this.#deps.lively(),
-      (c) => this.#deps.ceiling(c),
-      this.#config,
-    );
-    const matches = await this.#match(contexts, waiting.candidates);
-    if (matches.length === 0) return;
-    await this.#share(waiting.candidates, matches, signal);
-    await this.#drop(waiting.candidates);
+    try {
+      const matches = await this.#match(this.#eligible(this.#deps.lively()), waiting.candidates);
+      if (matches.length === 0) return;
+      await this.#share(waiting.candidates, matches, signal);
+      await this.#drop(waiting.candidates);
+    } catch (error) {
+      this.#deps.warn("sharing what was waiting failed", error);
+    }
   }
 
   /** While paused: looks whether Threads works again. Reads the page, spends no tokens. */
@@ -196,8 +195,7 @@ export class Sharer {
         }
         return;
       }
-      const contexts = eligibleChannels(deps.contexts(), (c) => deps.ceiling(c), this.#config);
-      const matches = await this.#match(contexts, picked);
+      const matches = await this.#match(this.#eligible(deps.contexts()), picked);
       if (matches.length === 0) return;
       candidates = await this.#capture(picked);
       if (candidates.length > 0) await this.#share(candidates, matches, signal);
@@ -208,6 +206,13 @@ export class Sharer {
       if (!keep) await this.#remove(candidates);
       await this.#save();
     }
+  }
+
+  /** Where she may post now, among the places that can show the picture. */
+  #eligible(contexts: readonly ContextKey[]): ContextKey[] {
+    const deps = this.#deps;
+    const places = contexts.filter((c) => deps.sink(c.platform)?.sendsFiles === true);
+    return eligibleChannels(places, (c) => deps.ceiling(c), this.#config);
   }
 
   #match(
@@ -244,7 +249,7 @@ export class Sharer {
     const now = deps.now();
     if (!this.#limits.canPost(now)) return;
     const { context, comment, link } = decision;
-    if (eligibleChannels([context], (c) => deps.ceiling(c), this.#config).length === 0) return;
+    if (this.#eligible([context]).length === 0) return;
     const path = candidates.find((c) => c.link === link)?.jpeg_path;
     const sink = deps.sink(context.platform);
     if (!path || !sink) return;
@@ -260,6 +265,7 @@ export class Sharer {
         signal,
       );
       this.#limits.notePost(now);
+      await this.#save();
     } catch (error) {
       deps.warn("sharing a post failed", error);
     }

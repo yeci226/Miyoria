@@ -201,6 +201,7 @@ dirs = ["extensions"]
 # max_per_day = 3            # 一天最多發幾則
 # min_gap_mins = 120         # 兩則至少隔多久
 # browse_per_day = 6         # 一天最多滑幾輪
+# browse_gap_mins = 120      # 兩輪至少隔多久
 # posts = 10                 # 一輪最多看幾則
 # quiet_hours = "01:00-08:00"   # 這段時間不滑也不發,空字串 = 關閉
 # channels = []              # 頻道 id;空 = 她自己挑

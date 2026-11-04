@@ -100,12 +100,14 @@ export function toPost(raw: RawPost): Post {
 }
 
 const SPONSORED = /^(贊助|赞助|廣告|广告|Sponsored)$/m;
+/** A post's own page; what the page gives as a link goes to Discord and into the browser. */
+const POST_LINK = /^\/@[\w.]+\/post\/[\w-]+$/;
 /** A post with less to say than this and no picture is not worth a look. */
 const MIN_BODY = 8;
 
 /** Worth showing to her when she scrolls on her own: no ads, nothing too short to talk about. */
 export function worthReading(post: Post): boolean {
-  if (post.link === null || SPONSORED.test(post.body)) return false;
+  if (post.link === null || !POST_LINK.test(post.link) || SPONSORED.test(post.body)) return false;
   return post.images > 0 || post.body.length >= MIN_BODY;
 }
 

@@ -68,6 +68,7 @@ class Feed {
 
 class Sink {
   readonly platform = "discord";
+  sendsFiles = true;
   sent: { context: ContextKey; message: OutgoingMessage; hadFile: boolean[] }[] = [];
   dms: string[] = [];
   fail: Error | null = null;
@@ -133,7 +134,11 @@ function rig(replies: (string | Error)[], config: Partial<ShareConfig> = {}): Ri
     now: () => clock.now,
     warn: () => {},
   };
-  const sharer = new Sharer(ShareConfigSchema.parse({ quiet_hours: "", ...config }), deps, dir);
+  const sharer = new Sharer(
+    ShareConfigSchema.parse({ quiet_hours: "", browse_gap_mins: 0, ...config }),
+    deps,
+    dir,
+  );
   return { sharer, feed, model, sink, dir, saved, deps, clock, decided };
 }
 
@@ -171,6 +176,24 @@ describe("a round", () => {
     r.sink.fail = new Error("403");
     await round(r);
     expect(readdirSync(r.dir)).toEqual([]);
+  });
+
+  it("does not consider a place that cannot show the picture", async () => {
+    const r = rig(['{"picks":["p1"]}', POST]);
+    r.sink.sendsFiles = false;
+    await round(r);
+    expect(r.model.calls).toBe(1);
+    expect(r.sink.sent).toEqual([]);
+  });
+
+  it("the post is on record before the round ends", async () => {
+    const r = rig(['{"picks":["p1"]}', POST]);
+    let posts: unknown = null;
+    r.feed.close = async () => {
+      posts = (r.saved.value as { limits: { posts: number } }).limits.posts;
+    };
+    await round(r);
+    expect(posts).toBe(1);
   });
 
   it("no pick ends the round with one model call and no capture", async () => {
@@ -347,6 +370,19 @@ describe("when = active", () => {
     expect(r.model.calls).toBe(2);
     expect(r.sink.sent.length).toBe(1);
     expect(readdirSync(r.dir)).toEqual([]);
+  });
+
+  it("a failing memory lookup does not escape flush", async () => {
+    const warned: string[] = [];
+    const r = rig(['{"picks":["p1"]}'], { when: "active" });
+    r.deps.warn = (message) => warned.push(message);
+    await round(r);
+    r.decided.lively = [here];
+    r.deps.match.recall = async () => {
+      throw new Error("db down");
+    };
+    await expect(r.sharer.flush(signal)).resolves.toBeUndefined();
+    expect(warned.length).toBe(1);
   });
 
   it("does not scroll while a candidate waits", async () => {

@@ -3,7 +3,7 @@ import { type ShareConfig, ShareConfigSchema } from "../src/config.js";
 import { Limits } from "../src/limits.js";
 
 const config = (extra: Partial<ShareConfig> = {}): ShareConfig =>
-  ShareConfigSchema.parse({ quiet_hours: "", ...extra });
+  ShareConfigSchema.parse({ quiet_hours: "", browse_gap_mins: 0, ...extra });
 
 /** Local time on 2026-11-`day`. */
 const at = (day: number, hour: number, minute = 0) =>
@@ -16,6 +16,7 @@ describe("ShareConfigSchema", () => {
       max_per_day: 3,
       min_gap_mins: 120,
       browse_per_day: 6,
+      browse_gap_mins: 120,
       posts: 10,
       quiet_hours: "01:00-08:00",
       channels: [],
@@ -72,6 +73,13 @@ describe("limits", () => {
   it("canBrowse is false inside the gap", () => {
     const limits = new Limits(config({ min_gap_mins: 120 }));
     limits.notePost(at(4, 10));
+    expect(limits.canBrowse(at(4, 11, 59))).toBe(false);
+    expect(limits.canBrowse(at(4, 12))).toBe(true);
+  });
+
+  it("spreads the rounds over the day", () => {
+    const limits = new Limits(config({ browse_gap_mins: 120 }));
+    limits.noteRound(at(4, 10));
     expect(limits.canBrowse(at(4, 11, 59))).toBe(false);
     expect(limits.canBrowse(at(4, 12))).toBe(true);
   });
@@ -136,6 +144,11 @@ describe("limits", () => {
     expect(again.paused).toBe("login");
     again.resume();
     expect(again.canBrowse(at(4, 11))).toBe(false);
+  });
+
+  it("reads a state saved before the round gap existed", () => {
+    const old = { day: "", posts: 1, rounds: 1, last_post_ms: null, pause: null, empty_rounds: 0 };
+    expect(new Limits(config(), old).snapshot().posts).toBe(1);
   });
 
   it("unreadable state starts empty", () => {
