@@ -10,6 +10,7 @@
 //   (`sing.stop`)
 // * `POST /api/game/start` `{ game?, goal?, stream? }`, `POST /api/game/stop`,
 //   `POST /api/game/goal` `{ text }` (`game.*`; played where she is in voice)
+// * `POST /api/share/browse` (`share.browse`; one round on Threads, within the usual limits)
 
 import { SingerKey, type SongEntry } from "@miyoria/sing";
 import { type ContextKey, contextKeyString, type JsonObject } from "@miyoria/types";
@@ -164,6 +165,14 @@ async function stopSong(state: ApiState, c: ApiContext): Promise<Response> {
   return json({ ...result, ...songsState(state) });
 }
 
+// ---- share ------------------------------------------------------------------------------
+
+async function shareBrowse(state: ApiState, c: ApiContext): Promise<Response> {
+  return json(
+    await run(state, c, "share.browse", {}, { action: "share.browse", target: "threads" }),
+  );
+}
+
 // ---- game -------------------------------------------------------------------------------
 
 const GameStartSchema = z.object({
@@ -242,5 +251,6 @@ export function controlRoutes(state: ApiState): Route[] {
     { method: "POST", path: "/api/game/start", handler: (c) => gameStart(state, c) },
     { method: "POST", path: "/api/game/stop", handler: (c) => gameStop(state, c) },
     { method: "POST", path: "/api/game/goal", handler: (c) => gameGoal(state, c) },
+    { method: "POST", path: "/api/share/browse", handler: (c) => shareBrowse(state, c) },
   ];
 }

@@ -68,6 +68,7 @@ async function harness() {
     "game.start",
     "game.stop",
     "game.goal",
+    "share.browse",
   ]) {
     capability(name, loose);
   }
@@ -155,6 +156,15 @@ describe("control routes", () => {
     expect(h.calls[0]?.principal.context).toEqual(context);
     expect((await h.post("/api/game/goal", { text: "挖鐵礦" })).status).toBe(200);
     expect((await h.post("/api/game/stop")).status).toBe(200);
+  });
+
+  it("sends her scrolling through the gate", async () => {
+    const h = await harness();
+    expect((await h.post("/api/share/browse")).status).toBe(200);
+    expect(h.calls[0]).toMatchObject({
+      capability: "share.browse",
+      principal: { kind: "panel" },
+    });
   });
 });
 

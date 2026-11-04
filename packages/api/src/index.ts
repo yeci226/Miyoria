@@ -31,7 +31,8 @@
 //   `GET|PUT /api/stage/scenes` (scene roles), `POST /api/stage/scenes/classify`
 // * `GET /api/voice`
 // * `POST /api/voice/join|leave|golive`, `GET|POST /api/songs`, `POST /api/songs/play|stop`,
-//   `POST /api/game/start|stop|goal` (through the actuator gate as the panel, see `control.ts`)
+//   `POST /api/game/start|stop|goal`, `POST /api/share/browse` (through the actuator gate as
+//   the panel, see `control.ts`)
 // * `GET /api/telemetry?minutes=360` (a minute's samples of her state and the LLM counters)
 // * `GET /api/llm/calls?purpose=&model=&module=&status=&trouble=&thought=&turn=&since=&until=&q=`,
 //   `GET /api/llm/calls/{id}` (request and response, redacted), `GET /api/llm/stats?minutes=`
