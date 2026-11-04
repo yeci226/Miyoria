@@ -495,6 +495,19 @@ describe("agent module", () => {
     expect(requests[0]?.tools?.map((t) => t.name)).toEqual(["probe", "react"]);
   });
 
+  it("an internal tool cannot be called by name from a turn", async () => {
+    const hidden = new Probe("internal_threads_feed");
+    const mock = new MockProvider("chat")
+      .events([toolCall(0, "x", "internal_threads_feed", "{}"), done()])
+      .reply("嗯?");
+    const h = await Harness.build("always", noCheck(), mock, null, { tools: [hidden] });
+    h.say(incoming(channel("c"), "Owen", "試試看"));
+    await wait(3000);
+    expect(hidden.calls).toEqual([]);
+    const results = (mock.requests()[1]?.messages ?? []).filter((m) => m.role === "tool");
+    expect(results[0]?.content).toContain("unknown tool");
+  });
+
   it("tool_permissions_follow_the_triggering_users", async () => {
     const script = (mock: MockProvider, turns: number) => {
       for (let i = 0; i < turns; i++) {

@@ -66,6 +66,14 @@ export function isValidToolName(name: string): boolean {
 }
 
 /** Every tool offered to the model, by name. */
+/**
+ * Tools only other modules call (like `internal_threads_feed`): the registry keeps them, the
+ * model is never offered them.
+ */
+export function isInternalTool(name: string): boolean {
+  return name.startsWith("internal_");
+}
+
 export class ToolRegistry {
   readonly #tools = new Map<string, Tool>();
 
@@ -91,7 +99,9 @@ export class ToolRegistry {
 
   /** Specs of every registered tool, ordered by name. */
   specs(): ToolSpec[] {
-    return this.names().map((n) => (this.#tools.get(n) as Tool).spec);
+    return this.names()
+      .filter((n) => !isInternalTool(n))
+      .map((n) => (this.#tools.get(n) as Tool).spec);
   }
 
   get isEmpty(): boolean {

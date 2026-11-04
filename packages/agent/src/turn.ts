@@ -30,7 +30,7 @@ import {
   userMessage,
   withLlmTag,
 } from "@miyoria/llm";
-import type { Tool, ToolContext } from "@miyoria/tools";
+import { isInternalTool, type Tool, type ToolContext } from "@miyoria/tools";
 import {
   type AccountRef,
   type ActionSink,
@@ -1339,7 +1339,7 @@ class Turn {
 
   /** The tools offered in this context (`react` makes no sense in voice). */
   #offers(name: string): boolean {
-    return !(this.voice && name === ReactTool.NAME);
+    return !isInternalTool(name) && !(this.voice && name === ReactTool.NAME);
   }
 
   #toolSpecs(): ToolSpec[] {

@@ -10,6 +10,14 @@ function tool(name: string, permission: string | null = null): Tool {
 }
 
 describe("ToolRegistry", () => {
+  it("specs() leaves internal tools out", () => {
+    const reg = new ToolRegistry();
+    reg.register(tool("internal_threads_feed"));
+    reg.register(tool("react"));
+    expect(reg.specs().map((s) => s.name)).toEqual(["react"]);
+    expect(reg.get("internal_threads_feed")?.spec.name).toBe("internal_threads_feed");
+  });
+
   it("registers by name, ordered, with the legacy name rules", async () => {
     const reg = new ToolRegistry();
     expect(reg.isEmpty).toBe(true);
