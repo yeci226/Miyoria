@@ -366,9 +366,9 @@ export interface Attitude {
 - 上限只在設定(`[modules.conversation]` / `[modules.knowledge]` / `[modules.reflect]` 的次數、間隔、大小);預算 degraded 時減量,exhausted 停止;自主暫停時不反思。
 - Admin API:`GET /api/knowledge`、`GET /api/knowledge/conversations`、`GET /api/reflection`、`GET /api/mind/digests`(唯讀);面板「內心 → 知識 / 反思」。
 
-### 6.7 看直播(`watch`,opt-in;spec 見 [superpowers/specs/2026-11-05-watch-stream-design.md](superpowers/specs/2026-11-05-watch-stream-design.md))
+### 6.7 看直播(`watch`,opt-in)
 
-她掛在語音頻道時,可以自己決定看朋友的 Discord Go Live。`[modules.watch] enabled = true` 才啟動(`OPT_IN_MODULES`),沒開時其他功能不變。
+她掛在語音頻道時,可以自己決定看朋友的 Discord Go Live。`[modules.watch] enabled = true` 才啟動(`OPT_IN_MODULES`),沒開時其他功能不變。需要 `watch` 用途指向收圖片的模型(`[llm.purposes]`,沒設定時走 `chat`),否則她不會開始看;看圖每小時約 120 次呼叫,建議同時設 `[llm.budget]`。
 
 ```
 朋友的 Go Live ─ WebRTC + DAVE ─▶ apps/voice-node/src/watch/   收串流、解密、解 JPEG、聲音轉 16 kHz 單聲道
@@ -378,11 +378,11 @@ export interface Attitude {
 ```
 
 - **接收端**:`manager.ts` 管生命週期,`rtp.ts` 組 H.264,`snapshot.ts` 要關鍵影格(PLI)並用一次性 ffmpeg 轉 JPEG。只解密關鍵影格和音訊。動到函式庫私有欄位的程式全部關在 `connection.ts`,啟動先檢查,欄位不在就回 `failed`,語音不受影響。
-- **Watcher**:一次一場。每 `snapshot_secs` 秒截一張,連同最近筆記和台詞交給 `watch` 用途的模型(不提供工具,畫面和台詞走 data block);`SpeakGate`(純函式)全部成立才開口。串流聲音經正規化、`EnergyVad`、`Segmenter`、`speech.transcribe` 轉成台詞,不進 `Listener`,不觸發插話。截圖、筆記、轉錄只在記憶體。
+- **Watcher**:一次一場。每 `snapshot_secs` 秒截一張,連同最近筆記和台詞交給 `watch` 用途的模型(不提供工具,畫面和台詞走 data block);`SpeakGate`(純函式)全部成立才開口。串流聲音經正規化、`EnergyVad`、`Segmenter`、`speech.transcribe` 轉成台詞,不進 `Listener`,不觸發插話。截圖、筆記、轉錄只在記憶體。看圖請求帶 `requires_images`:router 不會把圖片換成文字,收不了圖片就跳過;整條備援鏈都不行時回 `NoImageModelError`,例行的一輪因此結束這場,`watch_look` 則回覆看不到。
 - **能力**:`watch.start`(中風險,參數 `user`;正在看別人時等於換人)、`watch.stop`(低)、`watch.look`(低,工具 `watch_look`,有人問時立刻截一張回答)。別人請她看而她不在語音時,先以該 principal 呼叫 `voice.join`。每小時 `starts_per_hour` 次由 `packages/watch` 自己計數。
-- **Prompt 區段 `watch`**:提供 `streams`(所在頻道裡開播且允許被看的人)和 `watching`(在看誰、看多久、最近的筆記);也列在 `[modules.mind] contributors`,心智迴圈因此看得到。
-- **同意**:`/me privacy watch:off`(`PrivacyChoices.watch`,預設開)。開始前檢查一次,之後每次截圖前再檢查,關掉後約 30 秒內退出;開始看某人時在該語音頻道的文字區發通知卡(同一人 `notice_hours` 內一次),送不出去就不看。
-- **自動停止**:關播、她離開或自己移到別的語音頻道、`watch:off`、連續 `max_snapshot_failures` 次截圖失敗、滿 `max_watch_mins`、LLM 預算用完、Core 與 voice node 斷線。她自己開 Go Live 時先停止看。
+- **Prompt 區段 `watch`**:提供 `streams`(所在頻道裡開播且允許被看的人)和 `watching`(在看誰、看多久、最近的筆記);也列在 `[modules.mind] contributors`,心智迴圈因此看得到,但它和記憶區段分開:只進提示詞,不進想法日誌(`Thought.input`)。她自己的想法和講出口的話照常記錄。
+- **同意**:`/me privacy watch:off`(`PrivacyChoices.watch`,預設開)。開始前檢查一次,之後每次截圖前再檢查,關掉後約 30 秒內退出;開始看某人時在該語音頻道的文字區發通知卡(同一人 `notice_hours` 內一次,發出就算數,之後開始失敗也不重發),說明畫面和說話內容都會送到模型;送不出去就不看。串流語音另外遵守 `/voice consent off`。
+- **自動停止**:關播、她離開或自己移到別的語音頻道、`watch:off`、連續 `max_snapshot_failures` 次截圖失敗、滿 `max_watch_mins`、LLM 預算用完、沒有模型看得到圖、Core 與 voice node 斷線(包括連線被新的取代)。她自己開 Go Live 時先停止看。
 - **第二階段**(Twitch / YouTube 瀏覽器來源)只透過 `WatchSource` 介面接入,另開 spec。
 
 ## 7. Profile(角色)
@@ -842,7 +842,7 @@ extensions/minecraft/
   "ollama" = false
   ```
 
-- **圖片輸入**:`ChatMessage.content` 是字串或 content parts(`text`、`image_url` + `detail`,圖片可以帶 `alt`)。`[llm.image_input]` 標成不收圖片的模型,router 送出前把 parts 攤平成文字(圖片換成 `alt` 或 `[圖片]`);模型用 400 / 413 / 415 / 422 拒絕帶圖片的請求時,router 同一個模型改送文字重試一次,成功就記住(這次執行期間都送文字)並記一行警告。`router.takesImages(purpose)` 讓呼叫端在模型不收圖片時不用先下載。她看圖用的就是 `chat` 的模型(沒有另外的 `vision` 用途)。
+- **圖片輸入**:`ChatMessage.content` 是字串或 content parts(`text`、`image_url` + `detail`,圖片可以帶 `alt`)。`[llm.image_input]` 標成不收圖片的模型,router 送出前把 parts 攤平成文字(圖片換成 `alt` 或 `[圖片]`);模型用 400 / 413 / 415 / 422 拒絕帶圖片的請求時,router 同一個模型改送文字重試一次,成功就記住(這次執行期間都送文字)並記一行警告。`router.takesImages(purpose)` 讓呼叫端在模型不收圖片時不用先下載。請求帶 `requires_images` 時不攤平也不重試成文字:跳過已知不收圖片的模型,都不行就丟 `NoImageModelError`。她看圖用的就是 `chat` 的模型(沒有另外的 `vision` 用途)。
 - **DeepSeek 要注意的地方**:
   - 走 OpenAI 相容 provider,另外處理 DeepSeek 特有的欄位。
   - 推理模型回傳的思考內容(`reasoning_content`)**不能送進輸出、TTS 或對話歷史**,只記在 Decision Trace。

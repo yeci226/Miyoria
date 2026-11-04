@@ -151,7 +151,7 @@ Phase 0–8 先用 Rust 寫成原型(留在 git 歷史裡),之後整個改寫成
 
 ## 看直播
 
-設計見 [superpowers/specs/2026-11-05-watch-stream-design.md](superpowers/specs/2026-11-05-watch-stream-design.md)。
+範圍和決策見 [DECISIONS.md](DECISIONS.md) ADR 14,架構見 [ARCHITECTURE.md](ARCHITECTURE.md) §6.7。
 
 第一階段(Discord Go Live,`[modules.watch]` 預設關閉):
 
