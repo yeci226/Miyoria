@@ -51,16 +51,22 @@ export {
   type CoreMessage,
   coreMessageJson,
   decodeAudio,
+  decodeSnapshot,
+  decodeWatchAudio,
   encodeAudio,
   type NodeMessage,
   NodeMessageSchema,
   TAG_CAPTURE,
   TAG_LEVELS,
   TAG_PLAYBACK,
+  TAG_SNAPSHOT,
+  TAG_WATCH_AUDIO,
   VERSION,
   type WireGoLiveState,
   type WireParticipant,
   type WirePlaybackState,
+  type WireWatchState,
+  WireWatchStateSchema,
 } from "./protocol.js";
 export { DEFAULT_SEGMENTER, Segmenter, type SegmenterConfig, type Utterance } from "./segment.js";
 export {

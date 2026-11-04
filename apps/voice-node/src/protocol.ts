@@ -5,6 +5,8 @@
 //   0x02 [play:   u32 LE] [PCM s16le mono ...]          Core -> node (playback)
 //   0x03 [play:   u32 LE] [PCM s16le mono ...]          Core -> node (levels track of a play
 //                                                       started with `levels`: what lip sync follows)
+//   0x04 [id: u32 LE] [JPEG ...]                         node -> Core (watch: one snapshot)
+//   0x05 [PCM s16le mono 16 kHz ...]                     node -> Core (watch: the stream's audio, no id)
 
 export const PROTOCOL_VERSION = 1;
 export const CAPTURE_SAMPLE_RATE = 16_000;
@@ -12,6 +14,8 @@ export const CAPTURE_SAMPLE_RATE = 16_000;
 export const FRAME_CAPTURE = 0x01;
 export const FRAME_PLAYBACK = 0x02;
 export const FRAME_LEVELS = 0x03;
+export const FRAME_SNAPSHOT = 0x04;
+export const FRAME_WATCH_AUDIO = 0x05;
 
 /** WebSocket close codes the protocol assigns meaning to. */
 export const CLOSE_VERSION_MISMATCH = 4400;
@@ -31,6 +35,9 @@ export type CoreMessage =
   | { type: "play_stop"; play: number; fade_ms: number }
   | GoLiveStartMessage
   | { type: "golive_stop"; guild: string }
+  | { type: "watch_start"; guild: string; user_id: string }
+  | { type: "watch_stop"; guild: string }
+  | { type: "watch_snapshot"; id: number }
   | { type: "ping" };
 
 export type GoLiveEncoderChoice = "auto" | "nvenc" | "software";
@@ -52,6 +59,7 @@ export interface GoLiveStartMessage {
 }
 
 export type GoLiveWireState = "starting" | "live" | "stopped" | "failed";
+export type WatchWireState = "starting" | "live" | "stopped" | "failed";
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string; ignorable: boolean };
 
@@ -165,6 +173,23 @@ export function parseCoreMessage(text: string): ParseResult<CoreMessage> {
       if (!guild) return fail("golive_stop: `guild` must be a non-empty string");
       return { ok: true, value: { type, guild } };
     }
+    case "watch_start": {
+      const guild = reqId(raw, "guild");
+      const userId = reqId(raw, "user_id");
+      if (!guild) return fail("watch_start: `guild` must be a non-empty string");
+      if (!userId) return fail("watch_start: `user_id` must be a non-empty string");
+      return { ok: true, value: { type, guild, user_id: userId } };
+    }
+    case "watch_stop": {
+      const guild = reqId(raw, "guild");
+      if (!guild) return fail("watch_stop: `guild` must be a non-empty string");
+      return { ok: true, value: { type, guild } };
+    }
+    case "watch_snapshot": {
+      const id = raw.id;
+      if (!isU32(id)) return fail("watch_snapshot: `id` must be a u32");
+      return { ok: true, value: { type, id } };
+    }
     default:
       return fail(`unknown message type \`${type}\``, true);
   }
@@ -251,6 +276,15 @@ export type NodeMessage =
   | { type: "stream_close"; stream: number }
   | { type: "playback"; play: number; state: PlaybackState; error?: string }
   | { type: "golive"; guild: string; state: GoLiveWireState; error?: string; reason?: string }
+  | {
+      type: "watch";
+      guild: string;
+      user_id: string;
+      state: WatchWireState;
+      reason?: string;
+      error?: string;
+    }
+  | { type: "watch_snapshot_failed"; id: number; error: string }
   | { type: "error"; message: string }
   | { type: "pong" };
 
@@ -267,6 +301,24 @@ export function encodeCaptureFrame(stream: number, pcm: Uint8Array): Buffer {
   out[0] = FRAME_CAPTURE;
   out.writeUInt32LE(stream, 1);
   out.set(pcm, 5);
+  return out;
+}
+
+/** Builds a `0x04` snapshot frame: `[0x04][id: u32 LE][JPEG]`. */
+export function encodeSnapshotFrame(id: number, jpeg: Uint8Array): Buffer {
+  if (!isU32(id)) throw new RangeError(`snapshot id out of u32 range: ${id}`);
+  const out = Buffer.allocUnsafe(5 + jpeg.byteLength);
+  out[0] = FRAME_SNAPSHOT;
+  out.writeUInt32LE(id, 1);
+  out.set(jpeg, 5);
+  return out;
+}
+
+/** Builds a `0x05` watch audio frame: `[0x05][PCM s16le mono 16 kHz]`. No id: only one stream is watched at a time. */
+export function encodeWatchAudioFrame(pcm: Uint8Array): Buffer {
+  const out = Buffer.allocUnsafe(1 + pcm.byteLength);
+  out[0] = FRAME_WATCH_AUDIO;
+  out.set(pcm, 1);
   return out;
 }
 

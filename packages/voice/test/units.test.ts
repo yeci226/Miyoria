@@ -11,6 +11,8 @@ import {
   cleanTranscript,
   coreMessageJson,
   decodeAudio,
+  decodeSnapshot,
+  decodeWatchAudio,
   EnergyVad,
   echoesHint,
   encodeAudio,
@@ -21,6 +23,8 @@ import {
   type Stoppable,
   stripTags,
   TAG_PLAYBACK,
+  TAG_SNAPSHOT,
+  TAG_WATCH_AUDIO,
   toTraditional,
   type Utterance,
   VoiceConfigSchema,
@@ -451,5 +455,38 @@ describe("config", () => {
     const d = VoiceConfigSchema.parse({ consent: "opt-in", barge_in: "ignore" });
     expect(d.consent).toBe("opt-in");
     expect(d.barge_in).toBe("ignore");
+  });
+});
+
+describe("watch messages", () => {
+  it("accepts_watch_node_messages", () => {
+    expect(
+      NodeMessageSchema.parse({ type: "watch", guild: "g", user_id: "u", state: "live" }),
+    ).toEqual({ type: "watch", guild: "g", user_id: "u", state: "live", error: null, reason: null });
+    expect(NodeMessageSchema.safeParse({ type: "watch", guild: "g", user_id: "u", state: "x" }).success).toBe(
+      false,
+    );
+    expect(
+      NodeMessageSchema.parse({ type: "watch_snapshot_failed", id: 7, error: "no frame" }),
+    ).toEqual({ type: "watch_snapshot_failed", id: 7, error: "no frame" });
+    expect(
+      coreMessageJson({ type: "watch_start", guild: "g", user_id: "u" }),
+    ).toBe('{"type":"watch_start","guild":"g","user_id":"u"}');
+    expect(coreMessageJson({ type: "watch_snapshot", id: 7 })).toBe('{"type":"watch_snapshot","id":7}');
+  });
+
+  it("decodes_snapshot_frames", () => {
+    expect(TAG_SNAPSHOT).toBe(0x04);
+    expect(decodeSnapshot(new Uint8Array([0x04, 1, 0]))).toBeNull();
+    const d = decodeSnapshot(new Uint8Array([0x04, 7, 0, 0, 0, 1, 2]));
+    expect(d?.id).toBe(7);
+    expect([...(d?.jpeg ?? [])]).toEqual([1, 2]);
+  });
+
+  it("decodes_watch_audio_unaligned_and_drops_odd_byte", () => {
+    expect(TAG_WATCH_AUDIO).toBe(0x05);
+    const backing = new Uint8Array([9, 0x05, 1, 0, 0xff, 0xff, 7]);
+    const frame = backing.subarray(1); // byteOffset 1: not 2-aligned
+    expect([...decodeWatchAudio(frame)]).toEqual([1, -1]);
   });
 });

@@ -28,6 +28,9 @@ Self voice node(`apps/voice-node`,TS)和 Core 的 `voice.link` 模組之間的�
 | `play_stop` | `play`, `fade_ms` | 立刻停止(插話 / barge-in),淡出 `fade_ms` 毫秒 |
 | `golive_start` | `guild`, `source`, `channel?`, `width?`, `height?`, `fps?`, `bitrate_kbps?`, `encoder?`, `audio?`, `listen?` | 開始 Go Live,見下面〈Go Live〉 |
 | `golive_stop` | `guild` | 停止 Go Live |
+| `watch_start` | `guild`, `user_id` | 開始看某人的 Go Live,見下面〈看直播〉 |
+| `watch_stop` | `guild` | 結束觀看 |
+| `watch_snapshot` | `id`(u32) | 要一張目前畫面 |
 | `ping` | | |
 
 二進位 `0x02`(播放音訊):`[0x02][play: u32 LE][PCM s16le 單聲道 …]`。
@@ -46,6 +49,8 @@ Self voice node(`apps/voice-node`,TS)和 Core 的 `voice.link` 模組之間的�
 | `stream_close` | `stream` | 這個人停止說話(Discord 停止送封包);可以當作斷句的提示 |
 | `playback` | `play`, `state`(`started` / `finished` / `interrupted` / `failed`), `error?` | 播放狀態 |
 | `golive` | `guild`, `state`(`starting` / `live` / `stopped` / `failed`), `error?`, `reason?` | Go Live 狀態,見下面〈Go Live〉 |
+| `watch` | `guild`, `user_id`, `state`(`starting` / `live` / `stopped` / `failed`), `reason?`, `error?` | 觀看狀態,見〈看直播〉 |
+| `watch_snapshot_failed` | `id`, `error` | 這張截圖沒拿到 |
 | `error` | `message` | 非致命錯誤(例如進頻道失敗) |
 | `pong` | | |
 
@@ -94,6 +99,27 @@ OBS 端:RTMP 設定→串流→自訂,伺服器 `rtmp://127.0.0.1:1935/live`、�
 - 離開語音(`leave`、被踢、換頻道)會先停掉 Go Live。
 
 **和語音(收音 + TTS)同時進行**:`GOLIVE_VOICE_MODE=hybrid`(預設)時,語音連線維持不動(`selfDeaf: false`,照常收音、播放),Go Live 是 Discord 另開的第二條 WebRTC 連線(`STREAM_CREATE`),只借用語音 session id,所以兩者互不干擾。這靠的是動到 `@dank074/discord-video-stream` Streamer 的一個私有欄位(`_voiceConnection`),屬於實驗性質,還沒對真的 Discord 驗證(Phase 0 spike 的 `GOLIVE_VOICE=hybrid` 同一做法)。如果實測發現不行,改 `GOLIVE_VOICE_MODE=exclusive`:推流前 node 離開語音(送 `left`,`reason: "golive"`)、由套件自己的連線進頻道(固定自我拒聽,聽不到人、不能播 TTS);Go Live 結束後自動重新加入原頻道(送 `joined` + `voice_state`),Core 的 `leave` 會取消這個重新加入。
+
+## 看直播
+
+她看朋友的 Go Live:Core 送 `watch_start`,node 接收該直播的影像與聲音,Core 定期要截圖,串流聲音另外送回。
+
+二進位(node → Core):
+
+| 訊框 | 格式 | 說明 |
+|---|---|---|
+| `0x04` | `[0x04][id: u32 LE][JPEG]` | 回應 `watch_snapshot` 的截圖,`id` 同請求 |
+| `0x05` | `[0x05][PCM s16le 單聲道 16 kHz]` | 串流聲音,每框 20 ms。**沒有 id**,因為同時只看一場 |
+
+規則:
+
+- `0x05` 和人聲的 `0x01` 完全分開,不進 `Listener`,不觸發插話。
+- JPEG 長邊最多 1280,上限 900 KB(Core 的單則上限是 1 MiB):超過就降品質重編一次,還是超過就回 `watch_snapshot_failed`。
+- 同一個 self 帳號同時只看一場;已在看別人時 `watch_start` 會先停舊的再接新的。
+- 她在 Go Live 時,`watch_start` 回 `failed`;看直播時開始 Go Live 會先停止觀看。
+- 開播者關播、她離開語音、被踢時,node 送 `stopped`。
+- Core 連線斷掉時,node 立刻停止觀看(和 Go Live 不同,Go Live 會繼續推流)。
+- 舊版 node 會忽略這些訊息;Core 等 `live` 超過 15 秒就視為失敗。
 
 ## 嘴型音量(不在這個協定裡)
 

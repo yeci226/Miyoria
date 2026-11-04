@@ -28,6 +28,11 @@ export const TAG_PLAYBACK = 0x02;
  */
 export const TAG_LEVELS = 0x03;
 
+/** Binary frame tag of a watch snapshot (node → Core): `[0x04][id: u32 LE][JPEG]`. */
+export const TAG_SNAPSHOT = 0x04;
+/** Binary frame tag of a watched stream's audio (node → Core): `[0x05][PCM s16le mono 16 kHz]`, no id. */
+export const TAG_WATCH_AUDIO = 0x05;
+
 const u32 = () => z.number().int().min(0).max(0xffff_ffff);
 const optString = () => z.string().nullable().default(null);
 
@@ -49,6 +54,10 @@ export type WirePlaybackState = z.output<typeof WirePlaybackStateSchema>;
 /** Go Live state reported by the node. */
 export const WireGoLiveStateSchema = z.enum(["starting", "live", "stopped", "failed"]);
 export type WireGoLiveState = z.output<typeof WireGoLiveStateSchema>;
+
+/** Watch state reported by the node. */
+export const WireWatchStateSchema = z.enum(["starting", "live", "stopped", "failed"]);
+export type WireWatchState = z.output<typeof WireWatchStateSchema>;
 
 /** Text frames sent by the voice node. */
 export const NodeMessageSchema = z.discriminatedUnion("type", [
@@ -96,6 +105,15 @@ export const NodeMessageSchema = z.discriminatedUnion("type", [
     error: optString(),
     reason: optString(),
   }),
+  z.object({
+    type: z.literal("watch"),
+    guild: z.string(),
+    user_id: z.string(),
+    state: WireWatchStateSchema,
+    error: optString(),
+    reason: optString(),
+  }),
+  z.object({ type: z.literal("watch_snapshot_failed"), id: u32(), error: z.string() }),
   z.object({ type: z.literal("error"), message: z.string() }),
   z.object({ type: z.literal("ping") }),
   z.object({ type: z.literal("pong") }),
@@ -126,6 +144,9 @@ export type CoreMessage =
       listen?: boolean;
     }
   | { type: "golive_stop"; guild: string }
+  | { type: "watch_start"; guild: string; user_id: string }
+  | { type: "watch_stop"; guild: string }
+  | { type: "watch_snapshot"; id: number }
   | { type: "ping" }
   | { type: "pong" };
 
@@ -154,4 +175,20 @@ export function decodeAudio(
   const samples = new Int16Array(count);
   for (let i = 0; i < count; i++) samples[i] = v.getInt16(5 + i * 2, true);
   return { tag: frame[0] as number, id: v.getUint32(1, true), samples };
+}
+
+/** Parses a `0x04` frame. Null when shorter than its 5-byte header. */
+export function decodeSnapshot(frame: Uint8Array): { id: number; jpeg: Buffer } | null {
+  if (frame.length < 5) return null;
+  const b = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
+  return { id: b.readUInt32LE(1), jpeg: b.subarray(5) };
+}
+
+/** Parses a `0x05` frame's PCM. The input need not be aligned; a trailing odd byte is ignored. */
+export function decodeWatchAudio(frame: Uint8Array): Int16Array {
+  const count = Math.max(0, (frame.length - 1) >> 1);
+  const v = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+  const out = new Int16Array(count);
+  for (let i = 0; i < count; i++) out[i] = v.getInt16(1 + i * 2, true);
+  return out;
 }
