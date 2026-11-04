@@ -49,7 +49,7 @@
 - 工具 `internal.threads.close`:關閉瀏覽器。
 - 設定 `headless`(預設 `false`):Mac 設 `true`。
 - 設定 `game`(預設 `true`):`false` 時不註冊遊戲 adapter,Mac 設 `false`,避免她改走逐則問模型的遊戲流程。
-- `pnpm login`:用同一個資料夾開有視窗的瀏覽器,讓擁有者手動登入。
+- `pnpm run login`:用同一個資料夾開有視窗的瀏覽器,讓擁有者手動登入。
 - 回傳前只做程式過濾:去掉已看過、廣告標記、文字太短的貼文。已看過的 `id` 存在外掛儲存區,最多保留 500 筆。
 
 單次工具呼叫受 `call_timeout_ms`(預設 30 秒)限制,`internal.threads.feed` 要在 25 秒內結束,時間到就回傳已讀到的貼文。
@@ -165,7 +165,7 @@ keep_hours = 24          # active 模式下候選留多久
 ## 上線步驟
 
 1. Mac:`pnpm --filter @miyoria/sdk build`,在 `extensions/threads` 執行 `pnpm browser` 和 `pnpm build`。
-2. 擁有者用螢幕共用在 Mac 上執行 `pnpm login`,手動登入她的帳號。
+2. 擁有者用螢幕共用在 Mac 上執行 `pnpm run login`,手動登入她的帳號。
 3. `miyoria.toml`:Threads 外掛 `enabled = true`、`headless = true`、`game = false`,`[modules.share]` 先把 `channels` 設成測試頻道。
 4. 確認一輪成功後,再清空 `channels` 開放她自己挑。
 

@@ -1,4 +1,4 @@
-// `pnpm login`: opens her browser with a window so the owner can log in by hand, in the same
+// `pnpm run login`: opens her browser with a window so the owner can log in by hand, in the same
 // profile folder the extension reads. Close the window when done. Not while she is scrolling: a
 // profile folder can only be open once.
 

@@ -175,7 +175,7 @@ export class ThreadsBrowser {
     await this.#need().waitForTimeout(3000);
   }
 
-  /** Resolves when the window was closed (`pnpm login`). */
+  /** Resolves when the window was closed (`pnpm run login`). */
   async closed(): Promise<void> {
     const context = this.#context;
     if (context) await new Promise((resolve) => context.once("close", resolve));

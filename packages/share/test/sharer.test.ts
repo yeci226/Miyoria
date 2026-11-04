@@ -319,6 +319,7 @@ describe("when something is wrong with Threads", () => {
     r.feed.result = { logged_in: false, posts: [] };
     await round(r);
     expect(r.sink.dms.length).toBe(2);
+    expect(r.sink.dms[0]).toContain("`pnpm run login`");
     expect(r.sharer.available(NOON)).toBe(false);
     expect(await round(r)).toBe(false);
     expect(r.sink.dms.length).toBe(2);

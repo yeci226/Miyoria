@@ -224,14 +224,14 @@ Expected:FAIL。
 - `capture`:用 `posts()` 找 `link` 對應的索引再 `shot`;`images > 0` 才描述。
 - 設定新增 `headless`、`game`,`config.schema.json` 同步。
 
-- [ ] **Step 4: 實作 `pnpm login`**
+- [ ] **Step 4: 實作 `pnpm run login`**
 
 `src/login.ts` 用同一個 `profile_dir` 開有視窗的瀏覽器,等視窗關閉後結束。資料夾來源:環境變數 `MIYORIA_THREADS_PROFILE`,否則 `defaultProfileDir()`。`package.json` 加 `"login": "node dist/login.js"`。
 
 - [ ] **Step 5: 確認通過並更新 README**
 
 Run: `corepack pnpm --filter @miyoria/ext-threads test`、`corepack pnpm --filter @miyoria/ext-threads typecheck`
-Expected:PASS。README 加上分享用途、`headless`、`game`、`pnpm login`;提醒登入前先確認 Core 沒有正在滑(同一個資料夾不能同時開)。
+Expected:PASS。README 加上分享用途、`headless`、`game`、`pnpm run login`;提醒登入前先確認 Core 沒有正在滑(同一個資料夾不能同時開)。
 
 - [ ] **Step 6: Commit**
 
@@ -504,7 +504,7 @@ Expected:全部 PASS。失敗要先修,不能略過。
 
 - [ ] **Step 2: 擁有者登入**
 
-請擁有者在 Mac 的終端機執行 `cd ~/miyoria/extensions/threads && pnpm login`,登入後關閉視窗。全程不經手帳號密碼。
+請擁有者在 Mac 的終端機執行 `cd ~/miyoria/extensions/threads && pnpm run login`,登入後關閉視窗。全程不經手帳號密碼。
 
 - [ ] **Step 3: 改設定並只重啟 `miyoria`**
 

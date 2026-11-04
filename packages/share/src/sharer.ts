@@ -57,7 +57,7 @@ const HOUR_MS = 3_600_000;
 const FILE_NAME = "threads.jpg";
 
 const NOTICE: Record<Exclude<Pause, null>, string> = {
-  login: "Threads 要重新登入了,我先不滑。到放瀏覽器的機器跑 `pnpm login` 登入就好。",
+  login: "Threads 要重新登入了,我先不滑。到放瀏覽器的機器跑 `pnpm run login` 登入就好。",
   no_posts: "Threads 連續好幾輪都讀不到貼文,可能改版了,我先不滑。",
 };
 
