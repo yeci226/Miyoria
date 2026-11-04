@@ -1,5 +1,5 @@
 import { type ChatRequest, systemMessage, userMessage } from "@miyoria/llm";
-import { dataBlock } from "@miyoria/types";
+import { dataBlock, safeName } from "@miyoria/types";
 import { z } from "zod";
 
 /** Longest note. */
@@ -41,7 +41,7 @@ function system(input: LookInput, task: string): string {
 }
 
 function context(input: LookInput, question: string | null): string {
-  const parts = [`正在看:${input.name}`];
+  const parts = [`正在看:${safeName(input.name)}`];
   if (input.notes.length > 0) parts.push(dataBlock("watch", "最近的筆記", input.notes.join("\n")));
   if (input.transcript.length > 0) {
     parts.push(dataBlock("stream", "最近的台詞", input.transcript.join("\n")));
