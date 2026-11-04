@@ -589,6 +589,73 @@ describe("sing module", () => {
     expect(await h.singer.voteSkip(BOB)).toBeNull();
   });
 
+  describe("sing.play by name", () => {
+    /** Song #1 "Long", ready, requested by Amy. */
+    async function ready(): Promise<void> {
+      h = await Harness.create();
+      await h.join();
+      await h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "Long", by: "Amy" });
+      h.worker.finish("j1", "Long", 1);
+      await settle(150);
+    }
+
+    /** Song #1 "Long" sung to the end. */
+    async function sungOnce(): Promise<void> {
+      await ready();
+      await h.invoke(Principals.self(VOICE), "sing.play", { song: 1 });
+      await settle(2600);
+      expect(h.singer.list.get(1)?.state).toBe("done");
+      h.worker.cacheHit = true;
+    }
+
+    it("starts a ready song she names", async () => {
+      await ready();
+      const played = await h.invoke(Principals.self(VOICE), "sing.play", { song: "《long》" });
+      expect(played.status === "done" && played.result.data).toMatchObject({ song: 1 });
+      expect(h.singer.playing()?.no).toBe(1);
+    });
+
+    it("reads a number written as text", async () => {
+      await ready();
+      const played = await h.invoke(Principals.self(VOICE), "sing.play", { song: "#1" });
+      expect(played.status === "done" && played.result.data).toMatchObject({ song: 1 });
+    });
+
+    it("sings a finished song again from the worker's cache, for who asked for it", async () => {
+      await sungOnce();
+      const again = await h.invoke(Principals.self(VOICE), "sing.play", { song: "Long" });
+      expect(again.status).toBe("done");
+      expect(h.worker.submitted).toHaveLength(2);
+      expect(h.worker.submitted[1]).toMatchObject({ query: "Long", key: 0 });
+      expect(h.singer.list.get(2)).toMatchObject({ requester_name: "Amy", forced: true });
+      await settle(7000);
+      expect(h.voice.plays).toHaveLength(2);
+    }, 15_000);
+
+    it("sings a finished song again by its number", async () => {
+      await sungOnce();
+      const again = await h.invoke(Principals.self(VOICE), "sing.play", { song: 1 });
+      expect(again.status === "done" && again.result.data).toMatchObject({ song: 2 });
+      expect(h.worker.submitted).toHaveLength(2);
+    });
+
+    it("sends a song not on the list to sing_request, without asking the worker", async () => {
+      await ready();
+      const played = await h.invoke(Principals.self(VOICE), "sing.play", { song: "Unknown" });
+      expect(played.status).toBe("failed");
+      expect(played.status === "failed" && played.error).toContain("sing_request");
+      expect(h.worker.submitted).toHaveLength(1);
+      expect(h.singer.playing()).toBeNull();
+    });
+
+    it("does not fall back to another song for a number not on the list", async () => {
+      await ready();
+      const played = await h.invoke(Principals.self(VOICE), "sing.play", { song: 9 });
+      expect(played.status).toBe("failed");
+      expect(h.singer.playing()).toBeNull();
+    });
+  });
+
   it("sings a commanded song as soon as it is ready and she is in voice", async () => {
     h = await Harness.create();
     expect(await h.command("queue song request", { song: "Song A" })).toContain("好了她就會唱");

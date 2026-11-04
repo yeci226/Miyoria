@@ -3,15 +3,17 @@
 // * `sing.request` (tool `sing_request`): prepare a song (search, link or library file). People
 //   asking her is a request she may turn down; commands and the panel force it (sung as soon as
 //   it is ready and she is free).
-// * `sing.play` (tool `sing_start`): sing a ready song now, after what she is saying.
+// * `sing.play` (tool `sing_start`): sing a ready song now, after what she is saying. She can name
+//   it, and a song she already sang goes back on the list (the worker has it cached); a song not
+//   on the list has to go through `sing.request`, with its permission and limits.
 // * `sing.stop` (tool `sing_stop`): stop the song (skip), or with `all` also drop the rest.
 
 import { type Capability, defineCapability } from "@miyoria/actions";
 import { type Principal, safeName } from "@miyoria/types";
 import { z } from "zod";
 import type { SingPermissions } from "./config.js";
-import { songLabel } from "./setlist.js";
-import type { Singer } from "./singer.js";
+import { type SongNo, songLabel } from "./setlist.js";
+import { SingError, type Singer } from "./singer.js";
 
 const RequestArgs = z.object({
   /** Song name (with the artist helps), a YouTube link, or `library:<file>`. */
@@ -21,11 +23,20 @@ const RequestArgs = z.object({
   /** How to call the person who asked (shown in the list and to her later). */
   by: z.string().trim().min(1).max(64).nullish(),
 });
-const PlayArgs = z.object({ song: z.number().int().positive().nullish() });
+const PlayArgs = z.object({
+  /** A number on the set list (also written as text, `#3`) or a song's name. */
+  song: z.union([z.number().int().positive(), z.string().trim().min(1).max(300)]).nullish(),
+});
 const StopArgs = z.object({ all: z.boolean().nullish() });
 type RequestArgs = z.output<typeof RequestArgs>;
 type PlayArgs = z.output<typeof PlayArgs>;
 type StopArgs = z.output<typeof StopArgs>;
+
+/** The song she means: a set list number, a name, or `null` for the first ready one. */
+function songRef(song: PlayArgs["song"]): SongNo | string | null {
+  if (typeof song !== "string") return song ?? null;
+  return /^#?\d+$/.test(song) ? Number(song.replace("#", "")) : song;
+}
 
 /** Commands and the panel force a song: it is sung as soon as it is ready. */
 function forced(p: Principal): boolean {
@@ -97,8 +108,9 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
       name: "sing_start",
       description:
         "唱一首已經準備好的歌(在你所在的語音頻道;你這句話說完才開始,唱的時候你不能說話)。" +
-        "song 是歌單上的編號,省略 = 最早準備好的那首。開唱前用一句話開場。",
-      properties: { song: { type: "integer", description: "歌單編號(可省略)" } },
+        "song 是歌單上的編號或歌名,省略 = 最早準備好的那首;剛唱過的歌也可以再唱一次。" +
+        "不在歌單上的歌要先用 sing_request 準備。開唱前用一句話開場。",
+      properties: { song: { type: "string", description: "歌單編號或歌名(可省略)" } },
     },
     check(args) {
       const now = singer.playing();
@@ -107,7 +119,37 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
       return null;
     },
     async execute(args, ctx) {
-      const entry = singer.play(args.song ?? null, ctx.principal.context, ctx.request.turn);
+      const ref = songRef(args.song);
+      const p = ctx.principal;
+      const listed =
+        typeof ref === "string"
+          ? singer.list.named(ref)
+          : ref === null
+            ? null
+            : singer.list.get(ref);
+      if (typeof ref === "string" && listed === null) {
+        throw new SingError(`「${safeName(ref, 60)}」不在歌單上,要先用 sing_request 準備`);
+      }
+      if (listed?.state === "done") {
+        // Sung before, so the worker has it: back on the list for who asked for it.
+        const again = await singer.request(
+          {
+            query: listed.query,
+            key: listed.key,
+            requester: listed.requester,
+            requester_name: listed.requester_name,
+            context: p.context ?? listed.context,
+            forced: true,
+          },
+          ctx.signal,
+        );
+        return {
+          text: `${songLabel(again)} 再唱一次(#${again.no}),她有空就會開始。`,
+          data: { song: again.no },
+        };
+      }
+      const no = listed?.no ?? (typeof ref === "number" ? ref : null);
+      const entry = singer.play(no, p.context, ctx.request.turn);
       return {
         text: `準備開始唱 ${songLabel(entry)}(#${entry.no}),說完這句就開始。`,
         data: { song: entry.no },

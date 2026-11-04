@@ -68,6 +68,14 @@ export function askedName(query: string): string {
   return LINK.test(q) || q.toLowerCase().startsWith("library:") ? "" : q;
 }
 
+/** A song name to compare: no case, no surrounding spaces or title marks (`《》「」`, quotes). */
+function plainName(name: string): string {
+  return name
+    .replace(/[《》「」『』〈〉"'“”‘’]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
 /**
  * What to call a song: the worker's title, unless people asked for it by words that title is not
  * in (a video title can name something else, like the show the song is from).
@@ -194,6 +202,16 @@ export class SetList {
   findOpen(query: string, key: number): SongEntry | null {
     const q = query.trim().toLowerCase();
     return this.open().find((e) => e.key === key && e.query.trim().toLowerCase() === q) ?? null;
+  }
+
+  /** The song `name` names (what was asked for, or its title): a ready one, else the newest. */
+  named(name: string): SongEntry | null {
+    const wanted = plainName(name);
+    if (wanted === "") return null;
+    const hits = this.#entries.filter(
+      (e) => plainName(askedName(e.query)) === wanted || plainName(e.song?.title ?? "") === wanted,
+    );
+    return hits.find((e) => e.state === "ready") ?? hits.at(-1) ?? null;
   }
 
   add(song: NewSong, now: Timestamp): SongEntry {
