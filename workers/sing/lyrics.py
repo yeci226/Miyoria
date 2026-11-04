@@ -15,7 +15,10 @@ log = logging.getLogger("miyoria.sing.lyrics")
 LRCLIB_URL = "https://lrclib.net"
 
 # Video-title noise: "(Official Video)", "[MV]", "【歌ってみた】", "| 4K", "feat. X" stays.
-_BRACKETED = re.compile(r"[\(\[【「『〔][^\)\]】」』〕]*[\)\]】」』〕]")
+_BRACKETED = re.compile(r"[\(\[【「『《〔][^\)\]】」』》〕]*[\)\]】」』》〕]")
+# A song named in quotes, sometimes followed by who sings it: 「Song」, 《Song》, “Song” by Artist.
+_QUOTED = re.compile(r"[「『《“]([^」』》”]+)[」』》”]")
+_BY = re.compile(r"\s*by\s+([^|｜]+)", re.IGNORECASE)
 _NOISE = re.compile(
     r"\b(official|music|lyric|lyrics|video|audio|mv|pv|hd|4k|hq|full|ver\.?|version|remaster(ed)?)\b",
     re.IGNORECASE,
@@ -32,9 +35,20 @@ def clean_title(raw: str) -> str:
     return re.sub(r"\s+", " ", t).strip(" -–—/")
 
 
+def _quoted_song(raw: str) -> tuple[str, str | None] | None:
+    """``(song, artist or None)`` from the first quoted name that is not a version tag."""
+    for m in _QUOTED.finditer(raw):
+        song = _BRACKETED.sub(" ", m.group(1)).strip()
+        if song and not _NOISE.search(song):
+            by = _BY.match(raw, m.end())
+            return song, by.group(1).strip() if by else None
+    return None
+
+
 def guess_artist_title(raw_title: str, uploader: str | None = None) -> tuple[str | None, str]:
     """``(artist, title)`` from a video title like ``Artist - Song (Official Video)``.
 
+    Without that form, a quoted name is the song (``Show | “Song” by Artist | Music Video``).
     Falls back to the uploader (without `` - Topic`` / ``VEVO``) as the artist.
     """
     t = clean_title(raw_title)
@@ -47,6 +61,9 @@ def guess_artist_title(raw_title: str, uploader: str | None = None) -> tuple[str
     artist = None
     if uploader:
         artist = re.sub(r"\s*-\s*Topic$|VEVO$", "", uploader).strip() or None
+    quoted = _quoted_song(raw_title)
+    if quoted:
+        return quoted[1] or artist, quoted[0]
     return artist, _NOISE.sub("", t).strip() or t
 
 

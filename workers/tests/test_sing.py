@@ -383,6 +383,24 @@ def test_parse_lrc():
         ("YOASOBI - 夜に駆ける (Official Music Video)", None, ("YOASOBI", "夜に駆ける")),
         ("【MV】Song Name", "Artist - Topic", ("Artist", "Song Name")),
         ("Some Song | Live at Home", None, (None, "Some Song")),
+        # The song is the quoted name, wherever it stands.
+        (
+            "Cyberpunk: Edgerunners | “I Really Want to Stay At Your House” by Rosa Walton | Music Video",
+            "Netflix",
+            ("Rosa Walton", "I Really Want to Stay At Your House"),
+        ),
+        ("「雨爱 (司凤版)」|“邦吧”|  \"听完\"", "uploader", ("uploader", "雨爱")),
+        (
+            "【Hi-Res】DJ音乐《朋友的酒 (DJ-夢ノ結唱)》“人生”",
+            "uploader",
+            ("uploader", "朋友的酒"),
+        ),
+        ("Aimer - 「殘響散歌」 Music Video", "Aimer", ("Aimer", "殘響散歌")),
+        # Artist - Song stays: quotes there are a version or an album.
+        ("Hana - Sakura no Uta 「 Full Vers. 」", None, ("Hana", "Sakura no Uta")),
+        ("周杰倫 - 晴天 《葉惠美》", None, ("周杰倫", "晴天")),
+        # Quotes around a version name no song.
+        ("Song Name 「Full Version」", "Artist", ("Artist", "Song Name")),
     ],
 )
 def test_guess_artist_title(raw, uploader, expected):
