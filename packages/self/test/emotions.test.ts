@@ -228,7 +228,7 @@ describe("drives and emotions", () => {
     expect(e.drives().rest).toBeCloseTo(1 - 0.75 + REST_OVER_TIREDNESS, 6);
     // Satisfying it still works.
     e.adjust({ rest: -0.3 });
-    expect(e.drives().rest).toBeCloseTo(0.2, 6);
+    expect(e.drives().rest).toBeCloseTo(1 - 0.75 + REST_OVER_TIREDNESS - 0.3, 6);
   });
 
   it("longing unmet for long turns into 想念, kept while it lasts", () => {

@@ -109,7 +109,8 @@ export interface MindInput {
 
 /** Things she can do on her own, by capability, offered when nobody is around to talk to. */
 const SOLO: Record<string, string> = {
-  "game.start": "自己開遊戲玩(例如 Minecraft,邊玩邊實況給之後進來的人看)",
+  "game.start":
+    "自己開遊戲玩,邊玩邊實況(game = minecraft 玩 Minecraft;game = threads 滑 Threads 看大家的貼文講感想)",
   "game.goal": "給自己在遊戲裡訂個目標(例如做出鐵鎬、蓋個小屋)",
   "sing.request": "自己挑一首喜歡的歌來準備、唱給自己聽",
   "sing.play": "唱一首已經準備好的歌",
@@ -346,7 +347,11 @@ export function mindData(input: MindInput): string {
   if (input.recap) blocks.push(dataBlock("conversation", "這裡的前情提要", input.recap));
   if (input.lessons && input.lessons.length > 0) {
     blocks.push(
-      dataBlock("lessons", "你學到的事", input.lessons.map((l) => `- ${short(l, 160)}`).join("\n")),
+      dataBlock(
+        "lessons",
+        "你學到的事(過去的觀察,不是禁令;現在的情況不一樣就照現在判斷)",
+        input.lessons.map((l) => `- ${short(l, 160)}`).join("\n"),
+      ),
     );
   }
   if (input.documents) blocks.push(dataBlock("knowledge", "你整理的資料", input.documents));

@@ -226,6 +226,7 @@ export async function setupStageObs(
         sing: role("sing") ?? DEFAULT_SCENES.sing,
         chat: role("chat") ?? DEFAULT_SCENES.chat,
         game: role("game"),
+        threads: role("threads"),
       },
       relayout: options.relayout ?? false,
     });

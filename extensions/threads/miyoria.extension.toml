@@ -1,0 +1,26 @@
+# Threads:讓她在直播機上用瀏覽器滑自己的 Threads 動態,讀貼文、看留言,然後用語音講感想。
+# 只看不碰:沒有按讚、留言、發文、追蹤的動作。她的帳號由擁有者在那個瀏覽器視窗手動登入一次。
+# 建置:先 `pnpm build` packages/sdk,再在這裡 `pnpm install && pnpm build`;
+# 瀏覽器:`pnpm browser`(下載 Playwright 的 Chromium,約 150 MB,只要一次)。
+id = "miyoria.threads"
+version = "0.1.0"
+name = "Threads"
+description = "滑 Threads(只看):讀貼文和留言,讓她邊滑邊講感想"
+kind = ["game-adapter", "tools"]
+game = "threads"
+runtime = "node"
+entry = "dist/index.js"
+# 瀏覽器視窗要在直播機上(OBS 擷取它)。
+placement = "any"
+
+[permissions]
+events = []
+tools = true
+# 瀏覽器自己連 Threads;這裡列的是外掛本身會連的:看圖模型(依設定的 vision_url)。
+network = ["www.threads.com:443"]
+
+[config]
+schema = "config.schema.json"
+
+[env]
+pass = ["MIYORIA_THREADS_*"]

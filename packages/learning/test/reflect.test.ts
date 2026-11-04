@@ -203,6 +203,20 @@ describe("daily reflection", () => {
     expect(all.map((l) => l.text).sort()).toEqual(["Owen 講話時不要插嘴", "在 p1 少說一點"]);
     // Lessons scoped to Owen shift her talkativeness only when he is in the conversation.
     expect(lessons.talkShift(TEXT, ["p-owen"])).toBeLessThan(0);
+    // However many "be quieter" lessons pile up, together they only nudge her.
+    for (let i = 0; i < 30; i++) {
+      lessons.add({
+        id: `quiet-${i}`,
+        text: `在 p1 少說話 ${i}`,
+        person: null,
+        scope: null,
+        talk: -1,
+        created_at: "2026-11-02T00:00:00.000Z",
+        expires_at: null,
+        source: "daily",
+      });
+    }
+    expect(lessons.talkShift(TEXT, [])).toBeCloseTo(-0.15);
     expect(lessons.applicable(TEXT, ["p-amy"]).map((l) => l.text)).not.toContain(
       "Owen 講話時不要插嘴",
     );

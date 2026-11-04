@@ -39,11 +39,43 @@ const HOUR_MS = 3_600_000;
 /** Longest agenda / reason text kept. */
 const MAX_TEXT = 300;
 const MAX_WHY = 200;
+const DAY_MS = 24 * 60 * 60_000;
+
+/** Characters that tell texts apart (no spaces or punctuation), lower case. */
+function letters(text: string): string {
+  return text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+function bigrams(text: string): Set<string> {
+  const out = new Set<string>();
+  const chars = [...text];
+  for (let i = 0; i + 1 < chars.length; i++) out.add(`${chars[i]}${chars[i + 1]}`);
+  return out;
+}
+
+/**
+ * Two agenda texts say the same thing: equal or one inside the other once spaces and
+ * punctuation are gone, or most of the shorter one's character pairs appear in the other.
+ */
+export function sameAgenda(a: string, b: string): boolean {
+  const x = letters(a);
+  const y = letters(b);
+  if (x === "" || y === "") return false;
+  if (x === y) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  if (short.length >= 4 && long.includes(short)) return true;
+  const sa = bigrams(short);
+  const sb = bigrams(long);
+  if (sa.size === 0) return false;
+  let shared = 0;
+  for (const g of sa) if (sb.has(g)) shared++;
+  return shared / sa.size >= 0.6;
+}
 /** Longest scope string. */
 const MAX_SCOPE = 120;
 
 /** How far above her tiredness (`1 - energy`) her own nudges may lift `rest`. */
-export const REST_OVER_TIREDNESS = 0.25;
+export const REST_OVER_TIREDNESS = 0.1;
 
 export class SelfError extends Error {
   override readonly name = "SelfError";
@@ -415,9 +447,19 @@ export class SelfEngine {
   addAgenda(input: AgendaInput, now: number): AgendaItem {
     const text = cut(input.text, MAX_TEXT);
     if (text === "") throw new SelfError("agenda text is empty");
-    const expires = validTimestamp(input.expiresAt, "expires_at");
-    if (expires !== null && timestampMs(expires) <= now) {
+    const asked = validTimestamp(input.expiresAt, "expires_at");
+    if (asked !== null && timestampMs(asked) <= now) {
       throw new SelfError("`expires_at` is in the past");
+    }
+    const latest = now + this.config.max_agenda_days * DAY_MS;
+    const expires = asked !== null && timestampMs(asked) <= latest ? asked : toTimestamp(latest);
+    // The same item again: the open one stays (its expiry moves out if this one lasts longer).
+    const twin = this.#agenda.find((a) => a.status === "open" && sameAgenda(a.text, text));
+    if (twin) {
+      if (twin.expires_at === null || timestampMs(twin.expires_at) < timestampMs(expires)) {
+        twin.expires_at = expires;
+      }
+      return { ...twin };
     }
     const item: AgendaItem = {
       id: newId(),

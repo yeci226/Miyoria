@@ -1,0 +1,26 @@
+{
+  "name": "@miyoria/ext-threads",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Threads browsing as a game: she scrolls her feed in a browser on the streaming PC and talks about the posts",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -w -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "browser": "playwright-core install chromium --no-shell"
+  },
+  "dependencies": {
+    "@miyoria/sdk": "workspace:*",
+    "playwright-core": "^1.56.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

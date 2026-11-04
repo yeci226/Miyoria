@@ -46,6 +46,13 @@ export const SingConfigSchema = z.object({
   /** After this many reminders (while she is in voice) the song starts on its own. */
   max_reminders: z.number().int().nonnegative().default(2),
   /**
+   * While she plays a game, a ready song does not start on its own (songs from the request
+   * queue included; an owner's command still does): she is reminded every `busy_remind_secs`
+   * and picks the moment, and only after `busy_max_wait_mins` it starts anyway.
+   */
+  busy_remind_secs: z.number().positive().default(300),
+  busy_max_wait_mins: z.number().positive().default(20),
+  /**
    * `/queue song voteskip`: the song she is singing is skipped once this share of the people
    * listening in her voice channel voted (rounded up), and at least `vote_skip_min` votes.
    */

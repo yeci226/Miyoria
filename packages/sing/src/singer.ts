@@ -44,6 +44,7 @@ import {
   safeName,
   sameAccount,
   type TurnId,
+  timestampMs,
   toTimestamp,
   type VoiceFloor,
   VoicePlayerKey,
@@ -403,10 +404,24 @@ export class Singer implements VoiceFloor, SpeechPause {
 
   // ----- the moment to sing -----
 
+  /** The game she is playing, if any. */
+  #game(): string | null {
+    return this.ctx.services.get(WorldStateKey)?.snapshot().her.game ?? null;
+  }
+
   #mindDecides(entry: SongEntry): boolean {
-    if (entry.forced || this.cfg.start === "auto") return false;
-    // She let every reminder pass: someone is still waiting for it, so it starts on its own.
-    if (entry.reminders > this.cfg.max_reminders) return false;
+    if (this.cfg.start === "auto") return false;
+    const gaming = this.#game() !== null;
+    // An owner's command overrides; a request from the queue waits while she plays.
+    if (entry.forced && !(gaming && entry.queue_item !== null)) return false;
+    if (gaming) {
+      // She picks the moment, but someone is waiting: after a while it starts anyway.
+      const since = timestampMs(entry.ready_at ?? entry.created_at);
+      if (this.ctx.clock.now() - since >= this.cfg.busy_max_wait_mins * 60_000) return false;
+    } else if (entry.reminders > this.cfg.max_reminders) {
+      // She let every reminder pass: someone is still waiting for it, so it starts on its own.
+      return false;
+    }
     return this.ctx.services.get(MindKey)?.accepting === true;
   }
 
@@ -425,9 +440,14 @@ export class Singer implements VoiceFloor, SpeechPause {
     entry.reminders += 1;
     entry.last_reminder_ms = this.ctx.clock.now();
     const voice = this.voiceContext() === null ? "你現在不在語音頻道,要唱得先進語音。" : "";
+    const game = this.#game();
+    const busy =
+      game === null
+        ? ""
+        : `你正在玩 ${game}:想先唱就唱(唱完再回去玩),想先玩完就跟${entry.requester_name}說一聲等一下。`;
     const hint =
       `${entry.requester_name} 點的${songLabel(entry)}已經準備好了(#${entry.no})。` +
-      `想唱就用 sing.play(song = ${entry.no}),opening 寫一句開場;現在不想唱也可以晚點再唱。${voice}`;
+      `想唱就用 sing.play(song = ${entry.no}),opening 寫一句開場;現在不想唱也可以晚點再唱。${voice}${busy}`;
     const ok = mind?.suggest({
       source: "sing",
       reason: REASONS.ready,
@@ -459,13 +479,15 @@ export class Singer implements VoiceFloor, SpeechPause {
     const now = this.ctx.clock.now();
     this.#checkPreparing(now);
     this.#updatePause();
+    const gaming = this.#game() !== null;
     for (const e of this.list.ready()) {
       if (!this.#mindDecides(e)) continue;
-      const due = (e.last_reminder_ms ?? now) + this.cfg.remind_secs * 1000;
-      // The first notice plus `max_reminders`, only while she is in voice (she can sing then).
-      if (e.reminders <= this.cfg.max_reminders && now >= due && this.voiceContext() !== null) {
-        this.#remind(e);
-      }
+      const every = gaming ? this.cfg.busy_remind_secs : this.cfg.remind_secs;
+      const due = (e.last_reminder_ms ?? now) + every * 1000;
+      // The first notice plus `max_reminders` (while she plays, every few minutes until it
+      // starts), only while she is in voice (she can sing then).
+      const more = gaming || e.reminders <= this.cfg.max_reminders;
+      if (more && now >= due && this.voiceContext() !== null) this.#remind(e);
     }
     this.#autoStart();
   }

@@ -120,6 +120,7 @@ function rules(kind: "daily" | "light", maxGoals: number): string {
 - insights:${kind === "daily" ? "把講同一件事的零散記憶(n 代號)合併成更有意義的一句;只能合併同一個範圍(範圍標在記憶後面)的記憶,合併後舊的會被取代。" : "這次不整理記憶,給空陣列。"}
 - outdated:${kind === "daily" ? "互相矛盾或過時的記憶,用較新的那條(by)取代舊的(old)。" : "給空陣列。"}
 - 從回饋(反應、回覆、被說吵、主動開話題有沒有人理、被拒絕的行動)檢討自己,寫成 lessons:具體、可以照著做的一句話,可以只針對某個人或某個地方;talk 是你在那裡要調整的多話程度。
+- lessons 要平衡:做得好、大家有接話、玩得開心的也要記(talk 可以是正的)。被嫌一兩次只代表那個人、那個話題、那個時候,不要寫成「整場不主動開話題」「只被點名才回」這種全面沉默的規則;你是有自己想法、會主動找事做的人,不是只會等人點名。舊的 lesson 已經過時或太極端就放進 drop_lessons。
 - 用 documents 更新你自己整理的資料庫(人物、伺服器、主題),也包括關於你自己的文件(subject "self":你喜歡做什麼、什麼做得好或不好、你的長期目標)。
 - goals:最多 ${maxGoals} 個值得花幾天去做的長期目標,會放進你的議程;沒有就不要。
 - 只能用資料裡的代號(n1、u1、p1、L1、#文件)。
@@ -613,7 +614,9 @@ export class Reflector {
         scope,
         talk: l.talk,
         created_at: ts,
-        expires_at: toTimestamp(now + (l.days ?? d.config.lesson_days) * DAY_MS),
+        expires_at: toTimestamp(
+          now + Math.min(l.days ?? d.config.lesson_days, d.config.max_lesson_days) * DAY_MS,
+        ),
         source: kind,
       };
       d.lessons.add(lesson);

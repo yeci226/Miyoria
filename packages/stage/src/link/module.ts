@@ -73,7 +73,7 @@ function direct(director: SceneDirector, env: Envelope): void {
         const state = GOLIVE_STATES.find((s) => s === data.state);
         if (state) director.onGoLive(typeof data.guild === "string" ? data.guild : "", state);
       } else if (topic === GAME_SESSION_TOPIC) {
-        director.onGame(data.state === "started");
+        director.onGame(data.state === "started", typeof data.game === "string" ? data.game : null);
       } else if (topic === SONG_TOPIC) {
         const cue = parseSongCue(payload);
         if (cue?.state === "started") director.onSong(true);

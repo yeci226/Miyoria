@@ -39,6 +39,15 @@ export const SING = {
 /** Her model in the corner of the game scene. */
 export const GAME_MODEL = { x: 1320, y: 732, width: 576, height: 324 } as const;
 
+/** The Threads scene: her browser window on the left, her model standing at the right. */
+export const THREADS = {
+  window: { x: 120, y: 40, width: 760, height: 1000 },
+  model: { x: 600, y: 200, width: 1600, height: 900 },
+} as const;
+
+/** The Threads extension's browser window (an app window titled `Miyoria Threads`). */
+export const THREADS_WINDOW = "Miyoria Threads:Chrome_WidgetWin_1:chrome.exe";
+
 /** The frame the layout is designed at. */
 const DESIGN_WIDTH = 1920;
 
@@ -49,6 +58,7 @@ export const SOURCES = {
   overlaySing: "Miyoria Overlay · 唱歌",
   model: "VTube Studio 透明",
   frame: "◇ 影片框",
+  threads: "Miyoria Threads 視窗",
 } as const;
 
 /** The image mask filter that rounds the song video. */
@@ -68,8 +78,8 @@ export interface ObsSetupOptions {
   videoSource: string;
   /** Where the mask image goes (absolute). */
   maskPath: string;
-  /** Scene of each role (`[modules."stage.link".scenes] roles`); `game` may be absent. */
-  scenes: { sing: string; chat: string; game: string | null };
+  /** Scene of each role (`[modules."stage.link".scenes] roles`); `game` and `threads` may be absent. */
+  scenes: { sing: string; chat: string; game: string | null; threads?: string | null };
   /** Place the items again even when they exist. */
   relayout: boolean;
 }
@@ -206,6 +216,17 @@ export function planObsSetup(snap: ObsSnapshot, options: ObsSetupOptions): Step[
         priority: 2,
         allow_transparency: true,
         capture_cursor: false,
+      },
+    },
+    [SOURCES.threads]: {
+      kind: "window_capture",
+      // Matched by its title first; only the page, not the window frame.
+      settings: {
+        window: THREADS_WINDOW,
+        priority: 1,
+        method: 2,
+        client_area: true,
+        cursor: false,
       },
     },
     [options.videoSource]: {
@@ -374,6 +395,22 @@ export function planObsSetup(snap: ObsSnapshot, options: ObsSetupOptions): Step[
       ],
     );
     hideOtherVts(game);
+  }
+
+  // ---- threads: backdrop, her browser window, her model, the overlay
+  const threads = options.scenes.threads ?? null;
+  if (threads !== null) {
+    ensureScene(threads);
+    layout(
+      threads,
+      [{ source: SOURCES.backdrop, transform: full }],
+      [
+        { source: SOURCES.threads, transform: fitInto(THREADS.window) },
+        { source: SOURCES.model, transform: fitInto(THREADS.model) },
+        { source: SOURCES.overlay, transform: full },
+      ],
+    );
+    hideOtherVts(threads);
   }
   return steps;
 }

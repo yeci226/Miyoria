@@ -19,7 +19,7 @@
 
 import { getLogger, sleep } from "@miyoria/kernel";
 import { type Clock, type StreamCurtain, systemClock } from "@miyoria/types";
-import type { SceneRoles, ScenesConfig } from "./scenes.js";
+import { ROLE_NAME, type SceneRoles, type ScenesConfig } from "./scenes.js";
 
 const log = getLogger("stage.director");
 
@@ -62,6 +62,8 @@ export class SceneDirector implements StreamCurtain {
   readonly #golive = new Map<string, GoLiveState>();
   #obsStreaming = false;
   #playing = false;
+  /** The game being played (its id, e.g. `threads`): a role of that name wins over `game`. */
+  #game: string | null = null;
   /** Bumped when her situation changes (a game, going live or off); see `onSong`. */
   #situation = 0;
   #singing = false;
@@ -141,6 +143,9 @@ export class SceneDirector implements StreamCurtain {
     if (this.#away(now)) {
       out.push({ role: "brb", why: "暫時沒有人在講話或她離開了語音", urgent: false });
     }
+    if (this.#playing && this.#game !== null && ROLE_NAME.test(this.#game)) {
+      out.push({ role: this.#game, why: `開始${this.#game}`, urgent: false });
+    }
     if (this.#playing) out.push({ role: "game", why: "開始玩遊戲", urgent: false });
     out.push({ role: "chat", why: "回到聊天", urgent: false });
     return out;
@@ -202,10 +207,12 @@ export class SceneDirector implements StreamCurtain {
     }
   }
 
-  /** A game session started or stopped. */
-  onGame(playing: boolean): void {
-    if (this.#playing === playing) return;
+  /** A game session started or stopped (`game`: its id, for a scene of its own). */
+  onGame(playing: boolean, game: string | null = null): void {
+    const next = playing ? game : null;
+    if (this.#playing === playing && this.#game === next) return;
     this.#playing = playing;
+    this.#game = next;
     this.#situation += 1;
     this.#returnTo = null;
     this.#ended = false;

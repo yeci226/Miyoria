@@ -132,7 +132,12 @@ export const SelfConfigSchema = z.object({
   /** Longest a talkativeness setting may last (she can always set it again). */
   max_talkativeness_hours: z.number().positive().default(24),
   /** Open agenda items kept; adding more drops the oldest. */
-  max_open_agenda: count().default(20),
+  max_open_agenda: count().default(8),
+  /**
+   * Longest an agenda item stays open (days); one without an expiry gets this one. Long-lived
+   * vague goals ("practise staying quiet for two weeks") piled up and steered her for days.
+   */
+  max_agenda_days: z.number().positive().default(3),
   /** Done / dropped / expired agenda items kept for the panel. */
   keep_closed_agenda: count().default(20),
   /** Longest feelings text per person. */

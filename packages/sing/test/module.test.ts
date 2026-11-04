@@ -39,6 +39,8 @@ import {
   VoiceFloorKey,
   type VoicePlayer,
   VoicePlayerKey,
+  type WorldState,
+  WorldStateKey,
 } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -536,6 +538,30 @@ describe("sing module", () => {
     // One more reminder, then nobody waits any longer: it starts after an opening line.
     await settle(2500);
     expect(h.mind.suggestions.filter((s) => s.reason === "song_ready")).toHaveLength(2);
+    expect(["preparing", "ready"]).not.toContain(h.singer.list.get(1)?.state);
+  });
+
+  it("waits for her while she plays a game, reminding her, and only starts after a long wait", async () => {
+    h = await Harness.create({
+      remind_secs: 0.2,
+      max_reminders: 1,
+      busy_remind_secs: 0.3,
+      busy_max_wait_mins: 0.05,
+    });
+    h.sup.services.provide("world", WorldStateKey, {
+      snapshot: () => ({ her: { game: "Minecraft" }, voice_channels: [] }),
+    } as unknown as WorldState);
+    await h.join();
+    await h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "Lemon", by: "Amy" });
+    h.worker.finish("j1", "Lemon", 1);
+    // Past the usual reminders: she is still asked, not overridden, and told about the game.
+    await settle(1500);
+    const ready = h.mind.suggestions.filter((s) => s.reason === "song_ready");
+    expect(ready.length).toBeGreaterThanOrEqual(3);
+    expect(ready.at(-1)?.hint).toContain("你正在玩 Minecraft");
+    expect(h.singer.list.get(1)?.state).toBe("ready");
+    // Three seconds after it was ready, Amy has waited long enough.
+    await settle(2500);
     expect(["preparing", "ready"]).not.toContain(h.singer.list.get(1)?.state);
   });
 

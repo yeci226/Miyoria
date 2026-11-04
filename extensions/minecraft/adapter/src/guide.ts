@@ -2,7 +2,9 @@
 // description, so the director's prompt carries it). She picks the next step from what is really
 // in her inventory instead of going straight for diamonds with bare hands.
 
-export const GUIDE = `生存的進度(一步一步來,看背包裡實際有什麼,選下一個「現在做得到」的步驟,不要跳級):
+export const GUIDE = `走路、挖掘、戰鬥這些細節交給遊戲裡的 bot(Baritone / AltoClef),你只下高階動作。危險(血量低、敵人靠近、天黑、掉進岩漿)先求生。
+像真人一樣一步一步玩:看遊戲狀態裡你實際有的東西(背包、工具、看得到的方塊),不要跳級去做還沒條件的事。
+生存的進度(一步一步來,看背包裡實際有什麼,選下一個「現在做得到」的步驟,不要跳級):
 1. 空手 mine 看得到的原木(oak_log 這類)→ craft 木材(例如 oak_planks)→ craft 工作台 crafting_table → place 放下來。
 2. craft 木棒 stick → 站在工作台旁 craft 木鎬 wooden_pickaxe。
 3. 用木鎬 mine 石頭 stone(得到鵝卵石 cobblestone)→ craft 石鎬 stone_pickaxe、石劍、石斧;8 個鵝卵石 craft 熔爐 furnace 再 place。

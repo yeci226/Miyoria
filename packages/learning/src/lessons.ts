@@ -20,9 +20,13 @@ import {
 const log = getLogger("learning.lessons");
 
 export const LESSON_PREFIX = "reflect:lesson:";
-/** One unit of a lesson's `talk` shifts talkativeness by this much (before the clamp). */
-const TALK_STEP = 0.25;
-const MAX_SHIFT = 0.4;
+/**
+ * One unit of a lesson's `talk` shifts talkativeness by this much, and all lessons together by
+ * at most `MAX_SHIFT`: lessons nudge her, they never silence her (thirty "be quieter" lessons
+ * once added up to the old cap of 0.4 and kept her near mute everywhere).
+ */
+const TALK_STEP = 0.1;
+const MAX_SHIFT = 0.15;
 
 export class LessonStore implements Lessons {
   readonly #items = new Map<string, Lesson>();

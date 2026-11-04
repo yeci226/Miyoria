@@ -144,6 +144,22 @@ describe("agenda", () => {
     expect(e.blockAgenda("nope", { capability: "x", reason: "y" }, T0)).toBeNull();
   });
 
+  it("merges an item she already has and caps how long one stays open", () => {
+    const e = new SelfEngine(selfConfig(), T0);
+    const first = e.addAgenda({ text: "整理一份「別人的場子」清單:音game、硬體" }, T0);
+    const again = e.addAgenda(
+      { text: "把「別人的場子」清單整理完(音game、硬體/拆東西)" },
+      T0 + 60_000,
+    );
+    expect(again.id).toBe(first.id);
+    expect(e.agenda(T0 + 2).length).toBe(1);
+    // Asked for two weeks, kept for at most three days.
+    const long = e.addAgenda({ text: "練習留白", expiresAt: "2026-11-20T00:00:00Z" }, T0);
+    expect(Date.parse(long.expires_at ?? "")).toBe(T0 + 3 * 24 * 60 * 60_000);
+    expect(first.expires_at).not.toBeNull();
+    expect(e.addAgenda({ text: "去麥塊挖礦" }, T0).id).not.toBe(first.id);
+  });
+
   it("keeps the open list and the history bounded", () => {
     const e = new SelfEngine(selfConfig({ max_open_agenda: 2, keep_closed_agenda: 1 }), T0);
     const a = e.addAgenda({ text: "a" }, T0);

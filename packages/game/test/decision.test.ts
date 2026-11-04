@@ -163,10 +163,11 @@ describe("prompts", () => {
     expect(system).toContain("- mine:挖");
     expect(system).toContain('"goal_status"');
     expect(system).toContain('{"type":"object"}');
-    // plays step by step from what she has, and learns from refusals
-    expect(system).toContain("實際有的東西");
-    expect(system).toContain("不要跳級");
+    // plays from what she has (each game's own rules come with its actions), learns from refusals
+    expect(system).toContain("實際有什麼");
+    expect(system).toContain("怎麼玩寫在最後的動作說明裡");
     expect(system).toContain("讀失敗原因");
+    expect(system).not.toContain("Baritone");
     for (const part of ["定時檢查", "挖鐵礦", "mine {}", "蓋房子", "- 死掉了", "血量 20/20"]) {
       expect(user, part).toContain(part);
     }

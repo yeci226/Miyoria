@@ -212,6 +212,25 @@ describe("obs-setup", () => {
     expect(steps.some((s) => s.op === "create_input" && s.name === SOURCES.overlay)).toBe(false);
   });
 
+  it("builds a Threads scene when the threads role has one", async () => {
+    const obs = new FakeObs();
+    await run(obs, { scenes: { ...OPTIONS.scenes, threads: "Threads" } });
+    expect(obs.order("Threads")).toEqual([
+      SOURCES.backdrop,
+      SOURCES.threads,
+      SOURCES.model,
+      SOURCES.overlay,
+    ]);
+    expect(obs.inputs.get(SOURCES.threads)).toMatchObject({
+      kind: "window_capture",
+      settings: { window: "Miyoria Threads:Chrome_WidgetWin_1:chrome.exe" },
+    });
+    // Without the role there is no such scene.
+    const none = new FakeObs();
+    await run(none);
+    expect(none.scenes.has("Threads")).toBe(false);
+  });
+
   it("scales the layout to OBS's base resolution", async () => {
     const obs = new FakeObs();
     obs.base = { width: 1280, height: 720 };

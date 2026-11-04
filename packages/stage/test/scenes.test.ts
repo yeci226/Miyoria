@@ -353,6 +353,20 @@ describe("scene director", () => {
     vi.useRealTimers();
   });
 
+  it("gives a game with a role of its own (threads) that scene, others the game scene", async () => {
+    const t = await rig({ roles: { threads: "Camera" } });
+    t.director.onGame(true, "threads");
+    await ms(1_600);
+    expect(t.switches).toEqual(["threads"]);
+    expect(t.scene()).toBe("Camera");
+    // Another game without a scene of its own: the game scene.
+    t.director.onGame(true, "minecraft");
+    await ms(10_000); // past the minimum gap between automatic switches
+    expect(t.switches).toEqual(["threads", "game"]);
+    expect(t.scene()).toBe("Gameplay");
+    t.director.stop();
+  });
+
   it("does nothing at boot and follows a game session", async () => {
     const t = await rig();
     await ms(60_000);

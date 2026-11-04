@@ -11,6 +11,7 @@ export default defineConfig({
       "apps/voice-node",
       "extensions/minecraft/adapter",
       "extensions/osu",
+      "extensions/threads",
     ],
   },
 });

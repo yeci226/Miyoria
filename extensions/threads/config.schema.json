@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "start_url": {
+      "type": "string",
+      "description": "打開時的頁面(她的動態)",
+      "default": "https://www.threads.com/"
+    },
+    "profile_dir": {
+      "type": "string",
+      "description": "瀏覽器資料夾(她的登入狀態存在這裡);預設 %LOCALAPPDATA%/Miyoria/threads-browser"
+    },
+    "width": { "type": "integer", "minimum": 360, "default": 720, "description": "視窗寬度(px)" },
+    "height": { "type": "integer", "minimum": 480, "default": 1000, "description": "視窗高度(px)" },
+    "vision_url": {
+      "type": "string",
+      "description": "看圖模型的 OpenAI 相容端點(例如 https://openrouter.ai/api/v1);沒設就只知道「有圖」(MIYORIA_THREADS_VISION_URL)"
+    },
+    "vision_model": {
+      "type": "string",
+      "description": "看圖模型名稱(MIYORIA_THREADS_VISION_MODEL)"
+    },
+    "vision_key_env": {
+      "type": "string",
+      "description": "放看圖模型 API key 的環境變數名稱(要以 MIYORIA_THREADS_ 開頭才會傳進來)",
+      "default": "MIYORIA_THREADS_VISION_KEY"
+    },
+    "vision_timeout_ms": { "type": "integer", "minimum": 1000, "default": 20000 }
+  }
+}

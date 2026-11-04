@@ -118,12 +118,16 @@ export const ReflectConfigSchema = z.object({
   max_tokens: count().default(4000),
   /** Memories reviewed by the daily reflection. */
   max_notes: count().default(60),
-  /** Lessons kept (oldest dropped) and their default lifetime. */
-  max_lessons: count().default(60),
-  lesson_days: count().default(30),
+  /**
+   * Lessons kept (oldest dropped), their default and longest lifetime (days). Kept short: a
+   * month of "be quieter" lessons from a few bad evenings silenced her everywhere.
+   */
+  max_lessons: count().default(25),
+  lesson_days: count().default(7),
+  max_lesson_days: count().default(14),
   /** Long-term goals added per reflection, and how long they stay on her agenda. */
   max_goals: count().default(2),
-  goal_days: count().default(14),
+  goal_days: count().default(3),
   /** Reflections kept for the panel. */
   runs_keep: count().default(60),
   /** Feedback: a reply within this long counts as an answer to her. */
