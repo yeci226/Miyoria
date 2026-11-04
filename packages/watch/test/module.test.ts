@@ -20,7 +20,7 @@ import {
   type WorldSnapshot,
   WorldStateKey,
 } from "@miyoria/types";
-import { VoiceLinkKey } from "@miyoria/voice";
+import { type StreamHearing, StreamHearingKey, VoiceLinkKey } from "@miyoria/voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WatchModule } from "../src/module.js";
 
@@ -127,13 +127,13 @@ class Rig {
     );
   }
 
-  provideLink(): void {
+  provideLink({ watchStart, watchStop } = this as Pick<Rig, "watchStart" | "watchStop">): void {
     this.sup.services.provide("voice.link", VoiceLinkKey, {
       channel: (guild: string) => (guild === G ? this.channel : null),
       isStreaming: () => false,
       isSelf: (a: AccountRef) => a.id === "her",
-      watchStart: this.watchStart,
-      watchStop: this.watchStop,
+      watchStart,
+      watchStop,
       snapshot: async () => Buffer.from([1]),
       subscribeWatchAudio: () => (async function* () {})(),
     } as never);
@@ -327,6 +327,88 @@ describe("WatchModule", () => {
     expect((await running).status).toBe("failed");
     expect(rig.watchStart).not.toHaveBeenCalled();
     expect(rig.registry.get("watch.look")).toBeUndefined();
+  });
+
+  it("a_start_the_tool_gave_up_on_does_not_begin_late", async () => {
+    rig = new Rig();
+    await rig.start();
+    rig.watchStart.mockImplementationOnce(async () => {}); // `live` is slow
+    const ctl = new AbortController();
+    const running = rig.registry
+      .invoke(
+        {
+          principal: Principals.self(voice("c1")),
+          capability: "watch.start",
+          args: { user: "小明" } as never,
+          why: null,
+          turn: null,
+        },
+        { signal: ctl.signal },
+      )
+      .catch((e: unknown) => e);
+    await vi.waitFor(() => expect(rig.watchStart).toHaveBeenCalled());
+    ctl.abort(new Error("timed out"));
+    await running;
+    await vi.waitFor(() => expect(rig.watchStop).toHaveBeenCalledWith(G));
+
+    rig.status("u1", "live");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(rig.registry.get("watch.look")).toBeUndefined();
+    expect(rig.modelCalls).toBe(0);
+  });
+
+  it("a_restarted_voice_link_is_used_by_the_next_watch", async () => {
+    rig = new Rig();
+    await rig.start();
+    expect((await rig.watch()).status).toBe("done");
+    expect(rig.watchStart).toHaveBeenCalledOnce();
+
+    // `optional` does not restart this module with `voice.link`.
+    const services = rig.sup.services;
+    const old = { watchStart: rig.watchStart, watchStop: rig.watchStop };
+    services.removeOwnedBy("voice.link");
+    const fresh = {
+      watchStart: vi.fn(async (_guild: string, user: string) => rig.status(user, "live")),
+      watchStop: vi.fn(async (_guild: string) => {}),
+    };
+    rig.provideLink(fresh);
+
+    // The stream that is on was started through the old link and is stopped through it.
+    await rig.invoke("watch.stop");
+    expect(old.watchStop).toHaveBeenCalledWith(G);
+    expect(fresh.watchStop).not.toHaveBeenCalled();
+
+    rig.skew += 30_000;
+    expect((await rig.watch()).status).toBe("done");
+    expect(old.watchStart).toHaveBeenCalledOnce();
+    expect(fresh.watchStart).toHaveBeenCalledWith(G, "u1");
+    await rig.rounds(1);
+    await rig.invoke("watch.stop");
+    expect(fresh.watchStop).toHaveBeenCalledWith(G);
+  });
+
+  it("a_voice_link_that_is_gone_fails_the_start_and_comes_back", async () => {
+    rig = new Rig();
+    await rig.start();
+    rig.sup.services.removeOwnedBy("voice.link");
+    expect((await rig.watch()).status).not.toBe("done");
+    expect(await rig.prompt(voice("c1"))).toEqual([]);
+
+    rig.provideLink();
+    rig.skew += 30_000;
+    expect((await rig.watch()).status).toBe("done");
+  });
+
+  it("hearing_is_looked_up_for_each_use", async () => {
+    rig = new Rig();
+    await rig.start();
+    const hearing: StreamHearing = {
+      allowed: vi.fn(async () => true),
+      transcribe: vi.fn(async () => null),
+    };
+    rig.sup.services.provide("voice", StreamHearingKey, hearing);
+    expect((await rig.watch()).status).toBe("done");
+    await vi.waitFor(() => expect(hearing.allowed).toHaveBeenCalled());
   });
 
   it("a_watch_that_fails_to_start_leaves_no_look_tool", async () => {

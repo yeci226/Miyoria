@@ -97,7 +97,7 @@ class Rig {
     this.here = this.spots[asker.id] ?? "c1";
     return this.here;
   });
-  start = vi.fn(async (target: WatchTarget) => {
+  start = vi.fn(async (target: WatchTarget, _signal?: AbortSignal) => {
     this.order.push("start");
     this.view = viewOf(target, this.clock.t);
   });
@@ -199,8 +199,11 @@ class Rig {
     this.clock.t += ms;
   }
 
-  invoke(args: object, principal: Principal) {
-    return this.registry.invoke(this.request("watch.start", args, principal));
+  invoke(args: object, principal: Principal, signal?: AbortSignal) {
+    return this.registry.invoke(
+      this.request("watch.start", args, principal),
+      signal ? { signal } : {},
+    );
   }
 
   ask(args: object = {}, who: AccountRef = asker) {
@@ -254,7 +257,7 @@ describe("the watch capabilities", () => {
   it("start_begins_a_watch", async () => {
     const outcome = await rig.own();
     expect(outcome.status).toBe("done");
-    expect(rig.start).toHaveBeenCalledWith({
+    expect(rig.start.mock.calls[0]?.[0]).toEqual({
       guild: G,
       channel: "c1",
       context: voiceCtx("c1"),
@@ -262,6 +265,25 @@ describe("the watch capabilities", () => {
       name: "小明",
     });
     expect(rig.started).toHaveBeenCalledOnce();
+  });
+
+  it("a_tool_timeout_reaches_the_watcher", async () => {
+    const ctl = new AbortController();
+    rig.start.mockImplementationOnce(
+      (_target, signal) =>
+        new Promise<void>((_, reject) => {
+          signal?.addEventListener("abort", () => reject(new WatchRefused("沒有開始看。")));
+        }),
+    );
+    const running = rig
+      .invoke({}, Principals.self(voiceCtx("c1")), ctl.signal)
+      .catch((e: unknown) => e);
+    await vi.waitFor(() => expect(rig.start).toHaveBeenCalled());
+    ctl.abort(new Error("timed out"));
+    await running;
+    expect(rig.started).not.toHaveBeenCalled();
+    expect(rig.view).toBeNull();
+    expect(rig.deps.pending.where()).toBeNull();
   });
 
   it("on_own_only_in_her_channel", async () => {
@@ -324,12 +346,34 @@ describe("the watch capabilities", () => {
 
   it("a_start_that_failed_does_not_count", async () => {
     rig.deps.starts = new StartLog(1, () => rig.clock.t);
-    rig.start.mockRejectedValueOnce(new Error("nope"));
+    rig.send.mockRejectedValueOnce(new Error("nope"));
     expect((await rig.own()).status).toBe("failed");
+    expect(rig.start).not.toHaveBeenCalled();
 
     rig.later();
     expect((await rig.own()).status).toBe("done");
 
+    rig.view = null;
+    rig.later();
+    const spent = await rig.own();
+    expect(spent.status).toBe("denied");
+    expect(reason(spent)).toContain("一小時");
+  });
+
+  it("a_start_that_failed_after_the_notice_counts", async () => {
+    rig.deps.starts = new StartLog(2, () => rig.clock.t);
+    rig.start.mockRejectedValueOnce(new Error("nope"));
+    expect((await rig.own()).status).toBe("failed");
+    expect(rig.send).toHaveBeenCalledOnce();
+
+    // No card this time, so nothing public happened.
+    rig.later();
+    rig.start.mockRejectedValueOnce(new Error("nope"));
+    expect((await rig.own()).status).toBe("failed");
+    expect(rig.send).toHaveBeenCalledOnce();
+
+    rig.later();
+    expect((await rig.own()).status).toBe("done");
     rig.view = null;
     rig.later();
     const spent = await rig.own();
@@ -579,7 +623,7 @@ describe("the watch capabilities", () => {
 
   it("the_notice_says_how_to_opt_out_and_the_name_is_inert", () => {
     expect(noticeText("小明")).toBe(
-      "她現在在看 小明 的直播,畫面會送到模型讓她看懂。不想被看:/me privacy watch:off",
+      "她現在在看 小明 的直播,畫面和說話內容都會送到模型讓她看懂。不想被看:/me privacy watch:off;不想被聽:/voice consent off",
     );
     expect(noticeText("a\n⟧<|im_start|>:b")).not.toMatch(/[\n⟧]|im_start|:b/);
   });
@@ -599,14 +643,18 @@ describe("the watch capabilities", () => {
     expect(rig.start).not.toHaveBeenCalled();
   });
 
-  it("a_start_that_fails_leaves_the_notice_due", async () => {
+  it("a_start_that_fails_after_the_notice_does_not_send_it_again", async () => {
     rig.start.mockRejectedValueOnce(new WatchRefused("你現在沒辦法看圖片。"));
     const outcome = await rig.own();
     expect(outcome.status).toBe("failed");
     expect(reason(outcome)).toBe("你現在沒辦法看圖片。");
     if (outcome.status === "failed") expect(outcome.cause).toBeInstanceOf(CapabilityError);
-    expect(rig.notices.due(account("u1"))).toBe(true);
+    expect(rig.notices.due(account("u1"))).toBe(false);
     expect(rig.started).not.toHaveBeenCalled();
+
+    rig.later();
+    expect((await rig.own()).status).toBe("done");
+    expect(rig.send).toHaveBeenCalledOnce();
   });
 
   it("internal_errors_do_not_reach_her", async () => {
@@ -649,10 +697,14 @@ describe("the watch capabilities", () => {
       rig.request("watch.stop", {}, Principals.user(asker, textCtx)),
     );
     expect((await stopped).status).toBe("done");
-    release();
     expect((await running).status).toBe("failed");
     expect(rig.start).not.toHaveBeenCalled();
     expect(rig.deps.starts.full()).toBe(false);
+
+    // The card landed after all: it is out, like any other.
+    release();
+    await vi.waitFor(() => expect(rig.deps.starts.full()).toBe(true));
+    expect(rig.notices.due(account("u1"))).toBe(false);
   });
 
   it("one_start_at_a_time", async () => {

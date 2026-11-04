@@ -702,6 +702,41 @@ describe("a stop always wins", () => {
     expect(h.source.snapshot.mock.calls.length).toBe(calls);
   });
 
+  it("the caller giving up during start: nothing starts afterwards", async () => {
+    const h = track(harness());
+    const gate = deferred<void>();
+    h.source.start.mockImplementationOnce(() => gate.promise);
+    const ctl = new AbortController();
+    const p = h.watcher.start(target(), ctl.signal).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(h.source.start).toHaveBeenCalled());
+    ctl.abort(new Error("timed out"));
+    expect(await p).toBeInstanceOf(WatchRefused);
+    gate.resolve();
+    await h.watcher.idle();
+    expect(h.watcher.view()).toBeNull();
+    expect(h.source.stop).toHaveBeenCalled();
+    expect(h.source.snapshot).not.toHaveBeenCalled();
+  });
+
+  it("a caller that has already given up starts nothing", async () => {
+    const h = track(harness());
+    const ctl = new AbortController();
+    ctl.abort(new Error("timed out"));
+    await expect(h.watcher.start(target(), ctl.signal)).rejects.toBeInstanceOf(WatchRefused);
+    expect(h.source.start).not.toHaveBeenCalled();
+  });
+
+  it("the caller's signal has no say over a watch that began", async () => {
+    const h = track(harness({}, {}, { manualSleep: true }));
+    const ctl = new AbortController();
+    await h.watcher.start(target(), ctl.signal);
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(1));
+    ctl.abort(new Error("the turn ended"));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(h.watcher.view()).not.toBeNull();
+    expect(h.source.stop).not.toHaveBeenCalled();
+  });
+
   it("a start that never ends is cancelled by stop", async () => {
     const h = track(harness());
     h.source.start.mockImplementationOnce(() => new Promise<void>(() => {}));

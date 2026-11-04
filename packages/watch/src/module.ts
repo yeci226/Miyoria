@@ -51,7 +51,8 @@ interface Running {
  * on her own whose stream to watch. Off unless `enabled = true`. Registers `watch.start`,
  * `watch.stop` and, while watching, `watch.look`. Services used (all optional): `VoiceLink`
  * (without it the module does nothing), `StreamHearing`, `VoiceFloor`, `LlmRouter`, `WorldState`,
- * `PlatformSinks`, `PromptContributors`.
+ * `PlatformSinks`, `PromptContributors`. `optional` does not restart this module with them, so
+ * services are looked up on each use, never kept; one watch keeps the link that started it.
  */
 export class WatchModule implements Module {
   static readonly ID = "watch";
@@ -70,8 +71,8 @@ export class WatchModule implements Module {
   async start(ctx: ModuleContext): Promise<void> {
     const cfg = ctx.config(WatchConfigSchema);
     const s = ctx.services;
-    const link = s.get(VoiceLinkKey);
-    if (!link) {
+    const link = () => s.get(VoiceLinkKey);
+    if (!link()) {
       ctx.log.warn("no voice link: she cannot watch streams");
       return;
     }
@@ -94,7 +95,9 @@ export class WatchModule implements Module {
     };
     const watcher = new Watcher(cfg, {
       source: () => {
-        source = new DiscordSource(link);
+        const current = link();
+        if (!current) throw new Error("no voice link");
+        source = new DiscordSource(current);
         return source;
       },
       model: {
@@ -107,7 +110,11 @@ export class WatchModule implements Module {
       persona: () => this.#options.persona(s),
       canLook,
       watchAllowed,
-      hearing: s.get(StreamHearingKey) ?? null,
+      hearing: {
+        allowed: async (account) => (await s.get(StreamHearingKey)?.allowed(account)) ?? false,
+        transcribe: async (samples, signal) =>
+          (await s.get(StreamHearingKey)?.transcribe(samples, signal)) ?? null,
+      },
       busy: (guild) => playing.has(guild) || (s.get(VoiceFloorKey)?.holder(guild) ?? null) !== null,
       speak: (target: WatchTarget, hint: string) => {
         try {
@@ -146,7 +153,10 @@ export class WatchModule implements Module {
 
     const unregister = watchCapabilities({
       cfg,
-      link,
+      link: {
+        channel: (guild) => link()?.channel(guild) ?? null,
+        isStreaming: (guild) => link()?.isStreaming(guild) ?? false,
+      },
       watcher,
       notices: new NoticeBook(cfg.notice_hours, now),
       starts: new StartLog(cfg.starts_per_hour, now),
@@ -167,7 +177,7 @@ export class WatchModule implements Module {
         view: () => watcher.view(),
         streams: async (context: ContextKey) => {
           const guild = context.scope;
-          if (guild === null || link.channel(guild) !== context.channel) return [];
+          if (guild === null || link()?.channel(guild) !== context.channel) return [];
           const room = s
             .get(WorldStateKey)
             ?.snapshot()
@@ -195,7 +205,7 @@ export class WatchModule implements Module {
         if (topic === WATCH_TOPIC && isJsonObject(payload)) source?.onStatus(payload);
       } else if (isEvent(event, "voice_speaking")) {
         const { speaking, account } = event.data;
-        if (speaking && !link.isSelf(account)) watcher.noteVoice(now());
+        if (speaking && link()?.isSelf(account) === false) watcher.noteVoice(now());
       } else if (isEvent(event, "voice_playback")) {
         const { context, state } = event.data;
         if (context.scope === null) return;

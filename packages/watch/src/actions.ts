@@ -56,7 +56,7 @@ export function streamers(room: VoiceChannelState): VoiceMember[] {
 
 /** The card in the voice channel's text chat. */
 export function noticeText(name: string): string {
-  return `她現在在看 ${safeName(name)} 的直播,畫面會送到模型讓她看懂。不想被看:/me privacy watch:off`;
+  return `她現在在看 ${safeName(name)} 的直播,畫面和說話內容都會送到模型讓她看懂。不想被看:/me privacy watch:off;不想被聽:/voice consent off`;
 }
 
 const noticeKey = (account: AccountRef): string => `${account.platform}:${account.id}`;
@@ -86,7 +86,7 @@ export class NoticeBook {
   }
 }
 
-/** Watches begun within the last hour; the gate has no hourly limit. */
+/** Starts within the last hour that did something public; the gate has no hourly limit. */
 export class StartLog {
   readonly #limit: number;
   readonly #now: () => number;
@@ -309,7 +309,10 @@ export function watchCapabilities(deps: WatchActionDeps): Capability[] {
     }
   }
 
-  /** Tells the channel, when due. `true` when a notice went out. */
+  /**
+   * Tells the channel, when due. `true` when a notice went out. The card is spent and counts as a
+   * start the moment it lands, whatever becomes of the watch: everyone has seen it by then.
+   */
   async function notify(target: WatchTarget, signal: AbortSignal): Promise<boolean> {
     if (!deps.notices.due(target.account)) return false;
     const sink = deps.sink(target.context.platform);
@@ -318,7 +321,11 @@ export function watchCapabilities(deps: WatchActionDeps): Capability[] {
     const chat = { ...target.context, kind: "channel" as const };
     try {
       const message = { text: noticeText(target.name), reply_to: null, mentions: false };
-      await untilAborted(sink.send(chat, message, signal), signal);
+      const sent = sink.send(chat, message, signal).then(() => {
+        deps.notices.mark(target.account);
+        deps.starts.add();
+      });
+      await untilAborted(sent, signal);
     } catch (error) {
       if (signal.aborted) throw new CapabilityError(STOPPED);
       deps.warn("cannot send the watch notice", error);
@@ -345,8 +352,8 @@ export function watchCapabilities(deps: WatchActionDeps): Capability[] {
     };
     const noticed = await notify(target, signal);
     if (signal.aborted) throw new CapabilityError(STOPPED);
-    await watcher.start(target);
-    if (noticed) deps.notices.mark(target.account);
+    await watcher.start(target, signal);
+    if (!noticed) deps.starts.add();
     return target;
   }
 
@@ -390,7 +397,6 @@ export function watchCapabilities(deps: WatchActionDeps): Capability[] {
       if (claim === null) throw new CapabilityError(STARTING);
       try {
         const target = await begin(stream, ctx, claim);
-        deps.starts.add();
         deps.onStarted();
         return `開始看 ${safeName(target.name)} 的直播了`;
       } catch (error) {

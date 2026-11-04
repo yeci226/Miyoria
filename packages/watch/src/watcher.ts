@@ -122,12 +122,15 @@ export class Watcher {
     };
   }
 
-  /** Starts watching `target`; a watch in progress is stopped first. */
-  start(target: WatchTarget): Promise<void> {
+  /**
+   * Starts watching `target`; a watch in progress is stopped first. `caller` gives up on the start
+   * and nothing else: a watch that began no longer listens to it.
+   */
+  start(target: WatchTarget, caller?: AbortSignal): Promise<void> {
     const ctl = new AbortController();
     this.#pending.add(ctl);
     const p = this.#chain
-      .then(() => this.#start(target, ctl))
+      .then(() => this.#start(target, ctl, caller))
       .finally(() => this.#pending.delete(ctl));
     this.#chain = p.catch(noop);
     return p;
@@ -211,8 +214,8 @@ export class Watcher {
 
   // -- start -----------------------------------------------------------------------------
 
-  async #start(target: WatchTarget, ctl: AbortController): Promise<void> {
-    const { signal } = ctl;
+  async #start(target: WatchTarget, ctl: AbortController, caller?: AbortSignal): Promise<void> {
+    const signal = caller ? AbortSignal.any([ctl.signal, caller]) : ctl.signal;
     const stopped = (): WatchRefused => new WatchRefused("看直播被停掉了,沒有開始看。");
     if (!this.#canLook()) {
       throw new WatchRefused(
