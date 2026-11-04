@@ -150,6 +150,7 @@ export {
   imageType,
   incomingText,
   type MessageRef,
+  type OutgoingFile,
   type OutgoingMessage,
   PlatformHistories,
   PlatformHistoriesKey,

@@ -1,5 +1,6 @@
 // `DiscordSink`: executes output actions through the bot account's REST client.
 
+import { readFile } from "node:fs/promises";
 import type { CommandReply, ReplySink } from "@miyoria/commands";
 import {
   type AccountRef,
@@ -36,8 +37,15 @@ function nameOf(value: unknown): string | null {
   return typeof value.name === "string" && value.name.trim() !== "" ? value.name : null;
 }
 
+export interface RestFile {
+  name: string;
+  data: Buffer;
+  contentType: string;
+}
+
 export interface RestRequest {
   body?: unknown;
+  files?: RestFile[];
   signal?: AbortSignal;
 }
 
@@ -94,20 +102,35 @@ export class DiscordSink implements PlatformSink, ReplySink {
         fail_if_not_exists: false,
       };
     }
+    // All read before anything is sent, so a missing file sends nothing.
+    let files: RestFile[] | null = await inContext(`reading files for ${channel}`, () =>
+      Promise.all(
+        (message.files ?? []).map(async (f) => ({
+          name: f.name,
+          data: await readFile(f.path),
+          contentType: f.contentType,
+        })),
+      ),
+    );
     let first: string | null = null;
     for (const chunk of chunks) {
       const body: Record<string, unknown> = {
         content: chunk,
         // Users may be pinged by name; never roles, @everyone or @here. Replying must not ping
         // the replied-to author.
-        allowed_mentions: { parse: ["users"], roles: [], replied_user: false },
+        allowed_mentions:
+          message.mentions === false
+            ? { parse: [] }
+            : { parse: ["users"], roles: [], replied_user: false },
       };
       if (reference) {
         body.message_reference = reference;
         reference = null;
       }
+      const attached = files !== null && files.length > 0 ? { files } : {};
+      files = null;
       const sent = await inContext(`sending message to ${contextKeyString(context)}`, () =>
-        this.#rest.post(Routes.channelMessages(channel), { body, signal }),
+        this.#rest.post(Routes.channelMessages(channel), { body, signal, ...attached }),
       );
       first ??= messageId(sent);
     }

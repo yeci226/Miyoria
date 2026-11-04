@@ -199,9 +199,19 @@ export function incomingText(msg: IncomingMessage): string {
   return out;
 }
 
+/** A file on this machine to send with a message. */
+export interface OutgoingFile {
+  name: string;
+  path: string;
+  contentType: string;
+}
+
 export interface OutgoingMessage {
   text: string;
   reply_to: MessageRef | null;
+  files?: OutgoingFile[];
+  /** `false`: nobody is pinged, not even users. */
+  mentions?: boolean;
 }
 
 /**
