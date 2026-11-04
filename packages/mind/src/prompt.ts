@@ -78,6 +78,8 @@ export interface MindInput {
   night: boolean;
   self: SelfSnapshot | null;
   capabilities: CapabilityInfo[];
+  /** Threads can be played as a game (its adapter runs). */
+  threadsGame: boolean;
   maxIntents: number;
   triggers: ThoughtTrigger[];
   suggestions: MindSuggestion[];
@@ -115,7 +117,15 @@ const SOLO: Record<string, string> = {
   "sing.request": "自己挑一首喜歡的歌來準備、唱給自己聽",
   "sing.play": "唱一首已經準備好的歌",
   "voice.leave": "離開語音去休息,晚點有人再回來(還有歌沒唱完、或剛有人叫你回來時不行)",
+  "share.browse": "去滑一下 Threads,看到想分享的就發",
 };
+
+const THREADS_GAME = ";game = threads 滑 Threads 看大家的貼文講感想";
+
+function soloText(name: string, threadsGame: boolean): string | undefined {
+  const text = SOLO[name];
+  return threadsGame ? text : text?.replace(THREADS_GAME, "");
+}
 
 /** Idle thoughts in a row after which she is told she has been sitting there. */
 export const IDLE_NUDGE_THOUGHTS = 3;
@@ -222,7 +232,7 @@ function rules(input: MindInput): string {
       "",
       "# 沒人可以聊的時候",
       "你不是只能等人來找你。照你現在的心情和慾望(想玩、好奇、想休息……),自己找件事做:",
-      ...solo.map((c) => `- ${c.name}:${SOLO[c.name]}`),
+      ...solo.map((c) => `- ${c.name}:${soloText(c.name, input.threadsGame)}`),
       "- 或去文字頻道說說你最近在想的事(chat.start),整理一下自己的筆記(documents)",
     );
   }

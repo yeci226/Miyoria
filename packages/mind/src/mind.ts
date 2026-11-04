@@ -12,6 +12,7 @@ import {
   withLlmTag,
 } from "@miyoria/llm";
 import { SocialKey } from "@miyoria/social";
+import { ToolRegistryKey } from "@miyoria/tools";
 import {
   type AccountRef,
   CHAT_DM,
@@ -735,6 +736,7 @@ export class MindLoop implements Mind {
         night,
         self: self?.snapshot() ?? null,
         capabilities: capabilityInfo(registry),
+        threadsGame: d.services.get(ToolRegistryKey)?.get("game_threads_observe") !== undefined,
         maxIntents: cfg.max_intents,
         triggers,
         suggestions,

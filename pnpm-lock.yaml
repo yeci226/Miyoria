@@ -972,6 +972,9 @@ importers:
       '@miyoria/store':
         specifier: workspace:*
         version: link:../store
+      '@miyoria/tools':
+        specifier: workspace:*
+        version: link:../tools
       '@miyoria/types':
         specifier: workspace:*
         version: link:../types

@@ -401,7 +401,7 @@ export function capabilityInfo(registry: ActuatorRegistry | undefined): Capabili
     .filter((n) => !NOT_FOR_HER.includes(n) && n !== CHAT_START && n !== CHAT_DM)
     .flatMap((n) => {
       const c = registry.get(n);
-      if (!c) return [];
+      if (!c || c.available?.() === false) return [];
       return [
         {
           name: c.name,

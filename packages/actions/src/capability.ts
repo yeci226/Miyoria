@@ -109,6 +109,8 @@ export interface Capability<A = unknown> {
   target?(args: A, principal: Principal): AccountRef | null;
   /** Scheduler lane for runs requested from a turn; `null` runs directly. */
   lane?(args: A, principal: Principal): LaneKey | null;
+  /** `false`: her mind is not offered this for now (it may also refuse in `check`). */
+  available?(): boolean;
   /** Checks against live state after the schema (e.g. the scene exists); returns why not. */
   check?(args: A, principal: Principal): string | null;
   /** The owners' approval card shows this instead of the raw JSON arguments. */

@@ -27,6 +27,7 @@
     "@miyoria/llm": "workspace:*",
     "@miyoria/social": "workspace:*",
     "@miyoria/store": "workspace:*",
+    "@miyoria/tools": "workspace:*",
     "@miyoria/types": "workspace:*",
     "zod": "^4.6.7"
   },
