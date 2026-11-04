@@ -70,6 +70,11 @@ Phase 0 用你朋友在 Discord 的真實錄音測(台灣腔中文、夾日英�
     - **Node 24 + pnpm 9**:Node 24 內建 `node:sqlite`、`fetch`、`AbortSignal.any`、`util.parseEnv`,少掉一批依賴;pnpm workspace 讓每個子系統是獨立套件(module 之間只能透過 `@miyoria/kernel` 的事件與 service registry 溝通),開發時 `tsx` 直接跑原始碼(`@miyoria/source` 匯出條件),發佈時用 esbuild 打成單一套件。
     - **SQLite 預設、Postgres 選用**:個人使用不必先架資料庫,資料是一個檔案(`data/miyoria.db`,好備份);`node:sqlite` 是內建的,不需要原生編譯。server 部署或資料量大時改 `DATABASE_URL=postgres://…`(pgvector 做向量檢索)。兩個後端實作同一組 store 介面、跑同一份行為測試。取代舊決策「只支援 Postgres」。
     - **WebSocket + JSON 連線**:voice link、stage link、Admin API 的 SSE 都是純文字 / JSON(音訊用二進位訊框),瀏覽器與 Node 都能直接用,不需要 protoc 或程式碼產生;協定文件在 `docs/protocols/`。
+14. **她看朋友的 Go Live**(2026-11,擁有者決定並自負風險):`[modules.watch]` 預設關閉(opt-in),第一階段只做 Discord Go Live,Twitch / YouTube 另開 spec。
+    - **self-bot 風險**:看別人的串流是新的 self-bot 行為,可能增加封號風險,沿用 ADR 9 的自負風險原則。voice node 用的是同一個 self 帳號,所以一個帳號被封,語音和 Go Live 會一起沒有。
+    - **只解密關鍵影格和音訊**:接收端平常不解碼影片,每次截圖才要一個關鍵影格(PLI)再轉 JPEG。已用真的 Go Live 實測(連看 30 分鐘,連線與語音穩定,關鍵影格與音訊解密成功)。
+    - **依賴函式庫私有欄位**:收串流要碰 `@dank074/discord-video-stream` 與 `@snazzah/davey` 的私有欄位,全部關在 `apps/voice-node/src/watch/connection.ts`;啟動先檢查,欄位改了就回 `failed`,語音不受影響。
+    - **隱私**:本人用 `/me privacy watch:off` 拒絕,開始看時發通知卡,通知送不出去就不看;截圖、筆記、轉錄不寫磁碟、不進長期記憶。
 
 ## 3. 風險
 

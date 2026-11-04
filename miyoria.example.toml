@@ -21,6 +21,8 @@ chat = ["deepseek:deepseek-chat"]
 review = ["deepseek:deepseek-chat"]
 # 她的內心獨白(心智迴圈);不設就用 chat 的模型(會記一行警告)
 mind = ["deepseek:deepseek-chat"]
+# 看直播用的模型要收圖片;不設就用 chat
+# watch = ["provider:model"]
 
 # 推理模型要不要先思考,依用途(沒列的 = 不思考)。不急的判斷開、要即時的關:
 # 文字回覆會思考、語音回覆一律不思考(agent 每次自己決定,不看這裡的 chat)
@@ -193,6 +195,21 @@ dirs = ["extensions"]
 # prepare_notice = true      # worker 做歌要整張顯示卡時(SING_OFFLOAD_URLS),她先說「我去準備一下歌喔」再讓它開始
 # only_on_request = false   # 只唱別人點的:她不會自己挑歌或開唱,點的歌好了就唱,她也看不到歌單,重啟後不留
 # prepare_notice_gap_secs = 180   # 連點好幾首時這段時間內不再說第二次
+
+# 看直播(opt-in,預設關閉)。她掛在語音頻道時自己決定看誰的 Go Live,有值得講的才開口;
+# 本人可用 /me privacy watch:off 拒絕。用途 watch 的模型要收圖片(見上面 [llm.purposes])
+# [modules.watch]
+# enabled = false
+# snapshot_secs = 30
+# speak_min_secs = 60
+# quiet_secs = 10
+# notes_keep = 10
+# transcript_secs = 180
+# min_watch_secs = 180
+# starts_per_hour = 6
+# max_watch_mins = 120
+# max_snapshot_failures = 5
+# notice_hours = 24
 
 # 她閒著時自己滑 Threads,把截圖和評語發到文字頻道(要有 extensions/threads,見它的 README)。
 # 只有貼文對得上那個頻道的記憶和筆記才發;上限、頻道、時段都由程式把關,模型繞不過去。

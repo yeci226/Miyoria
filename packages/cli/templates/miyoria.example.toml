@@ -21,6 +21,8 @@ chat = ["deepseek:deepseek-chat"]
 review = ["deepseek:deepseek-chat"]
 # 她的內心獨白(心智迴圈);不設就用 chat 的模型(會記一行警告)
 mind = ["deepseek:deepseek-chat"]
+# 看直播用的模型要收圖片;不設就用 chat
+# watch = ["provider:model"]
 
 # 推理模型要不要先思考,依用途(沒列的 = 不思考)。不急的判斷開、要即時的關:
 # 文字回覆會思考、語音回覆一律不思考(agent 每次自己決定,不看這裡的 chat)
@@ -177,6 +179,21 @@ dirs = ["extensions"]
 # lip_sync_vocals = true     # 嘴型跟轉換後的人聲走(不是整首混音)
 # vote_skip_ratio = 0.25     # /queue song voteskip:語音裡這個比例的人投了就跳過(無條件進位)
 # vote_skip_min = 1          # 至少幾票;點歌的人自己投一票就跳過
+
+# 看直播(opt-in,預設關閉)。她掛在語音頻道時自己決定看誰的 Go Live,有值得講的才開口;
+# 本人可用 /me privacy watch:off 拒絕。用途 watch 的模型要收圖片(見上面 [llm.purposes])
+# [modules.watch]
+# enabled = false
+# snapshot_secs = 30
+# speak_min_secs = 60
+# quiet_secs = 10
+# notes_keep = 10
+# transcript_secs = 180
+# min_watch_secs = 180
+# starts_per_hour = 6
+# max_watch_mins = 120
+# max_snapshot_failures = 5
+# notice_hours = 24
 
 # 遊戲內聊天變成獨立的對話(每個世界 / 伺服器一段歷史)。玩家在 Discord 用 /me link 拿代碼,
 # 在遊戲聊天室打 `!link <代碼>` 就跟 Discord 帳號連在一起;沒連的玩家是陌生人。

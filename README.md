@@ -56,6 +56,7 @@ start = "decide"              # she picks the moment; a requested song starts on
 | Stream | Goes live on Discord through OBS, drives a Live2D model in VTube Studio (emotions, gestures, lip sync, idle motion), and picks OBS scenes |
 | Singing | Turns a song request (YouTube or a local file) into a cover in her voice (Demucs + Seed-VC), sings it with lyrics on the overlay, and shows the original video |
 | Games | Plays Minecraft 1.21.1 legitimately through a Fabric bridge and Baritone (no x-ray, real progression, crafting), with live commentary |
+| Watching | Watches a friend's Discord Go Live when she decides to (off by default): a screenshot every 30 seconds goes to a vision model, and she speaks up at most about once a minute. Anyone can opt out with `/me privacy watch:off` |
 | Overlay | An OBS browser source with typewriter subtitles, an emotion dot, live status, the request queue and voice bars along the left edge |
 | Extensions | TypeScript extensions, MCP servers, and sandboxed tools she can write and propose herself |
 

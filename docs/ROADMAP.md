@@ -149,6 +149,25 @@ Phase 0–8 先用 Rust 寫成原型(留在 git 歷史裡),之後整個改寫成
 - [x] Docker 映像檔、CI 換成 Node 版本
 - [ ] 實測(跟上面各 phase 的「實測」項目相同):真的 DeepSeek、Discord(bot + self 帳號)、VTube Studio / OBS、Minecraft、Go Live
 
+## 看直播
+
+設計見 [superpowers/specs/2026-11-05-watch-stream-design.md](superpowers/specs/2026-11-05-watch-stream-design.md)。
+
+第一階段(Discord Go Live,`[modules.watch]` 預設關閉):
+
+- [x] spike:對真的 Go Live 收串流、DAVE 解密、關鍵影格轉 JPEG、音訊(連看 30 分鐘)
+- [x] voice node 接收端(`apps/voice-node/src/watch/`)和 voice link 新訊息
+- [x] `@miyoria/watch`:`Watcher`、筆記、`SpeakGate`、串流聲音轉錄、Prompt 區段、`watch_look`
+- [x] 她自己決定看誰、換人、離開(`watch.start` / `watch.stop`),別人也可以請她看
+- [x] 同意與通知:`/me privacy watch:off`、通知卡、通知送不出去就不看
+- [ ] 實測完整流程:自己決定開始看、約一到兩分鐘最多一句、人聲不打斷她、`watch_look`、換人、`watch:off`、她 Go Live 時先停止、voice node 重啟後狀態正確
+
+第二階段(待辦,另開 spec):
+
+- [ ] Twitch / YouTube 瀏覽器來源(`WatchSource`);未驗證的風險是瀏覽器抓音訊,以及 Playwright Chromium 不含 H.264
+- [ ] 掉包重傳(NACK)、H.264 以外的編碼
+- [ ] 串流聲音偏小(平均約 -50 dB)的來源(接收端還是開播端)尚未確認
+
 ## 後續可以考慮
 
 更多遊戲 adapter、Telegram / LINE adapter、唱歌進階(和聲、即時翻唱、自己寫詞)、記憶視覺化、她自己寫日記 / 發社群貼文、影像理解(看觀眾貼的圖)、vLLM-Omni 的 WebSocket 文字串流輸入(邊生成邊合成)。
