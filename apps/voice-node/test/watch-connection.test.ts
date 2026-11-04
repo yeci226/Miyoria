@@ -189,6 +189,33 @@ describe("DiscordWatchEngine with a connection", () => {
     return { run, abort, conn, libState };
   }
 
+  /** Runs what the library's `setupEvents` installs and delivers `message` to it. */
+  function receive(conn: FakeConn, message: unknown): void {
+    let listener: ((e: { data: unknown }) => void) | undefined;
+    (conn as unknown as { ws: unknown }).ws = {
+      addEventListener: (_type: string, fn: (e: { data: unknown }) => void) => {
+        listener = fn;
+      },
+    };
+    conn.setupEvents();
+    listener?.({ data: JSON.stringify(message) });
+  }
+
+  it("a stream in another codec ends the run with an error naming it", async () => {
+    const { run, conn } = await start();
+    receive(conn, { op: 14, d: { video_codec: "VP8" } });
+    await expect(run).rejects.toThrow(/VP8/);
+    expect(conn.stop).toHaveBeenCalled();
+  });
+
+  it("op 14 with H264 or without a codec changes nothing", async () => {
+    const { run, abort, conn } = await start();
+    receive(conn, { op: 14, d: { video_codec: "H264" } });
+    receive(conn, { op: 14, d: {} });
+    abort.abort();
+    await expect(run).resolves.toBe("stopped");
+  });
+
   it("a failing ack ends the run with an error", async () => {
     const { run, conn } = await start();
     await conn.handleProtocolAck({});

@@ -39,6 +39,7 @@ const PLI_EVERY_MS = 2_000;
 const STREAM_INFO_MS = 10_000;
 const VOICE_OP_SELECT_PROTOCOL = 1;
 const VOICE_OP_READY = 12;
+const VOICE_OP_SESSION_UPDATE = 14;
 const VOICE_OP_VIDEO_BITRATES = 15;
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -267,6 +268,15 @@ export class DiscordWatchEngine implements WatchEngine {
         hooks.onOpus(data);
       };
 
+      /** Discord names the codec on the ack or on a later session update. False: the run is over. */
+      const codecOk = (codec: unknown): boolean => {
+        if (typeof codec !== "string") return true;
+        log.info(`watch: stream codec ${codec}`);
+        if (codec.toUpperCase() === "H264") return true;
+        finish({ error: new Error(`the stream uses ${codec}; only H264 can be watched`) });
+        return false;
+      };
+
       const onPcState = (state: string): void => {
         if (state === "failed") finish({ error: new Error("the stream connection failed") });
         else if (state === "closed") finish({ reason: "connection closed" });
@@ -324,11 +334,7 @@ export class DiscordWatchEngine implements WatchEngine {
         c.handleProtocolAck = async (d) => {
           try {
             if (typeof d.sdp !== "string") throw new Error("Only WebRTC connections are allowed");
-            const codec = typeof d.video_codec === "string" ? d.video_codec : undefined;
-            if (codec !== undefined && codec.toUpperCase() !== "H264") {
-              finish({ error: new Error(`the stream uses ${codec}; only H264 can be watched`) });
-              return;
-            }
+            if (!codecOk(d.video_codec)) return;
             c._daveProtocolVersion = d.dave_protocol_version as number;
             c.initDave();
             wrapper.webRtcConn.setRemoteDescription(answerSdp(d.sdp), "answer");
@@ -359,7 +365,11 @@ export class DiscordWatchEngine implements WatchEngine {
           c.ws?.addEventListener("message", (e) => {
             if (typeof e.data !== "string") return;
             try {
-              const { op, d } = JSON.parse(e.data) as { op: number; d?: { video_ssrc?: number } };
+              const { op, d } = JSON.parse(e.data) as {
+                op: number;
+                d?: { video_ssrc?: number; video_codec?: unknown };
+              };
+              if (op === VOICE_OP_SESSION_UPDATE) codecOk(d?.video_codec);
               if (op === VOICE_OP_READY && typeof d?.video_ssrc === "number" && d.video_ssrc !== 0) {
                 c.sendOpcode(VOICE_OP_VIDEO_BITRATES, { any: 100, [String(d.video_ssrc)]: 100 });
               }

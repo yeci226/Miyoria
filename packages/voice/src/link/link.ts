@@ -462,6 +462,8 @@ export class VoiceLink {
       onAbort = () => reject(new VoiceLinkError("snapshot aborted"));
       signal.addEventListener("abort", onAbort, { once: true });
     });
+    // Both can settle while the send is pending, before anything listens to them.
+    answer.promise.catch(() => undefined);
     interrupted.catch(() => undefined);
     try {
       await conn.sendJson({ type: "watch_snapshot", id });
@@ -875,21 +877,22 @@ export class VoiceLink {
     for (const { id } of state.streams.values())
       this.#emitAudio({ type: "stream_close", stream: id });
     const platform = conn.account.platform;
+    // The node stops its watch when its link drops, even for a replacement.
+    for (const [guild, status] of state.watch) {
+      if (status.state === "starting" || status.state === "live") {
+        this.#publishWatch(platform, guild, {
+          ...status,
+          state: "stopped",
+          error: null,
+          reason: "voice node disconnected",
+        });
+      }
+    }
     if (conn.closeCode() !== CLOSE.REPLACED) {
       // A Go Live stream belongs to the node; Core can no longer see it.
       for (const [guild, status] of state.golive) {
         if (status.state === "starting" || status.state === "live") {
           this.#publishGolive(platform, guild, {
-            state: "stopped",
-            error: null,
-            reason: "voice node disconnected",
-          });
-        }
-      }
-      for (const [guild, status] of state.watch) {
-        if (status.state === "starting" || status.state === "live") {
-          this.#publishWatch(platform, guild, {
-            ...status,
             state: "stopped",
             error: null,
             reason: "voice node disconnected",

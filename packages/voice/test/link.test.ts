@@ -8,8 +8,9 @@ import {
   isEvent,
   VoicePlayerKey,
 } from "@miyoria/types";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type AudioEvent, GOLIVE_TOPIC, type GoLiveRequest, WATCH_TOPIC } from "../src/index.js";
+import { Conn } from "../src/link/conn.js";
 import type { BoundedQueue } from "../src/util.js";
 import { Harness, nextEvent, SELF_ID, sleepMs, TOKEN, waitUntil } from "./harness.js";
 
@@ -621,6 +622,60 @@ describe("voice.link", () => {
     expect(payload.state).toBe("stopped");
     expect(payload.user_id).toBe("u1");
     expect(payload.reason).toBe("voice node disconnected");
+  });
+
+  it("a_snapshot_still_being_sent_when_the_node_drops_is_no_unhandled_rejection", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    let failSend = (_error: Error): void => {};
+    const send = vi.spyOn(Conn.prototype, "sendJson").mockImplementationOnce(
+      () =>
+        new Promise<void>((_, reject) => {
+          failSend = reject;
+        }),
+    );
+    try {
+      const pending = rejection(link.snapshot("g1", 5000, new AbortController().signal));
+      node.drop();
+      await waitUntil(() => !link.isConnected());
+      await sleepMs(20);
+      failSend(new Error("voice node disconnected"));
+      expect(await pending).toContain("disconnected");
+      await sleepMs(20);
+      expect(unhandled).toEqual([]);
+    } finally {
+      send.mockRestore();
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("a_replaced_connection_reports_its_watch_as_stopped", async () => {
+    const h = await start();
+    const first = await h.node(SELF_ID);
+    const events = h.subscribe([WATCH_TOPIC, GOLIVE_TOPIC]);
+    first.sendJson({ type: "watch", guild: "g1", user_id: "u1", state: "live" });
+    first.sendJson({ type: "golive", guild: "g1", state: "live" });
+    await nextEvent(events);
+    await nextEvent(events);
+
+    const second = await h.connect();
+    second.hello(TOKEN, SELF_ID);
+    expect((await second.recvJson()).type).toBe("welcome");
+    expect(await first.expectClose()).toBe(4409);
+
+    const payload = data((await nextEvent(events)).event, "custom").payload as Record<
+      string,
+      unknown
+    >;
+    expect(payload.state).toBe("stopped");
+    expect(payload.user_id).toBe("u1");
+    // Go Live survives a replaced link, as before.
+    await sleepMs(50);
+    expect(events.tryRecv()).toBeNull();
   });
 
   it("watch_audio_is_not_capture_audio", async () => {
