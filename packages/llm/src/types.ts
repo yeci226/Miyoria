@@ -126,6 +126,11 @@ export interface ChatRequest {
    */
   thinking?: boolean | null;
   /**
+   * The request is about its images: the router never strips them, skips models known not to
+   * take them, and throws `NoImageModelError` when no model is left.
+   */
+  requires_images?: boolean;
+  /**
    * Stable id of the conversation this request belongs to (see `contextSession`). Providers
    * may forward it (e.g. as a header) for routing and prompt caching.
    */
@@ -247,6 +252,21 @@ export class ProviderHttpError extends LlmError {
     readonly status: number,
   ) {
     super(message);
+  }
+}
+
+/**
+ * A request with `requires_images` found no model that takes them. `status`: the last HTTP status
+ * a model refused it with; `null` when every model was known not to take images, so none was asked.
+ */
+export class NoImageModelError extends LlmError {
+  override name = "NoImageModelError";
+
+  constructor(
+    purpose: string,
+    readonly status: number | null,
+  ) {
+    super(`no model for purpose \`${purpose}\` takes images`);
   }
 }
 

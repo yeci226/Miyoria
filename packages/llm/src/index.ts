@@ -102,6 +102,7 @@ export {
   type ImageDetail,
   type ImagePart,
   LlmError,
+  NoImageModelError,
   type MessageContent,
   type ModelRef,
   ModelRefSchema,
