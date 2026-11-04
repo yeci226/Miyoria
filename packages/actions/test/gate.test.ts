@@ -134,6 +134,16 @@ describe("gate order", () => {
       expect(out.status).toBe("done");
     });
 
+    it("watching_with_no_one_to_ask_is_refused", async () => {
+      const g = await gate();
+      g.registry.register(watchCapability());
+      for (const p of [self(), user()]) {
+        const out = await g.registry.invoke(request("t.watch", p));
+        expect(out.decision).toMatchObject({ allowed: false, stage: "consent" });
+        expect(out.decision.reason).toBe("no one to ask consent from");
+      }
+    });
+
     it("store_failure_counts_as_opted_out", async () => {
       const g = await gate();
       vi.spyOn(g.store.settings, "get").mockRejectedValue(new Error("down"));

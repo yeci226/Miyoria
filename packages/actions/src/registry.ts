@@ -592,6 +592,9 @@ export class ActuatorRegistry implements ActuatorExecutor {
     }
 
     // 3. Consent.
+    if (capability.consent === "watch" && target === null) {
+      return deny("consent", "no one to ask consent from");
+    }
     if (target !== null && !askedForThemselves) {
       const choices = await this.privacy.get(target);
       if (capability.consent === "dm" && !choices.dm) {
