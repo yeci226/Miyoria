@@ -250,6 +250,8 @@ export interface Situation {
   /** Go Live / OBS state. */
   live: string;
   scene: string | null;
+  /** Who streams in her voice channel, sorted (`watch.*` depends on it). */
+  streamers: string;
 }
 
 /** The part of the situation `capability` depends on. */
@@ -260,6 +262,8 @@ export function conditionOf(capability: string, s: Situation): string {
       return `game:${s.game ?? ""}`;
     case "voice":
       return `voice:${s.voice ?? ""}`;
+    case "watch":
+      return `watch:${s.voice ?? ""}|${s.streamers}`;
     case "stream":
       return `live:${s.live}`;
     case "stage":

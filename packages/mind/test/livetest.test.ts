@@ -232,6 +232,35 @@ describe("failed actions", () => {
     expect(r.intents.intents).toHaveLength(2);
   });
 
+  it("tries a failed watch again when someone else goes live", async () => {
+    const provider = new MockProvider("p").reply(
+      reply([{ action: "watch.start", place: "p1", why: "想看直播" }]),
+    );
+    const r = await manual(provider);
+    r.registry.register(
+      defineCapability({
+        name: "watch.start",
+        summary: "看直播",
+        risk: "low",
+        args: z.looseObject({}),
+        permission: null,
+        async execute() {
+          return "ok";
+        },
+      }),
+    );
+    r.intents.outcome = () => ({ status: "failed", detail: "連不上這場直播", turn: null });
+    r.world.herVoice = VOICE;
+    r.world.voiceMembers = [{ account: OWEN, name: "Owen", streaming: true }];
+    await r.think(VOICE);
+    await wait(2 * MIN);
+    expect(status(await r.think(VOICE))[0]?.[2]).toContain("on hold");
+
+    r.world.voiceMembers = [...r.world.voiceMembers, { account: AQUA, name: "阿夸", streaming: true }];
+    await wait(2 * MIN);
+    expect(status(await r.think(VOICE))[0]?.[1]).toBe("failed");
+  });
+
   it("lifts the hold after blocked_retry_mins even if nothing visible changed", async () => {
     const provider = new MockProvider("p").reply(
       reply([{ action: "voice.join", place: "p1", why: "想進語音" }]),

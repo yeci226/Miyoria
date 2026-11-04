@@ -86,7 +86,26 @@ describe("blocks", () => {
     voice: null,
     live: "|false",
     scene: null,
+    streamers: "",
     ...over,
+  });
+
+  it("lifts a failed watch once the people streaming change or she moves", () => {
+    const now = situation({ streamers: "discord:u1" });
+    const b: Block = {
+      capability: "watch.start",
+      reason: "看不到",
+      at: T0,
+      condition: conditionOf("watch.start", now),
+    };
+    const retry = 30 * MIN;
+    expect(blockLifted(b, now, T0 + MIN, retry)).toBe(false);
+    expect(blockLifted(b, { ...now, game: "Minecraft" }, T0 + MIN, retry)).toBe(false);
+    for (const streamers of ["discord:u1,discord:u2", "discord:u2", ""]) {
+      expect(blockLifted(b, { ...now, streamers }, T0 + MIN, retry)).toBe(true);
+    }
+    expect(blockLifted(b, { ...now, voice: "discord:g1:voice:v2" }, T0 + MIN, retry)).toBe(true);
+    expect(blockLifted(b, now, T0 + retry, retry)).toBe(true);
   });
 
   it("lifts a failed game action once the game shows up, or after the retry time", () => {

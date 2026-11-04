@@ -76,7 +76,7 @@ class Stub implements Module {
 }
 
 export class FakeWorld implements WorldState {
-  voiceMembers: { account: AccountRef; name: string }[] = [];
+  voiceMembers: { account: AccountRef; name: string; streaming?: boolean }[] = [];
   herVoice: ContextKey | null = null;
   /** Conversation in the voice channel (from utterances). */
   voiceActivity: VoiceActivity | null = null;
@@ -115,7 +115,7 @@ export class FakeWorld implements WorldState {
                   muted: false,
                   deafened: false,
                   video: false,
-                  streaming: false,
+                  streaming: m.streaming ?? false,
                   since: toTimestamp(0),
                 })),
               },

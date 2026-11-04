@@ -15,6 +15,7 @@ import { SocialKey } from "@miyoria/social";
 import { ToolRegistryKey } from "@miyoria/tools";
 import {
   type AccountRef,
+  accountRefString,
   CHAT_DM,
   CHAT_START,
   type Clock,
@@ -469,13 +470,23 @@ export class MindLoop implements Mind {
 
   /** What her actions depend on right now (for holding and lifting blocks). */
   #situation(): Situation {
-    const her = this.#d.services.get(WorldStateKey)?.snapshot().her ?? null;
+    const world = this.#d.services.get(WorldStateKey)?.snapshot() ?? null;
+    const her = world?.her ?? null;
+    const voice = her?.voice ?? null;
+    const room = world?.voice_channels.find(
+      (c) => c.guild === voice?.scope && c.channel === voice.channel,
+    );
     return {
       game: her?.game ?? null,
       gameSeenAt: this.#gameSeenAt,
-      voice: her?.voice ? contextKeyString(her.voice) : null,
+      voice: voice ? contextKeyString(voice) : null,
       live: `${her?.golive ?? ""}|${her?.streaming ?? false}`,
       scene: her?.scene ?? null,
+      streamers: (room?.members ?? [])
+        .filter((m) => m.streaming && !m.is_self)
+        .map((m) => accountRefString(m.account))
+        .sort()
+        .join(","),
     };
   }
 
