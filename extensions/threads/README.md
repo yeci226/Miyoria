@@ -36,11 +36,27 @@ env = { MIYORIA_THREADS_VISION_KEY = "${OPENCODE_API_KEY:-}" }   # 沿用 .env �
 
 第一次:叫她去滑 Threads(或 `/game start threads`),瀏覽器視窗出現後,在視窗裡登入她的帳號。登入前她不會開始滑。
 
+## 平常滑、分享到文字頻道
+
+她也可以不直播、不進語音,閒著時自己滑,把截圖和評語發到文字頻道。流程在 Core 的 `share` 模組(`[modules.share]`),這個外掛只提供瀏覽器(工具 `internal.threads.*`,不會給模型用)。
+
+放在沒人看的機器上時:
+
+```toml
+[extensions."miyoria.threads"]
+headless = true   # 不開視窗
+game = false      # 不當遊戲玩(遊戲模式每一步都問一次模型)
+```
+
+第一次要有視窗才能登入:在那台機器的桌面開終端機,到這個資料夾執行 `pnpm login`,登入後關掉視窗。Core 正在滑的時候不要跑,同一個瀏覽器資料夾不能同時開。她的帳號只追蹤公開帳號,程式認不出私人貼文。
+
 ## 設定
 
 | 設定 | 預設 | 說明 |
 |---|---|---|
 | `start_url` | `https://www.threads.com/` | 打開時的頁面 |
+| `headless` | `false` | 不開視窗(沒人看的機器用) |
+| `game` | `true` | 也能當遊戲 `threads` 玩 |
 | `profile_dir` | `%LOCALAPPDATA%\Miyoria\threads-browser` | 瀏覽器資料夾(登入狀態) |
 | `width` / `height` | `720` / `1000` | 視窗大小 |
 | `vision_url` / `vision_model` | 無 | 看圖模型(也可以用 `MIYORIA_THREADS_VISION_URL` / `_MODEL`) |

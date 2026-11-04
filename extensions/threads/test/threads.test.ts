@@ -96,6 +96,9 @@ class FakeBrowser implements Browser {
   onPostPage() {
     return this.page === "post";
   }
+  url() {
+    return "https://www.threads.com/";
+  }
   viewportHeight() {
     return 1000;
   }

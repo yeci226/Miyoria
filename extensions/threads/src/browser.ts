@@ -11,6 +11,8 @@ export interface BrowserOptions {
   profileDir: string;
   width: number;
   height: number;
+  /** No window: for a machine nobody watches (scrolling on her own, not on stream). */
+  headless: boolean;
 }
 
 /** The window title OBS captures it by (its window is a Chromium "app" window). */
@@ -66,13 +68,15 @@ export class ThreadsBrowser {
 
   async launch(): Promise<void> {
     if (this.open) return;
-    const { startUrl, profileDir, width, height } = this.#opts;
+    const { startUrl, profileDir, width, height, headless } = this.#opts;
     const context = await chromium.launchPersistentContext(profileDir, {
       channel: "chromium",
-      headless: false,
-      viewport: null,
+      headless,
+      viewport: headless ? { width, height } : null,
       locale: "zh-TW",
-      args: [`--app=${startUrl}`, `--window-size=${width},${height}`, "--disable-infobars"],
+      args: headless
+        ? []
+        : [`--app=${startUrl}`, `--window-size=${width},${height}`, "--disable-infobars"],
     });
     context.on("close", () => {
       this.#context = null;
@@ -169,6 +173,12 @@ export class ThreadsBrowser {
   async home(): Promise<void> {
     await this.#need().goto(this.#opts.startUrl, { waitUntil: "domcontentloaded" });
     await this.#need().waitForTimeout(3000);
+  }
+
+  /** Resolves when the window was closed (`pnpm login`). */
+  async closed(): Promise<void> {
+    const context = this.#context;
+    if (context) await new Promise((resolve) => context.once("close", resolve));
   }
 
   async close(): Promise<void> {

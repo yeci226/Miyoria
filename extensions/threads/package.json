@@ -12,7 +12,8 @@
     "dev": "tsc -w -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "browser": "playwright-core install chromium --no-shell"
+    "browser": "playwright-core install chromium --no-shell",
+    "login": "node dist/login.js"
   },
   "dependencies": {
     "@miyoria/sdk": "workspace:*",

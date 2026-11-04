@@ -13,6 +13,16 @@
     },
     "width": { "type": "integer", "minimum": 360, "default": 720, "description": "視窗寬度(px)" },
     "height": { "type": "integer", "minimum": 480, "default": 1000, "description": "視窗高度(px)" },
+    "headless": {
+      "type": "boolean",
+      "default": false,
+      "description": "不開視窗(沒人看的機器用;直播要 OBS 擷取時維持 false)"
+    },
+    "game": {
+      "type": "boolean",
+      "default": true,
+      "description": "也能當遊戲 threads 玩(一步問一次模型);只用分享功能時設 false"
+    },
     "vision_url": {
       "type": "string",
       "description": "看圖模型的 OpenAI 相容端點(例如 https://openrouter.ai/api/v1);沒設就只知道「有圖」(MIYORIA_THREADS_VISION_URL)"

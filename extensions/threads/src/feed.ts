@@ -99,6 +99,16 @@ export function toPost(raw: RawPost): Post {
   };
 }
 
+const SPONSORED = /^(贊助|赞助|廣告|广告|Sponsored)$/m;
+/** A post with less to say than this and no picture is not worth a look. */
+const MIN_BODY = 8;
+
+/** Worth showing to her when she scrolls on her own: no ads, nothing too short to talk about. */
+export function worthReading(post: Post): boolean {
+  if (post.link === null || SPONSORED.test(post.body)) return false;
+  return post.images > 0 || post.body.length >= MIN_BODY;
+}
+
 const MAX_BODY = 600;
 
 function cut(text: string, max: number): string {
