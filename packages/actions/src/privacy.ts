@@ -22,9 +22,11 @@ export interface PrivacyChoices {
   dm: boolean;
   /** She may approach them on her own (DMs she starts, joining them, ...). */
   approach: boolean;
+  /** She may watch their Go Live. */
+  watch: boolean;
 }
 
-export const DEFAULT_PRIVACY: Readonly<PrivacyChoices> = { dm: true, approach: true };
+export const DEFAULT_PRIVACY: Readonly<PrivacyChoices> = { dm: true, approach: true, watch: true };
 
 /** `privacy:<platform>:<id>`. */
 export function privacyKey(account: AccountRef): string {
@@ -36,6 +38,7 @@ function parseChoices(value: JsonValue | null): PrivacyChoices {
   return {
     dm: value.dm !== false,
     approach: value.approach !== false,
+    watch: value.watch !== false,
   };
 }
 
@@ -57,7 +60,7 @@ export class Privacy {
       return parseChoices(await store.get(PRIVACY_PROFILE, key));
     } catch (error) {
       log.warn({ err: errorMessage(error) }, "cannot read privacy choices; treating as opted out");
-      return { dm: false, approach: false };
+      return { dm: false, approach: false, watch: false };
     }
   }
 

@@ -23,7 +23,7 @@ import type { Limit } from "./config.js";
 export type Risk = "low" | "medium" | "high";
 
 /** What a person can withdraw for actions directed at them (see `/me privacy`). */
-export type ConsentKind = "dm";
+export type ConsentKind = "dm" | "watch";
 
 /** How a capability is offered to the model as a tool (names: `[A-Za-z0-9_-]`). */
 export interface CapabilityTool {

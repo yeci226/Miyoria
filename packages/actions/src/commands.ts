@@ -43,10 +43,16 @@ async function statusReply(registry: ActuatorRegistry): Promise<CommandReply> {
   });
 }
 
-function privacyText(dm: boolean, approach: boolean, presence: boolean | null): string {
+function privacyText(
+  dm: boolean,
+  approach: boolean,
+  watch: boolean,
+  presence: boolean | null,
+): string {
   return [
     `私訊你：${dm ? "可以" : "不可以"}`,
     `主動找你（她自己發起的私訊等）：${approach ? "可以" : "不可以"}`,
+    `看你的直播：${watch ? "可以" : "不可以"}`,
     ...(presence === null
       ? []
       : [`看你在 Discord 上的狀態（在線、遊戲、音樂、自訂狀態）：${presence ? "可以" : "不可以"}`]),
@@ -103,10 +109,11 @@ export function registerCommands(
   const onOff = (name: string, description: string) =>
     argSpec(name, description, ArgKind.choice(["on", "off"]), { required: false });
   registry.register(
-    commandSpec("me privacy", "設定她能不能私訊你、主動找你、看你的狀態（省略 = 查看）", {
+    commandSpec("me privacy", "設定她能不能私訊你、主動找你、看你的直播、看你的狀態（省略 = 查看）", {
       args: [
         onOff("dm", "on = 可以私訊你，off = 不要"),
         onOff("approach", "on = 可以主動找你，off = 不要"),
+        onOff("watch", "on = 可以看你的直播，off = 不要"),
         onOff("presence", "on = 可以看你在 Discord 上的狀態（在線、遊戲、音樂），off = 不要"),
       ],
       permission: NODE_PRIVACY,
@@ -115,6 +122,7 @@ export function registerCommands(
     async (inv) => {
       const dm = inv.str("dm");
       const approach = inv.str("approach");
+      const watch = inv.str("watch");
       const wantPresence = inv.str("presence");
       const privacy = actuators().privacy;
       const book = presence();
@@ -124,9 +132,9 @@ export function registerCommands(
         await book.setPresence(inv.invoker, wantPresence === "on");
       }
       const seen = (): boolean | null => (book?.loaded ? book.presenceAllowed(inv.invoker) : null);
-      if (dm === null && approach === null) {
+      if (dm === null && approach === null && watch === null) {
         const now = await privacy.get(inv.invoker);
-        const text = privacyText(now.dm, now.approach, seen());
+        const text = privacyText(now.dm, now.approach, now.watch, seen());
         return wantPresence === null
           ? notice("info", text)
           : notice("success", `已更新。\n${text}`);
@@ -134,8 +142,12 @@ export function registerCommands(
       const next = await privacy.set(inv.invoker, {
         ...(dm === null ? {} : { dm: dm === "on" }),
         ...(approach === null ? {} : { approach: approach === "on" }),
+        ...(watch === null ? {} : { watch: watch === "on" }),
       });
-      return notice("success", `已更新。\n${privacyText(next.dm, next.approach, seen())}`);
+      return notice(
+        "success",
+        `已更新。\n${privacyText(next.dm, next.approach, next.watch, seen())}`,
+      );
     },
   );
 }
