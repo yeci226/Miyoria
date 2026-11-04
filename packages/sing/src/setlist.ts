@@ -60,9 +60,28 @@ export class SetListError extends Error {
 
 const OPEN: readonly SongState[] = ["preparing", "ready", "playing"];
 
+export const LINK = /https?:\/\/[^\s<>"'「」]+/i;
+
+/** The name people asked for a song by; a link or a library path is none. */
+export function askedName(query: string): string {
+  const q = query.trim();
+  return LINK.test(q) || q.toLowerCase().startsWith("library:") ? "" : q;
+}
+
+/**
+ * What to call a song: the worker's title, unless people asked for it by words that title is not
+ * in (a video title can name something else, like the show the song is from).
+ */
+function songName(e: SongEntry): string {
+  const title = e.song?.title?.trim() ?? "";
+  const asked = askedName(e.query);
+  if (asked === "") return title || e.query;
+  return title !== "" && asked.toLowerCase().includes(title.toLowerCase()) ? title : asked;
+}
+
 /** One line naming a song for her or for a card: `「title」- artist`, escaped and short. */
 export function songLabel(e: SongEntry): string {
-  const title = e.song?.title?.trim() || e.query;
+  const title = songName(e);
   const artist = e.song?.artist?.trim();
   return `「${safeName(title, 60)}」${artist ? ` - ${safeName(artist, 40)}` : ""}`;
 }

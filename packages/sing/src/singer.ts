@@ -59,7 +59,15 @@ import {
 import type { SingConfig } from "./config.js";
 import { LyricsCard } from "./lyrics-card.js";
 import { singSong, sleep } from "./player.js";
-import { type NewSong, SetList, type SongEntry, type SongNo, songLabel } from "./setlist.js";
+import {
+  askedName,
+  LINK,
+  type NewSong,
+  SetList,
+  type SongEntry,
+  type SongNo,
+  songLabel,
+} from "./setlist.js";
 
 const log = getLogger("sing");
 
@@ -88,8 +96,6 @@ export class SingError extends CapabilityError {
 export interface SongRequest extends Omit<NewSong, "query"> {
   query: string;
 }
-
-const LINK = /https?:\/\/[^\s<>"'「」]+/i;
 
 /**
  * The worker request for a set list query: a link (anywhere in it, e.g. 「唱這首 https://…」),
@@ -788,12 +794,10 @@ export class Singer implements VoiceFloor, SpeechPause {
     let payload: SongPrepare = NOT_PREPARING;
     if (best !== null) {
       const info = this.#jobs.get(best.no);
-      const query = best.query.trim();
       // A link or a library path is no title; the worker's comes once it found the song.
-      const asked = LINK.test(query) || query.toLowerCase().startsWith("library:") ? "" : query;
       payload = {
         no: best.no,
-        title: info?.title || asked,
+        title: info?.title || askedName(best.query),
         stage: best.stage,
         progress: Math.round(Math.min(Math.max(best.progress, 0), 1) * 1000) / 1000,
         exclusive: info?.exclusive ?? null,

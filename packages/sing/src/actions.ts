@@ -53,7 +53,9 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
       description:
         "準備一首歌給你唱(在背景下載、分離人聲、轉成你的聲音,通常要一到兩分鐘;已經唱過的歌馬上好)。" +
         "有人點歌、你想唱的時候用;準備的時候照常聊天,好了會告訴你,再用 sing_start 開唱。" +
-        "query 寫歌名(加上歌手更準),也可以是 YouTube 連結。不想唱、歌不適合可以拒絕。",
+        "一次點好幾首就每首各用一次 sing_request。" +
+        "query 寫歌名(加上歌手更準),也可以是 YouTube 連結。" +
+        "歌不適合可以拒絕,但已經唱過不是拒絕的理由:唱過的歌有人點就再唱一次。",
       properties: {
         query: { type: "string", description: "歌名 + 歌手,或 YouTube 連結" },
         key: { type: "integer", description: "整首升降幾個半音(-6 到 6,通常省略)" },

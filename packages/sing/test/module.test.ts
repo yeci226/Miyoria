@@ -431,6 +431,33 @@ describe("sing module", () => {
     vi.useRealTimers();
   });
 
+  it("calls a searched song what was asked for: a video title can name something else", async () => {
+    h = await Harness.create();
+    await h.join();
+    await h.command("queue song request", { song: "I Really Want to Stay at Your House" });
+    h.worker.finish("j1", "Cyberpunk: Edgerunners", 1);
+    await settle(150);
+    const hint = h.initiatives().at(-1)?.hint;
+    expect(hint).toContain("I Really Want to Stay at Your House");
+    expect(hint).not.toContain("Cyberpunk");
+  });
+
+  it("calls a linked song by the worker's title: a link is no name", async () => {
+    h = await Harness.create();
+    await h.join();
+    await h.command("queue song request", { song: "https://youtu.be/abc" });
+    h.worker.finish("j1", "Song Title", 1);
+    await settle(150);
+    expect(h.initiatives().at(-1)?.hint).toContain("「Song Title」");
+  });
+
+  it("tells her to request every song asked for, and that a sung song can be sung again", async () => {
+    h = await Harness.create();
+    const tool = h.sup.services.require(ActuatorRegistryKey).get("sing.request")?.tool;
+    expect(tool?.description).toMatch(/每首.*sing_request/);
+    expect(tool?.description).toMatch(/唱過.*再/);
+  });
+
   it("asks her mind when a song she agreed to is ready, and sings it when she starts it", async () => {
     h = await Harness.create();
     await h.join();
