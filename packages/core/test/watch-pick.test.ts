@@ -77,6 +77,7 @@ describe("picking a stream in a thought", () => {
     expect(start).toHaveBeenCalledOnce();
     expect(start.mock.calls[0]).toEqual([
       expect.objectContaining({ guild: GUILD, channel: VOICE.channel, account: hua, name: "阿華" }),
+      expect.any(AbortSignal),
     ]);
   });
 });

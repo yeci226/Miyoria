@@ -256,7 +256,7 @@ describe("failed actions", () => {
     await wait(2 * MIN);
     expect(status(await r.think(VOICE))[0]?.[2]).toContain("on hold");
 
-    r.world.voiceMembers = [...r.world.voiceMembers, { account: AQUA, name: "阿夸", streaming: true }];
+    r.world.voiceMembers.push({ account: AQUA, name: "阿夸", streaming: true });
     await wait(2 * MIN);
     expect(status(await r.think(VOICE))[0]?.[1]).toBe("failed");
   });
