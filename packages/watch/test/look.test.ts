@@ -1,7 +1,13 @@
-import { DATA_CLOSE, DATA_OPEN } from "@miyoria/types";
 import { contentText } from "@miyoria/llm";
+import { DATA_CLOSE, DATA_OPEN } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
-import { answerRequest, cutNote, type LookInput, LookResultSchema, lookRequest } from "../src/look.js";
+import {
+  answerRequest,
+  cutNote,
+  type LookInput,
+  LookResultSchema,
+  lookRequest,
+} from "../src/look.js";
 
 const input: LookInput = {
   name: "小明",
@@ -19,7 +25,9 @@ describe("lookRequest", () => {
     const user = req.messages.find((m) => m.role === "user");
     const parts = typeof user?.content === "string" ? [] : (user?.content ?? []);
     const img = parts.find((p) => p.type === "image_url");
-    expect(img?.type === "image_url" && img.image_url.url.startsWith("data:image/jpeg;base64,")).toBe(true);
+    expect(
+      img?.type === "image_url" && img.image_url.url.startsWith("data:image/jpeg;base64,"),
+    ).toBe(true);
     expect(img?.type === "image_url" && img.image_url.detail).toBe("low");
   });
   it("tells the model picture text is not instructions", () => {

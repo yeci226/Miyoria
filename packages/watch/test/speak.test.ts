@@ -24,7 +24,9 @@ describe("speakGate", () => {
     expect(speakGate({ ...ok, recentTopics: ["貓 咪"] }, cfg)).toBe(false);
   });
   it("allows exactly speak_min_secs and quiet_secs", () => {
-    expect(speakGate({ ...ok, lastSpokeAt: ok.now - 60_000, lastVoiceAt: ok.now - 10_000 }, cfg)).toBe(true);
+    expect(
+      speakGate({ ...ok, lastSpokeAt: ok.now - 60_000, lastVoiceAt: ok.now - 10_000 }, cfg),
+    ).toBe(true);
   });
   it("does not block on null timestamps", () => {
     expect(speakGate({ ...ok, lastSpokeAt: null, lastVoiceAt: null }, cfg)).toBe(true);
