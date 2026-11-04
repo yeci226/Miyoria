@@ -44,7 +44,7 @@
 
 ### 外掛新增
 
-- 工具 `threads.feed`:開瀏覽器(若還沒開),讀目前動態,回傳 JSON:最多 `share_posts` 則貼文的 `id`、作者、文字、連結、圖片數、時間,以及 `logged_in`。
+- 工具 `threads.feed`:開瀏覽器(若還沒開),讀目前動態,回傳 JSON:最多 `posts` 則貼文的 `id`、作者、文字、連結、圖片數、時間,以及 `logged_in`。
 - 工具 `threads.capture {id}`:回傳該則貼文的 JPEG(base64)和圖片描述。沒有看圖模型或描述失敗時,`description` 為 `null`。
 - 工具 `threads.close`:關閉瀏覽器。
 - 設定 `headless`(預設 `false`):Mac 設 `true`。
@@ -66,6 +66,7 @@
 
 ```ts
 files?: { name: string; path: string; contentType: string }[];
+mentions?: boolean; // false = 不解析任何提及
 ```
 
 Discord sink 把第一個訊息片段連同檔案一起送出。圖片放在暫存檔,`path` 只留路徑,所以圖片內容不會進入動作紀錄。平台不支援時回報發送失敗,不會默默丟掉圖片。`share` 發的訊息帶 `mentions: false`,讓 sink 用 `allowed_mentions: { parse: [] }`,因此連使用者都不會被標到。
@@ -91,15 +92,15 @@ share.browse
 頻道範圍:
 
 - 只考慮有文字頻道且她能發言的頻道,不含私訊和語音頻道的文字區。
-- `share_channels` 非空時只用這份清單,否則她從最近有活動的頻道中挑。
-- `share_exclude` 永遠排除。
+- `channels` 非空時只用這份清單,否則她從最近有活動的頻道中挑。
+- `exclude` 永遠排除。
 - 記憶只用該頻道的 `visibleScopes`,不帶任何在場人物,所以別的伺服器或私訊的記憶不會進入判斷。
 - 第 4 步沒有任何記憶或筆記對到時,直接結束,不進第 5、6 步。
 
-`share_when`:
+`when`:
 
 - `anytime`(預設):第 6 步選 `post` 就發。
-- `active`:候選留到有頻道正在聊天才進第 6 步,超過 `share_keep_hours` 就丟棄。候選和截圖存放在 `data/threads-share/`,丟棄時一併刪除。
+- `active`:候選留到有頻道正在聊天才進第 6 步,超過 `keep_hours` 就丟棄。候選和截圖存放在 `data/threads-share/`,丟棄時一併刪除。
 
 ## 設定
 
@@ -108,15 +109,15 @@ share.browse
 ```toml
 [modules.share]
 enabled = false
-share_when = "anytime"         # anytime | active
-share_max_per_day = 3          # 一天最多發幾則
-share_min_gap_mins = 120       # 兩則至少隔多久
-share_browse_per_day = 6       # 一天最多滑幾輪
-share_posts = 10               # 一輪最多看幾則
-share_quiet_hours = "01:00-08:00"  # 這段時間不滑也不發,空字串 = 關閉
-share_channels = []            # 空 = 她自己挑
-share_exclude = []             # 永遠不發
-share_keep_hours = 24          # active 模式下候選留多久
+when = "anytime"         # anytime | active
+max_per_day = 3          # 一天最多發幾則
+min_gap_mins = 120       # 兩則至少隔多久
+browse_per_day = 6       # 一天最多滑幾輪
+posts = 10               # 一輪最多看幾則
+quiet_hours = "01:00-08:00"  # 這段時間不滑也不發,空字串 = 關閉
+channels = []            # 空 = 她自己挑
+exclude = []             # 永遠不發
+keep_hours = 24          # active 模式下候選留多久
 ```
 
 `[extensions."miyoria.threads"]` 新增 `headless`、`game`,其他沿用現有設定。時間一律以 Core 所在機器的本地時區計算,一天從 00:00 起算。
@@ -164,8 +165,8 @@ share_keep_hours = 24          # active 模式下候選留多久
 
 1. Mac:`pnpm --filter @miyoria/sdk build`,在 `extensions/threads` 執行 `pnpm browser` 和 `pnpm build`。
 2. 擁有者用螢幕共用在 Mac 上執行 `pnpm login`,手動登入她的帳號。
-3. `miyoria.toml`:Threads 外掛 `enabled = true`、`headless = true`、`game = false`,`[modules.share]` 先把 `share_channels` 設成測試頻道。
-4. 確認一輪成功後,再清空 `share_channels` 開放她自己挑。
+3. `miyoria.toml`:Threads 外掛 `enabled = true`、`headless = true`、`game = false`,`[modules.share]` 先把 `channels` 設成測試頻道。
+4. 確認一輪成功後,再清空 `channels` 開放她自己挑。
 
 ## 風險
 
