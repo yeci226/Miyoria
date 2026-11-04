@@ -36,9 +36,11 @@ const post = (n: number, images = 0): FeedPost => ({
 
 class Model implements Completer {
   calls = 0;
+  requests: ChatRequest[] = [];
   constructor(public replies: (string | Error)[]) {}
-  async complete(_purpose: string, _request: ChatRequest): Promise<ChatResponse> {
+  async complete(_purpose: string, request: ChatRequest): Promise<ChatResponse> {
     this.calls++;
+    this.requests.push(request);
     const reply = this.replies.shift() ?? new Error("no reply scripted");
     if (reply instanceof Error) throw reply;
     return { text: reply, reasoning: "", tool_calls: [], finish_reason: "stop", usage: null };
@@ -196,33 +198,69 @@ describe("a round", () => {
     expect(posts).toBe(1);
   });
 
-  it("no pick ends the round with one model call and no capture", async () => {
+  it("she sees what is in the pictures before she picks", async () => {
+    const r = rig(['{"picks":[]}']);
+    r.feed.result = { logged_in: true, posts: [post(1, 2)] };
+    r.feed.captures["/@u/post/1"] = { jpeg: "AQID", description: "海邊的夕陽" };
+    await round(r);
+    expect(JSON.stringify(r.model.requests[0]?.messages)).toContain("海邊的夕陽");
+  });
+
+  it("no pick ends the round with one model call and removes the pictures", async () => {
     const r = rig(['{"picks":[]}']);
     await round(r);
     expect(r.model.calls).toBe(1);
-    expect(r.feed.log).toEqual(["feed 10", "close"]);
-    expect(r.sink.sent).toEqual([]);
-  });
-
-  it("no matching channel ends before capture and decide", async () => {
-    const r = rig(['{"picks":["p1"]}']);
-    r.decided.hits = [];
-    await round(r);
-    expect(r.model.calls).toBe(1);
-    expect(r.feed.log).toEqual(["feed 10", "close"]);
-  });
-
-  it("a post with pictures and no description is dropped", async () => {
-    const r = rig(['{"picks":["p1"]}']);
-    r.feed.result = { logged_in: true, posts: [post(1, 2)] };
-    await round(r);
-    expect(r.model.calls).toBe(1);
+    expect(r.feed.log).toEqual(["feed 10", "capture /@u/post/1", "close"]);
     expect(r.sink.sent).toEqual([]);
     expect(readdirSync(r.dir)).toEqual([]);
   });
 
+  it("no matching channel ends before decide", async () => {
+    const r = rig(['{"picks":["p1"]}']);
+    r.decided.hits = [];
+    await round(r);
+    expect(r.model.calls).toBe(1);
+    expect(r.sink.sent).toEqual([]);
+  });
+
+  it("a post with pictures and no description never reaches the model", async () => {
+    const r = rig([]);
+    r.feed.result = { logged_in: true, posts: [post(1, 2)] };
+    await round(r);
+    expect(r.model.calls).toBe(0);
+    expect(r.sink.sent).toEqual([]);
+    expect(readdirSync(r.dir)).toEqual([]);
+  });
+
+  it("one post that cannot be captured does not end the round", async () => {
+    const r = rig(['{"picks":["p1"]}', POST]);
+    r.feed.result = { logged_in: true, posts: [post(1), post(2)] };
+    const capture = r.feed.capture.bind(r.feed);
+    r.feed.capture = async (link) => {
+      if (link === "/@u/post/1") throw new Error("page moved");
+      return capture(link);
+    };
+    await round(r);
+    expect(r.sink.sent[0]?.message.text).toContain("/@u/post/2");
+  });
+
+  it("stops looking once the module stops", async () => {
+    const r = rig([]);
+    r.feed.result = { logged_in: true, posts: [post(1), post(2)] };
+    const abort = new AbortController();
+    const capture = r.feed.capture.bind(r.feed);
+    r.feed.capture = async (link) => {
+      abort.abort();
+      return capture(link);
+    };
+    r.sharer.start(abort.signal);
+    await r.sharer.idle();
+    expect(r.feed.log.filter((l) => l.startsWith("capture")).length).toBe(1);
+    expect(r.model.calls).toBe(0);
+  });
+
   it("keeps the post that has a description", async () => {
-    const r = rig(['{"picks":["p1","p2"]}', POST]);
+    const r = rig(['{"picks":["p1"]}', POST]);
     r.feed.result = { logged_in: true, posts: [post(1, 2), post(2, 1)] };
     r.feed.captures["/@u/post/2"] = { jpeg: "AQID", description: "海邊" };
     await round(r);
@@ -230,10 +268,10 @@ describe("a round", () => {
   });
 
   it("a post that left the page is dropped", async () => {
-    const r = rig(['{"picks":["p1"]}']);
+    const r = rig([]);
     r.feed.captures["/@u/post/1"] = { jpeg: null, description: null };
     await round(r);
-    expect(r.model.calls).toBe(1);
+    expect(r.model.calls).toBe(0);
   });
 
   it("a failed send does not count against the limit", async () => {
@@ -358,6 +396,13 @@ describe("when something is wrong with Threads", () => {
 });
 
 describe("when = active", () => {
+  it("active removes the pictures of the posts she did not pick", async () => {
+    const r = rig(['{"picks":["p2"]}'], { when: "active" });
+    r.feed.result = { logged_in: true, posts: [post(1), post(2)] };
+    await round(r);
+    expect(readdirSync(r.dir).length).toBe(1);
+  });
+
   it("active keeps candidates until a channel is lively", async () => {
     const r = rig(['{"picks":["p1"]}', POST], { when: "active" });
     await round(r);

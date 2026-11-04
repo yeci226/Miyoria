@@ -202,7 +202,7 @@ dirs = ["extensions"]
 # min_gap_mins = 120         # 兩則至少隔多久
 # browse_per_day = 6         # 一天最多滑幾輪
 # browse_gap_mins = 120      # 兩輪至少隔多久
-# posts = 10                 # 一輪最多看幾則
+# posts = 10                 # 一輪最多看幾則(有圖的每則看一次圖;沒設看圖模型就跳過有圖的貼文)
 # quiet_hours = "01:00-08:00"   # 這段時間不滑也不發,空字串 = 關閉
 # channels = []              # 頻道 id;空 = 她自己挑
 # exclude = []               # 永遠不發的頻道 id

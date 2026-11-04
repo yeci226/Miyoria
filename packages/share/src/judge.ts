@@ -79,12 +79,13 @@ async function ask<S extends z.ZodType>(
 export async function pickPosts(
   router: Completer,
   persona: string,
-  posts: readonly FeedPost[],
+  posts: readonly (FeedPost & { description?: string | null })[],
   signal?: AbortSignal,
 ): Promise<string[]> {
   const lines = posts.map((p, i) => {
     const pictures = p.images > 0 ? `[${p.images} 張圖]` : "";
-    return `p${i + 1} @${p.author}${p.age ? `(${p.age})` : ""}${pictures}:${clip(p.body, MAX_BODY)}`;
+    const seen = p.description ? `\n圖片:${p.description}` : "";
+    return `p${i + 1} @${p.author}${p.age ? `(${p.age})` : ""}${pictures}:${clip(p.body, MAX_BODY)}${seen}`;
   });
   const reply = await ask(
     router,

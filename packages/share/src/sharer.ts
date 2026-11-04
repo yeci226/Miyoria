@@ -1,6 +1,7 @@
-// One round: read the feed, pick what she has something to say about, find the channels that would
-// care, capture the posts and share one. Cheap steps come first, so most rounds end before the
-// second call to the model. Whatever fails ends the round: nothing is retried, nothing is sent.
+// One round: read the feed, look at the posts, pick what she has something to say about, find the
+// channels that would care and share one. Most posts say little without their pictures, so she
+// looks first; most rounds still end before the second call to the model. Whatever fails ends the
+// round: nothing is retried, nothing is sent.
 
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -76,6 +77,7 @@ const WaitingSchema = z.object({
 });
 const StateSchema = z.object({ limits: z.unknown(), waiting: WaitingSchema.nullable() });
 type Waiting = z.output<typeof WaitingSchema>;
+type Looked = FeedPost & Candidate;
 
 export class Sharer {
   readonly #config: ShareConfig;
@@ -170,8 +172,8 @@ export class Sharer {
 
   async #round(signal: AbortSignal): Promise<void> {
     const deps = this.#deps;
-    let candidates: Candidate[] = [];
-    let keep = false;
+    let looked: Looked[] = [];
+    let kept: readonly Looked[] = [];
     try {
       this.#limits.noteRound(deps.now());
       await this.#save();
@@ -183,27 +185,24 @@ export class Sharer {
       }
       this.#limits.noteFound();
       if (signal.aborted) return;
-      const links = await pickPosts(deps.model, deps.persona(), out.posts, signal);
-      const picked = out.posts.filter((p) => links.includes(p.link));
+      looked = await this.#capture(out.posts, signal);
+      if (looked.length === 0 || signal.aborted) return;
+      const links = await pickPosts(deps.model, deps.persona(), looked, signal);
+      const picked = looked.filter((p) => links.includes(p.link));
       if (picked.length === 0 || signal.aborted) return;
 
       if (this.#config.when === "active") {
-        candidates = await this.#capture(picked);
-        if (candidates.length > 0) {
-          this.#waiting = { at_ms: deps.now(), candidates };
-          keep = true;
-        }
+        this.#waiting = { at_ms: deps.now(), candidates: picked };
+        kept = picked;
         return;
       }
       const matches = await this.#match(this.#eligible(deps.contexts()), picked);
-      if (matches.length === 0) return;
-      candidates = await this.#capture(picked);
-      if (candidates.length > 0) await this.#share(candidates, matches, signal);
+      if (matches.length > 0) await this.#share(picked, matches, signal);
     } catch (error) {
       deps.warn("a round on Threads failed", error);
     } finally {
       await deps.feed.close();
-      if (!keep) await this.#remove(candidates);
+      await this.#remove(looked.filter((c) => !kept.includes(c)));
       await this.#save();
     }
   }
@@ -224,15 +223,20 @@ export class Sharer {
   }
 
   /** The posts as pictures on disk. A post with pictures nobody could look at is dropped. */
-  async #capture(posts: readonly FeedPost[]): Promise<Candidate[]> {
+  async #capture(posts: readonly FeedPost[], signal: AbortSignal): Promise<Looked[]> {
     await mkdir(this.#dir, { recursive: true });
-    const out: Candidate[] = [];
+    const out: Looked[] = [];
     for (const post of posts) {
-      const { jpeg, description } = await this.#deps.feed.capture(post.link);
-      if (jpeg === null || (post.images > 0 && description === null)) continue;
-      const path = join(this.#dir, `${newId()}.jpg`);
-      await writeFile(path, Buffer.from(jpeg, "base64"));
-      out.push({ ...post, description, jpeg_path: path });
+      if (signal.aborted) break;
+      try {
+        const { jpeg, description } = await this.#deps.feed.capture(post.link);
+        if (jpeg === null || (post.images > 0 && description === null)) continue;
+        const path = join(this.#dir, `${newId()}.jpg`);
+        await writeFile(path, Buffer.from(jpeg, "base64"));
+        out.push({ ...post, description, jpeg_path: path });
+      } catch (error) {
+        this.#deps.warn("capturing a post failed", error);
+      }
     }
     return out;
   }

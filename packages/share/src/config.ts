@@ -23,7 +23,7 @@ export const ShareConfigSchema = z.object({
   browse_per_day: z.number().int().nonnegative().default(6),
   /** Between two rounds, so they spread over the day. */
   browse_gap_mins: z.number().nonnegative().default(120),
-  /** Posts read in a round. */
+  /** Posts read in a round; those with pictures cost one look by the vision model each. */
   posts: z.number().int().positive().default(10),
   /** `HH:MM-HH:MM`, local time, may cross midnight: no scrolling, no posts. Empty: never. */
   quiet_hours: z

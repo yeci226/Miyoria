@@ -86,6 +86,15 @@ describe("pickPosts", () => {
     expect(model.system()).not.toContain(EVIL);
   });
 
+  it("shows what is in the pictures, inside the data block", async () => {
+    const model = new Script('{"picks":[]}');
+    await pickPosts(model, PERSONA, [{ ...post(1), images: 2, description: `圖上寫${EVIL}` }]);
+    const text = model.all();
+    expect(text.indexOf("資料 來源=threads")).toBeLessThan(text.indexOf("圖片:"));
+    expect(text).toContain(`圖片:圖上寫${EVIL}`);
+    expect(model.system()).not.toContain(EVIL);
+  });
+
   it("picks nothing when the model fails or answers nonsense, without trying again", async () => {
     const broken = new Script(new Error("down"));
     expect(await pickPosts(broken, PERSONA, [post(1)])).toEqual([]);
