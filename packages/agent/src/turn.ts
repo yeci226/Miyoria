@@ -123,7 +123,14 @@ const MAX_ATTITUDE_HINTS = 5;
  * Things she may say she has done that only happen through a tool, by tool name. A reply that
  * says one of these without the tool call gets one reminder (see `#produce`).
  */
-const CLAIMS: readonly (readonly [string, RegExp])[] = [
+const CLAIMS: readonly (readonly [tool: string, said: RegExp, asked?: RegExp])[] = [
+  // A song only counts when someone brought one up: 「我先把報告弄好」 is not about a song.
+  // 「弄好了」 and 「練好了」 are songs already prepared, with nothing left to ask for.
+  [
+    "sing_request",
+    /(我|這首|那首)[^。!?!?\n]{0,12}(去抓|抓下來|抓來|去準備|去下載|弄好(?!了)|排進|排上|加進歌單)/,
+    /唱|歌|https?:\/\//i,
+  ],
   ["voice_join", /游過去|游去了|進語音了|進去語音|加入語音了|過去語音/],
   ["voice_leave", /離開語音了|退出語音了|游走了|先下語音/],
   ["stream_start", /開台了|開播了|開始直播了/],
@@ -1180,7 +1187,11 @@ class Turn {
       if (calls.length === 0 && offered && !reminded && step < cfg.max_tool_steps) {
         const names = new Set(tools.map((t) => t.name));
         const claim = CLAIMS.find(
-          ([tool, said]) => names.has(tool) && !used.has(tool) && said.test(expression.text),
+          ([tool, said, asked]) =>
+            names.has(tool) &&
+            !used.has(tool) &&
+            said.test(expression.text) &&
+            (asked === undefined || this.inputs.some((m) => asked.test(m.text))),
         );
         if (claim) {
           reminded = true;
@@ -1316,7 +1327,7 @@ class Turn {
   async #runTool(call: ToolCall, priority: Priority): Promise<string> {
     const [ok, full] = await this.#tryTool(call, priority);
     const result = truncate(full, this.agent.config.max_tool_result_chars);
-    this.agent.log.debug({ turn: this.turn, tool: call.name, ok, result }, "tool call");
+    this.agent.log.info({ turn: this.turn, tool: call.name, ok, result }, "tool call");
     this.signal.throwIfAborted();
     this.agent.ctx.publish(
       {

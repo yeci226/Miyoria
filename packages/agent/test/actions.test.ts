@@ -2,7 +2,7 @@
 // tool calls in a reactive turn carry the `user` principal.
 
 import { ActuatorRegistry } from "@miyoria/actions";
-import { ServiceRegistry } from "@miyoria/kernel";
+import { configureLogging, ServiceRegistry } from "@miyoria/kernel";
 import { MockProvider } from "@miyoria/llm";
 import { type ToolContext, ToolRegistry } from "@miyoria/tools";
 import {
@@ -141,6 +141,80 @@ describe("channel.activeness", () => {
     expect(h.sink.texts()).toEqual(["到了。"]);
     const second = mock.requests()[1]?.messages ?? [];
     expect(String(second.at(-1)?.content)).toContain("voice_join");
+  });
+
+  describe("a song she promises", () => {
+    const request = (mock: MockProvider) =>
+      mock
+        .events([
+          {
+            type: "tool_call_delta",
+            index: 0,
+            id: "c1",
+            name: "sing_request",
+            arguments: '{"query":"朋友的酒"}',
+          },
+          { type: "done", finish_reason: "tool_calls", usage: null },
+        ])
+        .reply("好了。");
+
+    it.each([
+      "好啦,這首我會去抓,等我一下。",
+      "好啦好啦,我先把邦友の酒弄好,你們繼續聊。",
+      "好,我去準備一下。",
+      "我排進去了。",
+    ])("is requested after a reminder: %s", async (claim) => {
+      const mock = request(new MockProvider("chat").reply(claim));
+      const sing = new Probe("sing_request");
+      const h = await Harness.build("always", noCheck(), mock, null, { tools: [sing] });
+      h.say(mention(channel("c"), "Owen", "唱這個 https://www.bilibili.com/video/BV1"));
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(sing.calls).toHaveLength(1);
+      const second = mock.requests()[1]?.messages ?? [];
+      expect(String(second.at(-1)?.content)).toContain("sing_request");
+    });
+
+    it("is not asked about when nobody talked about a song", async () => {
+      const mock = new MockProvider("chat").reply("我先把報告弄好。");
+      const sing = new Probe("sing_request");
+      const h = await Harness.build("always", noCheck(), mock, null, { tools: [sing] });
+      h.say(mention(channel("c"), "Owen", "你在忙什麼"));
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(mock.requests()).toHaveLength(1);
+      expect(h.sink.texts()).toEqual(["我先把報告弄好。"]);
+    });
+
+    it.each(["《朋友的酒》我練好了,唱歪了別怪我。", "歌我弄好了,等一下就唱。"])(
+      "is not asked about when it is already done: %s",
+      async (said) => {
+        const mock = new MockProvider("chat").reply(said);
+        const sing = new Probe("sing_request");
+        const h = await Harness.build("always", noCheck(), mock, null, { tools: [sing] });
+        h.say(mention(channel("c"), "Owen", "唱歌"));
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(mock.requests()).toHaveLength(1);
+      },
+    );
+  });
+
+  it("logs every tool call at info, so a call that went wrong shows in the log", async () => {
+    const lines: string[] = [];
+    configureLogging({ level: "info", destination: { write: (line) => lines.push(line) } });
+    try {
+      const mock = new MockProvider("chat")
+        .events([
+          { type: "tool_call_delta", index: 0, id: "c1", name: "nope", arguments: "{}" },
+          { type: "done", finish_reason: "tool_calls", usage: null },
+        ])
+        .reply("好");
+      const h = await Harness.build("always", noCheck(), mock, null, {});
+      h.say(mention(channel("c"), "Owen", "幫我跑個程式"));
+      await vi.advanceTimersByTimeAsync(3000);
+      const call = lines.map((l) => JSON.parse(l)).find((l) => l.msg === "tool call");
+      expect(call).toMatchObject({ tool: "nope", ok: false });
+    } finally {
+      configureLogging();
+    }
   });
 
   it("registers in the app's actuator registry while running", async () => {

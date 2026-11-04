@@ -22,6 +22,7 @@ import {
   incoming,
   nextTs,
   Paced,
+  Probe,
   stopHarnesses,
   textDelta,
   wait,
@@ -107,6 +108,28 @@ function completedTexts(h: Harness): string[] {
 }
 
 describe("voice", () => {
+  it("a spoken promise of a song gets the reminder too", async () => {
+    const mock = new MockProvider("chat")
+      .reply("好啦,這首我會去抓,等我一下。")
+      .events([
+        {
+          type: "tool_call_delta",
+          index: 0,
+          id: "c1",
+          name: "sing_request",
+          arguments: '{"query":"朋友的酒"}',
+        },
+        { type: "done", finish_reason: "tool_calls", usage: null },
+      ])
+      .reply("");
+    const sing = new Probe("sing_request");
+    const h = await Harness.build("off", voiceConfig("always"), mock, null, { tools: [sing] });
+    h.publish(joined());
+    h.publish(utterance("Owen", "唱朋友的酒"));
+    await wait(1500);
+    expect(sing.calls).toHaveLength(1);
+  });
+
   it("utterances_are_debounced_and_merged", async () => {
     const mock = new MockProvider("chat").reply("<emo:happy>考完啦?辛苦了。");
     const h = await Harness.create("off", voiceConfig("always"), mock);
