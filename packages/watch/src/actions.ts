@@ -3,15 +3,19 @@
 // (a stream in the room, an hourly limit, a watch that just began) is checked here.
 
 import {
+  type ActionOutcome,
+  ActuatorRegistryKey,
   type Capability,
   CapabilityError,
   defineCapability,
+  deniedText,
   type ExecContext,
 } from "@miyoria/actions";
 import {
   type AccountRef,
   dataBlock,
   isAutonomous,
+  isJsonObject,
   type PlatformId,
   type PlatformSink,
   type Principal,
@@ -134,7 +138,7 @@ export class PendingStart {
 
 export interface WatchActionDeps {
   cfg: WatchConfig;
-  link: Pick<VoiceLink, "channel" | "join" | "isStreaming">;
+  link: Pick<VoiceLink, "channel" | "isStreaming">;
   watcher: Pick<Watcher, "view" | "start" | "stop">;
   notices: NoticeBook;
   starts: StartLog;
@@ -143,6 +147,11 @@ export interface WatchActionDeps {
   sink(platform: PlatformId): PlatformSink | undefined;
   canLook(): boolean;
   watchAllowed(account: AccountRef): Promise<boolean>;
+  /**
+   * `watch` was off the last time the prompt looked. `check` is synchronous and cannot read the
+   * store, so this only narrows what she chooses from; the gate still asks about who she picks.
+   */
+  hidden(account: AccountRef): boolean;
   now(): number;
   /** A watch really began. */
   onStarted(): void;
@@ -176,12 +185,22 @@ const sameName = (a: string, b: string): boolean =>
 const roster = (members: readonly VoiceMember[]): string =>
   members.map((m) => `${safeName(m.display_name)}(${m.account.id})`).join("、");
 
-/** Who `wanted` is among the people streaming in the room, or why it cannot be told. */
-function pick(live: readonly VoiceMember[], wanted: string | null): VoiceMember | string {
+/**
+ * Who `wanted` is among the people streaming in the room, or why it cannot be told. Nobody named
+ * while she watches someone means someone else: that is how she switches.
+ */
+function pick(
+  live: readonly VoiceMember[],
+  wanted: string | null,
+  watching: AccountRef | null,
+): VoiceMember | string {
   if (live.length === 0) return NOBODY_LIVE;
+  const others = live.filter((m) => watching === null || !sameAccount(m.account, watching));
   const hits =
     wanted === null
-      ? live
+      ? others.length > 0
+        ? others
+        : live
       : live.filter((m) => m.account.id === wanted || sameName(m.display_name, wanted));
   const [only] = hits;
   if (only !== undefined && hits.length === 1) return only;
@@ -212,9 +231,15 @@ export function watchCapabilities(deps: WatchActionDeps): Capability[] {
     if (here !== null && theirs !== null && here !== theirs) return ELSEWHERE;
     const channel = here ?? theirs;
     if (channel === null) return NOT_IN_VOICE;
+    // Joining here would take her away from another server, and from a watch there.
+    const her = snapshot.her.voice;
+    if (here === null && her !== null && (her.scope !== guild || her.channel !== channel)) {
+      return ELSEWHERE;
+    }
     const room = snapshot.voice_channels.find((c) => c.guild === guild && c.channel === channel);
     if (room === undefined) return NOBODY_LIVE;
-    const member = pick(streamers(room), args.user ?? null);
+    const seen = streamers(room).filter((m) => asker !== null || !deps.hidden(m.account));
+    const member = pick(seen, args.user ?? null, watcher.view()?.target.account ?? null);
     if (typeof member === "string") return member;
     return { guild, channel, platform: room.platform, member };
   }
@@ -245,19 +270,43 @@ export function watchCapabilities(deps: WatchActionDeps): Capability[] {
     return typeof stream === "string" ? null : stream;
   };
 
-  /** Brings her to the stream's channel when she is in no voice channel. */
-  async function arrive(stream: Stream, principal: Principal): Promise<void> {
+  /**
+   * Brings her to the stream's channel when she is in no voice channel, through `voice.join` and
+   * as whoever asked: their permission applies, and she counts as invited there. No `priority`:
+   * it runs here, not queued in the voice lane behind this request.
+   */
+  async function arrive(stream: Stream, ctx: ExecContext, signal: AbortSignal): Promise<void> {
     if (link.channel(stream.guild) !== null) return;
-    const requester = principal.requester;
-    if (requester === null) throw new CapabilityError(NOT_IN_VOICE);
-    let joined: string;
+    const registry = ctx.services.get(ActuatorRegistryKey);
+    if (registry === undefined) throw new CapabilityError(NO_JOIN);
+    let outcome: ActionOutcome;
     try {
-      joined = await link.join(stream.guild, null, requester.id);
+      outcome = await registry.invoke(
+        {
+          principal: ctx.principal,
+          capability: "voice.join",
+          args: { guild: stream.guild },
+          why: ctx.request.why,
+          turn: ctx.request.turn,
+        },
+        { signal },
+      );
     } catch (error) {
+      if (signal.aborted) throw new CapabilityError(STOPPED);
       deps.warn("cannot join for a watch", error);
       throw new CapabilityError(NO_JOIN);
     }
-    if (joined !== stream.channel) throw new CapabilityError(MOVED_ON);
+    if (outcome.status === "denied") {
+      throw new CapabilityError(`${NO_JOIN}${deniedText(outcome.decision.stage)}`);
+    }
+    if (outcome.status === "failed") {
+      deps.warn("cannot join for a watch", outcome.error);
+      throw new CapabilityError(NO_JOIN);
+    }
+    const { data } = outcome.result;
+    if (!isJsonObject(data) || data.channel !== stream.channel) {
+      throw new CapabilityError(MOVED_ON);
+    }
   }
 
   /** Tells the channel, when due. `true` when a notice went out. */
@@ -285,7 +334,7 @@ export function watchCapabilities(deps: WatchActionDeps): Capability[] {
     if (!(await deps.watchAllowed(member.account))) {
       throw new CapabilityError(notWatchable(member.display_name));
     }
-    await arrive(stream, ctx.principal);
+    await arrive(stream, ctx, signal);
     if (signal.aborted) throw new CapabilityError(STOPPED);
     const target: WatchTarget = {
       guild: stream.guild,
@@ -325,7 +374,10 @@ export function watchCapabilities(deps: WatchActionDeps): Capability[] {
       return (deps.world()?.snapshot().voice_channels ?? []).some(
         (room) =>
           link.channel(room.guild) === room.channel &&
-          streamers(room).some((m) => watching === null || !sameAccount(m.account, watching)),
+          streamers(room).some(
+            (m) =>
+              !deps.hidden(m.account) && (watching === null || !sameAccount(m.account, watching)),
+          ),
       );
     },
     check,

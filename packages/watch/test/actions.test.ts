@@ -1,7 +1,14 @@
-import { type ActionRequest, ActuatorRegistry, CapabilityError } from "@miyoria/actions";
+import {
+  type ActionRequest,
+  ActuatorRegistry,
+  ActuatorRegistryKey,
+  CapabilityError,
+  defineCapability,
+} from "@miyoria/actions";
 import { ServiceRegistry } from "@miyoria/kernel";
 import {
   type AccountRef,
+  AuthorizerKey,
   type ContextKey,
   type MessageRef,
   type PersonPresence,
@@ -14,6 +21,7 @@ import {
 } from "@miyoria/types";
 import type { VoiceLink } from "@miyoria/voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import {
   NoticeBook,
   noticeText,
@@ -68,7 +76,12 @@ class Rig {
     c2: [member("u2", "阿華"), member("u3", "小美", { streaming: false })],
   };
   spots: Record<string, string> = {};
+  /** Where she is in voice as far as the world knows, when not `here`. */
+  otherServer: ContextKey | null = null;
   view: WatchView | null = null;
+  hidden = new Set<string>();
+  mayJoin = true;
+  joinPrincipals: Principal[] = [];
   cfg: WatchConfig = WatchConfigSchema.parse({});
   canLook = true;
   sinkMissing = false;
@@ -96,13 +109,12 @@ class Rig {
   warn = vi.fn();
   link = {
     channel: (_guild: string) => this.here,
-    join: this.join,
     isStreaming: (_guild: string) => this.live,
   } as unknown as VoiceLink;
   world: WorldState = {
     snapshot: () =>
       ({
-        her: { voice: this.here === null ? null : voiceCtx(this.here) },
+        her: { voice: this.otherServer ?? (this.here === null ? null : voiceCtx(this.here)) },
         voice_channels: Object.entries(this.rooms).map(([channel, members]) => ({
           platform: "discord",
           guild: G,
@@ -141,18 +153,41 @@ class Rig {
       this.sinkMissing ? undefined : ({ platform: "discord", send: this.send } as never),
     canLook: () => this.canLook,
     watchAllowed: this.allowed,
+    hidden: (a) => this.hidden.has(a.id),
     now: () => this.clock.t,
     onStarted: this.started,
     warn: this.warn,
   };
+  services = new ServiceRegistry();
   registry = new ActuatorRegistry({
-    services: new ServiceRegistry(),
+    services: this.services,
     builtins: false,
     clock: { now: () => this.clock.t } as never,
   });
 
   constructor() {
+    this.services.provide("app", ActuatorRegistryKey, this.registry);
+    this.services.provide("app", AuthorizerKey, {
+      allows: (_account, node) => node === "voice.join" && this.mayJoin,
+      allowsSubject: () => false,
+    });
     for (const capability of watchCapabilities(this.deps)) this.registry.register(capability);
+    // Same gate as the real one: a permission, medium risk and the tier's 20 s cooldown.
+    this.registry.register(
+      defineCapability({
+        name: "voice.join",
+        summary: "加入語音頻道",
+        risk: "medium",
+        args: z.object({ guild: z.string().nullish() }),
+        permission: "voice.join",
+        execute: async (args, ctx) => {
+          this.joinPrincipals.push(ctx.principal);
+          const asker = ctx.principal.requester?.id ?? null;
+          const channel = await this.join(args.guild ?? G, null, asker);
+          return { text: "joined", data: { channel } };
+        },
+      }),
+    );
   }
 
   request(capability: string, args: object, principal: Principal): ActionRequest {
@@ -288,13 +323,18 @@ describe("the watch capabilities", () => {
   });
 
   it("a_start_that_failed_does_not_count", async () => {
+    rig.deps.starts = new StartLog(1, () => rig.clock.t);
     rig.start.mockRejectedValueOnce(new Error("nope"));
-    await rig.own();
-    expect(rig.starts.full()).toBe(false);
-    const log = new StartLog(1, () => rig.clock.t);
-    expect(log.full()).toBe(false);
-    log.add();
-    expect(log.full()).toBe(true);
+    expect((await rig.own()).status).toBe("failed");
+
+    rig.later();
+    expect((await rig.own()).status).toBe("done");
+
+    rig.view = null;
+    rig.later();
+    const spent = await rig.own();
+    expect(spent.status).toBe("denied");
+    expect(reason(spent)).toContain("一小時");
   });
 
   it("someone_asking_brings_her_to_their_channel", async () => {
@@ -303,11 +343,59 @@ describe("the watch capabilities", () => {
     const outcome = await rig.ask();
     expect(outcome.status).toBe("done");
     expect(rig.join).toHaveBeenCalledWith(G, null, asker.id);
+    expect(rig.joinPrincipals).toEqual([Principals.user(asker, textCtx)]);
     expect(rig.order).toEqual(["join", "notice", "start"]);
     expect(rig.start.mock.calls[0]?.[0]).toMatchObject({
       channel: "c2",
       account: account("u2"),
     });
+  });
+
+  it("someone_who_may_not_call_her_in_gets_no_watch", async () => {
+    rig.here = null;
+    rig.spots[asker.id] = "c2";
+    rig.mayJoin = false;
+    const outcome = await rig.ask();
+    expect(outcome.status).toBe("failed");
+    expect(reason(outcome)).not.toMatch(/[A-Za-z]{3}/);
+    expect(reason(outcome)).toContain("沒有權限");
+    expect(rig.join).not.toHaveBeenCalled();
+    expect(rig.send).not.toHaveBeenCalled();
+    expect(rig.start).not.toHaveBeenCalled();
+  });
+
+  it("a_forbidden_join_stays_forbidden", async () => {
+    rig.here = null;
+    rig.spots[asker.id] = "c2";
+    rig.registry.configure({ ...rig.registry.config, forbidden: ["voice.join"] });
+    expect((await rig.ask()).status).toBe("failed");
+    expect(rig.join).not.toHaveBeenCalled();
+    expect(rig.send).not.toHaveBeenCalled();
+  });
+
+  it("a_join_inside_its_cooldown_is_refused_and_does_not_spend_the_start", async () => {
+    rig.deps.starts = new StartLog(1, () => rig.clock.t);
+    rig.here = null;
+    rig.spots[asker.id] = "c2";
+    rig.registry.rate.record("voice.join", null, rig.clock.t); // someone just called her in
+    rig.clock.t += 1_000;
+    const cooling = await rig.ask();
+    expect(cooling.status).toBe("failed");
+    expect(reason(cooling)).toContain("太頻繁");
+    expect(rig.send).not.toHaveBeenCalled();
+    expect(rig.start).not.toHaveBeenCalled();
+    expect(rig.deps.starts.full()).toBe(false);
+
+    rig.later();
+    expect((await rig.ask()).status).toBe("done");
+  });
+
+  it("a_join_that_lands_elsewhere_is_no_watch", async () => {
+    rig.here = null;
+    rig.spots[asker.id] = "c2";
+    rig.join.mockImplementationOnce(async () => "c9");
+    expect((await rig.ask()).status).toBe("failed");
+    expect(rig.send).not.toHaveBeenCalled();
   });
 
   it("a_failed_join_says_so_in_her_words", async () => {
@@ -317,6 +405,7 @@ describe("the watch capabilities", () => {
     const outcome = await rig.ask();
     expect(outcome.status).toBe("failed");
     expect(reason(outcome)).not.toMatch(/[A-Za-z]{3}/);
+    expect(rig.warn).toHaveBeenCalled();
     expect(rig.send).not.toHaveBeenCalled();
     expect(rig.start).not.toHaveBeenCalled();
   });
@@ -328,6 +417,23 @@ describe("the watch capabilities", () => {
     expect(reason(outcome)).toContain("別的語音頻道");
     expect(rig.join).not.toHaveBeenCalled();
     expect(rig.start).not.toHaveBeenCalled();
+  });
+
+  it("someone_asking_from_another_server_is_refused", async () => {
+    rig.here = null; // nothing in this server
+    rig.otherServer = { ...voiceCtx("c9"), scope: "g2" };
+    rig.spots[asker.id] = "c2";
+    const outcome = await rig.ask();
+    expect(outcome.status).toBe("denied");
+    expect(reason(outcome)).toContain("別的語音頻道");
+    expect(rig.join).not.toHaveBeenCalled();
+    expect(rig.start).not.toHaveBeenCalled();
+  });
+
+  it("being_in_voice_on_two_servers_does_not_refuse_the_one_asked_about", async () => {
+    rig.otherServer = { ...voiceCtx("c9"), scope: "g2" }; // she is in c1 here as well
+    expect((await rig.ask()).status).toBe("done");
+    expect(rig.join).not.toHaveBeenCalled();
   });
 
   it("someone_asking_from_text_watches_in_her_channel", async () => {
@@ -387,6 +493,51 @@ describe("the watch capabilities", () => {
     rig.canLook = false;
     expect((await rig.ask()).status).toBe("denied");
     expect(rig.send).not.toHaveBeenCalled();
+  });
+
+  it("leaving_out_user_while_watching_means_the_other_one", async () => {
+    rig.rooms.c1?.push(member("u4", "阿德"));
+    rig.watch("u1", "小明", rig.clock.t - 200_000);
+    expect((await rig.own()).status).toBe("done");
+    expect(rig.start.mock.calls[0]?.[0].account).toEqual(account("u4"));
+
+    rig.later();
+    rig.watch("u1", "小明", rig.clock.t - 200_000);
+    expect((await rig.ask()).status).toBe("done");
+    expect(rig.start.mock.calls[1]?.[0].account).toEqual(account("u4"));
+  });
+
+  it("three_streamers_still_need_a_name_while_watching_one", async () => {
+    rig.rooms.c1?.push(member("u4", "阿德"), member("u5", "阿花"));
+    rig.watch("u1", "小明", rig.clock.t - 200_000);
+    const outcome = await rig.own();
+    expect(outcome.status).toBe("denied");
+    expect(reason(outcome)).toContain("阿德");
+    expect(reason(outcome)).toContain("阿花");
+    expect(reason(outcome)).not.toContain("小明");
+  });
+
+  it("people_she_cannot_see_do_not_make_it_ambiguous_for_her", async () => {
+    rig.rooms.c1?.push(member("u4", "阿德"));
+    rig.hidden.add("u1");
+    expect((await rig.own()).status).toBe("done");
+    expect(rig.start.mock.calls[0]?.[0].account).toEqual(account("u4"));
+  });
+
+  it("people_she_cannot_see_are_not_named_to_her", async () => {
+    rig.rooms.c1?.push(member("u4", "阿德"), member("u5", "阿花"));
+    rig.hidden.add("u1");
+    const outcome = await rig.own();
+    expect(outcome.status).toBe("denied");
+    expect(reason(outcome)).not.toContain("小明");
+    expect((await rig.own({ user: "小明" })).status).toBe("denied");
+    expect(rig.start).not.toHaveBeenCalled();
+  });
+
+  it("she_is_not_offered_a_room_of_people_she_cannot_see", () => {
+    expect(rig.registry.get("watch.start")?.available?.()).toBe(true);
+    rig.hidden.add("u1");
+    expect(rig.registry.get("watch.start")?.available?.()).toBe(false);
   });
 
   it("the_person_she_watches_is_not_started_again", async () => {
@@ -484,6 +635,7 @@ describe("the watch capabilities", () => {
   });
 
   it("a_stop_reaches_a_start_on_its_way", async () => {
+    rig.deps.starts = new StartLog(1, () => rig.clock.t);
     let release = (): void => {};
     rig.send.mockImplementationOnce(async (context) => {
       await new Promise<void>((r) => {
@@ -500,7 +652,7 @@ describe("the watch capabilities", () => {
     release();
     expect((await running).status).toBe("failed");
     expect(rig.start).not.toHaveBeenCalled();
-    expect(rig.starts.full()).toBe(false);
+    expect(rig.deps.starts.full()).toBe(false);
   });
 
   it("one_start_at_a_time", async () => {

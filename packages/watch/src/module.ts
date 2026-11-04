@@ -9,6 +9,7 @@ import {
 import { LlmRouterKey } from "@miyoria/llm";
 import {
   type AccountRef,
+  accountRefString,
   type ContextKey,
   type Event,
   isEvent,
@@ -83,6 +84,8 @@ export class WatchModule implements Module {
       (await actuators.privacy.get(account)).watch;
     /** Guilds where her own line is playing. */
     const playing = new Set<string>();
+    /** Streamers with `watch` off when the prompt last looked. */
+    const hidden = new Set<string>();
     let source: DiscordSource | null = null;
 
     const canLook = () => {
@@ -152,6 +155,7 @@ export class WatchModule implements Module {
       sink: (platform) => s.get(PlatformSinksKey)?.get(platform),
       canLook,
       watchAllowed,
+      hidden: (account) => hidden.has(accountRefString(account)),
       now,
       onStarted,
       warn,
@@ -172,6 +176,11 @@ export class WatchModule implements Module {
           const allowed = await Promise.all(
             live.map((m) => watchAllowed(m.account).catch(() => false)),
           );
+          live.forEach((m, i) => {
+            const key = accountRefString(m.account);
+            if (allowed[i]) hidden.delete(key);
+            else hidden.add(key);
+          });
           return live.filter((_, i) => allowed[i]);
         },
         now,

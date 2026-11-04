@@ -1,3 +1,4 @@
+import { ActuatorRegistryKey, defineCapability } from "@miyoria/actions";
 import { LlmRouterKey, MockProvider } from "@miyoria/llm";
 import { MemorySettingsStore } from "@miyoria/store";
 import {
@@ -12,6 +13,7 @@ import {
   type VoiceParticipant,
 } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { MAX_QUIET_MINUTES, MIN_SELF_TALK, THOUGHT_PREFIX } from "../src/index.js";
 import { HER, OWEN, rig, salient, stopRigs, TEXT, VOICE, wait } from "./helpers.js";
 
@@ -58,6 +60,45 @@ function dataText(provider: MockProvider, n = 0): string {
 }
 
 describe("mind module", () => {
+  const watchStart = defineCapability({
+    name: "watch.start",
+    summary: "看直播",
+    risk: "medium",
+    args: z.looseObject({}),
+    permission: null,
+    execute: async () => "ok",
+  });
+
+  it("the person she picks to watch becomes the `user` of watch.start", async () => {
+    const provider = new MockProvider("p").reply(
+      JSON.stringify({
+        thought: "想看 Owen 打遊戲",
+        intents: [{ action: "watch.start", person: "u1", why: "好奇" }],
+      }),
+    );
+    const r = await rig(provider, {
+      extra: (sup) => sup.services.require(ActuatorRegistryKey).register(watchStart),
+    });
+    r.publish(salient("Owen 開了直播"));
+    await wait(4100);
+    expect(r.intents.intents.map((i) => i.args)).toEqual([{ user: OWEN.id }]);
+  });
+
+  it("a `user` she wrote herself stays", async () => {
+    const provider = new MockProvider("p").reply(
+      JSON.stringify({
+        thought: "想看阿德",
+        intents: [{ action: "watch.start", person: "u1", args: { user: "阿德" }, why: "好奇" }],
+      }),
+    );
+    const r = await rig(provider, {
+      extra: (sup) => sup.services.require(ActuatorRegistryKey).register(watchStart),
+    });
+    r.publish(salient("Owen 開了直播"));
+    await wait(4100);
+    expect(r.intents.intents.map((i) => i.args)).toEqual([{ user: "阿德" }]);
+  });
+
   it("thinks with reasoning only when [llm.thinking] mind is on", async () => {
     const provider = new MockProvider("p").reply(FULL_REPLY);
     await rig(provider, { thinking: { mind: true } }).then((r) =>

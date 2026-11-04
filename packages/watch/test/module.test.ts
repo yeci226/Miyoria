@@ -130,7 +130,6 @@ class Rig {
   provideLink(): void {
     this.sup.services.provide("voice.link", VoiceLinkKey, {
       channel: (guild: string) => (guild === G ? this.channel : null),
-      join: async () => "c1",
       isStreaming: () => false,
       isSelf: (a: AccountRef) => a.id === "her",
       watchStart: this.watchStart,
@@ -237,6 +236,25 @@ describe("WatchModule", () => {
 
     await rig.registry.privacy.set(account("u1"), { watch: false });
     expect(await rig.prompt(voice("c1"))).toEqual([]);
+  });
+
+  it("who_the_prompt_hid_does_not_make_her_choice_ambiguous", async () => {
+    rig = new Rig();
+    await rig.start();
+    await rig.registry.privacy.set(account("u2"), { watch: false });
+    await rig.prompt(voice("c1"));
+    expect((await rig.invoke("watch.start")).status).toBe("done");
+    expect(rig.watchStart).toHaveBeenCalledWith(G, "u1");
+  });
+
+  it("turning_watch_back_on_shows_them_again", async () => {
+    rig = new Rig();
+    await rig.start();
+    await rig.registry.privacy.set(account("u1"), { watch: false });
+    await rig.prompt(voice("c1"));
+    await rig.registry.privacy.set(account("u1"), { watch: true });
+    await rig.prompt(voice("c1"));
+    expect((await rig.invoke("watch.start")).status).toBe("denied"); // two people again
   });
 
   it("prompt_counts_a_failed_privacy_read_as_not_allowed", async () => {
