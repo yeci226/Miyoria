@@ -28,6 +28,23 @@ export interface LookInput {
 }
 
 const PERSONA_CHARS = 600;
+const TRANSCRIPT_CHARS = 2000;
+
+/** The newest lines that fit in `TRANSCRIPT_CHARS`; one line over that alone keeps its end. */
+function newestLines(lines: readonly string[]): string {
+  const kept: string[] = [];
+  let left = TRANSCRIPT_CHARS;
+  for (const line of lines.toReversed()) {
+    const chars = [...line];
+    if (chars.length > left) {
+      if (kept.length === 0) kept.push(chars.slice(-left).join(""));
+      break;
+    }
+    kept.unshift(line);
+    left -= chars.length + 1;
+  }
+  return kept.join("\n");
+}
 
 function system(input: LookInput, task: string): string {
   const persona = [...input.persona].slice(0, PERSONA_CHARS).join("");
@@ -44,7 +61,7 @@ function context(input: LookInput, question: string | null): string {
   const parts = [`正在看:${safeName(input.name)}`];
   if (input.notes.length > 0) parts.push(dataBlock("watch", "最近的筆記", input.notes.join("\n")));
   if (input.transcript.length > 0) {
-    parts.push(dataBlock("stream", "最近的台詞", input.transcript.join("\n")));
+    parts.push(dataBlock("stream", "最近的台詞", newestLines(input.transcript)));
   }
   if (question !== null) parts.push(dataBlock("chat", "問題", question));
   return parts.join("\n\n");
@@ -70,6 +87,7 @@ export function lookRequest(input: LookInput): ChatRequest {
       userMessage([{ type: "text", text: context(input, null) }, image(input.jpeg)]),
     ],
     json_mode: true,
+    requires_images: true,
     max_tokens: 300,
     temperature: 0.4,
   };
@@ -84,6 +102,7 @@ export function answerRequest(input: LookInput & { question: string }): ChatRequ
       systemMessage(system(input, task)),
       userMessage([{ type: "text", text: context(input, input.question) }, image(input.jpeg)]),
     ],
+    requires_images: true,
     max_tokens: 300,
     temperature: 0.4,
   };

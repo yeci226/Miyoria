@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse } from "@miyoria/llm";
+import { type ChatRequest, type ChatResponse, NoImageModelError } from "@miyoria/llm";
 import type { AccountRef } from "@miyoria/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type WatchConfig, WatchConfigSchema } from "../src/config.js";
@@ -322,6 +322,28 @@ describe("the loop", () => {
     expect(h.watcher.view()).not.toBeNull();
   });
 
+  it("a bad answer costs one call: nothing asks the model to fix it", async () => {
+    const h = track(harness({}, {}, { manualSleep: true }));
+    h.complete.mockImplementation(async () => response("not json at all"));
+    await h.watcher.start(target());
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(1));
+    expect(h.complete).toHaveBeenCalledOnce();
+    expect(h.watcher.view()?.notes).toEqual([]);
+  });
+
+  it("no model that can see ends the watch instead of skipping rounds", async () => {
+    const h = track(harness());
+    h.complete.mockImplementation(async () => {
+      throw new NoImageModelError("watch", null);
+    });
+    await h.watcher.start(target());
+    await h.watcher.idle();
+    expect(h.complete).toHaveBeenCalledOnce();
+    expect(h.watcher.view()).toBeNull();
+    expect(h.source.stop).toHaveBeenCalled();
+    expect(h.warn.mock.calls[0]?.[0]).toContain("cannot look any more");
+  });
+
   it("stops after five failed snapshots", async () => {
     const h = track(harness());
     h.source.snapshot.mockRejectedValue(new Error("no frame"));
@@ -551,6 +573,18 @@ describe("look", () => {
       WatchRefused,
     );
     expect(h.complete.mock.calls.length).toBe(calls);
+  });
+
+  it("no model that can see is a refusal", async () => {
+    const h = track(harness({}, {}, { manualSleep: true }));
+    await h.watcher.start(target());
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(1));
+    h.complete.mockImplementation(async () => {
+      throw new NoImageModelError("watch", 400);
+    });
+    const refused = await h.watcher.look("?", new AbortController().signal).catch((e) => e);
+    expect(refused).toBeInstanceOf(WatchRefused);
+    expect(refused.message).toContain("沒辦法看圖片");
   });
 
   it("a failed look does not count toward the snapshot failures", async () => {

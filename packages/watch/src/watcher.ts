@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { type Completer, completeJson } from "@miyoria/llm";
+import { type ChatResponse, type Completer, completeJson, NoImageModelError } from "@miyoria/llm";
 import type { AccountRef } from "@miyoria/types";
 import { safeName } from "@miyoria/types";
 import type { StreamHearing } from "@miyoria/voice";
@@ -15,6 +15,7 @@ export const SNAPSHOT_TIMEOUT_MS = 8_000;
 /** Topics she remembers having spoken about. */
 export const RECENT_TOPICS = 5;
 const TOPIC_MAX_CHARS = 40;
+const CANNOT_SEE = "你現在沒辦法看圖片(模型不收圖片,或這陣子的預算用完了)。";
 
 /** A start or a look she may not do; the message is written for her. */
 export class WatchRefused extends Error {
@@ -146,7 +147,7 @@ export class Watcher {
     const run = this.#live();
     if (run === null) throw new WatchRefused("你現在沒有在看直播,沒辦法看畫面。");
     if (!this.#canLook()) {
-      throw new WatchRefused("你現在沒辦法看圖片(模型不收圖片,或這陣子的預算用完了)。");
+      throw new WatchRefused(CANNOT_SEE);
     }
     if (!(await this.#allowed(run.target.account))) {
       void this.#finish(run, "opted out", false);
@@ -163,21 +164,27 @@ export class Watcher {
     }
     this.#assertLive(run);
     scope.throwIfAborted();
-    const res = await untilAborted(
-      this.#deps.model.complete(
-        "watch",
-        answerRequest({
-          name: run.target.name,
-          persona: this.#deps.persona(),
-          notes: run.notes.notes(),
-          transcript: run.notes.transcript(),
-          jpeg,
-          question,
-        }),
+    let res: ChatResponse;
+    try {
+      res = await untilAborted(
+        this.#deps.model.complete(
+          "watch",
+          answerRequest({
+            name: run.target.name,
+            persona: this.#deps.persona(),
+            notes: run.notes.notes(),
+            transcript: run.notes.transcript(),
+            jpeg,
+            question,
+          }),
+          scope,
+        ),
         scope,
-      ),
-      scope,
-    );
+      );
+    } catch (error) {
+      if (error instanceof NoImageModelError) throw new WatchRefused(CANNOT_SEE);
+      throw error;
+    }
     this.#assertLive(run);
     this.#resetTimer(run);
     return res.text.trim();
@@ -367,13 +374,19 @@ export class Watcher {
               jpeg,
             }),
             LookResultSchema,
-            { signal },
+            // A second try is another paid picture; the next round is a fresh one anyway.
+            { signal, repairs: 0 },
           ),
           signal,
         );
         look = res.value;
       } catch (error) {
-        if (!signal.aborted) this.#deps.warn("watch look skipped", error);
+        if (signal.aborted) return;
+        if (error instanceof NoImageModelError) {
+          void this.#finish(run, "cannot look any more", true, error);
+        } else {
+          this.#deps.warn("watch look skipped", error);
+        }
         return;
       }
       if (signal.aborted) return;
