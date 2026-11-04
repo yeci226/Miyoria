@@ -3,7 +3,7 @@ import type { AccountRef } from "@miyoria/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type WatchConfig, WatchConfigSchema } from "../src/config.js";
 import type { WatchSource, WatchTarget } from "../src/source.js";
-import { Watcher, type WatcherDeps, WatchRefused } from "../src/watcher.js";
+import { untilAborted, Watcher, type WatcherDeps, WatchRefused } from "../src/watcher.js";
 
 const target = (name = "小明"): WatchTarget => ({
   guild: "g1",
@@ -622,8 +622,12 @@ describe("a stop always wins", () => {
     h.watchAllowed
       .mockImplementationOnce(async () => true)
       .mockImplementationOnce(() => gate.promise);
+    const base = h.watchAllowed.mock.calls.length;
+    const snaps = h.source.snapshot.mock.calls.length;
     const p = h.watcher.look("?", ctl.signal).catch((e: unknown) => e);
-    await vi.waitFor(() => expect(h.watchAllowed.mock.calls.length).toBeGreaterThanOrEqual(3));
+    // The second consent call comes after the snapshot; abort while it is pending.
+    await vi.waitFor(() => expect(h.watchAllowed.mock.calls.length).toBe(base + 2));
+    expect(h.source.snapshot.mock.calls.length).toBe(snaps + 1);
     ctl.abort(new Error("caller left"));
     gate.resolve(true);
     expect(await p).toBeInstanceOf(Error);
@@ -676,5 +680,17 @@ describe("a stop always wins", () => {
     // A new start works afterwards.
     await h.watcher.start(target());
     expect(h.watcher.view()).not.toBeNull();
+  });
+
+  it("untilAborted handles a failure of work that an earlier abort left behind", async () => {
+    unhandled.length = 0;
+    process.on("unhandledRejection", onUnhandled);
+    const ctl = new AbortController();
+    ctl.abort(new Error("already"));
+    const work = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("late")), 0));
+    await expect(untilAborted(work, ctl.signal)).rejects.toThrow("already");
+    await new Promise((r) => setTimeout(r, 20));
+    process.off("unhandledRejection", onUnhandled);
+    expect(unhandled).toEqual([]);
   });
 });

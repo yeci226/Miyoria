@@ -68,7 +68,7 @@ const noop = (): void => {};
 const cutTopic = (topic: string): string => [...topic.trim()].slice(0, TOPIC_MAX_CHARS).join("");
 
 /** Rejects when `signal` aborts, so a source that ignores it cannot hold the caller. */
-function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+export function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   // `work` has already started; when the abort wins its later failure must not go unhandled.
   work.catch(noop);
   return new Promise<T>((resolve, reject) => {
