@@ -82,6 +82,7 @@ interface LibConn {
     initWebRtc: () => unknown;
     webRtcConn: { setRemoteDescription(sdp: string, type: string): void };
   };
+  status: { started: boolean };
   _daveProtocolVersion: number;
   daveReady: unknown;
   daveSession: { decrypt(userId: string, mediaType: number, packet: Buffer): Uint8Array };
@@ -100,6 +101,7 @@ interface LibConn {
 }
 
 const CONN_FIELDS = [
+  "status",
   "_webRtcWrapper",
   "_daveProtocolVersion",
   "daveReady",
@@ -194,6 +196,9 @@ export class DiscordWatchEngine implements WatchEngine {
           }
         }
         try {
+          // stop() leaves status.started set, so the library would reopen the socket and RESUME with the
+          // stream token. Clearing it makes the library's close listener take its terminal branch.
+          if (conn) conn.status.started = false;
           conn?.stop();
         } catch (e) {
           log.debug(`watch: connection stop failed: ${errMsg(e)}`);
@@ -262,6 +267,11 @@ export class DiscordWatchEngine implements WatchEngine {
         hooks.onOpus(data);
       };
 
+      const onPcState = (state: string): void => {
+        if (state === "failed") finish({ error: new Error("the stream connection failed") });
+        else if (state === "closed") finish({ reason: "connection closed" });
+      };
+
       const onPacket = (b: Buffer): void => {
         if (settled) return;
         try {
@@ -285,33 +295,50 @@ export class DiscordWatchEngine implements WatchEngine {
 
         // Receive-only, one m-line: everything arrives on one track.
         wrapper.initWebRtc = () => {
-          const pc = new lib.dc.PeerConnection("", { iceServers: ["stun:stun.l.google.com:19302"] });
-          pc.onStateChange((state) => {
-            if (state === "failed") finish({ error: new Error("the stream connection failed") });
-            else if (state === "closed") finish({ reason: "connection closed" });
-          });
-          const t = pc.addTrack(wrapper._videoDef as Dc.Video);
-          t.onMessage(onPacket);
-          wrapper._webRtcConn = pc;
-          wrapper._videoTrack = t;
-          track = t;
-          return pc;
+          try {
+            const pc = new lib.dc.PeerConnection("", { iceServers: ["stun:stun.l.google.com:19302"] });
+            const t = pc.addTrack(wrapper._videoDef as Dc.Video);
+            t.onMessage(onPacket);
+            wrapper._webRtcConn = pc;
+            wrapper._videoTrack = t;
+            track = t;
+            // The peer connection holds a single state callback and the library registers its own right
+            // after this returns, so hand it a facade (it uses only these three methods) that tells us first.
+            return {
+              onStateChange: (cb: (state: string) => void) =>
+                pc.onStateChange((state) => {
+                  onPcState(state);
+                  cb(state);
+                }),
+              onLocalDescription: (cb: (sdp: string, type: string) => void) => pc.onLocalDescription(cb),
+              setLocalDescription: () => pc.setLocalDescription(),
+            };
+          } catch (e) {
+            finish({ error: e instanceof Error ? e : new Error(String(e)) });
+            // Throwing would be an unhandled rejection inside the library; hand it an inert connection.
+            return { onStateChange: () => {}, onLocalDescription: () => {}, setLocalDescription: () => {} };
+          }
         };
 
+        // The library calls this without awaiting it, so an error must end the run here.
         c.handleProtocolAck = async (d) => {
-          if (typeof d.sdp !== "string") throw new Error("Only WebRTC connections are allowed");
-          const codec = typeof d.video_codec === "string" ? d.video_codec : undefined;
-          if (codec !== undefined && codec.toUpperCase() !== "H264") {
-            finish({ error: new Error(`the stream uses ${codec}; only H264 can be watched`) });
-            return;
+          try {
+            if (typeof d.sdp !== "string") throw new Error("Only WebRTC connections are allowed");
+            const codec = typeof d.video_codec === "string" ? d.video_codec : undefined;
+            if (codec !== undefined && codec.toUpperCase() !== "H264") {
+              finish({ error: new Error(`the stream uses ${codec}; only H264 can be watched`) });
+              return;
+            }
+            c._daveProtocolVersion = d.dave_protocol_version as number;
+            c.initDave();
+            wrapper.webRtcConn.setRemoteDescription(answerSdp(d.sdp), "answer");
+            c.emit("select_protocol_ack");
+            // Without this the server may forward no video at all.
+            c.sendOpcode(VOICE_OP_VIDEO_BITRATES, { any: 100 });
+            if (!pliTimer && !gotKeyframe) pliTimer = setInterval(requestKeyframe, PLI_EVERY_MS);
+          } catch (e) {
+            finish({ error: e instanceof Error ? e : new Error(String(e)) });
           }
-          c._daveProtocolVersion = d.dave_protocol_version as number;
-          c.initDave();
-          wrapper.webRtcConn.setRemoteDescription(answerSdp(d.sdp), "answer");
-          c.emit("select_protocol_ack");
-          // Without this the server may forward no video at all.
-          c.sendOpcode(VOICE_OP_VIDEO_BITRATES, { any: 100 });
-          if (!pliTimer && !gotKeyframe) pliTimer = setInterval(requestKeyframe, PLI_EVERY_MS);
         };
 
         // We only decode H.264.

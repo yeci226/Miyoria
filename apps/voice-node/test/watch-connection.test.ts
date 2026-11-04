@@ -101,3 +101,119 @@ describe("DiscordWatchEngine", () => {
     await expect(engine.run(plan, hooks, new AbortController().signal)).rejects.toThrow(/no native module/);
   });
 });
+
+describe("DiscordWatchEngine with a connection", () => {
+  const plan = { guild: "g1", channel: "vc", userId: "u1", sessionId: "s" };
+  const key = "guild:g1:vc:u1";
+
+  class FakePc {
+    static last: FakePc;
+    constructor() {
+      FakePc.last = this;
+    }
+    cb: ((s: string) => void) | undefined;
+    closed = 0;
+    onStateChange(cb: (s: string) => void): void {
+      this.cb = cb;
+    }
+    onLocalDescription(): void {}
+    setLocalDescription(): void {}
+    setRemoteDescription = vi.fn();
+    addTrack() {
+      return { onMessage: () => {}, sendMessageBinary: () => {} };
+    }
+    close(): void {
+      this.closed++;
+    }
+  }
+
+  class FakeConn extends EventEmitter {
+    static last: FakeConn;
+    startedAtStop: boolean | undefined;
+    status = { started: true };
+    ws = null;
+    serverId = "";
+    streamKey = "";
+    _daveProtocolVersion = 0;
+    daveReady = false;
+    daveSession = { decrypt: () => new Uint8Array() };
+    webRtcParams = null;
+    _webRtcWrapper = {
+      _videoDef: {},
+      _webRtcConn: undefined as unknown,
+      _videoTrack: undefined as unknown,
+      initWebRtc: (): unknown => undefined,
+      webRtcConn: { setRemoteDescription: vi.fn() },
+    };
+    handleProtocolAck = async (_d: unknown): Promise<void> => {};
+    setupEvents(): void {}
+    sendOpcode = vi.fn();
+    initDave = vi.fn();
+    setSession = vi.fn();
+    setTokens = vi.fn();
+    stop = vi.fn(() => {
+      this.startedAtStop = this.status.started;
+    });
+    constructor() {
+      super();
+      FakeConn.last = this;
+    }
+  }
+
+  async function start() {
+    const client = Object.assign(new EventEmitter(), { user: { id: "self" } });
+    const lib = {
+      dvs: {
+        GatewayOpCodes: { STREAM_WATCH: 20, STREAM_DELETE: 19 },
+        Streamer: class {
+          sendOpcode(): void {}
+        },
+        StreamConnection: FakeConn,
+      },
+      dc: { PeerConnection: FakePc },
+    } as unknown as WatchLibrary;
+    const engine = new DiscordWatchEngine(client as never, noopLogger, async () => lib);
+    const abort = new AbortController();
+    const run = engine.run(plan, { onLive() {}, onKeyframe() {}, onOpus() {} }, abort.signal);
+    run.catch(() => {});
+    await new Promise((r) => setTimeout(r, 10));
+    client.emit("raw", { t: "STREAM_CREATE", d: { stream_key: key, rtc_server_id: "r1" } });
+    client.emit("raw", { t: "STREAM_SERVER_UPDATE", d: { stream_key: key, endpoint: "e", token: "t" } });
+    const conn = FakeConn.last;
+    // What the library does after the READY message.
+    const facade = conn._webRtcWrapper.initWebRtc() as {
+      onStateChange(cb: (s: string) => void): void;
+    };
+    const libState = vi.fn();
+    facade.onStateChange(libState);
+    return { run, abort, conn, libState };
+  }
+
+  it("a failing ack ends the run with an error", async () => {
+    const { run, conn } = await start();
+    await conn.handleProtocolAck({});
+    await expect(run).rejects.toThrow(/WebRTC/);
+    expect(conn.stop).toHaveBeenCalled();
+  });
+
+  it("a failed connection ends the run with an error", async () => {
+    const { run, libState } = await start();
+    FakePc.last.cb?.("failed");
+    await expect(run).rejects.toThrow(/failed/);
+    expect(libState).toHaveBeenCalledWith("failed");
+  });
+
+  it("a closed connection ends the run", async () => {
+    const { run } = await start();
+    FakePc.last.cb?.("closed");
+    await expect(run).resolves.toBe("connection closed");
+  });
+
+  it("abort clears status.started before stop so the library does not reconnect", async () => {
+    const { run, abort, conn } = await start();
+    abort.abort();
+    await expect(run).resolves.toBe("stopped");
+    expect(conn.stop).toHaveBeenCalledTimes(1);
+    expect(conn.startedAtStop).toBe(false);
+  });
+});
