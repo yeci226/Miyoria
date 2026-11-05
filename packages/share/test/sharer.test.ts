@@ -207,6 +207,18 @@ describe("a round", () => {
     expect(JSON.stringify(r.model.requests[0]?.messages)).toContain("海邊的夕陽");
   });
 
+  it("asks the channels' memories about what the picture shows too", async () => {
+    const queries: string[] = [];
+    const r = rig(['{"picks":["p1"]}']);
+    r.feed.captures["/@u/post/1"] = { jpeg: "AQID", description: "遊戲結算畫面" };
+    r.deps.match.recall = async (_scopes, _present, query) => {
+      queries.push(query);
+      return [];
+    };
+    await round(r);
+    expect(queries.join("\n")).toContain("遊戲結算畫面");
+  });
+
   it("says how far a round got", async () => {
     const rounds: unknown[] = [];
     const r = rig(['{"picks":["p1"]}']);

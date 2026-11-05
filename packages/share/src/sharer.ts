@@ -227,9 +227,9 @@ export class Sharer {
 
   #match(
     contexts: readonly ContextKey[],
-    posts: readonly { body: string }[],
+    posts: readonly { body: string; description: string | null }[],
   ): Promise<ChannelMatch[]> {
-    const query = posts.map((p) => p.body).join("\n");
+    const query = posts.map((p) => `${p.body}\n${p.description ?? ""}`.trim()).join("\n");
     return matchChannels(contexts, query, this.#deps.match, this.#deps.now());
   }
 
