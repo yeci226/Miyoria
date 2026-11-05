@@ -101,6 +101,53 @@ describe("mind module", () => {
     expect(r.intents.intents.map((i) => i.args)).toEqual([{ user: "阿德" }]);
   });
 
+  const voiceLeave = defineCapability({
+    name: "voice.leave",
+    summary: "離開語音",
+    risk: "medium",
+    args: z.looseObject({}),
+    permission: null,
+    execute: async () => "ok",
+  });
+
+  it("leaves voice where she is, whatever she wrote as the server", async () => {
+    const provider = new MockProvider("p").reply(
+      JSON.stringify({
+        thought: "想休息",
+        intents: [{ action: "voice.leave", args: { guild: "p1" }, why: "累了" }],
+      }),
+    );
+    const r = await rig(provider, {
+      extra: (sup) => sup.services.require(ActuatorRegistryKey).register(voiceLeave),
+    });
+    const there = { ...VOICE, scope: "g2" };
+    r.world.herVoice = there;
+    r.publish(salient("大家都走了"));
+    await wait(4100);
+    expect(r.intents.intents.map((i) => [i.args, i.context])).toEqual([[{ guild: "g2" }, there]]);
+  });
+
+  it("does not try to leave voice when she is not in it", async () => {
+    const provider = new MockProvider("p").reply(
+      JSON.stringify({
+        thought: "想休息",
+        intents: [{ action: "voice.leave", why: "累了" }],
+      }),
+    );
+    const r = await rig(provider, {
+      extra: (sup) => sup.services.require(ActuatorRegistryKey).register(voiceLeave),
+    });
+    r.publish(salient("大家都走了"));
+    await wait(4100);
+    expect(r.intents.intents).toEqual([]);
+    expect(
+      r
+        .mind()
+        .thoughts()[0]
+        ?.intents.map((i) => [i.status, i.detail]),
+    ).toEqual([["dropped", "she is not in voice"]]);
+  });
+
   it("thinks with reasoning only when [llm.thinking] mind is on", async () => {
     const provider = new MockProvider("p").reply(FULL_REPLY);
     await rig(provider, { thinking: { mind: true } }).then((r) =>

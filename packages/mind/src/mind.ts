@@ -1192,6 +1192,13 @@ export class MindLoop implements Mind {
       if (draft.action === "voice.join" && args.channel === undefined) {
         problem ??= "no voice channel to join";
       }
+      if (draft.action === "voice.leave") {
+        // Where she is, whatever she wrote: she knows refs (`p1`), not server ids.
+        const voice = this.#d.services.get(WorldStateKey)?.snapshot().her.voice ?? null;
+        args.guild = voice?.scope ?? null;
+        if (voice === null) problem ??= "she is not in voice";
+        else context = voice;
+      }
       if (draft.action === "watch.start" && who && args.user == null) args.user = who.account.id;
       if (draft.action === CHAT_START && context === null) problem ??= "no place to talk";
       if (context?.kind === "dm") context = null;
