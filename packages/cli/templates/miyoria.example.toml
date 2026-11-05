@@ -180,6 +180,13 @@ dirs = ["extensions"]
 # vote_skip_ratio = 0.25     # /queue song voteskip:語音裡這個比例的人投了就跳過(無條件進位)
 # vote_skip_min = 1          # 至少幾票;點歌的人自己投一票就跳過
 
+# 上網:她用 DeepSeek 的 Search / Fetch API 查資料、讀網頁(兩個都是每 1000 次約 0.75 美元)。
+# 跟聊天用哪個模型無關;金鑰留空這個模組就不啟動。讀過網頁的那一回合只能再用網路工具。
+[modules.web]
+token = "${DEEPSEEK_API_KEY:-}"
+# results = 4                # 一次搜尋幾筆
+# max_result_chars = 4000    # 一次結果給她讀多少字
+
 # 看直播(opt-in,預設關閉)。她掛在語音頻道時自己決定看誰的 Go Live,有值得講的才開口;
 # 本人可用 /me privacy watch:off 拒絕。用途 watch 的模型要收圖片(見上面 [llm.purposes])
 # [modules.watch]

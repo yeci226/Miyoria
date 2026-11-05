@@ -38,6 +38,9 @@ owners = ["discord:${MIYORIA_OWNER_ID:-0}"]
 [modules.auth]
 owners = ["discord:${MIYORIA_OWNER_ID:-0}"]
 
+[modules.web]
+token = "${DEEPSEEK_API_KEY:-}"
+
 [modules."platform.discord.bot"]
 token = "${DISCORD_BOT_TOKEN:-}"
 command_guilds = []

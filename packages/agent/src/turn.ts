@@ -439,6 +439,8 @@ class Turn {
   readonly social: SocialSignals | undefined;
   /** The first model response's latency was published (`voice.latency`, stage `llm`). */
   #latencyReported = false;
+  /** An `outside` tool returned text this turn. */
+  #readOutside = false;
 
   constructor(
     readonly agent: Agent,
@@ -1326,7 +1328,9 @@ class Turn {
   /** Runs one tool call; the result (or error) is a short text for the model. */
   async #runTool(call: ToolCall, priority: Priority): Promise<string> {
     const [ok, full] = await this.#tryTool(call, priority);
-    const result = truncate(full, this.agent.config.max_tool_result_chars);
+    const limit =
+      this.agent.tools.get(call.name)?.maxResultChars ?? this.agent.config.max_tool_result_chars;
+    const result = truncate(full, limit);
     this.agent.log.info({ turn: this.turn, tool: call.name, ok, result }, "tool call");
     this.signal.throwIfAborted();
     this.agent.ctx.publish(
@@ -1348,9 +1352,13 @@ class Turn {
     return result;
   }
 
-  /** The tools offered in this context (`react` makes no sense in voice). */
+  /**
+   * The tools offered in this context (`react` makes no sense in voice). After an `outside`
+   * result only `outside` tools are left: what she read must not decide what she does.
+   */
   #offers(name: string): boolean {
-    return !isInternalTool(name) && !(this.voice && name === ReactTool.NAME);
+    if (isInternalTool(name) || (this.voice && name === ReactTool.NAME)) return false;
+    return !this.#readOutside || this.agent.tools.get(name)?.outside === true;
   }
 
   #toolSpecs(): ToolSpec[] {
@@ -1415,6 +1423,7 @@ class Turn {
             };
         return tool.call(ctx, args);
       });
+      if (tool.outside) this.#readOutside = true;
       return [true, out];
     } catch (error) {
       if (this.signal.aborted) throw error;

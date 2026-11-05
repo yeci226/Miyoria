@@ -385,6 +385,17 @@ export interface Attitude {
 - **自動停止**:關播、她離開或自己移到別的語音頻道、`watch:off`、連續 `max_snapshot_failures` 次截圖失敗、滿 `max_watch_mins`、LLM 預算用完、沒有模型看得到圖、Core 與 voice node 斷線(包括連線被新的取代)。她自己開 Go Live 時先停止看。
 - **第二階段**(Twitch / YouTube 瀏覽器來源)只透過 `WatchSource` 介面接入,另開 spec。
 
+### 6.8 上網(`web`)
+
+`[modules.web]` 有 `token`(DeepSeek API 金鑰)才啟動。她在聊天和語音回合可以用 `web_search`、`web_fetch`,自己發起的回合也可以;心智迴圈是單次 JSON 呼叫,沒有工具,所以不能直接上網。API 是獨立的 `POST /v1/tools/search`、`/v1/tools/fetch`,跟聊天用哪個模型無關;網頁由 DeepSeek 端抓取,網址碰不到本機網路。
+
+網頁是陌生人寫的,所以有兩層防線:
+
+- 結果包在 `dataBlock` 裡,`GUARD_RULES` 要她只當資料;內容裡的控制字元和 `⟦⟧` 都會先處理掉,關不掉區塊。
+- 這兩個工具標記 `outside`。成功回傳後,這一回合只剩 `outside` 工具可用(`Turn.#offers`),記憶、知識庫、動作都等下一回合。她的回覆內容仍然可能受網頁影響。
+
+工具結果預設上限 `max_tool_result_chars` 只有 1000 字,所以工具可以用 `maxResultChars` 自己設上限(`web` 用 `max_result_chars`,預設 4000 字)。
+
 ## 7. Profile(角色)
 
 套件:`@miyoria/profile`。一個 profile 是一個資料夾,用 git 管版本:

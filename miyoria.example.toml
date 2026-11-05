@@ -196,6 +196,13 @@ dirs = ["extensions"]
 # only_on_request = false   # 只唱別人點的:她不會自己挑歌或開唱,點的歌好了就唱,她也看不到歌單,重啟後不留
 # prepare_notice_gap_secs = 180   # 連點好幾首時這段時間內不再說第二次
 
+# 上網:她用 DeepSeek 的 Search / Fetch API 查資料、讀網頁(兩個都是每 1000 次約 0.75 美元)。
+# 跟聊天用哪個模型無關;金鑰留空這個模組就不啟動。讀過網頁的那一回合只能再用網路工具。
+[modules.web]
+token = "${DEEPSEEK_API_KEY:-}"
+# results = 4                # 一次搜尋幾筆
+# max_result_chars = 4000    # 一次結果給她讀多少字
+
 # 看直播(opt-in,預設關閉)。她掛在語音頻道時自己決定看誰的 Go Live,有值得講的才開口;
 # 本人可用 /me privacy watch:off 拒絕。用途 watch 的模型要收圖片(見上面 [llm.purposes])
 # [modules.watch]

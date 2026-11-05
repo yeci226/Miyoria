@@ -44,6 +44,13 @@ export interface Tool {
   /** Permission node the triggering user needs, if any. */
   readonly permission?: string | null;
   /**
+   * Its result is text from strangers (a web page). Once it has run, the rest of the turn is
+   * offered only other `outside` tools, so nothing in that text can make her act.
+   */
+  readonly outside?: boolean;
+  /** Keeps this much of the result instead of the turn's `max_tool_result_chars`. */
+  readonly maxResultChars?: number;
+  /**
    * Runs the tool. The returned text (or the error message) goes back to the model, so keep it
    * short.
    */
