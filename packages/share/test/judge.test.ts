@@ -105,6 +105,13 @@ describe("pickPosts", () => {
 });
 
 describe("decide", () => {
+  it("lets her post to start something, not only what already fits the channel", async () => {
+    const model = new Script('{"action":"skip"}');
+    await decide(model, PERSONA, [candidate(1)], [match(here)]);
+    expect(model.system()).toContain("想丟個話題帶帶氣氛,也可以發");
+    expect(model.system()).not.toContain("寧可不發");
+  });
+
   const go = (reply: string | Error, comment = "好可愛") =>
     decide(
       new Script(typeof reply === "string" ? reply.replace("COMMENT", comment) : reply),

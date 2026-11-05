@@ -212,7 +212,7 @@ dirs = ["extensions"]
 # notice_hours = 24
 
 # 她閒著時自己滑 Threads,把截圖和評語發到文字頻道(要有 extensions/threads,見它的 README)。
-# 只有貼文對得上那個頻道的記憶和筆記才發;上限、頻道、時段都由程式把關,模型繞不過去。
+# 她會參考那個頻道的記憶和筆記,但想丟話題帶氣氛也可以發;上限、頻道、時段都由程式把關,模型繞不過去。
 # [modules.share]
 # enabled = true
 # when = "anytime"           # anytime:想發就發;active:等頻道有人聊天才發
