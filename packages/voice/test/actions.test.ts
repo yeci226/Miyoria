@@ -87,6 +87,7 @@ function setup(nodes: string[], options: SetupOptions = {}) {
   const link = new FakeLink();
   const world = {
     snapshot: () => ({
+      her: { voice: link.inVoice === null ? null : { ...CTX, kind: "voice" } },
       voice_channels: [
         {
           guild: "g1",
@@ -147,6 +148,14 @@ async function leaveOnHerOwn(s: ReturnType<typeof setup>) {
 }
 
 describe("leaving on her own", () => {
+  it("is on her list only while she is in voice", () => {
+    const s = setup(["voice.leave"]);
+    const leave = s.registry.get("voice.leave");
+    expect(leave?.available?.()).toBe(false);
+    s.link.inVoice = "vc1";
+    expect(leave?.available?.()).toBe(true);
+  });
+
   it("is refused while a song plays or songs are still to sing; a person can still send her away", async () => {
     const songs = { playing: true, pending: 2 };
     const s = setup(["voice.leave"], { songs });

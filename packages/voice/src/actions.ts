@@ -169,6 +169,10 @@ export function voiceCapabilities(
     risk: "medium",
     args: GuildArgs,
     permission: "voice.leave",
+    available() {
+      const state = world();
+      return state === undefined || state.snapshot().her.voice !== null;
+    },
     tool: {
       name: "voice_leave",
       description: "離開你現在所在的語音頻道。",
