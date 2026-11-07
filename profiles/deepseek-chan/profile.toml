@@ -1,7 +1,7 @@
 # DeepSeek-chan:一個 profile = 人格 + LLM + 聲音 + Live2D 模型
 id = "deepseek-chan"
 display_name = "DeepSeek-chan"
-nicknames = ["DeepSeek", "小鯨魚", "鯨魚娘", "DS醬",   # 被叫到這些名字算「直接叫她」
+nicknames = ["DeepSeek", "小鯨魚", "鯨魚娘", "DS醬", "D指導",   # 被叫到這些名字算「直接叫她」
              "Miyo", "米優", "咪優",                         # 她的 Discord 名字 Miyoria(「miyo」也算)
              "Deep Sick", "迪普西克", "低普西克",            # 語音辨識常聽錯的寫法
              "米悠", "米喲", "咪喲", "咪呦"]
