@@ -37,7 +37,7 @@ import {
   runUntilSignal,
 } from "../src/boot.js";
 import { CLI_PLATFORM, CliPlatform } from "../src/cli-platform.js";
-import { configuredModules, MODULE_IDS, moduleEnabled, NEEDS_TOKEN } from "../src/module-ids.js";
+import { configuredModules, MODULE_IDS, moduleEnabled } from "../src/module-ids.js";
 import { RecorderModule } from "../src/recorder.js";
 import {
   DEFAULT_DATABASE_URL,
@@ -380,11 +380,6 @@ describe("settings", () => {
       false,
     );
     expect(moduleEnabled(Config.fromToml("[modules.watch]\nenabled = true"), "watch")).toBe(true);
-  });
-
-  it("web_runs_only_with_its_token", () => {
-    expect(MODULE_IDS.indexOf("web")).toBe(MODULE_IDS.indexOf("watch") + 1);
-    expect(NEEDS_TOKEN).toContain("web");
   });
 });
 

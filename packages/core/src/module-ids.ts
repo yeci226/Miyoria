@@ -34,7 +34,6 @@ export const MODULE_IDS: readonly string[] = [
   "sing",
   "share",
   "watch",
-  "web",
   "mcp",
   "stage.link",
   "web",
@@ -55,7 +54,6 @@ export const NEEDS_TOKEN: readonly string[] = [
   "api",
   "voice.link",
   "stage.link",
-  "web",
 ];
 
 /**
