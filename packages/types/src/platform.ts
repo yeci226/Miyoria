@@ -129,6 +129,8 @@ export interface IncomingMessage {
   stickers?: Sticker[];
   embeds?: Embed[];
   forwarded?: ForwardedMessage[];
+  /** Voice: a model judged the speaker done, so there is no need to wait and see if they go on. */
+  turn_complete?: boolean;
 }
 
 /** Image types she can look at. */
@@ -218,11 +220,14 @@ export interface OutgoingMessage {
  * Implemented by platform adapters so the scheduler can execute output actions without knowing
  * which platform (or which account) it talks to.
  */
+/** What `send` answers. `blocked`: the sink replaced the text with the filtered line (the rule). */
+export type SentMessage = MessageRef & { blocked?: string };
+
 export interface PlatformSink {
   readonly platform: PlatformId;
   /** Whether `files` reach the people there; a sink without it drops them. */
   readonly sendsFiles?: boolean;
-  send(context: ContextKey, message: OutgoingMessage, signal?: AbortSignal): Promise<MessageRef>;
+  send(context: ContextKey, message: OutgoingMessage, signal?: AbortSignal): Promise<SentMessage>;
   react(message: MessageRef, emoji: string, signal?: AbortSignal): Promise<void>;
   typing(context: ContextKey, signal?: AbortSignal): Promise<void>;
   /**
@@ -281,6 +286,8 @@ export const PlatformSinksKey = serviceKey<PlatformSinks>("PlatformSinks");
 export interface HistoryQuery {
   /** Only messages before this message id (`null`: the newest). */
   before: string | null;
+  /** Only messages after this message id (the lines that followed it); `before` is then ignored. */
+  after?: string | null;
   limit: number;
 }
 

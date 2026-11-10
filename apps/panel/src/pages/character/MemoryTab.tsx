@@ -246,7 +246,7 @@ export function MemoryTab() {
           含已取代
         </Label>
       </Toolbar>
-      <Card className="overflow-hidden">
+      <Card>
         {memory.isPending ? (
           <SkeletonRows />
         ) : memory.isError ? (
@@ -261,7 +261,7 @@ export function MemoryTab() {
               empty={deferred ? `沒有跟「${deferred}」有關的記憶` : "還沒有記憶"}
             />
             {memory.hasNextPage && (
-              <div className="border-t px-4 py-3">
+              <div className="pt-3">
                 <Button size="sm" variant="outline" busy={memory.isFetchingNextPage} onClick={() => void memory.fetchNextPage()}>
                   載入更多
                 </Button>
@@ -276,7 +276,6 @@ export function MemoryTab() {
         open={deleting !== null}
         title="刪除這則記憶?"
         confirmLabel="刪除"
-        destructive
         busy={del.isPending}
         onClose={() => setDeleting(null)}
         onConfirm={() =>

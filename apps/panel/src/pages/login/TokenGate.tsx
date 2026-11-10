@@ -1,4 +1,4 @@
-import { CircleAlert, Eye, EyeOff, LogIn } from "lucide-react";
+import { ChevronDown, CircleAlert, Eye, EyeOff, LogIn } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { createApi } from "@/api/endpoints";
 import { ApiClient, type ApiConfig, describeError, isApiError } from "@/api/http";
@@ -123,6 +123,7 @@ export function TokenGate({
   expired,
   discord = false,
   error,
+  tokenOpen = true,
   onSaved,
 }: {
   /** The saved token stopped working. */
@@ -133,11 +134,15 @@ export function TokenGate({
   discord?: boolean;
   /** `?error=` code from a failed Discord login. */
   error?: string | null;
+  /** Show the token form at once; otherwise it waits behind Discord login. */
+  tokenOpen?: boolean;
   onSaved?: () => void;
 }) {
   const { config, api } = useConnection();
   // The session cookie only reaches a Core on the panel's own origin.
   const showDiscord = discord && isSameOrigin(config.baseUrl);
+  const [tokenShown, setTokenShown] = useState(tokenOpen || rejected === true);
+  const showToken = !showDiscord || tokenShown;
   const notice = error
     ? loginErrorMessage(error)
     : rejected
@@ -146,44 +151,61 @@ export function TokenGate({
         ? "登入已過期或權限已變更,請重新登入。"
         : null;
   return (
-    <div className="flex min-h-svh items-center justify-center bg-background px-4 py-12">
-      <div className="grid w-full max-w-sm gap-6">
-        <div className="flex items-center gap-3">
-          <Logo className="size-7 text-brand" />
-          <h1 className="text-xl font-semibold tracking-tight">Miyoria</h1>
-        </div>
-        {notice && (
-          <div
-            role="alert"
-            className="flex gap-2.5 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm"
-          >
-            <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-[oklch(0.74_0.16_25)]" />
-            <span>{notice}</span>
+    <div className="flex min-h-svh items-center justify-center px-4 py-12">
+      <div className="login-card grid w-full max-w-sm overflow-hidden rounded-lg md:max-w-3xl md:grid-cols-2">
+        <div className="login-form grid content-center gap-6 p-6 md:min-h-[30rem] md:p-8">
+          <div className="flex items-center gap-3">
+            <Logo className="size-5 text-primary" />
+            <h1 className="text-[15px] font-semibold">Miyoria</h1>
           </div>
-        )}
-        <div className="grid gap-5 rounded-xl border bg-card p-6">
-          {showDiscord && (
-            <>
-              <Button asChild>
-                <a href={api.discordLoginUrl(loginNext())}>
-                  <LogIn aria-hidden />
-                  使用 Discord 登入
-                </a>
-              </Button>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-hidden>
-                <span className="h-px flex-1 bg-border" />
-                或
-                <span className="h-px flex-1 bg-border" />
-              </div>
-            </>
+          {notice && (
+            <div
+              role="alert"
+              className="glass-well flex gap-2.5 rounded-md border border-primary/50 px-3 py-2.5 text-sm"
+            >
+              <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-primary" />
+              <span>{notice}</span>
+            </div>
           )}
-          <TokenForm
-            initial={{ baseUrl: config.baseUrl, token: rejected ? "" : config.token }}
-            submitLabel={showDiscord ? "用 token 連線" : "連線"}
-            secondary={showDiscord}
-            onSaved={onSaved}
-          />
+          <div className="grid gap-5">
+            {showDiscord && (
+              <>
+                <Button asChild>
+                  <a href={api.discordLoginUrl(loginNext())}>
+                    <LogIn aria-hidden />
+                    使用 Discord 登入
+                  </a>
+                </Button>
+                {showToken ? (
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-hidden>
+                    <span className="h-px flex-1 bg-border" />
+                    或
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="flex items-center justify-center gap-1 text-[13px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                    aria-expanded={false}
+                    onClick={() => setTokenShown(true)}
+                  >
+                    管理員用 token 登入
+                    <ChevronDown aria-hidden className="size-3.5" />
+                  </button>
+                )}
+              </>
+            )}
+            {showToken && (
+              <TokenForm
+                initial={{ baseUrl: config.baseUrl, token: rejected ? "" : config.token }}
+                submitLabel={showDiscord ? "用 token 連線" : "連線"}
+                secondary={showDiscord}
+                onSaved={onSaved}
+              />
+            )}
+          </div>
         </div>
+        <div aria-hidden className="login-window hidden md:block" />
       </div>
     </div>
   );

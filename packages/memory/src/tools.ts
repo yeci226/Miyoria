@@ -12,6 +12,7 @@ import {
 } from "@miyoria/types";
 import { formatLines, PROMPT_KINDS } from "./contributor.js";
 import type { MemoryEngine } from "./engine.js";
+import { LINE_REF_PREFIX, nameWords, supporting } from "./evidence.js";
 import { scopeForNew, visibleScopes } from "./scope.js";
 
 export const REMEMBER = "remember";
@@ -77,6 +78,20 @@ export class RememberTool implements Tool {
     const subjects: PersonId[] = aboutSelf || person === null ? [] : [person];
     const globalPerson = global && !aboutSelf ? person : null;
     const scope = scopeForNew(this.#engine.config, ctx.context, ctx.account, kind, globalPerson);
+    const now = toTimestamp(this.#clock.now());
+
+    // She was told it, so the telling has to be in the log: a note nobody said is not kept.
+    // Without an EventLog there is nothing to check against, and the message that started the
+    // turn is the evidence.
+    const heard = await this.#engine.heard(ctx.context, ctx.account, now);
+    let evidence: string[];
+    if (heard === null) {
+      evidence = [`${LINE_REF_PREFIX}${ctx.message.id}`];
+    } else {
+      const backing = supporting(content, heard, this.#engine.config.evidence, nameWords([name]));
+      if (backing.length === 0) return "我沒有聽到有人這樣說過,所以沒有記下來。";
+      evidence = backing.map((l) => l.ref);
+    }
     const stored = await this.#engine.store(
       {
         kind,
@@ -87,9 +102,11 @@ export class RememberTool implements Tool {
         confidence: 0.9,
         source_context: ctx.context,
         source: { account: { ...ctx.account }, name },
+        origin: "told",
+        source_events: evidence,
         due: null,
       },
-      toTimestamp(this.#clock.now()),
+      now,
       ctx.signal,
     );
     switch (stored.type) {
@@ -99,6 +116,10 @@ export class RememberTool implements Tool {
         return "這件事我本來就記得,現在記得更牢了。";
       case "superseded":
         return "記住了(更新了之前記的內容)。";
+      case "refused":
+        return stored.reason === "present_state"
+          ? "這是現在的狀態,不會記進長期記憶。"
+          : "我沒有聽到有人這樣說過,所以沒有記下來。";
     }
   }
 }

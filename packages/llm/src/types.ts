@@ -1,4 +1,4 @@
-import type { JsonValue } from "@miyoria/types";
+import type { JsonValue, ReasoningLevel } from "@miyoria/types";
 import { z } from "zod";
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
@@ -130,6 +130,19 @@ export interface ChatRequest {
    * take them, and throws `NoImageModelError` when no model is left.
    */
   requires_images?: boolean;
+  /**
+   * How deeply a reasoning model thinks (`[llm.reasoning]`, docs/design/v2-architecture.md
+   * §3.10). The router fills it (and `thinking` from it); set it to force a level. Providers
+   * with an effort parameter send it, the others only switch thinking on / off and cap the
+   * length with `max_tokens`.
+   */
+  reasoning?: ReasoningLevel | null;
+  /**
+   * The `[llm.reasoning]` entry that decides the level (`chat_text`, `plan`, ...); unset: the
+   * model purpose the request is routed by. Reasoning purposes are finer than model purposes
+   * (the three `chat_*` all use the `chat` chain).
+   */
+  reasoning_purpose?: string | null;
   /**
    * Stable id of the conversation this request belongs to (see `contextSession`). Providers
    * may forward it (e.g. as a header) for routing and prompt caching.

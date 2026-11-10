@@ -1,0 +1,60 @@
+{
+  "id": "self-talk-screen-switch-22",
+  "title": "22 lines in a row while waiting for the screen to switch",
+  "category": "repeat",
+  "incident": {
+    "at": "2026-11-07T13:48:56+08:00",
+    "summary": "On 2026-11-07 about 13:49 she said 22 lines in a row about switching the stream scene, with nobody answering.",
+    "source": [
+      "message_log seq 9177-9198 (is_self rows)"
+    ]
+  },
+  "harness": "trace",
+  "trace": [
+    {"type":"heard","t":0,"who":"owner"},
+    {"type":"said","t":3.2,"channel":"text","text":"好啦好啦，我這就把畫面切過去。催什麼催，我又不是在磨菇。"},
+    {"type":"said","t":4.8,"channel":"text","text":"開起來了，畫面應該有出來了吧？先幫我確認一下，別等下又要我重弄第二次。"},
+    {"type":"said","t":5.5,"channel":"text","text":"……我這邊正在挖素材，晚上前想蓋個小東西。"},
+    {"type":"said","t":5.5,"channel":"voice","text":"はいはい、次はサラダさんのリクエスト、バタフライでーす。"},
+    {"type":"said","t":47,"channel":"voice","text":"喔,歐文你來了,剛好趕上,viewer-1點的這首 Butterfly。"},
+    {"type":"said","t":57.2,"channel":"voice","text":"要聽就安靜聽,別亂插話喔。"},
+    {"type":"said","t":65.3,"channel":"text","text":"……等等，開台好像沒成功欸。我這邊等了老半天，畫面還是沒起來。"},
+    {"type":"said","t":66.2,"channel":"text","text":"我再試一次，這次你幫我盯著看有沒有真的跳出來。"},
+    {"type":"said","t":84,"channel":"text","text":"……那個工作台是怎樣，地上明明平的，它跟我說沒地方放。木鎬都快散了，石鎬還生不出來。"},
+    {"type":"said","t":84.9,"channel":"text","text":"我再試一次開台，這次真的給我起來喔。"},
+    {"type":"said","t":86.2,"channel":"text","text":"喔、起來了，電腦畫面終於有東西了。你們看得到吧？看得到就應我一聲。"},
+    {"type":"said","t":86.9,"channel":"text","text":"……好啦，現在先把石鎬生出來，不然我這座小燈塔根本蓋不動。"},
+    {"type":"said","t":93.4,"channel":"voice","text":"又是沒地方放工作台,這遊戲到底多不想讓我蓋東西啊。"},
+    {"type":"said","t":100.2,"channel":"voice","text":"<emo:think..."},
+    {"type":"said","t":103,"channel":"voice","text":"うわっ、危なかった、あとちょっとで溺れるところだった"},
+    {"type":"said","t":107.5,"channel":"voice","text":"えへへ、ちゃんと自分で上がれたけどね"},
+    {"type":"said","t":124.8,"channel":"voice","text":"哇,苦力怕!嘶嘶聲都出來了!"},
+    {"type":"said","t":140.5,"channel":"voice","text":"快跑啦!"},
+    {"type":"said","t":142.2,"channel":"voice","text":"呼,差點就掰了,我這身血可不能這樣噴掉。"},
+    {"type":"said","t":145.8,"channel":"text","text":"失敗？等了整整六十秒跟我說沒開起來。"},
+    {"type":"said","t":146.5,"channel":"text","text":"……好啦好啦，再試一次，這次真的給我起來。"},
+    {"type":"said","t":147,"channel":"text","text":"順便——你們看得到畫面了沒？看不到快講，別讓我一個人在這瞎忙。"},
+    {"type":"heard","t":150.4,"who":"viewer-2"}
+  ],
+  "control": [
+    {"type":"heard","t":0,"who":"owner"},
+    {"type":"said","t":3.2,"channel":"text","text":"好啦好啦，我這就把畫面切過去。催什麼催，我又不是在磨菇。"},
+    {"type":"said","t":4.8,"channel":"text","text":"開起來了，畫面應該有出來了吧？先幫我確認一下，別等下又要我重弄第二次。"},
+    {"type":"said","t":5.5,"channel":"text","text":"……我這邊正在挖素材，晚上前想蓋個小東西。"},
+    {"type":"heard","t":150.4,"who":"viewer-2"},
+    {"type":"heard","t":10.5,"who":"viewer-1"}
+  ],
+  "checks": [
+    {
+      "rule": "no_self_talk_run",
+      "max": 3
+    },
+    {
+      "rule": "min_said",
+      "min": 3
+    }
+  ],
+  "status": "xfail",
+  "reason": "a long run of lines with nobody answering was not stopped (cause not confirmed: no limit on unanswered runs was found in the log)",
+  "flips_with": "floor / arbiter: a budget for unanswered lines that her own events do not reset (v3 §7.2); re-record the case and run `--trace`"
+}

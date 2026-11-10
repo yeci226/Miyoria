@@ -11,7 +11,13 @@ const RiseSchema = z.object({
   attention: rate().default(0.04),
   curiosity: rate().default(0.05),
   esteem: rate().default(0.04),
-  hunger: rate().default(0.05),
+  /**
+   * About 16 minutes from full (0) to wanting food again (`[modules.economy] full_below`, 0.15) and
+   * about 20 more per bowl of rice after that, so a busy channel can feed her several times an
+   * hour (2026-11-09: at 0.25 she was full after a bowl or two and stayed so for 40 minutes);
+   * talking does not fill her (`turn_hunger`).
+   */
+  hunger: rate().default(0.6),
   /** Toward her crush's romance while they are not with her (no crush: it fades). */
   longing: rate().default(0.12),
 });
@@ -24,8 +30,11 @@ const SatisfySchema = z.object({
   turn_boredom: unit().default(0.1),
   /** ...and a little `attention`. */
   turn_attention: unit().default(0.02),
-  /** ...and a little `hunger` (she got to spend some tokens). */
-  turn_hunger: unit().default(0.03),
+  /**
+   * ...and `hunger` (she got to spend some tokens). 0 by default: with dozens of replies an hour it
+   * kept her at 0, always full, and every feed was refused.
+   */
+  turn_hunger: unit().default(0),
   /** Someone talked to her directly: `attention`. */
   addressed_attention: unit().default(0.04),
   /** Something was said around her (a message in a channel, a line in voice): `boredom`. */
@@ -75,8 +84,12 @@ const EmotionsSchema = z.object({
   unmet_per_hour: rate().default(0.08),
   /** Praise this soon after a song counts as the song praised (得意). */
   song_praise_mins: z.number().nonnegative().default(10),
-  /** Her own thought (mind loop) moves an emotion at most this much. */
-  max_mind_nudge: unit().default(0.3),
+  /**
+   * All emotions together may be stirred at most this much in any 10 minutes (habituation and
+   * the saturating stir already shape each one; this stops a burst from filling every
+   * emotion). 0 = unlimited.
+   */
+  budget_per_10min: z.number().nonnegative().default(0.9),
   /** One `self.feel` event moves an emotion at most this much. */
   max_event_nudge: unit().default(0.5),
   /** Samples kept for charts (`SelfState.history`), one every `history_every_mins`. */
@@ -98,6 +111,34 @@ const HeartSchema = z.object({
   crush_margin: unit().default(0.08),
   /** People with feelings kept (the faintest are forgotten beyond this). */
   max_people: count().default(300),
+});
+
+/**
+ * `[modules.self.bond]`: how far Reflect's proposals may move a bond (small steps, a cap per
+ * person per local day). Attachment moves only on Reflect's (or the panel's) proposal.
+ */
+const BondSchema = z.object({
+  attachment_step: z.number().positive().default(0.03),
+  attachment_daily: z.number().positive().default(0.06),
+  affinity_step: z.number().positive().default(2),
+  affinity_daily: z.number().positive().default(4),
+  trust_step: z.number().positive().default(1),
+  trust_daily: z.number().positive().default(2),
+  familiarity_step: z.number().positive().default(2),
+  familiarity_daily: z.number().positive().default(4),
+});
+
+/**
+ * `[modules.self.mood]`: the mood is derived (baseline shaped by the hour, her emotions, her
+ * unmet drives), never stored.
+ */
+const MoodSchema = z.object({
+  /** How much energy drops at the deepest point of the night (0..1). */
+  night_dip: z.number().min(0).max(1).default(0.4),
+  /** How much her emotions move the mood (0 = only baseline, rhythm and drives). */
+  emotion_weight: z.number().nonnegative().default(1),
+  /** Publish `affect.changed` once the mood or her strongest emotions moved this much. */
+  publish_threshold: z.number().positive().default(0.05),
 });
 
 /**
@@ -125,6 +166,8 @@ export const SelfConfigSchema = z.object({
   satisfy: SatisfySchema.prefault({}),
   emotions: EmotionsSchema.prefault({}),
   heart: HeartSchema.prefault({}),
+  bond: BondSchema.prefault({}),
+  mood: MoodSchema.prefault({}),
   /** Starting value of every drive (first run, or after a wipe); `longing` starts at 0. */
   initial_drive: unit().default(0.3),
   initial_boredom: unit().default(0.2),
@@ -142,8 +185,6 @@ export const SelfConfigSchema = z.object({
   keep_closed_agenda: count().default(20),
   /** Longest feelings text per person. */
   max_feeling_chars: count().default(500),
-  /** Add the `self` and `emotion` prompt sections. */
-  prompt: z.boolean().default(true),
   /** Her local time zone as a UTC offset (times in the prompt section, local days). */
   utc_offset_minutes: z
     .number()
@@ -154,6 +195,13 @@ export const SelfConfigSchema = z.object({
 export type SelfConfig = z.output<typeof SelfConfigSchema>;
 export type EmotionsConfig = SelfConfig["emotions"];
 export type HeartConfig = SelfConfig["heart"];
+export type BondConfig = SelfConfig["bond"];
+
+/**
+ * Keys of `[modules.self]` that are gone: `prompt` switched her `self` / `emotion` prompt
+ * sections, which the agent renders itself now (v2 §3.5). Still loads, with a warning.
+ */
+export const DEPRECATED_SELF_KEYS: readonly string[] = ["prompt"];
 
 /** The defaults, optionally overridden. */
 export function selfConfig(overrides: Partial<SelfConfig> = {}): SelfConfig {

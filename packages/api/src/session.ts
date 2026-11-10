@@ -54,18 +54,26 @@ export function looksLikeToken(token: string): boolean {
   return token.length === TOKEN_LEN && /^[A-Za-z0-9_-]+$/.test(token);
 }
 
+/**
+ * What a session was opened as. `admin` was given to an account holding `admin.panel.access`;
+ * `member` to anyone else who logged in, and it opens the member routes and nothing more, even if
+ * the account gains the permission later: admin access takes a new login.
+ */
+export type SessionTier = "admin" | "member";
+
 /** A logged-in panel user, as persisted. */
 export interface SessionRecord {
   account: AccountRef;
   name: string;
   avatar_url: string | null;
+  tier: SessionTier;
   created_at: Timestamp;
   expires_at: Timestamp;
 }
 
 function parseRecord(value: JsonValue): SessionRecord | null {
   if (!isJsonObject(value)) return null;
-  const { account, name, avatar_url, created_at, expires_at } = value;
+  const { account, name, avatar_url, tier, created_at, expires_at } = value;
   if (
     !isJsonObject(account) ||
     typeof account.platform !== "string" ||
@@ -83,6 +91,8 @@ function parseRecord(value: JsonValue): SessionRecord | null {
     account: { platform: account.platform, id: account.id },
     name,
     avatar_url: avatar_url ?? null,
+    // Sessions stored before tiers existed were all admin logins; access is re-checked regardless.
+    tier: tier === "member" ? "member" : "admin",
     created_at,
     expires_at,
   };
@@ -144,6 +154,7 @@ export class Sessions {
     account: AccountRef,
     name: string,
     avatarUrl: string | null,
+    tier: SessionTier,
   ): Promise<string> {
     const token = randomToken(32);
     const hash = sha256Hex(token);
@@ -152,6 +163,7 @@ export class Sessions {
       account,
       name,
       avatar_url: avatarUrl,
+      tier,
       created_at: toTimestamp(now),
       expires_at: toTimestamp(now + this.ttlMs),
     };

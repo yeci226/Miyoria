@@ -320,7 +320,8 @@ class Stage {
     switch (msg.type) {
       case "emotion":
         this.#overlay.emotion(msg.name, msg.intensity);
-        this.#avatar?.emotion(msg.name, msg.intensity);
+        if (msg.resting) this.#avatar?.resting(msg.name, msg.intensity);
+        else this.#avatar?.emotion(msg.name, msg.intensity);
         return;
       case "subtitle": {
         this.#overlay.subtitle(msg.turn, msg.text, msg.final);
@@ -362,6 +363,18 @@ class Stage {
           if (!vts) throw new StageError("VTube Studio is not connected");
           return vts.triggerHotkey(msg.name);
         });
+        return;
+      case "avatar_expression":
+        this.#answer(msg.id, async () => {
+          if (!this.#avatar) throw new StageError("VTube Studio is disabled on the stage");
+          await this.#avatar.gift(msg.expression, msg.seconds);
+        });
+        return;
+      case "gift":
+        this.#overlay.gift(msg);
+        return;
+      case "screen":
+        this.#overlay.screen(msg);
         return;
       case "status_request":
         this.#answer(msg.id, () => this.#refreshHotkeys());

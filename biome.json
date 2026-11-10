@@ -19,6 +19,7 @@
       "!spikes",
       "!profiles",
       "!extensions/minecraft/mod",
+      "!packages/eval/fixtures",
       "!**/dist",
       "!**/coverage"
     ]
@@ -65,6 +66,7 @@
     {
       "includes": [
         "apps/panel/**",
+        "packages/card-face/**",
         "apps/overlay/**",
         "apps/voice-node/**",
         "packages/sdk/**",

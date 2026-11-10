@@ -1,19 +1,10 @@
-// Her thought as the model wrote it: JSON validated with zod, field by field and item by item,
-// so one malformed part never costs the rest. Everything is bounded here (lengths, counts,
-// drive nudges, levels, durations); references to people, places and agenda items are still
-// the prompt's short refs (`u1`, `p1`, `g1`) and are resolved against the snapshot later.
+// Her Plan reply as the model wrote it: JSON validated with zod, item by item, so one malformed
+// part never costs the rest. Everything is bounded here (lengths, counts, durations); people,
+// places and goals are still the names / context strings / goal keys she wrote and are
+// resolved against the snapshot later.
 
 import { extractJsonObject } from "@miyoria/llm";
-import {
-  DRIVE_NAMES,
-  type DriveName,
-  EMOTION_NAMES,
-  type EmotionName,
-  type JsonObject,
-  type JsonValue,
-  PERSON_EMOTION_NAMES,
-  type PersonEmotionName,
-} from "@miyoria/types";
+import type { JsonObject } from "@miyoria/types";
 import { z } from "zod";
 
 export class MindReplyError extends Error {
@@ -22,94 +13,64 @@ export class MindReplyError extends Error {
 
 /** Longest thought kept. */
 export const MAX_THOUGHT = 600;
-/** Largest drive (and boredom) change one thought may make. */
-export const MAX_DRIVE_NUDGE = 0.2;
-/** Largest emotion change one thought may make. */
-export const MAX_EMOTION_NUDGE = 0.3;
-export const MAX_FEELINGS = 3;
-export const MAX_FEELING_NOTE = 300;
-export const MAX_TALKATIVENESS = 3;
-export const MAX_AGENDA_ADD = 3;
-export const MAX_DOCUMENTS = 3;
-/** Talkativeness settings last 5 minutes to a day. */
-export const MIN_TALK_MINUTES = 5;
-export const MAX_TALK_MINUTES = 24 * 60;
-/** Intents expire after 15 seconds to 15 minutes (default 2 minutes). */
-export const MIN_INTENT_SECS = 15;
-export const MAX_INTENT_SECS = 900;
-export const DEFAULT_INTENT_SECS = 120;
-/** Agenda items expire after at most a week (default a day). */
-export const MAX_AGENDA_MINUTES = 7 * 24 * 60;
-export const DEFAULT_AGENDA_MINUTES = 24 * 60;
+export const MAX_GOAL_ADD = 3;
+export const MAX_GOAL_EDIT = 3;
+export const MAX_DAY_PLAN = 600;
+/** Impulses expire after 1 to 15 minutes (default 2). */
+export const MIN_IMPULSE_MINS = 1;
+export const MAX_IMPULSE_MINS = 15;
+export const DEFAULT_IMPULSE_MINS = 2;
+/** Goals last an hour to two weeks. */
+export const MIN_GOAL_HOURS = 1;
+export const MAX_GOAL_HOURS = 14 * 24;
 
-export type AffinityHint = "+" | "-" | "0";
+/** A trigger as she wrote it (`at` relative or as a local clock time). */
+export type TriggerDraft =
+  | { kind: "at"; time: string | null; inMin: number | null }
+  | { kind: "when_online"; person: string }
+  | { kind: "after_activity"; activity: string }
+  | { kind: "whenever" };
 
-export interface FeelingChange {
-  /** Person ref (`u1`). */
-  person: string;
-  /** Her new description (replaces the old one); `null` = unchanged. */
-  note: string | null;
-  hint: AffinityHint | null;
-  /** Changes of her emotions toward them. */
-  emotions?: Partial<Record<PersonEmotionName, number>>;
-}
-
-export interface TalkChange {
-  /** Place ref, `here`, `server`, `voice`, `text` or `*`. */
-  scope: string;
-  level: number;
-  minutes: number;
+export interface GoalDraft {
+  what: string;
   why: string;
-}
-
-export interface AgendaAdd {
-  text: string;
-  why: string;
+  trigger: TriggerDraft;
+  steps: string[];
   person: string | null;
   place: string | null;
-  dueInMin: number | null;
-  expiresInMin: number;
+  /** `null`: the default. */
+  expiresInHours: number | null;
 }
 
-export interface IntentDraft {
-  action: string;
+export interface GoalEditDraft {
+  goal: string;
+  what: string | null;
+  why: string | null;
+  trigger: TriggerDraft | null;
+  steps: string[] | null;
+  expiresInHours: number | null;
+}
+
+export interface ImpulseDraft {
+  kind: "speak" | "act";
+  capability: string | null;
   place: string | null;
   person: string | null;
   args: JsonObject;
   why: string;
-  opening: string | null;
-  expiresInS: number;
-  /** The agenda item (`g1`) it is for, if she said. */
-  agenda: string | null;
+  hint: string | null;
+  goal: string | null;
+  expiresInMin: number;
 }
 
-/** A change of her documents (refs still unresolved; the knowledge base re-validates it). */
-export interface DocDraft {
-  type: "create" | "patch" | "retitle" | "delete" | "merge";
-  subject: string | null;
-  kind: string | null;
-  title: string | null;
-  content: JsonObject;
-  doc: string | null;
-  into: string | null;
-  path: string;
-  ops: JsonValue[];
-  why: string;
-}
-
-export interface MindReply {
+export interface PlanReply {
   thought: string;
-  feelings: FeelingChange[];
-  /** Changes of her emotions (bounded). */
-  emotions?: Partial<Record<EmotionName, number>>;
-  drives: Partial<Record<DriveName | "boredom", number>>;
-  talkativeness: TalkChange[];
-  initiative: { level: number; why: string } | null;
-  agendaAdd: AgendaAdd[];
-  agendaDone: string[];
-  agendaDrop: string[];
-  intents: IntentDraft[];
-  documents: DocDraft[];
+  add: GoalDraft[];
+  edit: GoalEditDraft[];
+  done: string[];
+  drop: { goal: string; why: string }[];
+  impulses: ImpulseDraft[];
+  dayPlan: string | null;
 }
 
 function cut(text: string, max: number): string {
@@ -122,7 +83,6 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), h
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-const text = (max: number) => z.string().transform((s) => cut(s, max));
 const optText = (max: number) =>
   z
     .string()
@@ -134,88 +94,87 @@ const ref = z
   .transform((v) =>
     v === null || v === undefined || String(v).trim() === "" ? null : String(v).trim(),
   );
-const num = z.coerce.number().refine(Number.isFinite);
-const optNum = z
+/** A positive number, or `null` (0, missing and garbage all mean "the default"). */
+const optPositive = z
   .unknown()
   .optional()
   .transform((v) => {
     if (v === null || v === undefined || v === "") return null;
     const n = Number(v);
-    return Number.isFinite(n) ? n : null;
+    return Number.isFinite(n) && n > 0 ? n : null;
   });
 
-/** Known names with a finite, nonzero number, each bounded. */
-function nudges<K extends string>(value: unknown, names: readonly K[], max: number) {
-  const out: Partial<Record<K, number>> = {};
-  if (!isRecord(value)) return out;
-  for (const key of names) {
-    const v = Number(value[key]);
-    if (value[key] !== undefined && value[key] !== null && Number.isFinite(v) && v !== 0) {
-      out[key] = clamp(v, -max, max);
+/** A trigger, or `null` when it is not one. */
+export function parseTrigger(value: unknown): TriggerDraft | null {
+  if (typeof value === "string" && value.trim() === "whenever") return { kind: "whenever" };
+  if (!isRecord(value)) return null;
+  const kind = typeof value.kind === "string" ? value.kind.trim() : "";
+  switch (kind) {
+    case "at": {
+      const time = typeof value.time === "string" && value.time.trim() !== "" ? value.time : null;
+      const n = Number(value.in_min);
+      const inMin = Number.isFinite(n) && n > 0 ? clamp(n, 1, MAX_GOAL_HOURS * 60) : null;
+      return time === null && inMin === null ? null : { kind: "at", time, inMin };
     }
+    case "when_online": {
+      const person = typeof value.person === "string" ? value.person.trim() : "";
+      return person === "" ? null : { kind: "when_online", person };
+    }
+    case "after_activity": {
+      const activity = typeof value.activity === "string" ? value.activity.trim() : "";
+      return activity === "" ? null : { kind: "after_activity", activity: cut(activity, 40) };
+    }
+    case "whenever":
+      return { kind: "whenever" };
+    default:
+      return null;
   }
-  return out;
 }
 
-const Feeling = z
-  .object({
-    person: ref.refine((v) => v !== null),
-    note: optText(MAX_FEELING_NOTE),
-    affinity_hint: z
-      .unknown()
-      .optional()
-      .transform((h): AffinityHint | null => {
-        const v = typeof h === "string" ? h.trim() : "";
-        return v === "+" || v === "-" || v === "0" ? v : null;
-      }),
-    emotions: z
-      .unknown()
-      .optional()
-      .transform((v) => nudges(v, PERSON_EMOTION_NAMES, MAX_EMOTION_NUDGE)),
-  })
-  // Nothing to change: not an item.
-  .refine((f) => f.note !== null || f.affinity_hint !== null || Object.keys(f.emotions).length > 0);
+const steps = z
+  .unknown()
+  .optional()
+  .transform((v) =>
+    Array.isArray(v)
+      ? v.flatMap((s) => (typeof s === "string" && s.trim() !== "" ? [cut(s, 60)] : [])).slice(0, 6)
+      : null,
+  );
 
-const Talk = z.object({
-  scope: ref.refine((v) => v !== null),
-  level: num.transform((v) => clamp(v, 0, 1)),
-  for_min: optNum,
-  why: optText(200),
-});
-
-const Initiative = z.object({ level: num.transform((v) => clamp(v, 0, 1)), why: optText(200) });
-
-const Agenda = z.object({
-  text: text(200).refine((t) => t !== ""),
-  why: optText(200),
+const GoalAdd = z.object({
+  what: optText(120).refine((t) => t !== null),
+  why: optText(160),
+  trigger: z.unknown().optional(),
+  steps,
   person: ref,
   place: ref,
-  due_in_min: optNum,
-  expires_in_min: optNum,
+  expires_in_hours: optPositive,
 });
 
-const Intent = z.object({
-  action: z.string().trim().min(1).max(64),
+const GoalEdit = z.object({
+  goal: ref.refine((v) => v !== null),
+  what: optText(120),
+  why: optText(160),
+  trigger: z.unknown().optional(),
+  steps,
+  expires_in_hours: optPositive,
+});
+
+const Drop = z.object({ goal: ref.refine((v) => v !== null), why: optText(160) });
+
+const Impulse = z.object({
+  kind: z
+    .string()
+    .trim()
+    .transform((k) => k.toLowerCase())
+    .refine((k) => k === "speak" || k === "act"),
+  capability: ref,
   place: ref,
   person: ref,
   args: z.unknown().optional(),
   why: optText(200),
-  opening: optText(200),
-  expires_in_s: optNum,
-  agenda: ref,
-});
-
-const Doc = z.object({
-  type: z.enum(["create", "patch", "retitle", "delete", "merge"]),
-  subject: ref,
-  kind: optText(40),
-  title: optText(80),
-  content: z.record(z.string(), z.json()).optional(),
-  doc: ref,
-  into: ref,
-  path: z.string().optional(),
-  ops: z.array(z.json()).max(30).optional(),
-  why: optText(200),
+  hint: optText(200),
+  goal: ref,
+  expires_in_min: optPositive,
 });
 
 /** Each item of `value` that parses; the rest are dropped. */
@@ -232,96 +191,76 @@ function items<T>(value: unknown, schema: z.ZodType<T>, max: number): T[] {
 
 function refs(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((v) => (typeof v === "string" || typeof v === "number" ? [String(v)] : []));
+  return value.flatMap((v) =>
+    (typeof v === "string" && v.trim() !== "") || typeof v === "number" ? [String(v).trim()] : [],
+  );
 }
 
-/** Extracts and validates her reply (tolerates text around the JSON object). */
-export function parseMindReply(raw: string, maxIntents: number): MindReply {
-  // Whole text, fenced blocks or a balanced object in prose (models without a JSON mode).
+const hours = (h: number | null) => (h === null ? null : clamp(h, MIN_GOAL_HOURS, MAX_GOAL_HOURS));
+
+/** Extracts and validates her Plan reply (tolerates text around the JSON object). */
+export function parsePlanReply(raw: string, maxImpulses: number): PlanReply {
   const value = extractJsonObject(raw);
-  if (value === null) throw new MindReplyError("no JSON object in her thought");
+  if (value === null) throw new MindReplyError("no JSON object in her plan");
   const obj = value as Record<string, unknown>;
-
   const thought = typeof obj.thought === "string" ? cut(obj.thought, MAX_THOUGHT) : "";
-
-  const drives: MindReply["drives"] = {};
-  if (isRecord(obj.drives)) {
-    const d = obj.drives as Record<string, unknown>;
-    for (const key of [...DRIVE_NAMES, "boredom"] as const) {
-      const v = Number(d[key]);
-      if (d[key] !== undefined && d[key] !== null && Number.isFinite(v) && v !== 0) {
-        drives[key] = clamp(v, -MAX_DRIVE_NUDGE, MAX_DRIVE_NUDGE);
-      }
-    }
-  }
-
-  const policy = isRecord(obj.policy) ? (obj.policy as Record<string, unknown>) : {};
-  const talkativeness = items(policy.talkativeness, Talk, MAX_TALKATIVENESS).map((t) => ({
-    scope: t.scope as string,
-    level: t.level,
-    minutes: clamp(Math.round(t.for_min ?? 60), MIN_TALK_MINUTES, MAX_TALK_MINUTES),
-    why: t.why ?? "",
+  const goals = isRecord(obj.goals) ? obj.goals : {};
+  const add = items(goals.add, GoalAdd, MAX_GOAL_ADD).map((g) => ({
+    what: g.what as string,
+    why: g.why ?? "",
+    trigger: parseTrigger(g.trigger) ?? { kind: "whenever" as const },
+    steps: g.steps ?? [],
+    person: g.person,
+    place: g.place,
+    expiresInHours: hours(g.expires_in_hours),
   }));
-  const init = Initiative.safeParse(policy.initiative);
-  const initiative = init.success ? { level: init.data.level, why: init.data.why ?? "" } : null;
-
-  const agenda = isRecord(obj.agenda) ? (obj.agenda as Record<string, unknown>) : {};
-  const agendaAdd = items(agenda.add, Agenda, MAX_AGENDA_ADD).map((a) => ({
-    text: a.text,
-    why: a.why ?? "",
-    person: a.person,
-    place: a.place,
-    dueInMin: a.due_in_min === null ? null : clamp(a.due_in_min, 0, MAX_AGENDA_MINUTES),
-    expiresInMin: clamp(a.expires_in_min ?? DEFAULT_AGENDA_MINUTES, 5, MAX_AGENDA_MINUTES),
+  const edit = items(goals.edit, GoalEdit, MAX_GOAL_EDIT).map((g) => ({
+    goal: g.goal as string,
+    what: g.what,
+    why: g.why,
+    trigger: parseTrigger(g.trigger),
+    steps: g.steps === null || g.steps.length === 0 ? null : g.steps,
+    expiresInHours: hours(g.expires_in_hours),
   }));
-
-  const feelings = items(obj.feelings, Feeling, MAX_FEELINGS).map((f) => ({
-    person: f.person as string,
-    note: f.note,
-    hint: f.affinity_hint,
-    ...(Object.keys(f.emotions).length > 0 ? { emotions: f.emotions } : {}),
-  }));
-  const emotions = nudges(obj.emotions, EMOTION_NAMES, MAX_EMOTION_NUDGE);
-
-  const intents = items(obj.intents, Intent, Math.max(maxIntents, 0)).map((i) => ({
-    action: i.action,
+  const drop = Array.isArray(goals.drop)
+    ? goals.drop.flatMap((d) => {
+        if (typeof d === "string" && d.trim() !== "") return [{ goal: d.trim(), why: "" }];
+        const parsed = Drop.safeParse(d);
+        return parsed.success
+          ? [{ goal: parsed.data.goal as string, why: parsed.data.why ?? "" }]
+          : [];
+      })
+    : [];
+  const impulses = items(obj.impulses, Impulse, Math.max(maxImpulses, 0)).map((i) => ({
+    kind: i.kind as "speak" | "act",
+    capability: i.capability,
     place: i.place,
     person: i.person,
     args: isRecord(i.args) ? { ...(i.args as JsonObject) } : {},
     why: i.why ?? "",
-    opening: i.opening,
-    expiresInS: clamp(
-      Math.round(i.expires_in_s ?? DEFAULT_INTENT_SECS),
-      MIN_INTENT_SECS,
-      MAX_INTENT_SECS,
+    hint: i.hint,
+    goal: i.goal,
+    expiresInMin: clamp(
+      Math.round(i.expires_in_min ?? DEFAULT_IMPULSE_MINS),
+      MIN_IMPULSE_MINS,
+      MAX_IMPULSE_MINS,
     ),
-    agenda: i.agenda,
   }));
+  const dayPlan =
+    typeof obj.day_plan === "string" && obj.day_plan.trim() !== ""
+      ? cut(obj.day_plan, MAX_DAY_PLAN)
+      : null;
+  return { thought, add, edit, done: refs(goals.done), drop, impulses, dayPlan };
+}
 
-  const documents = items(obj.documents, Doc, MAX_DOCUMENTS).map((d) => ({
-    type: d.type,
-    subject: d.subject,
-    kind: d.kind,
-    title: d.title,
-    content: (d.content ?? {}) as JsonObject,
-    doc: d.doc,
-    into: d.into,
-    path: d.path ?? "",
-    ops: (d.ops ?? []) as JsonValue[],
-    why: d.why ?? "",
-  }));
-
-  return {
-    thought,
-    feelings,
-    emotions,
-    drives,
-    talkativeness,
-    initiative,
-    agendaAdd,
-    agendaDone: refs(agenda.complete),
-    agendaDrop: refs(agenda.drop),
-    intents,
-    documents,
-  };
+/** True when the reply changes nothing and asks for nothing. */
+export function isEmptyPlan(reply: PlanReply): boolean {
+  return (
+    reply.add.length === 0 &&
+    reply.edit.length === 0 &&
+    reply.done.length === 0 &&
+    reply.drop.length === 0 &&
+    reply.impulses.length === 0 &&
+    reply.dayPlan === null
+  );
 }

@@ -8,7 +8,8 @@ import {
   judge,
   parseDecision,
   prompts,
-  splitObservation,
+  timeoutValues,
+  timeoutViolations,
   type Verdict,
   verdictDebug,
 } from "../src/index.js";
@@ -64,75 +65,68 @@ describe("ActionCall", () => {
   });
 });
 
-describe("splitObservation", () => {
-  it("splits_observations", () => {
-    const { summary, state } = splitObservation('血量 20/20\n位置 (1, 2, 3)\n\n狀態:{"busy":true}');
-    expect(summary).toBe("血量 20/20\n位置 (1, 2, 3)");
-    expect(state?.busy).toBe(true);
-    const plain = splitObservation("沒有連上");
-    expect(plain.summary).toBe("沒有連上");
-    expect(plain.state).toBeNull();
-    // Broken state JSON: the summary is still cut, the state is unknown.
-    expect(splitObservation("a\n\n狀態:{oops")).toEqual({ summary: "a", state: null });
-  });
-});
-
-function facts(action: ActionCall | null, locked: boolean, age: number, since: number): GoalFacts {
+function facts(
+  action: ActionCall | null,
+  locked: boolean,
+  age: number,
+  running: boolean,
+): GoalFacts {
   return {
     text: "挖鐵礦",
     locked,
     pending: action === null,
     action,
     ageMs: age * 1000,
-    sinceIssuedMs: since * 1000,
+    running,
   };
 }
 
 const isKeep = (v: Verdict): boolean => v.type === "keep";
 
 describe("judge", () => {
-  it("goal_switching_rule", () => {
+  it("goal_switching_rule: the goal's task running or ended is the executor's word", () => {
     const cfg = defaultGameConfig();
     const mine = new ActionCall("mine", { block: "iron_ore" });
     const wood = new ActionCall("mine", { block: "oak_log" });
     const chat = new ActionCall("chat", { message: "hi" });
-    const busy = true;
-    const idle = false;
+    const running = true;
+    const ended = false;
 
-    expect(judge(cfg, null, mine, null, busy, false)).toEqual({ type: "replace" });
-    expect(judge(cfg, facts(mine, false, 5, 5), chat, null, busy, false)).toEqual({
+    expect(judge(cfg, null, mine, null, false)).toEqual({ type: "replace" });
+    expect(judge(cfg, facts(mine, false, 5, running), chat, null, false)).toEqual({
       type: "step",
     });
     // A goal without an action yet takes the proposal as its first step.
-    expect(judge(cfg, facts(null, true, 1, 1), mine, null, busy, false)).toEqual({
+    expect(judge(cfg, facts(null, true, 1, ended), mine, null, false)).toEqual({ type: "step" });
+    // Same action: only re-issued once its task ended.
+    expect(isKeep(judge(cfg, facts(mine, false, 30, running), mine, null, false))).toBe(true);
+    expect(judge(cfg, facts(mine, false, 1, ended), mine, null, false)).toEqual({ type: "step" });
+    // Different goal: too soon while running, fine when ended, important or old.
+    const current = facts(mine, false, 30, running);
+    expect(isKeep(judge(cfg, current, wood, "砍樹", false))).toBe(true);
+    expect(judge(cfg, facts(mine, false, 30, ended), wood, "砍樹", false)).toEqual({
+      type: "replace",
+    });
+    expect(judge(cfg, current, wood, "砍樹", true)).toEqual({ type: "replace" });
+    const old = facts(mine, false, 60, running);
+    expect(judge(cfg, old, wood, "砍樹", false)).toEqual({ type: "replace" });
+    // Same goal text, different step while running: keep.
+    expect(isKeep(judge(cfg, current, wood, "挖 鐵礦!", false))).toBe(true);
+    // Locked goals never get replaced, only stepped.
+    const locked = facts(mine, true, 10, running);
+    expect(isKeep(judge(cfg, locked, wood, "砍樹", false))).toBe(true);
+    expect(judge(cfg, facts(mine, true, 10, ended), wood, "砍樹", false)).toEqual({
       type: "step",
     });
-    // Same action: only re-issued once the bot is idle.
-    const current = facts(mine, false, 30, 30);
-    expect(isKeep(judge(cfg, current, mine, null, busy, false))).toBe(true);
-    expect(judge(cfg, current, mine, null, idle, false)).toEqual({ type: "step" });
-    // Different goal: too soon while busy, fine when idle, important or old.
-    expect(isKeep(judge(cfg, current, wood, "砍樹", busy, false))).toBe(true);
-    expect(isKeep(judge(cfg, current, wood, "砍樹", null, false))).toBe(true);
-    expect(judge(cfg, current, wood, "砍樹", idle, false)).toEqual({ type: "replace" });
-    expect(judge(cfg, current, wood, "砍樹", busy, true)).toEqual({ type: "replace" });
-    const old = facts(mine, false, 60, 60);
-    expect(judge(cfg, old, wood, "砍樹", busy, false)).toEqual({ type: "replace" });
-    // Same goal text, different step while busy: keep.
-    expect(isKeep(judge(cfg, current, wood, "挖 鐵礦!", busy, false))).toBe(true);
-    // Locked goals never get replaced, only stepped.
-    const locked = facts(mine, true, 100, 10);
-    expect(isKeep(judge(cfg, locked, wood, "砍樹", busy, false))).toBe(true);
-    expect(judge(cfg, locked, wood, "砍樹", idle, false)).toEqual({ type: "step" });
-    // Just issued: events from the previous goal are not "idle" yet.
-    const fresh = facts(mine, false, 1, 1);
-    expect(isKeep(judge(cfg, fresh, mine, null, idle, false))).toBe(true);
+    expect(judge(cfg, facts(mine, true, 100, running), wood, "砍樹", false)).toEqual({
+      type: "step",
+    });
   });
 
   it("instant actions never replace the goal and the debug form matches Rust", () => {
     const cfg = defaultGameConfig();
     const look = new ActionCall("look");
-    expect(judge(cfg, facts(new ActionCall("mine"), true, 1, 1), look, "x", true, false)).toEqual({
+    expect(judge(cfg, facts(new ActionCall("mine"), true, 1, true), look, "x", false)).toEqual({
       type: "step",
     });
     expect(verdictDebug({ type: "step" })).toBe("Step");
@@ -229,7 +223,7 @@ describe("goalNote and config", () => {
       min_decide_secs: 4,
       min_goal_secs: 45,
       max_goal_secs: 600,
-      settle_secs: 3,
+      task_budget_secs: 240,
       max_attempts: 3,
       commentary_min_secs: 15,
       urgent_commentary_min_secs: 3,
@@ -260,21 +254,14 @@ describe("goalNote and config", () => {
       "place",
       "respawn",
     ]);
-    expect(cfg.reached_events).toEqual([
-      "goal_reached",
-      "baritone_idle",
-      "craft_finished",
-      "smelt_finished",
-      "plan_finished",
-    ]);
-    expect(cfg.failed_events).toEqual([
-      "goal_failed",
-      "craft_failed",
-      "smelt_failed",
-      "plan_failed",
-    ]);
+    // Completion is not read from event names any more: no reached / failed event lists.
+    expect(cfg).not.toHaveProperty("reached_events");
+    expect(cfg).not.toHaveProperty("failed_events");
+    expect(cfg).not.toHaveProperty("settle_secs");
     expect(cfg.trigger_events).toContain("hostile_near");
     expect(cfg.trigger_events).toContain("reflex_end");
+    expect(cfg.trigger_events).not.toContain("goal_reached");
+    expect(cfg.directed_games).toEqual(["minecraft"]);
     expect(cfg).toMatchObject({
       auto_launch: true,
       launch_wait_secs: 240,
@@ -287,9 +274,39 @@ describe("goalNote and config", () => {
 
   it("never runs session actions from a decision", () => {
     const cfg = GameConfigSchema.parse({});
-    expect(judge(cfg, null, new ActionCall("quit"), null, false, true)).toEqual({
+    expect(judge(cfg, null, new ActionCall("quit"), null, true)).toEqual({
       type: "keep",
       why: "session actions belong to game start / stop",
     });
+  });
+});
+
+describe("timeout policy", () => {
+  it("the defaults are ordered from the inside out", () => {
+    const v = timeoutValues(defaultGameConfig());
+    expect(timeoutViolations(v)).toEqual([]);
+    const chain = [
+      v.bridgeRequestMs,
+      v.controlMs,
+      v.rpcCallMs,
+      v.taskBudgetMs,
+      v.taskBudgetMs + v.taskGraceMs,
+      v.maxGoalMs,
+    ];
+    expect([...chain].sort((a, b) => a - b)).toEqual(chain);
+    expect(new Set(chain).size).toBe(chain.length);
+    expect(v.launchMs).toBeLessThan(v.activityGameMs);
+  });
+
+  it("names every layer that is out of order", () => {
+    const cfg = { ...defaultGameConfig(), tool_timeout_secs: 45, launch_wait_secs: 400 };
+    const problems = timeoutViolations(timeoutValues(cfg));
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain("tool_timeout_secs");
+    expect(problems[1]).toContain("launch_wait_secs");
+    // A task budget above the goal limit is capped by it.
+    const capped = timeoutValues({ ...defaultGameConfig(), task_budget_secs: 9_999 });
+    expect(capped.taskBudgetMs).toBe(600_000);
+    expect(timeoutViolations(capped)[0]).toContain("max_goal_secs");
   });
 });

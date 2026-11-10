@@ -29,6 +29,16 @@ export interface VoiceUtterance {
   ended_at: Timestamp;
   /** Time from end of speech to transcript, in ms. */
   asr_ms: number;
+  /** How the turn was judged over, when a model judges it (`turn_engine = "smart-turn"`). */
+  turn?: VoiceTurnEnd;
+}
+
+/** How a speaker's turn ended. */
+export interface VoiceTurnEnd {
+  /** `turn`: the model says they are done; `timeout`: the longest silence; else silence or cap. */
+  ended_by: string;
+  /** The model's last answer; `null` when it did not give one. */
+  probability: number | null;
 }
 
 /** Her own speech playback. `interrupted`: stopped early, e.g. someone talked over her. */
@@ -52,7 +62,7 @@ export interface VoiceSink {
    * such as translating it can start before its turn. `spoken`: the words to say for it in
    * `speaksIn`, when the reply already has them. Optional; never required before `speak`.
    */
-  prepare?(context: ContextKey, text: string, spoken?: string): void;
+  prepare?(context: ContextKey, text: string, spoken?: string, emotion?: string | null): void;
   speak(
     context: ContextKey,
     text: string,
@@ -60,6 +70,8 @@ export interface VoiceSink {
     turn: TurnId | null,
     signal?: AbortSignal,
   ): Promise<SpeakOutcome>;
+  /** The emergency stop: what plays stops now and nothing prepared stays. Optional. */
+  silence?(): void;
 }
 
 export const VoiceSinkKey = serviceKey<VoiceSink>("VoiceSink");
@@ -115,6 +127,16 @@ export interface VoiceFloor {
   holder(guild: string): string | null;
   /** Songs still to sing in `guild` (preparing, ready or playing). */
   pending?(guild: string): number;
+  /** Those songs, with the numbers `sing.play` takes. */
+  setlist?(guild: string): SetlistLine[];
+}
+
+/** One song on her set list. `label` names it (someone else's text: data, not instructions). */
+export interface SetlistLine {
+  no: number;
+  label: string;
+  /** She can sing it now. */
+  ready: boolean;
 }
 
 export const VoiceFloorKey = serviceKey<VoiceFloor>("VoiceFloor");
@@ -141,3 +163,11 @@ export const SPEECH_PAUSE_TOPIC = "speech.pause";
  * `started` (first audio playing) or `failed` follows.
  */
 export const SPEECH_SYNTH_TOPIC = "voice.synthesis";
+
+/**
+ * Topic of `{context, turn, text, emotion}` custom events: a line of hers is about to play, about
+ * `subtitle_lead_ms` from now (`[modules.voice]`). Its subtitle goes up now, so that where the
+ * picture runs late (Go Live) it still arrives with her voice. Its `voice_playback` `started`
+ * follows, or nothing if it is dropped first (a barge-in).
+ */
+export const VOICE_UPCOMING_TOPIC = "voice.upcoming";

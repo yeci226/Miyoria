@@ -238,7 +238,7 @@ describe("config", () => {
     expect(c.vts.custom_params).toContain("MiyoriaEyeSmile");
     expect(c.vts.custom_params).toContain("JawOpen");
     expect(c.motion.seed).toBeNull();
-    expect(c.motion.speech_motion).toBe(1.5);
+    expect(c.motion.speech_motion).toBe(1.8);
     expect(c.blink).toMatchObject({ enabled: true, min_ms: 2_000, max_ms: 6_000, close_ms: 120 });
     expect(c.emotion.ease_in_ms).toBe(250);
     expect(c.gesture).toMatchObject({ enabled: true, min_gap_ms: 8_000 });
@@ -517,7 +517,11 @@ describe("motion", () => {
 
   it("body_is_a_lagged_smaller_copy_of_the_head", () => {
     const gaze = GazeConfigSchema.parse({ camera: { face_x: 20 } });
-    const m = new IdleMotion(gaze, MotionConfigSchema.parse({ body_drift: 0 }), new Random(1));
+    const m = new IdleMotion(
+      gaze,
+      MotionConfigSchema.parse({ body_drift: 0, body_follow: 0.35 }),
+      new Random(1),
+    );
     let v = m.update(TICK);
     const early = v.MiyoriaBodyX;
     for (let i = 0; i < 300; i++) v = m.update(TICK);

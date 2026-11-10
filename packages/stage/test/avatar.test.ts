@@ -384,6 +384,65 @@ describe("avatar loop frame", () => {
     return { l, levels, step, now: () => now, config };
   }
 
+  it("her resting face: a weaker pose while no marker is shown, and nothing else", () => {
+    const { l, step } = loop();
+    const settle = (): number => {
+      let v = 0;
+      for (let i = 0; i < 200; i++) v = step().get("MouthSmile") ?? 0;
+      return v;
+    };
+    const rest = settle();
+    l.resting("sad", 1);
+    const sad = settle();
+    expect(sad).not.toBeCloseTo(rest, 2);
+    // A marker takes over, and when it is over she looks the way she did.
+    l.emotion("happy", 1);
+    const happy = settle();
+    expect(happy).toBeGreaterThan(sad);
+    for (let i = 0; i < 600; i++) step();
+    expect(settle()).toBeCloseTo(sad, 1);
+    l.resting("neutral", 0);
+    expect(settle()).toBeCloseTo(rest, 1);
+    l.resting("no such face", 1);
+    expect(settle()).toBeCloseTo(rest, 1);
+  });
+
+  it("her resting face opens no accent and starts no gesture, a marker does", async () => {
+    const config = parseStageConfig({ motion: { seed: 9 } }, DEEPSEEK());
+    const sent: string[] = [];
+    const vts = {
+      isClosed: () => false,
+      setExpression: async (file: string) => {
+        sent.push(file);
+      },
+      triggerHotkey: async (name: string) => {
+        sent.push(name);
+        return name;
+      },
+    } as unknown as VtsClient;
+    let now = 1_000;
+    const l = new AvatarLoop(
+      config,
+      new Levels(config.lipsync),
+      new Watch<VtsClient | null>(vts),
+      { now: () => now },
+      new Random(9),
+    );
+    const run = async () => {
+      for (let i = 0; i < 90; i++) {
+        now += TICK;
+        l.frame(TICK, now);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    l.resting("happy", 1);
+    await run();
+    expect(sent).toEqual([]);
+    l.emotion("happy", 1);
+    await run();
+    expect(sent.length).toBeGreaterThan(0);
+  });
+
   it("drives_every_part_of_the_face", () => {
     const { l, levels, step, now } = loop();
     const params = l.parameters();

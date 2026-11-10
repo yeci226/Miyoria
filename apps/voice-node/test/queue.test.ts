@@ -333,3 +333,86 @@ describe("PlaybackQueue", () => {
     expect(port.frames.length).toBe(5);
   });
 });
+
+describe("PlaybackQueue ducking and pausing", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("ducks to a gain with a ramp and restores it", () => {
+    const { port, queue } = setup();
+    queue.start(1, 16_000);
+    queue.push(1, pcm(600));
+    port.pull(2);
+    const full = port.peaks[1] as number; // the first frame carries the resampler's start-up ripple
+
+    queue.duck(1, 0.5, 40); // two frames
+    port.pull(4);
+    // A frame's peak is its first sample: 1.0, 0.75, then the ducked 0.5.
+    expect(port.peaks[3]).toBeLessThan(full);
+    expect(port.peaks[3]).toBeGreaterThan(full / 2);
+    expect(port.peaks[4]).toBeCloseTo(full / 2, -1);
+    expect(port.peaks[5]).toBeCloseTo(full / 2, -1);
+
+    queue.duck(1, 1, 0);
+    port.pull(1);
+    expect(port.peaks[6]).toBeCloseTo(full, -1);
+  });
+
+  it("pause fades out, then holds the audio untouched until resume", () => {
+    const { port, queue, states } = setup();
+    queue.start(1, 16_000);
+    queue.push(1, pcm(400)); // 20 frames
+    queue.end(1);
+    port.pull(1);
+    queue.pause(1, 40);
+    port.pull(2); // fade-out frames
+    expect(port.peaks[2]).toBeLessThan(port.peaks[0] as number);
+    const buffered = port.source?.bufferedMs ?? 0;
+
+    // Held: only silence, the buffer is not consumed and the play does not starve.
+    port.pull(100);
+    expect(port.frames.slice(3).every((f) => f === "silence")).toBe(true);
+    expect(port.source?.bufferedMs).toBe(buffered);
+    expect(states()).toEqual(["started"]);
+
+    queue.resume(1, 40);
+    port.drain();
+    expect(states()).toEqual(["started", "finished"]);
+    // Everything that was buffered still got played.
+    expect(port.frames.filter((f) => f === "audio").length).toBe(20);
+  });
+
+  it("a ducked play that is paused and resumed keeps its duck gain", () => {
+    const { port, queue } = setup();
+    queue.start(1, 16_000);
+    queue.push(1, pcm(1000));
+    queue.duck(1, 0.5, 0);
+    queue.pause(1, 0);
+    port.pull(3);
+    queue.resume(1, 0);
+    port.pull(2);
+    expect(port.peaks.at(-1)).toBeCloseTo(4000, -2);
+  });
+
+  it("a pause nobody resumes ends the play as interrupted", () => {
+    const { port, queue, states } = setup({ maxPauseMs: 100 });
+    queue.start(1, 16_000);
+    queue.push(1, pcm(1000));
+    queue.pause(1, 0);
+    port.pull(20);
+    expect(states()).toEqual(["started", "interrupted"]);
+    expect(queue.size).toBe(0);
+  });
+
+  it("ignores controls for unknown or stopped plays", () => {
+    const { queue, port } = setup();
+    queue.duck(9, 0.5, 0);
+    queue.pause(9, 0);
+    queue.resume(9, 0);
+    queue.start(1, 16_000);
+    queue.push(1, pcm(200));
+    queue.stop(1, 0);
+    queue.pause(1, 0);
+    expect(port.stopCalls).toBeGreaterThan(0);
+  });
+});

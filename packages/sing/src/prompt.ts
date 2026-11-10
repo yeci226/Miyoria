@@ -4,7 +4,7 @@
 
 import type { PromptContributor, PromptSection } from "@miyoria/types";
 import { safeName } from "@miyoria/types";
-import { songLabel } from "./setlist.js";
+import { dedicationNote, songLabel } from "./setlist.js";
 import type { Singer } from "./singer.js";
 
 export const PROMPT_KEY = "sing";
@@ -29,18 +29,22 @@ export class SingPrompt implements PromptContributor {
     const lines: string[] = [];
     const song = playing && `${this.songOnly ? "" : `#${playing.no} `}${songLabel(playing)}`;
     if (playing && this.singer.starting()) {
-      lines.push(`要開始唱:${song}(${who(playing.requester_name)} 點的)。你說完這句就開始。`);
+      lines.push(
+        `要開始唱:${song}(${who(playing.requester_name)} 點的${dedicationNote(playing)})。你說完這句就開始。`,
+      );
     } else if (playing) {
       lines.push(
-        `正在唱:${song}(${who(playing.requester_name)} 點的)。唱完之前你在語音說的話不會播出;要停用 sing_stop。`,
+        `正在唱:${song}(${who(playing.requester_name)} 點的${dedicationNote(playing)})。唱完之前你在語音說的話不會播出;要停用 sing_stop。`,
       );
       lines.push(
-        "唱歌時有人再點歌,照樣用 sing_request 先準備,會排在這首後面;只給連結也可以,不用問歌名。",
+        "唱歌時有人再點歌也能用 sing_request 準備,新歌會排在這首後面;只有連結也可以,不需要歌名。文字頻道照常回,收食物、查魚幣、簽到這些工具照常用,不用等唱完。",
       );
     }
     for (const e of ready.slice(0, MAX_LINES)) {
       const when = e.forced ? "你有空就會自動開始" : "想唱就用 sing_start";
-      lines.push(`準備好了:#${e.no} ${songLabel(e)}(${who(e.requester_name)} 點的;${when})`);
+      lines.push(
+        `準備好了:#${e.no} ${songLabel(e)}(${who(e.requester_name)} 點的${dedicationNote(e)};${when})`,
+      );
     }
     for (const e of preparing.slice(0, MAX_LINES)) {
       lines.push(

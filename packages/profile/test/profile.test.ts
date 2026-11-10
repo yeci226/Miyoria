@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { Profile, ProfileError, parseProfileManifest } from "../src/index.js";
+import {
+  OWN_NAMES,
+  ownIdentity,
+  Profile,
+  ProfileError,
+  parseProfileManifest,
+} from "../src/index.js";
 
 const PROFILES = fileURLToPath(new URL("../../../profiles", import.meta.url));
 
@@ -69,10 +75,14 @@ describe("Profile", () => {
       const p = await Profile.loadDir(dir);
       expect(p.voice).toBeNull();
       expect(p.displayName).toBe("T");
-      expect(p.names()).toEqual(["T", "tt"]);
+      // Her own names come with every persona.
+      expect(p.names()).toEqual(["T", "tt", ...OWN_NAMES]);
       expect(p.personaPrompt()).toBe(
-        "B body\n\nA body\n\n# 範例對話(只示範語氣,不要照抄)\n\nex1\n\nex2",
+        `${ownIdentity("T")}\n\nB body\n\nA body\n\n# 範例對話(只示範語氣,不要照抄)\n\nex1\n\nex2`,
       );
+      expect(p.ownIdentity()).toContain("本名是 Miyoria");
+      expect(p.ownIdentity()).toContain("「T」");
+      expect(ownIdentity("Miyoria")).not.toContain("角色設定是");
       p.setSection("a", "A2");
       p.setSection("c", "C");
       expect(p.sections.map((s) => s.body)).toEqual(["B body", "A2", "C"]);

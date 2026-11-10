@@ -33,20 +33,19 @@ export function LlmPage() {
   const navigate = useNavigate();
   const tab = search.tab ?? (search.thought || search.turn || search.call ? "calls" : "overview");
   return (
-    <Page>
-      <PageHeader title="LLM" actions={<Budget />} />
-      <Tabs
-        className="gap-4"
-        value={tab}
-        onValueChange={(t) => void navigate({ to: "/llm", search: (s: LlmSearch) => ({ ...s, tab: t as LlmTab }), replace: true })}
-      >
-        <TabsList>
-          {LLM_TABS.map((t) => (
-            <TabsTrigger key={t.tab} value={t.tab}>
-              {t.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+    <Tabs
+      value={tab}
+      onValueChange={(t) => void navigate({ to: "/llm", search: (s: LlmSearch) => ({ ...s, tab: t as LlmTab }), replace: true })}
+    >
+      <TabsList>
+        {LLM_TABS.map((t) => (
+          <TabsTrigger key={t.tab} value={t.tab}>
+            {t.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      <Page>
+        <PageHeader title="LLM" actions={<Budget />} />
         <TabsContent value="overview">
           <OverviewTab />
         </TabsContent>
@@ -56,8 +55,8 @@ export function LlmPage() {
         <TabsContent value="prices">
           <PricesTab />
         </TabsContent>
-      </Tabs>
-      <CallSheet id={search.call} onClose={() => void navigate({ to: "/llm", search: (s: LlmSearch) => ({ ...s, call: undefined }), replace: true })} />
-    </Page>
+        <CallSheet id={search.call} onClose={() => void navigate({ to: "/llm", search: (s: LlmSearch) => ({ ...s, call: undefined }), replace: true })} />
+      </Page>
+    </Tabs>
   );
 }

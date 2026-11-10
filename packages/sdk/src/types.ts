@@ -126,6 +126,9 @@ export type Event =
         state: PlaybackState;
         text: string;
         emotion?: string | null;
+        heard_ms?: number | null;
+        total_ms?: number | null;
+        blocked?: string | null;
       };
     }
   | {
@@ -202,6 +205,11 @@ export interface ToolCallContext {
   account: AccountRef;
   message: MessageRef;
   priority: Priority;
+  /**
+   * Aborted when the host stops waiting for this call (`$/cancelRequest`: it timed out or the
+   * turn was cancelled). Not on the wire; set by the SDK.
+   */
+  signal?: AbortSignal;
 }
 
 // ---- commands ---------------------------------------------------------------
@@ -283,6 +291,17 @@ export interface Contributions {
   commands: CommandSpec[];
   prompts: string[];
   subscriptions: string[];
+  /** The extension's task executor (`tasks.register`), if it has one. */
+  executor?: ExecutorDecl | null;
+}
+
+/** `tasks.register` params / `contributions.executor`: what the extension's executor offers. */
+export interface ExecutorDecl {
+  name: string;
+  goals: { name: string; description: string; parameters: JsonSchema | null; budget_s: number | null }[];
+  guide: string | null;
+  /** The executor implements `steer` (the host answers a steer without it as unsupported). */
+  steer?: boolean;
 }
 
 /** `initialize` result (extension → host). */
@@ -303,6 +322,8 @@ export const ErrorCode = {
   Conflict: -32003,
   Unavailable: -32004,
   Closed: -32005,
+  /** The caller cancelled the request (`$/cancelRequest`, LSP's code). */
+  Cancelled: -32800,
 } as const;
 
 export interface RpcErrorObject {

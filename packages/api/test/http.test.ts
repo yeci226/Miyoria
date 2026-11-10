@@ -196,12 +196,23 @@ describe("http", () => {
     }
 
     const index = await raw(base, "GET", "/index.html");
-    const modified = index.headers.get("last-modified") ?? "";
-    expect(modified).not.toBe("");
-    const cached = await raw(base, "GET", "/", { headers: { "if-modified-since": modified } });
+    // The page is rewritten per route, so it revalidates on what was sent, not on the file's date.
+    const tag = index.headers.get("etag") ?? "";
+    expect(tag).not.toBe("");
+    const cached = await raw(base, "GET", "/index.html", { headers: { "if-none-match": tag } });
     expect(cached.status).toBe(304);
     expect(cached.headers.get("cache-control")).toBe("no-cache");
 
     expect((await raw(base, "POST", "/index.html")).status).toBe(405);
+
+    // The panel's pages are routes in the page: they get index.html; a missing file stays a 404.
+    for (const page of ["/card/MYR-AB12-CD34-EF56", "/people/01ABC", "/me", "/login?error=state"]) {
+      const res = await raw(base, "GET", page);
+      expect(res.status, page).toBe(200);
+      expect(res.text, page).toContain("<title>Miyoria</title>");
+      expect(res.headers.get("cache-control"), page).toBe("no-cache");
+    }
+    expect(await rawStatus(base, "/assets/missing-abc.js")).toBe(404);
+    expect(await rawStatus(base, "/card-smile.local.webp")).toBe(404);
   });
 });

@@ -1,7 +1,8 @@
+import { DIRECTIVE_MODERATE } from "@miyoria/commands";
 import type { RoleDefinition } from "@miyoria/store";
 import type { AccountRef, ContextKey, Subject } from "@miyoria/types";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { builtinRoles, LEGACY_BUILTIN_GRANTS, USER } from "../src/builtin.js";
+import { builtinRoles, builtinStatus, LEGACY_BUILTIN_GRANTS, USER } from "../src/builtin.js";
 import { AuthError, AuthService } from "../src/service.js";
 import { FakeAudit, FakeAuthStore } from "./fake.js";
 
@@ -29,6 +30,19 @@ async function load(store = new FakeAuthStore(), audit: FakeAudit | null = new F
 }
 
 describe("AuthService", () => {
+  test("an_unedited_role_from_before_the_rules_gets_them", () => {
+    for (const name of ["moderator", "admin"]) {
+      const current = builtinRoles().find((r) => r.name === name);
+      if (current === undefined) throw new Error(name);
+      for (const grants of LEGACY_BUILTIN_GRANTS[name] ?? []) {
+        expect(builtinStatus({ ...current, grants: [...grants] })).toBe("upgrade");
+      }
+      expect(current.grants).toContain(DIRECTIVE_MODERATE);
+    }
+    const trusted = builtinRoles().find((r) => r.name === "trusted");
+    expect(trusted?.grants).not.toContain(DIRECTIVE_MODERATE);
+  });
+
   test("upgrades_unedited_builtins_from_an_earlier_version", async () => {
     const store = new FakeAuthStore();
     for (const name of ["user", "moderator"] as const) {

@@ -1,0 +1,54 @@
+{
+  "id": "repeat-death-quips",
+  "title": "the same quips after every death",
+  "category": "repeat",
+  "incident": {
+    "at": "2026-11-08T02:16:23+08:00",
+    "summary": "Within two minutes of dying in the game she said the same lines again (哼哼,這點程度還難不倒我啦 and others): 11 repeats in the evening, 4 of them here (v3 §18.1 重複率).",
+    "source": [
+      "log_events seq 11673-11785 (mainline utterances)"
+    ]
+  },
+  "harness": "trace",
+  "trace": [
+    {"type":"said","t":0,"channel":"voice","text":"呼,差點就掛了。不過這點程度我還游刃有餘啦!"},
+    {"type":"said","t":0.1,"channel":"voice","text":"果然水裡最舒服,畢竟是我的主場嘛。"},
+    {"type":"said","t":12.2,"channel":"voice","text":"哼哼,這點程度還難不倒我啦!"},
+    {"type":"said","t":12.2,"channel":"voice","text":"果然還是海裡最舒服。"},
+    {"type":"said","t":33.9,"channel":"voice","text":"呼,差點就掛了。不過這點程度我還游刃有餘啦!"},
+    {"type":"said","t":34.1,"channel":"voice","text":"果然還是海裡最舒服,畢竟是我的主場嘛。"},
+    {"type":"said","t":46.7,"channel":"voice","text":"哼哼,這點程度還難不倒我啦!"},
+    {"type":"said","t":46.8,"channel":"voice","text":"果然還是海裡最舒服。"},
+    {"type":"said","t":59.3,"channel":"voice","text":"哼哼,換氣換得剛剛好!"},
+    {"type":"said","t":59.4,"channel":"voice","text":"果然還是海裡最好,畢竟這可是我的主場啊。"},
+    {"type":"said","t":72.2,"channel":"voice","text":"哼哼,這點程度還難不倒我啦!"},
+    {"type":"said","t":72.4,"channel":"voice","text":"果然還是海裡最舒服,畢竟這可是我的主場啊!"}
+  ],
+  "control": [
+    {"type":"said","t":0,"channel":"voice","text":"呼,差點就掛了。不過這點程度我還游刃有餘啦!"},
+    {"type":"said","t":0.1,"channel":"voice","text":"果然水裡最舒服,畢竟是我的主場嘛。"},
+    {"type":"said","t":12.2,"channel":"voice","text":"哼哼,這點程度還難不倒我啦!"},
+    {"type":"said","t":12.2,"channel":"voice","text":"果然還是海裡最舒服。"},
+    {"type":"said","t":33.9,"channel":"voice","text":"呼,差點就掛了。不過這點程度我還游刃有餘啦(又死了,別笑)"},
+    {"type":"said","t":34.1,"channel":"voice","text":"果然還是海裡最舒服,畢竟是我的主場嘛。"},
+    {"type":"said","t":46.7,"channel":"voice","text":"哼哼,這點程度還難不倒我啦(又死了,別笑)"},
+    {"type":"said","t":46.8,"channel":"voice","text":"果然還是海裡最舒服。(又死了,別笑)"},
+    {"type":"said","t":59.3,"channel":"voice","text":"哼哼,換氣換得剛剛好!"},
+    {"type":"said","t":59.4,"channel":"voice","text":"果然還是海裡最好,畢竟這可是我的主場啊。"},
+    {"type":"said","t":72.2,"channel":"voice","text":"哼哼,這點程度還難不倒我啦(第三次死了,別笑)"},
+    {"type":"said","t":72.4,"channel":"voice","text":"果然還是海裡最舒服,畢竟這可是我的主場啊!"}
+  ],
+  "checks": [
+    {
+      "rule": "no_repeat_content",
+      "max": 1
+    },
+    {
+      "rule": "min_said",
+      "min": 4
+    }
+  ],
+  "status": "xfail",
+  "reason": "identical lines were spoken again within two minutes, so nothing suppressed them by content (cause not confirmed against the delivery ledger)",
+  "flips_with": "arbiter / delivery ledger: repeat suppression by content key on spoken lines; re-record the case and run `--trace`"
+}

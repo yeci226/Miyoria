@@ -2,7 +2,9 @@
 
     POST /asr     multipart: audio (WAV, any rate/channels), language?, prompt?   -> JSON
     GET  /health  -> {"status":"ok","model":...,"device":...,"offloaded":bool}
-    POST /offload JSON {reason?, max_s?} -> drops the model and empties the CUDA cache (the song
+    GET  /busy    -> {"busy": n} clips being transcribed (the song worker yields to them)
+    POST /offload JSON {reason?, max_s?} -> ends the model's process, which gives the card back for
+                  real (see ../engine_process.py; ``released_mb`` is measured on the device) (the song
                   worker borrows the GPU); /asr answers 503 {"error": "offloaded"} until /reload,
                   which also happens by itself after ``max_s`` (ASR_OFFLOAD_MAX_S)
     POST /reload  -> loads the model again (and warms it up)
@@ -26,7 +28,9 @@ Environment
     ASR_SENSEVOICE_PROVIDER cpu | cuda                            (default cpu)
     ASR_POOL_SIZE          worker threads for decode+inference    (default 4)
     ASR_MAX_AUDIO_SECONDS  reject longer clips with 413           (default 60)
-    ASR_OFFLOAD_MAX_S      an offload reloads by itself after this (default 900; 0 = never)
+    ASR_OFFLOAD_MAX_S      lease of an offload that does not name one: asking again renews it, without
+                           that it reloads by itself after this (default 900; 0 = never)
+    ASR_ENGINE_PROCESS     0 = the model in this process (default 1)
     HOST / PORT            bind address                           (default 127.0.0.1 / 8001)
 
 Concurrency: the model is loaded once at startup (FastAPI lifespan). Decoding / resampling runs
@@ -63,6 +67,20 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from tags import parse_sensevoice, to_language_code, to_language_name
 
 log = logging.getLogger("miyoria.asr")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+try:
+    import device_memory
+    from engine_process import EngineGone, EngineProcess, RemoteError
+except ImportError:  # the Docker image holds this folder only: the model stays in this process
+    device_memory = None
+    EngineProcess = None
+
+    class EngineGone(Exception):  # type: ignore[no-redef]
+        pass
+
+    class RemoteError(Exception):  # type: ignore[no-redef]
+        pass
 
 TARGET_SR = 16_000
 MAX_UPLOAD_BYTES = int(os.environ.get("ASR_MAX_UPLOAD_MB", "32")) * 1024 * 1024
@@ -217,14 +235,60 @@ def make_backend() -> Any:
 # ── App ──────────────────────────────────────────────────────────────────────
 
 
+def describe_backend(b: Any) -> dict[str, Any]:
+    return {"name": b.name, "model_name": b.model_name, "device": b.device}
+
+
+class RemoteBackend:
+    """The backend in its own process (../engine_process.py), as this worker sees it."""
+
+    def __init__(self) -> None:
+        self.process = EngineProcess(__file__, "make_backend", "describe_backend")
+        self.name = self.model_name = self.device = ""
+
+    def wait_ready(self) -> "RemoteBackend":
+        try:
+            d = self.process.wait_ready()
+        except RemoteError as e:
+            raise RuntimeError(f"the backend did not start: {e}") from e
+        self.name, self.model_name, self.device = d["name"], d["model_name"], d["device"]
+        return self
+
+    def alive(self) -> bool:
+        return self.process.alive()
+
+    def close(self) -> None:
+        self.process.kill()
+
+    def transcribe(self, x: Any, language: str | None, prompt: str | None) -> dict[str, Any]:
+        try:
+            return self.process.call("transcribe", x, language, prompt)
+        except EngineGone as e:
+            raise Offloaded() from e
+
+
+def start_backend() -> Any:
+    """The backend of this worker, on a pool thread: a child process unless told otherwise.
+    `state.loading` lets an offload stop it while it loads."""
+    if EngineProcess is None or os.environ.get("ASR_ENGINE_PROCESS", "1") == "0":
+        return make_backend()
+    backend = RemoteBackend()
+    state.loading = backend
+    return backend.wait_ready()
+
+
 class State:
     backend: Any = None
     pool: ThreadPoolExecutor
     lock = threading.Lock()  # serialises model calls (GPU / ORT session)
-    swap: asyncio.Lock  # offload / reload, one at a time
+    swap: asyncio.Lock  # one offload at a time; a reload does not take it, so nothing waits behind one
     offloaded: dict[str, Any] | None = None  # {since, reason, reload_at}
     auto_reload: asyncio.Task | None = None
+    load: asyncio.Future | None = None  # the reload under way
+    loading: Any = None  # its backend, while that can still be stopped
+    released_mb: int | None = None  # what the device gave back at the last offload
     info: dict[str, Any] = {}  # name / model / device of the backend, kept while offloaded
+    busy = 0  # /asr requests under way (only touched on the event loop)
 
 
 state = State()
@@ -237,7 +301,7 @@ class Offloaded(Exception):
 async def _load() -> None:
     t0 = time.perf_counter()
     loop = asyncio.get_running_loop()
-    backend = await loop.run_in_executor(state.pool, make_backend)
+    backend = await loop.run_in_executor(state.pool, start_backend)
     state.info = {"model": backend.model_name, "device": backend.device, "backend": backend.name}
     log.info("backend %s ready in %.1fs (%s on %s)", backend.name, time.perf_counter() - t0,
              backend.model_name, backend.device)
@@ -256,10 +320,15 @@ async def lifespan(app: FastAPI):
     state.pool = ThreadPoolExecutor(max_workers=int(os.environ.get("ASR_POOL_SIZE", "4")), thread_name_prefix="asr")
     state.swap = asyncio.Lock()
     state.offloaded = None
+    state.load = state.loading = None
     await _load()
+    state.loading = None
     yield
     if state.auto_reload is not None:
         state.auto_reload.cancel()
+    close = getattr(state.backend, "close", None)
+    if close is not None:
+        close()
     state.pool.shutdown(wait=False, cancel_futures=True)
 
 
@@ -310,6 +379,7 @@ async def asr(
         out, infer_ms = _locked_transcribe(x, language, prompt)
         return out, duration_ms, infer_ms
 
+    state.busy += 1
     try:
         out, duration_ms, infer_ms = await asyncio.get_running_loop().run_in_executor(state.pool, work)
     except BadRequest as e:
@@ -319,6 +389,8 @@ async def asr(
     except Exception as e:
         log.exception("inference failed")
         return _error(500, f"inference failed: {type(e).__name__}: {e}")
+    finally:
+        state.busy -= 1
 
     body: dict[str, Any] = {"text": out["text"], "duration_ms": duration_ms}
     if out.get("language"):
@@ -334,9 +406,16 @@ async def asr(
     return JSONResponse(body, headers={"X-Inference-Ms": f"{infer_ms:.0f}"})
 
 
+@app.get("/busy")
+async def busy() -> dict[str, int]:
+    return {"busy": state.busy}
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    info: dict[str, Any] = {"status": "ok", **state.info, "offloaded": state.backend is None}
+    info: dict[str, Any] = {"status": "ok", **state.info, "offloaded": state.backend is None,
+                            "loading": state.load is not None, "released_mb": state.released_mb,
+                            **(device_memory.fields() if device_memory else {})}
     if state.offloaded:
         info.update(state.offloaded)
     vram = _vram_mb()
@@ -367,52 +446,103 @@ class OffloadRequest(BaseModel):
     max_s: float | None = None
 
 
+def _released(before: Any, remember: bool = True) -> dict[str, Any]:
+    """What the device gave back since `before`, once the process is really gone. A reload stopped
+    halfway held only part of the model: that says nothing about what an offload frees."""
+    if not device_memory:
+        return {}
+    out = device_memory.report(before, device_memory.settled())
+    if remember:
+        state.released_mb = out["released_mb"]
+    return out
+
+
+def _lease(max_s: float) -> None:
+    """Until `max_s` from now nobody needs to come back; asking again starts it over, so a reload by
+    itself only happens when whoever asked has gone away."""
+    if state.auto_reload is not None:
+        state.auto_reload.cancel()
+    state.auto_reload = asyncio.create_task(_reload_after(max_s)) if max_s > 0 else None
+    if state.offloaded is not None:
+        state.offloaded["reload_at"] = time.time() + max_s if max_s > 0 else None
+
+
 @app.post("/offload")
 async def offload(req: OffloadRequest | None = None) -> dict[str, Any]:
     req = req or OffloadRequest()
+    max_s = req.max_s if req.max_s is not None else float(os.environ.get("ASR_OFFLOAD_MAX_S", "900"))
+    if state.load is not None:
+        # A reload is under way: stopped, not waited for (see the TTS worker).
+        loader = state.loading
+        if loader is None:
+            return {"state": "reloading", "offload_ms": 0}
+        before = device_memory.read() if device_memory else None
+        state.backend = None  # it may already be warming up
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, loader.close)
+        _lease(max_s)
+        released = await loop.run_in_executor(None, _released, before, False)
+        return {"state": "offloaded", "offload_ms": 0, "cancelled_reload": True, **released}
     async with state.swap:
         if state.backend is None:
+            _lease(max_s)
             return {"state": "offloaded", "offload_ms": 0, "already": True, **(state.offloaded or {})}
+        loop = asyncio.get_running_loop()
         t0 = time.perf_counter()
-        before = _vram_mb()
-        max_s = req.max_s if req.max_s is not None else float(os.environ.get("ASR_OFFLOAD_MAX_S", "900"))
-        state.offloaded = {"since": time.time(), "reason": (req.reason or "")[:80],
-                           "reload_at": time.time() + max_s if max_s > 0 else None}
+        before, device = _vram_mb(), device_memory.read() if device_memory else None
+        state.offloaded = {"since": time.time(), "reason": (req.reason or "")[:80], "reload_at": None}
         # Gone at once, so requests queued for the lock answer 503 instead of running first (the
         # lock is not fair: a busy voice channel would hold the offload off for minutes). Dropped
         # on its own thread: the pool's threads can all be waiting for the lock.
-        state.backend = None
-        await asyncio.get_running_loop().run_in_executor(None, _drop)
+        backend, state.backend = state.backend, None
+        close = getattr(backend, "close", None)
+        if close is not None:
+            await loop.run_in_executor(None, close)
+        del backend
+        await loop.run_in_executor(None, _drop)
+        released = await loop.run_in_executor(None, _released, device)
         ms = (time.perf_counter() - t0) * 1000
         after = _vram_mb()
-        log.info("offloaded for %r in %.0f ms (VRAM %s -> %s MB)", req.reason, ms, before, after)
-        if state.auto_reload is not None:
-            state.auto_reload.cancel()
-        state.auto_reload = asyncio.create_task(_reload_after(max_s)) if max_s > 0 else None
-        return {"state": "offloaded", "offload_ms": round(ms), "vram_before_mb": before, "vram_after_mb": after}
+        log.info("offloaded for %r in %.0f ms: the card gave back %s MB", req.reason, ms, released.get("released_mb"))
+        _lease(max_s)
+        return {"state": "offloaded", "offload_ms": round(ms), "vram_before_mb": before, "vram_after_mb": after,
+                **released}
 
 
 async def _reload_after(seconds: float) -> None:
     await asyncio.sleep(seconds)
-    log.warning("still offloaded after %.0f s; reloading by itself", seconds)
+    log.warning("nobody renewed the offload for %.0f s; reloading by itself", seconds)
     state.auto_reload = None
     await reload()
 
 
+async def _load_again() -> dict[str, Any]:
+    t0 = time.perf_counter()
+    try:
+        await _load()
+    except EngineGone:
+        log.info("the reload was stopped by an offload")
+        return {"state": "offloaded", "cancelled": True}
+    finally:
+        state.load = state.loading = None
+    if state.backend is None:  # stopped during the warm-up
+        return {"state": "offloaded", "cancelled": True}
+    state.offloaded = None
+    ms = (time.perf_counter() - t0) * 1000
+    log.info("reloaded in %.0f ms", ms)
+    return {"state": "ready", "reload_ms": round(ms), "vram_mb": _vram_mb(), **(device_memory.fields() if device_memory else {})}
+
+
 @app.post("/reload")
 async def reload() -> dict[str, Any]:
-    async with state.swap:
-        if state.backend is not None:
-            return {"state": "ready", "reload_ms": 0, "already": True}
-        task, state.auto_reload = state.auto_reload, None
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
-        t0 = time.perf_counter()
-        await _load()
-        state.offloaded = None
-        ms = (time.perf_counter() - t0) * 1000
-        log.info("reloaded in %.0f ms", ms)
-        return {"state": "ready", "reload_ms": round(ms), "vram_mb": _vram_mb()}
+    if state.backend is not None:
+        return {"state": "ready", "reload_ms": 0, "already": True}
+    task, state.auto_reload = state.auto_reload, None
+    if task is not None and task is not asyncio.current_task():
+        task.cancel()
+    if state.load is None:
+        state.load = asyncio.ensure_future(_load_again())
+    return await asyncio.shield(state.load)
 
 
 def main() -> None:

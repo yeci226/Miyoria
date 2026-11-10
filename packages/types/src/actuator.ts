@@ -83,6 +83,8 @@ export interface ActuatorExecutor {
   run(ticket: string, signal: AbortSignal): Promise<string>;
   /** The scheduler dropped `ticket` without running it (expired, cancelled, ...). */
   dropped(ticket: string, reason: string): void;
+  /** The emergency stop is on: she is muted. The one switch every output path reads. */
+  readonly paused?: boolean;
 }
 
 export const ActuatorExecutorKey = serviceKey<ActuatorExecutor>("ActuatorExecutor");

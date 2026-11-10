@@ -125,6 +125,59 @@ export async function awaitBackfill(
 }
 
 /**
+ * The direct parent as it came with the reply (`msg.referenced`: author and text), or `null`.
+ * No network: what a reply always has, even when fetching the parent fails or times out.
+ */
+export function quotedParent(agent: Agent, msg: IncomingMessage): HistoryEntry | null {
+  const ref = msg.reply_to ?? null;
+  const quoted = msg.referenced ?? null;
+  if (ref === null || quoted === null) return null;
+  const account = quoted.author ?? { platform: msg.id.context.platform, id: "unknown" };
+  return {
+    // Its time is unknown; quoted parents are not part of the time-gap lines.
+    ...historyEntry(msg, agent.isSelf(account), false),
+    id: ref.id,
+    replyTo: null,
+    author: quoted.author_name,
+    account,
+    isBot: false,
+    text: quoted.text,
+    attachments: [],
+    undated: true,
+  };
+}
+
+/**
+ * The lines around message `id` in `context`, read from the platform: `before` earlier and
+ * `after` later ones, oldest first. Empty on any failure (context only).
+ */
+export async function fetchAround(
+  agent: Agent,
+  context: IncomingMessage["id"]["context"],
+  id: string,
+  before: number,
+  after: number,
+  signal: AbortSignal,
+): Promise<{ before: HistoryEntry[]; after: HistoryEntry[] }> {
+  const history = historyFor(agent, context.platform);
+  if (!history || (before <= 0 && after <= 0)) return { before: [], after: [] };
+  const read = async (query: { before: string | null; after?: string | null; limit: number }) =>
+    query.limit <= 0 ? [] : await history.recent(context, query, signal).catch(() => []);
+  const [earlier, later] = await Promise.all([
+    read({ before: id, limit: before }),
+    read({ before: null, after: id, limit: after }),
+  ]);
+  const entry = (m: IncomingMessage) => historyEntry(m, agent.isSelf(m.author.account), false);
+  return {
+    before: earlier.slice(-before).map(entry),
+    after: later
+      .filter((m) => m.id.id !== id)
+      .slice(0, after)
+      .map(entry),
+  };
+}
+
+/**
  * The parents of `msg` that are not in the session, oldest first: the direct parent (from the
  * reply itself when the platform sent it along, else fetched) and up to `history.reply_chain`
  * ancestors in all. Stops at the first parent that is in the session or cannot be read.
@@ -148,21 +201,8 @@ export async function replyParents(
       max > 0 && history ? await history.fetch(ref, signal) : null;
     if (parent === null) {
       // Only what came with the reply: its direct parent's author and text.
-      const quoted = chain.length === 0 ? (msg.referenced ?? null) : null;
-      if (quoted !== null) {
-        const account = quoted.author ?? { platform: msg.id.context.platform, id: "unknown" };
-        chain.push({
-          // Its time is unknown; quoted parents are not part of the time-gap lines.
-          ...historyEntry(msg, agent.isSelf(account), false),
-          id: ref.id,
-          replyTo: null,
-          author: quoted.author_name,
-          account,
-          isBot: false,
-          text: quoted.text,
-          attachments: [],
-        });
-      }
+      const quoted = chain.length === 0 ? quotedParent(agent, msg) : null;
+      if (quoted !== null) chain.push(quoted);
       break;
     }
     chain.push(historyEntry(parent, agent.isSelf(parent.author.account), false));

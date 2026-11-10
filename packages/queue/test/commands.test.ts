@@ -139,7 +139,7 @@ describe("queue commands", () => {
 
     const up = await run(reg, "queue upvote", "9", { id: 4 });
     expect(up.text).toContain("1 票");
-    expect(ephemeral(reg, "queue upvote", up)).toBe(true);
+    expect(ephemeral(reg, "queue upvote", up)).toBe(false);
 
     expect((await run(reg, "queue manage pause", "1")).text).toContain("已暫停叫號");
     expect(queue.isPaused()).toBe(true);

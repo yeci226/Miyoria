@@ -1,43 +1,28 @@
-// Attention: should she respond to this turn?
+// Attention: should she respond to this turn? (docs/design/v2-architecture.md §3.3, §3.9)
 //
-// Layer 1 are hard rules (channel mode, direct address, anti-spam share, cooldown), layer 2 a
-// cheap salience score. Layer 3, the optional `fast` LLM check for ambient gray-zone turns, runs
-// in the turn itself.
+// Only the cheap prefilter and her own talkativeness live here:
 //
-// Social signals scale the reply probability by how much she likes the speakers (direct
-// address is only ignored at very low affinity), and her energy scales the ambient probability
-// and cooldown a little.
+// * the prefilter: the channel's mode, direct address (mention, reply, her name, a DM; in voice
+//   a question right after she spoke or a one-on-one), someone answering what she just said,
+//   and in voice someone still speaking (she does not join in over them);
+// * whether to join in: a cheap salience score × her talkativeness (`talkFactor`), under the
+//   share cap (her share of recent messages); in the gray zone the `fast` model is asked (in
+//   the turn itself).
 //
-// How eager she is to join in is her own choice: the talkativeness she set for the context
-// (`SelfState`, docs/design/autonomy.md §6) scales the ambient probability, the cooldown, the
-// gray-zone thresholds and how much she joins in while someone in voice is still talking.
-// Without one, the configured activeness and voice numbers apply as before. The hard limits
-// stay config: her maximum share of recent messages and a minimum cooldown.
+// Her talkativeness is hers: what she set for the context (`SelfState`), shifted by lessons and
+// her feelings (`AffectSnapshot.biases`, in the turn), with a floor; without one, the channel
+// level's default, moved by the configured activeness. In text channels the owner's level
+// (`quiet` / `normal` / `lively`, `levels.ts`) caps it and adds a minimum score and a lower share
+// limit.
 //
-// In text channels the owner's level (`quiet` / `normal` / `lively`, `levels.ts`) is a ceiling
-// on all of that: her talkativeness is capped to the level's, so is the whole ambient
-// multiplier, and the level adds a minimum score, a longer cooldown and a lower share limit.
-//
-// Voice turns add `VoiceAttention`: a question right after she spoke addresses her, she never
-// joins in while someone is speaking and ambient probabilities are scaled down.
+// The other multipliers (affinity, energy, activeness factors, the voice ambient factor and
+// interrupt scale) and every cooldown are gone: how often she starts something on her own is
+// the Arbiter's (`[modules.arbiter]`), and her feelings already moved her talkativeness.
 
-import { type IncomingMessage, type Mood, timestampMs } from "@miyoria/types";
-import {
-  type Activeness,
-  type AttentionConfig,
-  type ChannelMode,
-  cooldownFactor,
-  probabilityFactor,
-} from "./config.js";
+import { type IncomingMessage, timestampMs } from "@miyoria/types";
+import type { Activeness, AttentionConfig, ChannelMode } from "./config.js";
 import { type Ceiling, cappedTalk } from "./levels.js";
 import type { Session } from "./session.js";
-import {
-  affinityAmbientFactor,
-  affinityDirectFactor,
-  energyCooldownFactor,
-  energyProbabilityFactor,
-  IGNORE_DIRECT_AFFINITY,
-} from "./signals.js";
 import {
   accountId,
   fixed,
@@ -78,7 +63,7 @@ export class SeededRandom implements RandomSource {
   }
 }
 
-/** What layers 1 and 2 concluded. */
+/** What the prefilter and the score concluded. */
 export type Gate =
   | { kind: "ignore" }
   /** Respond with this probability. */
@@ -91,23 +76,16 @@ export interface Assessment {
   score: number;
   gate: Gate;
   reasons: string[];
-  /**
-   * Multiplier for ambient probabilities decided later (after the LLM check): activeness,
-   * voice factor, affinity and energy.
-   */
+  /** Multiplier for ambient probabilities decided later (after the LLM check): `talkFactor`. */
   ambientScale: number;
 }
 
-/** Extra rules for voice contexts. */
+/** Extra facts of voice contexts. */
 export interface VoiceAttention {
-  /** Someone other than her is speaking right now. */
+  /** Someone other than her is speaking right now (she does not join in over them). */
   someoneSpeaking: boolean;
-  /** Multiplies the ambient reply probability. */
-  ambientFactor: number;
   /** A question this soon (ms) after she spoke addresses her. */
   questionWindowMs: number;
-  /** Multiplies the ambient probability while someone speaks; 0 = never join in over them. */
-  interruptScale: number;
   /** People in the voice channel besides her (`null` = unknown). */
   others: number | null;
 }
@@ -122,35 +100,30 @@ export interface TalkLevel {
 /** At or below this talkativeness she does not join in at all. */
 export const SILENT_TALKATIVENESS = 0.05;
 
+/** Her talkativeness while she set none and no level applies (voice, DMs). */
+export const USUAL_TALKATIVENESS = 0.5;
+
+/**
+ * How the configured activeness moves her default talkativeness (the old ×0.5 / ×1 / ×1.6 of the
+ * ambient probability, expressed on the talkativeness scale: `talkFactor` of the shifted level).
+ */
+export const ACTIVENESS_SHIFT: Readonly<Record<Activeness, number>> = {
+  low: -0.25,
+  medium: 0,
+  high: 0.17,
+};
+
 /** Ambient probability multiplier of a talkativeness: ×0.25 at 0, ×1 at 0.5, ×4 at 1. */
 export function talkFactor(level: number): number {
   return 4 ** (2 * clamp01(level) - 1);
 }
 
-/** Cooldown multiplier: ×4 at 0, ×1 at 0.5, ×0.25 at 1. */
-export function talkCooldownFactor(level: number): number {
-  return 4 ** (1 - 2 * clamp01(level));
-}
-
-/** Gray-zone threshold multiplier: ×2 at 0, ×1 at 0.5, ×0.5 at 1. */
-export function talkThresholdFactor(level: number): number {
-  return 2 ** (1 - 2 * clamp01(level));
-}
-
-/** Ambient multiplier while someone else in voice is still talking: 0.2 at 0 → 0.8 at 1. */
-export function talkInterruptScale(level: number): number {
-  return 0.2 + 0.6 * clamp01(level);
-}
-
 export interface AttentionInput {
   config: AttentionConfig;
   mode: ChannelMode;
-  /** Scales the ambient reply probability and cooldown (when `talkativeness` is `null`). */
+  /** Moves her default talkativeness (while she set none). */
   activeness: Activeness;
-  /**
-   * Her own talkativeness for this context; replaces `activeness` and the voice ambient
-   * factor and interrupt scale. `null`: she set none.
-   */
+  /** Her own talkativeness for this context (with lessons and feelings); `null`: she set none. */
   talkativeness?: TalkLevel | null;
   /** The owner's level for this text channel (`ceilingFor`); `null`: none (voice, tests). */
   ceiling?: Ceiling | null;
@@ -165,10 +138,19 @@ export interface AttentionInput {
   now: number;
   /** Set for voice contexts. */
   voice: VoiceAttention | null;
-  /** Mean affinity of the turn's speakers, if social signals are available. */
-  affinity: number | null;
-  /** Her mood, if mood signals are available. */
-  mood: Mood | null;
+}
+
+/**
+ * Her talkativeness with the floor (docs/design/v2-architecture.md §3.9): lessons and moods may
+ * lower it, but not below `floor`, unless she herself set exactly 0 for the place.
+ */
+export function flooredTalk(
+  merged: TalkLevel | null,
+  own: TalkLevel | null,
+  floor: number,
+): TalkLevel | null {
+  if (merged === null || own?.level === 0 || merged.level >= floor) return merged;
+  return { level: floor, scope: `${merged.scope} (floor)` };
 }
 
 function clamp01(x: number): number {
@@ -176,77 +158,28 @@ function clamp01(x: number): number {
 }
 
 /**
- * Ambient multiplier of her talkativeness under a level, before affinity and energy: ×4^(2T−1)
- * of her capped talkativeness T, or (`level` `null`: she set none) the level's default scaled
- * by activeness; never above the level's maximum.
+ * The talkativeness attention works with: hers (capped by the level), or the level's default
+ * (else "as usual") moved by activeness, never above the level's maximum.
  */
-export function ceilingFactor(
-  ceiling: Ceiling,
-  level: number | null,
-  activeness: Activeness,
-): number {
-  const factor =
-    level === null
-      ? talkFactor(ceiling.defaultTalk) * probabilityFactor(activeness)
-      : talkFactor(cappedTalk(ceiling, level));
-  return Math.min(factor, talkFactor(ceiling.maxTalk));
-}
-
-/**
- * Multiplier for ambient probabilities: her talkativeness (or activeness and the voice
- * factor), affinity and energy; under a level never above the level's maximum.
- */
-export function ambientScale(input: AttentionInput): number {
-  const affinity = input.affinity === null ? 1 : affinityAmbientFactor(input.affinity);
-  const energy = input.mood === null ? 1 : energyProbabilityFactor(input.mood);
-  const talk = input.talkativeness ?? null;
+export function effectiveTalk(input: AttentionInput): TalkLevel {
+  const own = input.talkativeness ?? null;
   const ceiling = input.ceiling ?? null;
-  if (ceiling !== null) {
-    const factor = ceilingFactor(ceiling, talk?.level ?? null, input.activeness);
-    return Math.min(factor * affinity * energy, talkFactor(ceiling.maxTalk));
+  if (own !== null) {
+    return ceiling === null ? own : { level: cappedTalk(ceiling, own.level), scope: own.scope };
   }
-  if (talk !== null) {
-    const speaking = input.voice?.someoneSpeaking ? talkInterruptScale(talk.level) : 1;
-    return talkFactor(talk.level) * speaking * affinity * energy;
-  }
-  const voice = input.voice
-    ? input.voice.ambientFactor * (input.voice.someoneSpeaking ? input.voice.interruptScale : 1)
-    : 1;
-  return probabilityFactor(input.activeness) * voice * affinity * energy;
+  const base = (ceiling?.defaultTalk ?? USUAL_TALKATIVENESS) + ACTIVENESS_SHIFT[input.activeness];
+  const level = clamp01(ceiling === null ? base : Math.min(base, ceiling.maxTalk));
+  return { level, scope: `default (activeness ${input.activeness})` };
 }
 
-/**
- * Minimum time (ms) between her ambient replies: the base cooldown scaled by her talkativeness
- * (never below `minMs`) or by activeness, and by her energy. Under a level her talkativeness is
- * capped (the level's default while she set none, with activeness); the level's own floor
- * (`Ceiling.minCooldownMs`) is applied by `assess`.
- */
-export function ambientCooldown(
-  baseMs: number,
-  minMs: number,
-  activeness: Activeness,
-  talk: TalkLevel | null,
-  mood: Mood | null,
-  ceiling: Ceiling | null = null,
-): number {
-  const energy = mood === null ? 1 : energyCooldownFactor(mood);
-  if (talk === null) {
-    const level = ceiling === null ? 1 : talkCooldownFactor(ceiling.defaultTalk);
-    return Math.trunc(baseMs * level * cooldownFactor(activeness) * energy);
-  }
-  const level = ceiling === null ? talk.level : cappedTalk(ceiling, talk.level);
-  return Math.max(Math.trunc(baseMs * talkCooldownFactor(level) * energy), minMs);
+/** Multiplier for ambient probabilities: `talkFactor` of her effective talkativeness. */
+export function ambientScale(input: AttentionInput): number {
+  return talkFactor(effectiveTalk(input).level);
 }
 
 /** Ambient probability after `ambientScale`, clamped. */
 export function ambientProbability(input: AttentionInput, p: number): number {
   return clamp01(p * ambientScale(input));
-}
-
-/** Reply probability when directly addressed (scaled slightly by affinity). */
-function directProbability(input: AttentionInput): number {
-  const factor = input.affinity === null ? 1 : affinityDirectFactor(input.affinity);
-  return clamp01(input.config.direct_probability * factor);
 }
 
 /** Why a message addresses her directly, if it does. */
@@ -324,6 +257,8 @@ function questionAfterHer(input: AttentionInput): string | null {
 }
 
 export function assess(input: AttentionInput): Assessment {
+  // Someone answering what she just said: never shut out by her quiet setting or the level.
+  const replying = followsHer(input);
   const cfg = input.config;
   const reasons = [`mode ${input.mode}`];
   let why: string | null = null;
@@ -335,17 +270,16 @@ export function assess(input: AttentionInput): Assessment {
   // Alone with one person in voice: whatever they say is said to her.
   if (why === null && input.voice?.others === 1) why = "one-on-one in voice";
   if (why !== null) reasons.push(`direct: ${why}`);
-  if (input.affinity !== null) reasons.push(`affinity ${signed(input.affinity, 0)}`);
   const score = salience(input, why !== null, reasons);
   const direct = why !== null;
-  const scale = ambientScale(input);
-  const done = (gate: Gate): Assessment => ({
-    direct,
-    score,
-    gate,
-    reasons,
-    ambientScale: scale,
-  });
+  const raw = effectiveTalk(input);
+  // Her quiet setting is about joining in, not about answering: at least "as usual" then.
+  const talk =
+    replying && raw.level < USUAL_TALKATIVENESS
+      ? { level: USUAL_TALKATIVENESS, scope: `${raw.scope}, replying` }
+      : raw;
+  const scale = talkFactor(talk.level);
+  const done = (gate: Gate): Assessment => ({ direct, score, gate, reasons, ambientScale: scale });
 
   switch (input.mode) {
     case "off":
@@ -357,10 +291,7 @@ export function assess(input: AttentionInput): Assessment {
     case "normal":
     case "lively":
       if (direct) {
-        if (input.affinity !== null && input.affinity <= IGNORE_DIRECT_AFFINITY) {
-          reasons.push("very low affinity: may ignore");
-        }
-        return done({ kind: "sample", probability: directProbability(input) });
+        return done({ kind: "sample", probability: clamp01(cfg.direct_probability) });
       }
       if (input.mode === "mention-only") {
         reasons.push("not addressed");
@@ -368,55 +299,23 @@ export function assess(input: AttentionInput): Assessment {
       }
   }
 
-  const talk = input.talkativeness ?? null;
+  const own = input.talkativeness ?? null;
   const ceiling = input.ceiling ?? null;
+  if (replying) reasons.push("replying to her: skips her quiet setting");
   if (ceiling !== null) reasons.push(`level ${ceiling.mode}`);
-  if (talk !== null) {
-    const capped = ceiling !== null && talk.level > ceiling.maxTalk;
-    reasons.push(
-      `talkativeness ${fixed(talk.level, 2)} (${talk.scope})` +
-        (capped ? ` capped to ${fixed(ceiling.maxTalk, 2)}` : ""),
-    );
-    if (talk.level <= SILENT_TALKATIVENESS) {
-      reasons.push("she wants to stay quiet here");
-      return done({ kind: "ignore" });
-    }
-  }
-  if (input.voice?.someoneSpeaking) {
-    // `interrupt_scale = 0` is the owner's "never over someone", whatever she wants.
-    if (input.voice.interruptScale <= 0) {
-      reasons.push("someone is speaking");
-      return done({ kind: "ignore" });
-    }
-    const scale = talk === null ? input.voice.interruptScale : talkInterruptScale(talk.level);
-    reasons.push(`someone is speaking ×${fixed(scale, 2)}`);
-  }
-  const activeness = input.activeness;
-  if (talk === null && activeness !== "medium") reasons.push(`activeness ${activeness}`);
-  if (input.mood !== null) reasons.push(`energy ${fixed(input.mood.energy, 2)}`);
-  const cooldownMs = ambientCooldown(
-    cfg.cooldown_ms,
-    cfg.min_cooldown_ms,
-    activeness,
-    talk,
-    input.mood,
-    ceiling,
+  const capped = own !== null && ceiling !== null && own.level > ceiling.maxTalk;
+  reasons.push(
+    capped && ceiling
+      ? `talkativeness ${fixed(own.level, 2)} (${own.scope}) capped to ${fixed(ceiling.maxTalk, 2)}`
+      : `talkativeness ${fixed(talk.level, 2)} (${talk.scope})`,
   );
-  const last = input.session.lastSelfAt();
-  const follows = followsHer(input);
-  // In voice, someone answering what she just said is a conversation, not her butting in.
-  const answeringHer = input.voice !== null && follows;
-  if (last !== null && !answeringHer) {
-    const since = input.now - last;
-    if (since < cooldownMs) {
-      reasons.push(`cooldown (${since}ms since she spoke)`);
-      return done({ kind: "ignore" });
-    }
-    // The level's long cooldown is about joining in again, not about keeping a conversation.
-    if (ceiling !== null && !follows && since < ceiling.minCooldownMs) {
-      reasons.push(`level cooldown (${since}ms since she spoke)`);
-      return done({ kind: "ignore" });
-    }
+  if (talk.level <= SILENT_TALKATIVENESS) {
+    reasons.push("she wants to stay quiet here");
+    return done({ kind: "ignore" });
+  }
+  if (input.voice?.someoneSpeaking && !replying) {
+    reasons.push("someone is speaking");
+    return done({ kind: "ignore" });
   }
   const share = input.session.selfShare(cfg.recent_window);
   const maxShare = Math.min(input.maxShare, ceiling?.maxShare ?? 1);
@@ -424,35 +323,48 @@ export function assess(input: AttentionInput): Assessment {
     reasons.push(`anti-spam: her share ${fixed(share, 2)} > ${fixed(maxShare, 2)}`);
     return done({ kind: "ignore" });
   }
-  const level =
-    talk === null ? null : ceiling === null ? talk.level : cappedTalk(ceiling, talk.level);
-  const threshold = level === null ? 1 : talkThresholdFactor(level);
-  const grayLow = Math.max(cfg.gray_low * threshold, ceiling?.minScore ?? 0);
-  const grayHigh = Math.max(cfg.gray_high * threshold, grayLow);
+  const grayLow = Math.max(cfg.gray_low, ceiling?.minScore ?? 0);
+  const grayHigh = Math.max(cfg.gray_high, grayLow);
   if (score < grayLow) {
     reasons.push(`score ${fixed(score, 2)} < ${fixed(grayLow, 2)}`);
     return done({ kind: "ignore" });
   }
-  if (score >= grayHigh) {
-    return done({ kind: "sample", probability: ambientProbability(input, score) });
-  }
+  const probability = clamp01(score * scale);
+  if (score >= grayHigh) return done({ kind: "sample", probability });
   if (cfg.llm_check) {
     reasons.push("gray zone: asking fast model");
     return done({ kind: "ask_llm" });
   }
-  return done({ kind: "sample", probability: ambientProbability(input, score) });
+  return done({ kind: "sample", probability });
 }
 
-/** She spoke among the last three entries before this turn, within the last 3 minutes. */
+/** Someone in this turn answers what she just said (see `answersHer`). */
 function followsHer(input: AttentionInput): boolean {
-  const history = input.session.history();
-  const before = Math.max(history.length - input.inputs.length, 0);
-  const her = history
-    .slice(0, before)
+  return answersHer(input.session, input.inputs, input.now);
+}
+
+/**
+ * Someone is answering what she just said: she spoke among the last three history entries
+ * other than `inputs` (which are already in the history; her reply may have landed between
+ * them), within the last 3 minutes.
+ */
+export function answersHer(
+  session: Session,
+  inputs: readonly IncomingMessage[],
+  now: number,
+): boolean {
+  const ids = new Set(inputs.map((m) => m.id.id));
+  const history = session.history();
+  // Inputs without an id match in the history are its last entries (as recorded).
+  const known = history.filter((e) => e.id !== null && ids.has(e.id)).length;
+  const rest = history
+    .slice(0, history.length - (inputs.length - known))
+    .filter((e) => e.id === null || !ids.has(e.id));
+  const her = rest
     .reverse()
     .slice(0, 3)
     .find((e) => e.isSelf);
-  return her !== undefined && Math.trunc((input.now - her.ts) / 1000) < 180;
+  return her !== undefined && Math.trunc((now - her.ts) / 1000) < 180;
 }
 
 function salience(input: AttentionInput, direct: boolean, reasons: string[]): number {

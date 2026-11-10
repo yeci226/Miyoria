@@ -7,8 +7,10 @@
 // * Her emotions (`EmotionEngine`) and feelings about people (`HeartBook`) live here too.
 //   Drives unmet for a long time turn into emotions: wanting company (social, attention) into
 //   寂寞, hunger and esteem into 不甘心, longing into 想念. Each builds as a "pressure" that
-//   approaches its target slowly and holds the emotion at least that high, so the emotion does
-//   not fade while the need lasts and fades at its own pace once it is met.
+//   approaches its target slowly and holds the emotion at least that high: 寂寞 is a function
+//   of the social / attention gap (nobody computes it separately), so it eases as soon as the
+//   need is met (the pressure follows the drive down at once; only what events stirred on top
+//   of it fades at its own pace).
 // * People she cares about who stay away build 想念 toward them (held, not faded, while away).
 // * Policy and agenda are only stored here: she (phase C's mind loop, the activeness tool)
 //   writes them; settings past `until` and agenda items past `expires_at` expire.
@@ -208,7 +210,9 @@ export class SelfEngine {
     const d = clamp01(config.initial_drive);
     this.#drives = Object.fromEntries(DRIVE_NAMES.map((n) => [n, d])) as Drives;
     this.#drives.longing = 0;
-    this.emotions = new EmotionEngine(temper, config.emotions.floor, now);
+    this.emotions = new EmotionEngine(temper, config.emotions.floor, now, {
+      budget: config.emotions.budget_per_10min,
+    });
     this.hearts = new HeartBook(
       config.heart,
       temper,
@@ -285,37 +289,72 @@ export class SelfEngine {
     this.#expire(now);
   }
 
+  /** Where the pressures of unmet needs are heading (what the drives imply right now). */
+  #targets(): { lonely: number; frustration: number } {
+    const e = this.config.emotions;
+    const d = this.#drives;
+    const above = (v: number, level: number) => (v > level ? (v - level) / (1 - level) : 0);
+    return {
+      lonely: 0.8 * above(Math.max(d.social, d.attention), e.lonely_social),
+      frustration: 0.6 * above(Math.max(d.hunger, d.esteem), e.unmet_level),
+    };
+  }
+
+  /**
+   * A need that was just met stops weighing at once: 寂寞 and the grumbling are functions of
+   * the drives, so they follow them down without waiting for the next tick.
+   */
+  #easePressures(): void {
+    const target = this.#targets();
+    let eased = false;
+    for (const key of ["lonely", "frustration"] as const) {
+      if (target[key] < this.#pressure[key]) {
+        this.#pressure[key] = target[key];
+        eased = true;
+      }
+    }
+    if (!eased) return;
+    const d = this.#drives;
+    this.emotions.hold(
+      "lonely",
+      this.#pressure.lonely,
+      d.attention > d.social ? "很久沒人理我" : "很久沒人陪我聊天",
+      null,
+      this.#at,
+    );
+    this.emotions.hold(
+      "frustration",
+      this.#pressure.frustration,
+      d.hunger >= d.esteem ? "肚子餓,沒人給我白飯" : "都沒人認可我",
+      null,
+      this.#at,
+    );
+  }
+
   /** Emotions from drives unmet for a while and from people she cares about staying away. */
   #unmet(hours: number, now: number, c: Circumstances, crush: string | null): void {
     const e = this.config.emotions;
     const t = this.emotions.temperament.emotions;
     const d = this.#drives;
     const above = (v: number, level: number) => (v > level ? (v - level) / (1 - level) : 0);
+    const target = this.#targets();
     const build = (key: keyof Pressure, target: number, perHour: number) => {
       const p = this.#pressure[key];
       this.#pressure[key] =
         target > p ? p + (target - p) * (1 - Math.exp(-perHour * hours)) : clamp01(target);
     };
     // Long-unmet needs weigh, but not to the top: 寂寞 up to 0.8, the grumbling up to 0.6.
-    build(
-      "lonely",
-      0.8 * above(Math.max(d.social, d.attention), e.lonely_social),
-      e.lonely_per_hour * t.lonely.gain,
-    );
-    build(
-      "frustration",
-      0.6 * above(Math.max(d.hunger, d.esteem), e.unmet_level),
-      e.unmet_per_hour * t.frustration.gain,
-    );
+    build("lonely", target.lonely, e.lonely_per_hour * t.lonely.gain);
+    build("frustration", target.frustration, e.unmet_per_hour * t.frustration.gain);
     build(
       "missing",
       c.crushTogether ? 0 : above(d.longing, 0.4),
       (e.missing_per_day / 24) * t.missing.gain,
     );
     const lonelyCause = d.attention > d.social ? "很久沒人理我" : "很久沒人陪我聊天";
-    this.emotions.atLeast("lonely", this.#pressure.lonely, lonelyCause, null, now);
+    this.emotions.hold("lonely", this.#pressure.lonely, lonelyCause, null, now);
     const grumble = d.hunger >= d.esteem ? "肚子餓,沒人給我白飯" : "都沒人認可我";
-    this.emotions.atLeast("frustration", this.#pressure.frustration, grumble, null, now);
+    this.emotions.hold("frustration", this.#pressure.frustration, grumble, null, now);
 
     // 想念 toward people she cares about who stay away; the strongest is also hers.
     let missing = crush === null ? 0 : this.#pressure.missing;
@@ -333,9 +372,7 @@ export class SelfEngine {
         about = person;
       }
     }
-    if (missing > 0) {
-      this.emotions.atLeast("missing", missing, "想念某個人", about, now);
-    }
+    this.emotions.hold("missing", missing, "想念某個人", about, now);
   }
 
   /** Agenda items about someone that expired since the last call (she did not get to them). */
@@ -360,6 +397,7 @@ export class SelfEngine {
     if (delta.boredom !== undefined && Number.isFinite(delta.boredom)) {
       this.#boredom = clamp01(this.#boredom + delta.boredom);
     }
+    this.#easePressures();
   }
 
   // ---- policy -------------------------------------------------------------------------

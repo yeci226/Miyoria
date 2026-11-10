@@ -19,15 +19,17 @@ export {
   LEVEL_TALKATIVENESS,
 } from "./actions.js";
 export {
+  ACTIVENESS_SHIFT,
   type Assessment,
   type AttentionInput,
-  ambientCooldown,
   ambientProbability,
   ambientScale,
+  answersHer,
   assess,
-  ceilingFactor,
   decide,
   directReason,
+  effectiveTalk,
+  flooredTalk,
   type Gate,
   isQuestion,
   mentionsTopic,
@@ -35,14 +37,31 @@ export {
   SeededRandom,
   SILENT_TALKATIVENESS,
   type TalkLevel,
-  talkCooldownFactor,
   talkFactor,
-  talkInterruptScale,
-  talkThresholdFactor,
+  USUAL_TALKATIVENESS,
   type VoiceAttention,
   vocativeName,
 } from "./attention.js";
 export { activenessLabel, personaSummary } from "./commands.js";
+export {
+  type Budgeted,
+  type BudgetOptions,
+  budgetBlocks,
+  budgetSelf,
+  contributedData,
+  fairShares,
+  fitBody,
+  ordered,
+  PROMPT_TOPIC,
+  renderSections,
+  SavedPrompts,
+  SavedPromptsKey,
+  type SelfBlock,
+  SUPERSEDED,
+  savedMessages,
+  savedPrompt,
+  squeeze,
+} from "./compiler.js";
 export {
   ACTIVENESS_LEVELS,
   type Activeness,
@@ -56,17 +75,21 @@ export {
   CHANNEL_MODES,
   type ChannelMode,
   ChannelModeSchema,
-  cooldownFactor,
+  DEPRECATED_AGENT_KEYS,
   defaultAgentConfig,
+  deprecatedAgentKeys,
+  type FilesConfig,
+  FilesConfigSchema,
   type HistoryConfig,
   HistoryConfigSchema,
+  MainLineConfigSchema,
   maxDebounceMs,
   modeFor,
   ParseError,
+  type PromptConfig,
+  PromptConfigSchema,
   parseActiveness,
   parseChannelMode,
-  probabilityFactor,
-  scaleByActiveness,
   typingRefreshMs,
   type VisionConfig,
   VisionConfigSchema,
@@ -82,6 +105,17 @@ export {
   MAX_PAUSE_MS,
   type Segment,
 } from "./expression.js";
+export { type FileCandidate, fileParts, selectFiles } from "./files.js";
+export {
+  type CallKind,
+  callKind,
+  type FocusSelection,
+  focusVerb,
+  selectFocus,
+  TurnFocusBoard,
+  type TurnFocusInit,
+  type VoiceCallFacts,
+} from "./focus.js";
 export {
   ACTIVENESS_PREFIX,
   AgentHandle,
@@ -101,6 +135,19 @@ export {
   modeLabel,
   UNCAPPED_INITIATIVES,
 } from "./levels.js";
+export { ACTING_ALONE, MainLine, MainTurn } from "./mainline/main.js";
+export { COMMIT_SPEC, STEER_SPEC, slimTool } from "./mainline/output.js";
+export {
+  contextData,
+  estimateTokens,
+  fitHistory,
+  mainMessages,
+  mainRules,
+  pinnedSection,
+  promptTokens,
+  proposalData,
+  tailSection,
+} from "./mainline/prompt.js";
 export { linkMentions, type MentionTarget } from "./mentions.js";
 export { AgentModule } from "./module.js";
 export { PersonaHandle, PersonaHandleKey } from "./persona.js";
@@ -114,7 +161,11 @@ export {
   cleanReply,
   DATA_PREAMBLE,
   DEFAULT_TRANSCRIPT,
+  dataMessage,
+  EXAMPLES_TITLE,
   FOCUS_HEAD,
+  FORMAT_RULES,
+  FRESHNESS_RULE,
   focusMessage,
   GUARD_RULES,
   gapLine,
@@ -126,18 +177,22 @@ export {
   INTENT_TITLE,
   INTERRUPTED,
   type IntentData,
+  intentBody,
   MAX_PARENT_CHARS,
-  PEOPLE_TITLE,
+  NOTICE,
   PRESENT_TITLE,
-  renderSections,
+  RULES,
   replyTag,
+  rulesPrompt,
+  SELF_HEAD,
   SELF_QUOTE_NAME,
   SITUATION,
   type Situation,
-  type SituationData,
   SPOKEN_TAG,
-  situationData,
+  selfSection,
   situationPrompt,
+  speaksReminder,
+  speaksRule,
   splitMessage,
   TRANSCRIPT_RULES,
   type TranscriptOptions,
@@ -147,8 +202,23 @@ export {
   VOICE_INITIATIVE,
   VOICE_INTENT,
   VOICE_PRESENT_TITLE,
+  VOICE_RULES,
   VOICE_SITUATION,
 } from "./prompt.js";
+export { BARGE_IN_TOPIC, SUBTITLE_TOPIC } from "./runtime.js";
+export {
+  activityBlock,
+  goalsBlock,
+  ledgerBlock,
+  moodBlock,
+  noticesBlock,
+  type PeopleSources,
+  type PresentPerson,
+  peopleBody,
+  policyBlock,
+  type SelfSources,
+  selfBlocks,
+} from "./self-block.js";
 export {
   type HistoryEntry,
   historyEntry,
@@ -157,20 +227,12 @@ export {
   type SessionParticipant,
 } from "./session.js";
 export {
-  affinityAmbientFactor,
-  affinityDirectFactor,
-  attitudeHint,
   BUDGET_TOPIC,
   type BudgetState,
   EXHAUSTED_LINE,
-  energyCooldownFactor,
-  energyProbabilityFactor,
   herStatusHint,
-  IGNORE_DIRECT_AFFINITY,
-  moodHint,
   parseBudgetState,
   shownHint,
-  tone,
   unansweredHint,
 } from "./signals.js";
 export {
@@ -182,7 +244,15 @@ export {
   SentenceSplitter,
 } from "./speech.js";
 export { ReactTool, ToolArgumentError } from "./tools.js";
-export { CheckError, markCurrent, parseCheck, TurnError, truncate } from "./turn.js";
+export {
+  CheckError,
+  focusVerbs,
+  markCurrent,
+  parseCheck,
+  TurnError,
+  type TurnPlan,
+  truncate,
+} from "./turn.js";
 export {
   allowedUrl,
   type FetchLike,

@@ -67,6 +67,8 @@ export const NodeMessageSchema = z.discriminatedUnion("type", [
     token: z.string(),
     node: z.string().default(""),
     self_account: SelfAccountSchema,
+    /** Optional features of the node (`play_duck`, `play_pause`); older nodes send none. */
+    capabilities: z.array(z.string()).default([]),
   }),
   z.object({ type: z.literal("joined"), guild: z.string(), channel: z.string() }),
   z.object({ type: z.literal("left"), guild: z.string(), reason: optString() }),
@@ -129,6 +131,15 @@ export type CoreMessage =
   | { type: "play_start"; play: number; guild: string; sample_rate: number; levels?: boolean }
   | { type: "play_end"; play: number }
   | { type: "play_stop"; play: number; fade_ms: number }
+  /**
+   * Sets the volume of a play (`gain` 0..1, 1 = normal) with a ramp of `fade_ms`; it stays until
+   * changed. Only sent to nodes whose hello `capabilities` has `play_duck`.
+   */
+  | { type: "play_duck"; play: number; gain: number; fade_ms: number }
+  /** Fades the play out and holds it (buffered audio waits). Needs capability `play_pause`. */
+  | { type: "play_pause"; play: number; fade_ms: number }
+  /** Continues a paused play with a fade-in. Needs capability `play_pause`. */
+  | { type: "play_resume"; play: number; fade_ms: number }
   /** Starts a Go Live stream of `source` (see `docs/protocols/voice-link.md`). */
   | {
       type: "golive_start";

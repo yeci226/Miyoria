@@ -29,6 +29,11 @@ export const SocialConfigSchema = z.object({
     .number()
     .int()
     .default(8 * 60),
+  /**
+   * Familiarity per line a person says (times its depth, see `lineDepth`; slows toward 100):
+   * it grows with how much and how deeply people interact, not a point per day.
+   */
+  familiarity_per_line: z.number().nonnegative().default(0.15),
   /** Days without contact before familiarity starts to decay. */
   familiarity_grace_days: z.number().int().default(7),
   /** Familiarity lost per day without contact after the grace period. */
@@ -52,13 +57,17 @@ export const SocialConfigSchema = z.object({
   tick_secs: count().default(15),
   /** Accounts the authorizer treats as owners get the `owner` tag. */
   auto_owner_tag: z.boolean().default(true),
-  /** People listed in the `在場的人` prompt section. */
-  prompt_max_people: count().default(8),
   /** LLM purpose used for appraisal and notes. */
   llm_purpose: z.string().default("fast"),
 });
 
 export type SocialConfig = z.output<typeof SocialConfigSchema>;
+
+/**
+ * Keys of `[modules.social]` that are gone: `prompt_max_people` sized her `在場的人` section,
+ * which the agent renders itself now (v2 §3.5). Still loads, with a warning.
+ */
+export const DEPRECATED_SOCIAL_KEYS: readonly string[] = ["prompt_max_people"];
 
 /** The defaults (`SocialConfig::default()`), optionally overridden. */
 export function socialConfig(overrides: Partial<SocialConfig> = {}): SocialConfig {

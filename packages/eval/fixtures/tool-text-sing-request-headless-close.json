@@ -1,0 +1,31 @@
+{
+  "id": "tool-text-sing-request-headless-close",
+  "title": "sing_request half written: no opening tag, closing tag spoken",
+  "category": "tool_as_text",
+  "incident": {
+    "at": "2026-11-08T11:09:32+08:00",
+    "summary": "The model wrote <query>, <by> and </sing_request> without the opening tag; the voice channel got the lines and the song was not requested by the call.",
+    "source": [
+      "log_events seq 13975-13976"
+    ]
+  },
+  "harness": "parser",
+  "trace": [
+    {"type":"said","t":0,"channel":"voice","text":"哼哼,最後一首,給我好好接著聽喔。"},
+    {"type":"said","t":0.4,"channel":"voice","text":"テト的 Override,來啦!\n\n\n<query>重音テトSV オーバーライド</query>\n<by>viewer-1</by>\n</sing_request>"},
+    {"type":"call","t":0.4,"tool":"sing_request","native":false}
+  ],
+  "control": [
+    {"type":"said","t":0,"channel":"voice","text":"哼哼,最後一首,給我好好接著聽喔。"},
+    {"type":"said","t":0.4,"channel":"voice","text":"テト的 Override,來啦!\n重音テトSV オーバーライド\nviewer-1"},
+    {"type":"call","t":1.4,"tool":"sing_request","native":true}
+  ],
+  "checks": [
+    {
+      "rule": "no_markup_in_speech"
+    }
+  ],
+  "status": "xfail",
+  "reason": "the expression parser drops only the tags it recognises (snake_case names); the rest of the model's function-call text reaches the speech as plain words",
+  "flips_with": "agent: expression parser drops tool-call markup it cannot parse (and the tool-as-text retry)"
+}

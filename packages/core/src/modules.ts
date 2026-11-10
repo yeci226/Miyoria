@@ -1,25 +1,35 @@
 // The one place that imports the module packages. Names mirror the legacy Rust constructors
 // (camelCased); if a package exported something else, fix it here and nowhere else.
 //
-// Boot order (legacy `boot.rs`): llm, speech, voice.link, voice, scheduler, agent, commands,
-// auth, actions, social, mood, world, self, memory, initiative, mind, knowledge, conversation,
-// reflect, queue, game, game.chat, sing, share (opt-in), watch (opt-in), web, mcp,
-// stage.link, sandbox (opt-in), recorder, Discord bot, Admin API, terminal chat, then the
+// Boot order (legacy `boot.rs`, after `facts`, which every other module outlives, and `moderation`,
+// which is there before anything can say a word): llm, speech, voice.link, voice, scheduler, agent, commands,
+// auth, actions, directive, activity, social, mood, world, self, memory, arbiter, mind, knowledge, conversation,
+// reflect, queue, game, game.chat, sing, share (opt-in), watch (opt-in), mcp,
+// stage.link, economy, web, sandbox (opt-in), recorder, Discord bot, Admin API, terminal chat, then the
 // extension host and one `ext.<id>` per extension.
 
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { ActionsModule } from "@miyoria/actions";
+import { ActivityModule } from "@miyoria/activity";
 import { AgentModule, PersonaHandleKey } from "@miyoria/agent";
 import { ApiModule, avatarEmotions } from "@miyoria/api";
+import { ArbiterModule } from "@miyoria/arbiter";
 import { AuthConfigSchema, AuthModule } from "@miyoria/auth";
 import { CommandsModule } from "@miyoria/commands";
+import { DirectiveModule } from "@miyoria/directive";
 import { DiscordBotModule } from "@miyoria/discord";
+import { EconomyModule } from "@miyoria/economy";
 import * as extHost from "@miyoria/ext-host";
+import { FactsModule } from "@miyoria/facts";
 import { GameChatModule, GameHandleKey, GameModule } from "@miyoria/game";
-import { InitiativeModule } from "@miyoria/initiative";
 import type { Config, Module } from "@miyoria/kernel";
-import { ConversationModule, KnowledgeModule, ReflectModule } from "@miyoria/learning";
+import {
+  ConversationModule,
+  KnowledgeModule,
+  ReflectModule,
+  repairEphemeralHandles,
+} from "@miyoria/learning";
 import {
   type LlmConfig,
   LlmConfigSchema,
@@ -31,6 +41,7 @@ import {
 import { McpModule } from "@miyoria/mcp";
 import { EmbeddingConfigSchema, MemoryModule } from "@miyoria/memory";
 import { MindModule } from "@miyoria/mind";
+import { ModerationModule } from "@miyoria/moderation";
 import type { Profile } from "@miyoria/profile";
 import { QueueModule } from "@miyoria/queue";
 import { SandboxModule } from "@miyoria/sandbox";
@@ -52,8 +63,12 @@ import {
   SOURCES,
   StageLinkModule,
 } from "@miyoria/stage";
-import { openStore as openStoreBackend, type Store } from "@miyoria/store";
-import { isJsonObject } from "@miyoria/types";
+import {
+  openStore as openStoreBackend,
+  type Store,
+  type StoredHandleDirectory,
+} from "@miyoria/store";
+import { isJsonObject, type ProfileId } from "@miyoria/types";
 import { VoiceLinkModule, VoiceModule } from "@miyoria/voice";
 import { WatchModule } from "@miyoria/watch";
 import { WebModule } from "@miyoria/web";
@@ -107,30 +122,45 @@ export function authOwners(config: Config): string[] {
   return parsed.success ? parsed.data.owners : [];
 }
 
-async function coreModules({ config, profile, profileId, baseDir }: ModuleDeps): Promise<Module[]> {
+async function coreModules({
+  config,
+  profile,
+  profileId,
+  store,
+  baseDir,
+}: ModuleDeps): Promise<Module[]> {
   return [
+    // First, so it stops last: it logs what the others say on their way down.
+    new FactsModule(store, profileId, { names: profile.names() }),
+    new ModerationModule(),
     llmModule(config, profile),
     SpeechModule.withDefaultFactories(config.get("speech", SpeechConfigSchema)),
     new VoiceLinkModule(),
-    new VoiceModule(profileId, profile.voice),
+    new VoiceModule(profileId, profile.voice, profile.names()),
     new SchedulerModule(),
     new AgentModule(profile),
     new CommandsModule({ owners: authOwners(config) }),
     new AuthModule(),
     new ActionsModule(profile.displayName),
+    new DirectiveModule(),
+    new ActivityModule(),
     SocialModule.fromProfile(profile),
     new MoodModule(profileId, profile.manifest.mood),
     new WorldModule({
       interests: profile.manifest.interests,
       game: (services) => services.get(GameHandleKey)?.status()?.game_name ?? null,
     }),
-    new SelfModule(profileId, { temperament: profile.manifest.temperament }),
+    new SelfModule(profileId, {
+      temperament: profile.manifest.temperament,
+      baseline: profile.manifest.mood,
+    }),
     new MemoryModule(profileId, config.get("memory.embedding", EmbeddingConfigSchema)),
-    new InitiativeModule(profileId),
+    // Replaces `initiative` (an old `[modules.initiative]` section is read with a warning).
+    new ArbiterModule(profileId, { legacyInitiative: config.module("initiative").config }),
     new MindModule(profileId, {
       name: profile.displayName,
       persona: (services) =>
-        services.get(PersonaHandleKey)?.personaPrompt() ?? profile.personaPrompt(),
+        services.get(PersonaHandleKey)?.corePrompt() ?? profile.personaPrompt(),
     }),
     new KnowledgeModule(profileId),
     new ConversationModule(profileId),
@@ -138,7 +168,7 @@ async function coreModules({ config, profile, profileId, baseDir }: ModuleDeps):
       name: profile.displayName,
       names: profile.names(),
       persona: (services) =>
-        services.get(PersonaHandleKey)?.personaPrompt() ?? profile.personaPrompt(),
+        services.get(PersonaHandleKey)?.corePrompt() ?? profile.personaPrompt(),
     }),
     new QueueModule(),
     GameModule.fromProfile(profile),
@@ -154,9 +184,10 @@ async function coreModules({ config, profile, profileId, baseDir }: ModuleDeps):
       persona: (services) =>
         services.get(PersonaHandleKey)?.personaPrompt() ?? profile.personaPrompt(),
     }),
-    new WebModule(),
     McpModule.fromAppConfig(config),
     new StageLinkModule(),
+    new EconomyModule(profileId),
+    new WebModule(),
     new SandboxModule(profileId, { baseDir }),
   ];
 }
@@ -166,12 +197,28 @@ async function discoverExtensions(config: Config, baseDir: string): Promise<Exte
   return { skipped: found.skipped, modules: found.modules };
 }
 
+/** Repairs lessons, recaps and agenda text that carry per-call codes (`u1`). */
+async function migrateStoredData(
+  store: Store,
+  profile: ProfileId,
+  handles: StoredHandleDirectory | null,
+): Promise<void> {
+  const people = await store.people.all();
+  const handleOf = new Map(people.map((p) => [p.id, handles?.ensurePerson(p) ?? null] as const));
+  await repairEphemeralHandles({
+    settings: store.settings,
+    profile,
+    handleOfPerson: (person) => handleOf.get(person) ?? null,
+  });
+}
+
 export const defaultCatalog: ModuleCatalog = {
   openStore,
   coreModules,
   discord: () => new DiscordBotModule(),
   api: (deps) => new ApiModule({ emotions: avatarEmotions(deps.profile.avatar) }),
   discoverExtensions,
+  migrateStoredData,
 };
 
 /** Builds a core node from `config` with every module package. */

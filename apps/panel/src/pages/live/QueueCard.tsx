@@ -106,7 +106,6 @@ export function QueueCard() {
                 <SkipForward />,
                 () => skip.mutate(i.id, { onSuccess: () => notify.ok(`已跳過 #${row.index + 1}`), onError: (e) => notify.error(e, "跳過失敗") }),
                 false,
-                "hover:bg-destructive/12 hover:text-[oklch(0.78_0.14_25)]",
               )}
             </div>
           );
@@ -117,7 +116,7 @@ export function QueueCard() {
   );
 
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>
           請求佇列

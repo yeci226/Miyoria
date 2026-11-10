@@ -1,5 +1,5 @@
 import {
-  createHashHistory,
+  createBrowserHistory,
   createRootRoute,
   createRoute,
   createRouter,
@@ -10,11 +10,13 @@ import { AccessPage } from "@/pages/access/AccessPage";
 import { ActivityPage } from "@/pages/activity/ActivityPage";
 import { CharacterPage } from "@/pages/character/CharacterPage";
 import { DataPage } from "@/pages/data/DataPage";
+import { EvalPage } from "@/pages/eval/EvalPage";
 import { InnerPage } from "@/pages/inner/InnerPage";
 import { LivePage } from "@/pages/live/LivePage";
 import { LlmPage } from "@/pages/llm/LlmPage";
 import { NotFoundPage } from "@/pages/NotFound";
 import { OverviewPage } from "@/pages/overview/OverviewPage";
+import { RulesPage } from "@/pages/rules/RulesPage";
 import { SettingsPage } from "@/pages/settings/SettingsPage";
 import { SystemPage } from "@/pages/system/SystemPage";
 import {
@@ -39,7 +41,10 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim
 export const activityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/activity",
-  validateSearch: (s: Record<string, unknown>): { tab?: ActivityTab } => ({ tab: oneOf(ACTIVITY_TABS, s.tab) }),
+  validateSearch: (s: Record<string, unknown>): { tab?: ActivityTab; turn?: string } => ({
+    tab: oneOf(ACTIVITY_TABS, s.tab),
+    turn: str(s.turn),
+  }),
   component: ActivityPage,
 });
 
@@ -125,6 +130,8 @@ const routeTree = rootRoute.addChildren([
   innerRoute,
   llmRoute,
   systemRoute,
+  createRoute({ getParentRoute: () => rootRoute, path: "/rules", component: RulesPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/eval", component: EvalPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/access", component: AccessPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/data", component: DataPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage }),
@@ -151,10 +158,10 @@ const routeTree = rootRoute.addChildren([
 ]);
 
 /**
- * Hash history: the Core serves `dist/` as static files, and `#/activity`
- * needs no server-side SPA fallback.
+ * Clean addresses (`/activity`, `/card/MYR-…`): the Core answers any page path without a file
+ * extension with `index.html` (`packages/api/src/panel.ts`).
  */
-export function createAppRouter(history: RouterHistory = createHashHistory()) {
+export function createAppRouter(history: RouterHistory = createBrowserHistory()) {
   return createRouter({ routeTree, history, defaultPreload: false, scrollRestoration: true });
 }
 

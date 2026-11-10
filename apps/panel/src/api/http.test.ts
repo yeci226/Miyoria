@@ -58,7 +58,7 @@ describe("ApiClient", () => {
 
   it("builds the Discord login URL with the return path", () => {
     const api = createApi(new ApiClient({ baseUrl: "", token: "" }));
-    expect(api.discordLoginUrl("/#/people")).toBe("/api/auth/oauth/login?next=%2F%23%2Fpeople");
+    expect(api.discordLoginUrl("/people")).toBe("/api/auth/oauth/login?next=%2Fpeople");
   });
 
   it("encodes the decisions context as JSON and passes the limit", async () => {

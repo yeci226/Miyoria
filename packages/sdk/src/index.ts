@@ -30,12 +30,42 @@ export {
   type GameInfo,
   type GameObservation,
   type RegisteredAdapter,
-  actToolSchema,
+  actWorker,
   describeActions,
-  formatActionResult,
   formatObservation,
   registerGameAdapter,
 } from "./game.js";
-export { type NotificationHandler, type PeerOptions, type RequestHandler, RpcError, RpcPeer } from "./rpc.js";
+export {
+  CANCEL_METHOD,
+  type NotificationHandler,
+  type PeerOptions,
+  type RequestHandler,
+  RpcError,
+  RpcPeer,
+} from "./rpc.js";
+export {
+  MAX_TASK_BUDGET_S,
+  type StructuredState,
+  TASK_FAILURE_CODES,
+  type TaskContext,
+  type TaskEvent,
+  type TaskEventType,
+  type TaskExecutor,
+  type TaskExecutorInfoInput,
+  TaskFailure,
+  type TaskFailureCode,
+  type TaskGoalSpec,
+  type TaskId,
+  type TaskResult,
+  TaskRunner,
+  type TaskRunnerOptions,
+  type TaskSpec,
+  type TaskSteer,
+  type TaskWorker,
+  type SteerOutcome,
+  isTaskFailureCode,
+  isTerminalTaskEvent,
+  taskTopic,
+} from "./task.js";
 export { isValidTopic, topicMatches } from "./topics.js";
 export * from "./types.js";

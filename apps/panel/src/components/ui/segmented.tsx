@@ -49,7 +49,7 @@ export function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
-      className={cn("inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-md border bg-background/60 p-0.5", className)}
+      className={cn("inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-[7px] bg-well p-0.5", className)}
     >
       {options.map((o, i) => {
         const on = o.value === value;
@@ -69,9 +69,9 @@ export function Segmented<T extends string>({
             onClick={() => !on && onChange(o.value)}
             onKeyDown={(e) => onKey(e, i)}
             className={cn(
-              "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[5px] px-2.5 font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-3.5",
-              size === "sm" ? "h-7 text-[13px]" : "h-8 text-sm",
-              on && "bg-accent text-foreground shadow-[inset_0_0_0_1px_var(--border)]",
+              "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[5px] px-2.5 font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-3.5",
+              size === "sm" ? "h-[22px] text-xs" : "h-7 text-[13px]",
+              on && "bg-secondary text-secondary-foreground [text-shadow:none] hover:text-secondary-foreground",
             )}
           >
             {o.label}

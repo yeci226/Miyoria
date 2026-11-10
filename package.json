@@ -13,8 +13,11 @@
     "test:watch": "vitest",
     "lint": "biome check .",
     "format": "biome format --write .",
+    "bootstrap": "node scripts/setup.mjs",
     "dev": "tsx --conditions=@miyoria/source packages/cli/src/main.ts",
     "dev:core": "tsx --conditions=@miyoria/source packages/cli/src/main.ts core",
+    "replay": "node packages/replay/bin/replay.mjs",
+    "eval": "tsx --conditions=@miyoria/source packages/eval/src/cli.ts",
     "build:web": "pnpm --filter @miyoria/panel --filter @miyoria/overlay build",
     "release:pack": "pnpm build:web && pnpm --dir packages/sdk pack && pnpm --dir packages/cli pack",
     "release:publish": "pnpm build:web && pnpm --dir packages/sdk publish --access public && pnpm --dir packages/cli publish --access public"

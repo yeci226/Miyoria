@@ -23,7 +23,14 @@ import {
   type ContextKey,
   type ContextKind,
   type DecisionTrace,
+  type Directive,
+  type DirectiveRecord,
+  isJsonObject,
+  type JsonObject,
   type JsonValue,
+  type LogEvent,
+  type LogEventFilter,
+  type LogEventKind,
   type ModuleId,
   newId,
   type PersonId,
@@ -31,8 +38,10 @@ import {
   type ProfileId,
   systemClock,
   type Timestamp,
+  type TurnOutcomeRecord,
 } from "@miyoria/types";
 import {
+  allowedDelta,
   authScopeKey,
   canonicalMemoryScope,
   cleanEmbedding,
@@ -44,6 +53,7 @@ import {
   fromMicros,
   MAX_DECISIONS,
   memoryKind,
+  memoryOrigin,
   memoryScopeKey,
   memorySourceJson,
   optionalMicros,
@@ -51,9 +61,11 @@ import {
   parseJson,
   queryTokens,
   StoreError,
+  sourceEvents,
   sqlLimit,
   toMicros,
   u32,
+  walletWith,
 } from "./common.js";
 import {
   addCount,
@@ -71,9 +83,26 @@ import {
 import type {
   Account,
   AuditEntry,
+  AuthoredEntry,
   AuthScope,
+  Bounty,
+  BountyPatch,
+  BountyStatus,
+  CoinCap,
+  CoinEntry,
+  CoinPost,
+  CoinRule,
+  Deal,
+  DealPatch,
+  DealStatus,
   DecisionRecord,
+  FortuneRecord,
+  Goal,
+  GoalPatch,
+  GoalPledge,
+  GoalStatus,
   LogEntry,
+  MemberCardRecord,
   MemoryFilter,
   MemoryHit,
   MemoryQuery,
@@ -93,8 +122,19 @@ import type {
 import type {
   AuditLog,
   AuthStore,
+  BountyStore,
+  CoinLedgerStore,
+  DealStore,
   DecisionLog,
+  DirectiveStore,
+  EventCompaction,
+  EventCompactionResult,
+  EventLogStore,
+  EventRollup,
+  FortuneStore,
+  GoalStore,
   IdentityStore,
+  MemberCardStore,
   MemoryRecordStore,
   MessageLog,
   ModuleStateStore,
@@ -376,6 +416,809 @@ class SqliteMessageLog implements MessageLog {
     );
     return rows.map(logEntryFromRow);
   }
+
+  async authoredSince(
+    profile: ProfileId,
+    authors: readonly AccountRef[],
+    since: Timestamp,
+    limit: number,
+  ): Promise<AuthoredEntry[]> {
+    if (authors.length === 0) return [];
+    const params: Record<string, string | number> = {
+      profile,
+      since: toMicros(since),
+      limit: limitParam(limit),
+    };
+    const who = authors.map((a, i) => {
+      params[`p${i}`] = a.platform;
+      params[`a${i}`] = a.id;
+      return `(author_platform = $p${i} AND author_id = $a${i})`;
+    });
+    const rows = this.db.all(
+      "SELECT * FROM (SELECT ts, kind, seq FROM message_log WHERE profile_id = $profile AND " +
+        `is_self = 0 AND ts >= $since AND (${who.join(" OR ")}) ORDER BY ts DESC, seq DESC ` +
+        "LIMIT $limit) ORDER BY ts ASC, seq ASC",
+      params,
+    );
+    return rows.map((row) => ({ ts: ts(row, "ts"), kind: str(row, "kind") as ContextKind }));
+  }
+}
+
+// ---- member cards -------------------------------------------------------------------------
+
+function memberCardFromRow(row: Row): MemberCardRecord {
+  return {
+    serial: str(row, "serial"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    person: optStr(row, "person_id"),
+    issued_at: ts(row, "issued_at"),
+    snapshot: json<JsonObject>(row, "snapshot", "member card"),
+  };
+}
+
+/** `(author_platform = … AND author_id = …) OR …` over `accounts`, its parameters added to `params`. */
+function authorsWhere(accounts: readonly AccountRef[], params: Params): string {
+  return accounts
+    .map((a, i) => {
+      params[`p${i}`] = a.platform;
+      params[`a${i}`] = a.id;
+      return `(author_platform = $p${i} AND author_id = $a${i})`;
+    })
+    .join(" OR ");
+}
+
+class SqliteMemberCards implements MemberCardStore {
+  constructor(private readonly db: Db) {}
+
+  async issue(card: MemberCardRecord): Promise<void> {
+    try {
+      this.db.run(
+        "INSERT INTO member_cards (serial, profile_id, author_platform, author_id, person_id, " +
+          "issued_at, snapshot) VALUES ($serial, $profile, $platform, $id, $person, $at, $snapshot)",
+        {
+          serial: card.serial,
+          profile: card.profile,
+          platform: card.account.platform,
+          id: card.account.id,
+          person: card.person,
+          at: toMicros(card.issued_at),
+          snapshot: JSON.stringify(card.snapshot),
+        },
+      );
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      if (isConstraintError(cause)) {
+        throw new StoreError(`member card \`${card.serial}\` already exists`, { cause });
+      }
+      throw new StoreError("cannot store the member card", { cause });
+    }
+  }
+
+  async bySerial(profile: ProfileId, serial: string): Promise<MemberCardRecord | null> {
+    const row = this.db.get(
+      "SELECT * FROM member_cards WHERE profile_id = $profile AND serial = $serial",
+      { profile, serial },
+    );
+    return row ? memberCardFromRow(row) : null;
+  }
+
+  async amend(profile: ProfileId, serial: string, snapshot: JsonObject): Promise<boolean> {
+    const changed = this.db.run(
+      "UPDATE member_cards SET snapshot = $snapshot WHERE profile_id = $profile AND serial = $serial",
+      { profile, serial, snapshot: JSON.stringify(snapshot) },
+    );
+    return changed > 0;
+  }
+
+  async listFor(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    limit: number,
+  ): Promise<MemberCardRecord[]> {
+    if (accounts.length === 0) return [];
+    const params: Params = { profile, limit: limitParam(limit) };
+    const rows = this.db.all(
+      `SELECT * FROM member_cards WHERE profile_id = $profile AND (${authorsWhere(accounts, params)}) ` +
+        "ORDER BY issued_at DESC, rowid DESC LIMIT $limit",
+      params,
+    );
+    return rows.map(memberCardFromRow);
+  }
+
+  async countSince(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    since: Timestamp,
+  ): Promise<number> {
+    if (accounts.length === 0) return 0;
+    const params: Params = { profile, since: toMicros(since) };
+    const row = this.db.get(
+      "SELECT COUNT(*) AS n FROM member_cards WHERE profile_id = $profile AND " +
+        `issued_at >= $since AND (${authorsWhere(accounts, params)})`,
+      params,
+    );
+    return row ? num(row, "n") : 0;
+  }
+
+  async countFor(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    if (accounts.length === 0) return 0;
+    const params: Params = { profile };
+    const row = this.db.get(
+      "SELECT COUNT(*) AS n FROM member_cards WHERE profile_id = $profile AND " +
+        `(${authorsWhere(accounts, params)})`,
+      params,
+    );
+    return row ? num(row, "n") : 0;
+  }
+
+  async deleteFor(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    if (accounts.length === 0) return 0;
+    const params: Params = { profile };
+    return this.db.run(
+      "DELETE FROM member_cards WHERE profile_id = $profile AND " +
+        `(${authorsWhere(accounts, params)})`,
+      params,
+    );
+  }
+}
+
+// ---- coins ---------------------------------------------------------------------------------
+
+function coinFromRow(row: Row): CoinEntry {
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    delta: num(row, "delta"),
+    reason: str(row, "reason"),
+    ref: optStr(row, "ref"),
+    idem_key: optStr(row, "idem_key"),
+    ts: ts(row, "ts"),
+  };
+}
+
+/** `reason IN (…)` over `reasons`, its parameters added to `params`. */
+function reasonsIn(reasons: readonly string[], params: Params): string {
+  const names = reasons.map((r, i) => {
+    params[`r${i}`] = r;
+    return `$r${i}`;
+  });
+  return `reason IN (${names.join(", ")})`;
+}
+
+class SqliteCoins implements CoinLedgerStore {
+  constructor(private readonly db: Db) {}
+
+  #balance(profile: ProfileId, accounts: readonly AccountRef[]): number {
+    if (accounts.length === 0) return 0;
+    const params: Params = { profile };
+    const row = this.db.get(
+      "SELECT COALESCE(SUM(delta), 0) AS n FROM coin_ledger WHERE profile_id = $profile AND " +
+        `(${authorsWhere(accounts, params)})`,
+      params,
+    );
+    return row ? num(row, "n") : 0;
+  }
+
+  #sum(profile: ProfileId, cap: CoinCap): number {
+    if (cap.reasons.length === 0 || cap.accounts?.length === 0) return 0;
+    const params: Params = { profile, since: toMicros(cap.since) };
+    const who = cap.accounts === null ? "" : ` AND (${authorsWhere(cap.accounts, params)})`;
+    const row = this.db.get(
+      "SELECT COALESCE(SUM(delta), 0) AS n FROM coin_ledger WHERE profile_id = $profile AND " +
+        `ts >= $since AND ${reasonsIn(cap.reasons, params)}${who}`,
+      params,
+    );
+    return row ? num(row, "n") : 0;
+  }
+
+  #byKey(profile: ProfileId, accounts: readonly AccountRef[], key: string): CoinEntry | null {
+    if (accounts.length === 0) return null;
+    const params: Params = { profile, key };
+    const row = this.db.get(
+      "SELECT * FROM coin_ledger WHERE profile_id = $profile AND idem_key = $key AND " +
+        `(${authorsWhere(accounts, params)}) ORDER BY ts, rowid LIMIT 1`,
+      params,
+    );
+    return row ? coinFromRow(row) : null;
+  }
+
+  async post(entry: CoinEntry, rule: CoinRule): Promise<CoinPost> {
+    if (!Number.isSafeInteger(entry.delta)) throw new StoreError("a coin delta must be whole");
+    const wallet = walletWith(entry.account, rule.wallet);
+    const profile = entry.profile;
+    try {
+      return this.db.tx((): CoinPost => {
+        if (entry.idem_key !== null) {
+          const first = this.#byKey(profile, wallet, entry.idem_key);
+          if (first) {
+            return { status: "duplicate", entry: first, balance: this.#balance(profile, wallet) };
+          }
+        }
+        const balance = this.#balance(profile, wallet);
+        const delta = allowedDelta(entry.delta, rule, (cap) => this.#sum(profile, cap));
+        if (delta === null) return { status: "capped", balance };
+        if (rule.covered && balance + delta < 0) return { status: "short", balance };
+        this.db.run(
+          "INSERT INTO coin_ledger (id, profile_id, author_platform, author_id, delta, reason, " +
+            "ref, idem_key, ts) VALUES ($id, $profile, $platform, $account, $delta, $reason, " +
+            "$ref, $key, $ts)",
+          {
+            id: entry.id,
+            profile,
+            platform: entry.account.platform,
+            account: entry.account.id,
+            delta,
+            reason: entry.reason,
+            ref: entry.ref,
+            key: entry.idem_key,
+            ts: toMicros(entry.ts),
+          },
+        );
+        return { status: "posted", entry: { ...entry, delta }, balance: balance + delta };
+      });
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot write to the coin ledger", { cause });
+    }
+  }
+
+  async balance(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    return this.#balance(profile, accounts);
+  }
+
+  async entries(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    filter: { reasons?: readonly string[]; since?: Timestamp; limit: number },
+  ): Promise<CoinEntry[]> {
+    if (accounts.length === 0 || filter.reasons?.length === 0) return [];
+    const params: Params = { profile, limit: limitParam(filter.limit) };
+    let where = `profile_id = $profile AND (${authorsWhere(accounts, params)})`;
+    if (filter.reasons) where += ` AND ${reasonsIn(filter.reasons, params)}`;
+    if (filter.since !== undefined) {
+      params.since = toMicros(filter.since);
+      where += " AND ts >= $since";
+    }
+    const rows = this.db.all(
+      `SELECT * FROM coin_ledger WHERE ${where} ORDER BY ts DESC, rowid DESC LIMIT $limit`,
+      params,
+    );
+    return rows.map(coinFromRow);
+  }
+
+  async byKey(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    key: string,
+  ): Promise<CoinEntry | null> {
+    return this.#byKey(profile, accounts, key);
+  }
+
+  async selectedFrame(profile: ProfileId, accounts: readonly AccountRef[]): Promise<string | null> {
+    if (accounts.length === 0) return null;
+    const params: Params = { profile };
+    const row = this.db.get(
+      "SELECT frame FROM coin_wallets WHERE profile_id = $profile AND " +
+        `(${authorsWhere(accounts, params)}) ORDER BY updated_at DESC LIMIT 1`,
+      params,
+    );
+    return row ? optStr(row, "frame") : null;
+  }
+
+  async selectFrame(
+    profile: ProfileId,
+    account: AccountRef,
+    frame: string | null,
+    at: Timestamp,
+  ): Promise<void> {
+    this.db.run(
+      "INSERT INTO coin_wallets (profile_id, author_platform, author_id, frame, updated_at) " +
+        "VALUES ($profile, $platform, $id, $frame, $at) ON CONFLICT (profile_id, " +
+        "author_platform, author_id) DO UPDATE SET frame = excluded.frame, updated_at = " +
+        "excluded.updated_at",
+      { profile, platform: account.platform, id: account.id, frame, at: toMicros(at) },
+    );
+  }
+
+  async onBoard(profile: ProfileId, accounts: readonly AccountRef[]): Promise<boolean> {
+    if (accounts.length === 0) return true;
+    const params: Params = { profile };
+    const row = this.db.get(
+      "SELECT 1 AS x FROM coin_wallets WHERE profile_id = $profile AND off_board = 1 AND " +
+        `(${authorsWhere(accounts, params)}) LIMIT 1`,
+      params,
+    );
+    return !row;
+  }
+
+  async setOnBoard(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    on: boolean,
+  ): Promise<void> {
+    // A row made only for the board is the oldest, so it never hides a chosen frame.
+    this.db.tx(() => {
+      for (const account of accounts) {
+        this.db.run(
+          "INSERT INTO coin_wallets (profile_id, author_platform, author_id, frame, updated_at, " +
+            "off_board) VALUES ($profile, $platform, $id, NULL, 0, $off) ON CONFLICT (profile_id, " +
+            "author_platform, author_id) DO UPDATE SET off_board = excluded.off_board",
+          { profile, platform: account.platform, id: account.id, off: on ? 0 : 1 },
+        );
+      }
+    });
+  }
+
+  async offBoardAccounts(profile: ProfileId, limit: number): Promise<AccountRef[]> {
+    const rows = this.db.all(
+      "SELECT author_platform, author_id FROM coin_wallets WHERE profile_id = $profile AND " +
+        "off_board = 1 ORDER BY author_platform, author_id LIMIT $limit",
+      { profile, limit: limitParam(limit) },
+    );
+    return rows.map((r) => ({ platform: str(r, "author_platform"), id: str(r, "author_id") }));
+  }
+
+  async spent(
+    profile: ProfileId,
+    reasons: readonly string[],
+    since: Timestamp,
+    limit: number,
+  ): Promise<{ account: AccountRef; spent: number }[]> {
+    if (reasons.length === 0) return [];
+    const params: Params = { profile, since: toMicros(since), limit: limitParam(limit) };
+    const names = reasons.map((r, i) => {
+      params[`r${i}`] = r;
+      return `$r${i}`;
+    });
+    const rows = this.db.all(
+      "SELECT l.author_platform AS author_platform, l.author_id AS author_id, " +
+        "-SUM(l.delta) AS n FROM coin_ledger l WHERE l.profile_id = $profile AND l.ts >= $since " +
+        `AND l.delta < 0 AND l.reason IN (${names.join(", ")}) AND (l.reason <> 'deal_escrow' ` +
+        "OR EXISTS (SELECT 1 FROM deals d WHERE d.escrow_entry = l.id AND d.status = 'settled')) " +
+        "AND NOT EXISTS (SELECT 1 FROM coin_ledger r WHERE r.profile_id = l.profile_id AND " +
+        "r.reason = 'refund' AND r.ref = l.id) GROUP BY l.author_platform, l.author_id " +
+        "HAVING SUM(l.delta) < 0 ORDER BY n DESC, l.author_platform, l.author_id LIMIT $limit",
+      params,
+    );
+    return rows.map((r) => ({
+      account: { platform: str(r, "author_platform"), id: str(r, "author_id") },
+      spent: num(r, "n"),
+    }));
+  }
+}
+
+// ---- fortunes ------------------------------------------------------------------------------
+
+function fortuneFromRow(row: Row): FortuneRecord {
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    person: optStr(row, "person_id"),
+    day: num(row, "day"),
+    issued_at: ts(row, "issued_at"),
+    entry: optStr(row, "entry_id"),
+    slip: json<JsonObject>(row, "slip", "fortune"),
+  };
+}
+
+class SqliteFortunes implements FortuneStore {
+  constructor(private readonly db: Db) {}
+
+  async put(record: FortuneRecord, accounts: readonly AccountRef[]): Promise<boolean> {
+    const wallet = walletWith(record.account, accounts);
+    try {
+      return this.db.tx((): boolean => {
+        const params: Params = { profile: record.profile, day: record.day };
+        const taken = this.db.get(
+          "SELECT id FROM fortunes WHERE profile_id = $profile AND day = $day AND " +
+            `(${authorsWhere(wallet, params)}) LIMIT 1`,
+          params,
+        );
+        if (taken) return false;
+        this.db.run(
+          "INSERT INTO fortunes (id, profile_id, author_platform, author_id, person_id, day, " +
+            "issued_at, entry_id, slip) VALUES ($id, $profile, $platform, $account, $person, " +
+            "$day, $at, $entry, $slip)",
+          {
+            id: record.id,
+            profile: record.profile,
+            platform: record.account.platform,
+            account: record.account.id,
+            person: record.person,
+            day: record.day,
+            at: toMicros(record.issued_at),
+            entry: record.entry,
+            slip: JSON.stringify(record.slip),
+          },
+        );
+        return true;
+      });
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot store the fortune", { cause });
+    }
+  }
+
+  async forDay(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    day: number,
+  ): Promise<FortuneRecord | null> {
+    if (accounts.length === 0) return null;
+    const params: Params = { profile, day };
+    const row = this.db.get(
+      "SELECT * FROM fortunes WHERE profile_id = $profile AND day = $day AND " +
+        `(${authorsWhere(accounts, params)}) ORDER BY issued_at DESC, rowid DESC LIMIT 1`,
+      params,
+    );
+    return row ? fortuneFromRow(row) : null;
+  }
+
+  async listFor(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    limit: number,
+  ): Promise<FortuneRecord[]> {
+    if (accounts.length === 0) return [];
+    const params: Params = { profile, limit: limitParam(limit) };
+    const rows = this.db.all(
+      `SELECT * FROM fortunes WHERE profile_id = $profile AND (${authorsWhere(accounts, params)}) ` +
+        "ORDER BY issued_at DESC, rowid DESC LIMIT $limit",
+      params,
+    );
+    return rows.map(fortuneFromRow);
+  }
+
+  async deleteFor(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    if (accounts.length === 0) return 0;
+    const params: Params = { profile };
+    return this.db.run(
+      `DELETE FROM fortunes WHERE profile_id = $profile AND (${authorsWhere(accounts, params)})`,
+      params,
+    );
+  }
+}
+
+// ---- deals ---------------------------------------------------------------------------------
+
+function dealFromRow(row: Row): Deal {
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    item: str(row, "reward_item"),
+    count: num(row, "reward_count"),
+    value: num(row, "reward_value"),
+    task: str(row, "task"),
+    prepaid: bool(row, "prepaid"),
+    escrow: optStr(row, "escrow_entry"),
+    status: str(row, "status") as DealStatus,
+    created_at: ts(row, "created_at"),
+    done_at: optTs(row, "done_at"),
+    due_at: optTs(row, "due_at"),
+    closed_at: optTs(row, "closed_at"),
+  };
+}
+
+/** `status IN (...)` over `statuses`, its parameters added to `params`. */
+function statusIn(statuses: readonly string[], params: Params): string {
+  const names = statuses.map((s, i) => {
+    params[`s${i}`] = s;
+    return `$s${i}`;
+  });
+  return `status IN (${names.join(", ")})`;
+}
+
+class SqliteDeals implements DealStore {
+  constructor(private readonly db: Db) {}
+
+  async create(deal: Deal): Promise<void> {
+    try {
+      this.db.run(
+        "INSERT INTO deals (id, profile_id, author_platform, author_id, reward_item, " +
+          "reward_count, reward_value, task, prepaid, escrow_entry, status, created_at, " +
+          "done_at, due_at, closed_at) VALUES ($id, $profile, $platform, $account, $item, " +
+          "$count, $value, $task, $prepaid, $escrow, $status, $created, $done, $due, $closed)",
+        {
+          id: deal.id,
+          profile: deal.profile,
+          platform: deal.account.platform,
+          account: deal.account.id,
+          item: deal.item,
+          count: deal.count,
+          value: deal.value,
+          task: deal.task,
+          prepaid: deal.prepaid ? 1 : 0,
+          escrow: deal.escrow,
+          status: deal.status,
+          created: toMicros(deal.created_at),
+          done: optionalMicros(deal.done_at),
+          due: optionalMicros(deal.due_at),
+          closed: optionalMicros(deal.closed_at),
+        },
+      );
+    } catch (cause) {
+      throw new StoreError("cannot write the deal", { cause });
+    }
+  }
+
+  async get(id: string): Promise<Deal | null> {
+    const row = this.db.get("SELECT * FROM deals WHERE id = $id", { id });
+    return row ? dealFromRow(row) : null;
+  }
+
+  async transition(id: string, from: readonly DealStatus[], patch: DealPatch): Promise<boolean> {
+    if (from.length === 0) return false;
+    const params: Params = { id, status: patch.status };
+    const sets = ["status = $status"];
+    for (const [column, value] of [
+      ["done_at", patch.done_at],
+      ["due_at", patch.due_at],
+      ["closed_at", patch.closed_at],
+    ] as const) {
+      if (value === undefined) continue;
+      params[column] = optionalMicros(value);
+      sets.push(`${column} = $${column}`);
+    }
+    return (
+      this.db.run(
+        `UPDATE deals SET ${sets.join(", ")} WHERE id = $id AND ${statusIn(from, params)}`,
+        params,
+      ) > 0
+    );
+  }
+
+  async forAccounts(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    filter: { statuses?: readonly DealStatus[]; since?: Timestamp; limit: number },
+  ): Promise<Deal[]> {
+    if (accounts.length === 0 || filter.statuses?.length === 0) return [];
+    const params: Params = { profile, limit: limitParam(filter.limit) };
+    let where = `profile_id = $profile AND (${authorsWhere(accounts, params)})`;
+    if (filter.statuses) where += ` AND ${statusIn(filter.statuses, params)}`;
+    if (filter.since !== undefined) {
+      params.since = toMicros(filter.since);
+      where += " AND created_at >= $since";
+    }
+    const rows = this.db.all(
+      `SELECT * FROM deals WHERE ${where} ORDER BY created_at DESC, rowid DESC LIMIT $limit`,
+      params,
+    );
+    return rows.map(dealFromRow);
+  }
+
+  async byStatus(
+    profile: ProfileId,
+    statuses: readonly DealStatus[],
+    filter: { since?: Timestamp; limit: number },
+  ): Promise<Deal[]> {
+    if (statuses.length === 0) return [];
+    const params: Params = { profile, limit: limitParam(filter.limit) };
+    let where = `profile_id = $profile AND ${statusIn(statuses, params)}`;
+    if (filter.since !== undefined) {
+      params.since = toMicros(filter.since);
+      where += " AND created_at >= $since";
+    }
+    const rows = this.db.all(
+      `SELECT * FROM deals WHERE ${where} ORDER BY created_at, rowid LIMIT $limit`,
+      params,
+    );
+    return rows.map(dealFromRow);
+  }
+}
+
+// ---- goals and bounties --------------------------------------------------------------------
+
+function goalFromRow(row: Row): Goal {
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    title: str(row, "title"),
+    promise: str(row, "promise"),
+    target: num(row, "target"),
+    status: str(row, "status") as GoalStatus,
+    created_at: ts(row, "created_at"),
+    deadline: ts(row, "deadline"),
+    closed_at: optTs(row, "closed_at"),
+  };
+}
+
+function pledgeFromRow(row: Row): GoalPledge {
+  return {
+    id: str(row, "id"),
+    goal: str(row, "goal_id"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    amount: num(row, "amount"),
+    created_at: ts(row, "created_at"),
+  };
+}
+
+class SqliteGoals implements GoalStore {
+  constructor(private readonly db: Db) {}
+
+  async create(goal: Goal): Promise<void> {
+    try {
+      this.db.run(
+        "INSERT INTO goals (id, profile_id, title, promise, target, status, created_at, " +
+          "deadline, closed_at) VALUES ($id, $profile, $title, $promise, $target, $status, " +
+          "$created, $deadline, $closed)",
+        {
+          id: goal.id,
+          profile: goal.profile,
+          title: goal.title,
+          promise: goal.promise,
+          target: goal.target,
+          status: goal.status,
+          created: toMicros(goal.created_at),
+          deadline: toMicros(goal.deadline),
+          closed: optionalMicros(goal.closed_at),
+        },
+      );
+    } catch (cause) {
+      throw new StoreError("cannot write the goal", { cause });
+    }
+  }
+
+  async get(id: string): Promise<Goal | null> {
+    const row = this.db.get("SELECT * FROM goals WHERE id = $id", { id });
+    return row ? goalFromRow(row) : null;
+  }
+
+  async transition(id: string, from: readonly GoalStatus[], patch: GoalPatch): Promise<boolean> {
+    if (from.length === 0) return false;
+    const params: Params = { id, status: patch.status };
+    const sets = ["status = $status"];
+    if (patch.closed_at !== undefined) {
+      params.closed_at = optionalMicros(patch.closed_at);
+      sets.push("closed_at = $closed_at");
+    }
+    return (
+      this.db.run(
+        `UPDATE goals SET ${sets.join(", ")} WHERE id = $id AND ${statusIn(from, params)}`,
+        params,
+      ) > 0
+    );
+  }
+
+  async list(
+    profile: ProfileId,
+    filter: { statuses?: readonly GoalStatus[]; limit: number },
+  ): Promise<Goal[]> {
+    if (filter.statuses?.length === 0) return [];
+    const params: Params = { profile, limit: limitParam(filter.limit) };
+    let where = "profile_id = $profile";
+    if (filter.statuses) where += ` AND ${statusIn(filter.statuses, params)}`;
+    const rows = this.db.all(
+      `SELECT * FROM goals WHERE ${where} ORDER BY created_at DESC, rowid DESC LIMIT $limit`,
+      params,
+    );
+    return rows.map(goalFromRow);
+  }
+
+  async addPledge(pledge: GoalPledge): Promise<void> {
+    try {
+      this.db.run(
+        "INSERT INTO goal_pledges (id, goal_id, profile_id, author_platform, author_id, " +
+          "amount, created_at) VALUES ($id, $goal, $profile, $platform, $account, $amount, " +
+          "$created)",
+        {
+          id: pledge.id,
+          goal: pledge.goal,
+          profile: pledge.profile,
+          platform: pledge.account.platform,
+          account: pledge.account.id,
+          amount: pledge.amount,
+          created: toMicros(pledge.created_at),
+        },
+      );
+    } catch (cause) {
+      throw new StoreError("cannot write the pledge", { cause });
+    }
+  }
+
+  async pledges(goal: string): Promise<GoalPledge[]> {
+    const rows = this.db.all(
+      "SELECT * FROM goal_pledges WHERE goal_id = $goal ORDER BY created_at, rowid",
+      { goal },
+    );
+    return rows.map(pledgeFromRow);
+  }
+}
+
+function bountyFromRow(row: Row): Bounty {
+  const platform = optStr(row, "winner_platform");
+  const id = optStr(row, "winner_id");
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    task: str(row, "task"),
+    reward: num(row, "reward"),
+    hold: str(row, "hold_entry"),
+    status: str(row, "status") as BountyStatus,
+    created_at: ts(row, "created_at"),
+    expires_at: ts(row, "expires_at"),
+    closed_at: optTs(row, "closed_at"),
+    winner: platform !== null && id !== null ? { platform, id } : null,
+  };
+}
+
+class SqliteBounties implements BountyStore {
+  constructor(private readonly db: Db) {}
+
+  async create(bounty: Bounty): Promise<void> {
+    try {
+      this.db.run(
+        "INSERT INTO bounties (id, profile_id, task, reward, hold_entry, status, created_at, " +
+          "expires_at, closed_at, winner_platform, winner_id) VALUES ($id, $profile, $task, " +
+          "$reward, $hold, $status, $created, $expires, $closed, $platform, $winner)",
+        {
+          id: bounty.id,
+          profile: bounty.profile,
+          task: bounty.task,
+          reward: bounty.reward,
+          hold: bounty.hold,
+          status: bounty.status,
+          created: toMicros(bounty.created_at),
+          expires: toMicros(bounty.expires_at),
+          closed: optionalMicros(bounty.closed_at),
+          platform: bounty.winner?.platform ?? null,
+          winner: bounty.winner?.id ?? null,
+        },
+      );
+    } catch (cause) {
+      throw new StoreError("cannot write the bounty", { cause });
+    }
+  }
+
+  async get(id: string): Promise<Bounty | null> {
+    const row = this.db.get("SELECT * FROM bounties WHERE id = $id", { id });
+    return row ? bountyFromRow(row) : null;
+  }
+
+  async transition(
+    id: string,
+    from: readonly BountyStatus[],
+    patch: BountyPatch,
+  ): Promise<boolean> {
+    if (from.length === 0) return false;
+    const params: Params = { id, status: patch.status };
+    const sets = ["status = $status"];
+    if (patch.closed_at !== undefined) {
+      params.closed_at = optionalMicros(patch.closed_at);
+      sets.push("closed_at = $closed_at");
+    }
+    if (patch.winner !== undefined) {
+      params.winner_platform = patch.winner?.platform ?? null;
+      params.winner_id = patch.winner?.id ?? null;
+      sets.push("winner_platform = $winner_platform", "winner_id = $winner_id");
+    }
+    return (
+      this.db.run(
+        `UPDATE bounties SET ${sets.join(", ")} WHERE id = $id AND ${statusIn(from, params)}`,
+        params,
+      ) > 0
+    );
+  }
+
+  async list(
+    profile: ProfileId,
+    filter: { statuses?: readonly BountyStatus[]; limit: number },
+  ): Promise<Bounty[]> {
+    if (filter.statuses?.length === 0) return [];
+    const params: Params = { profile, limit: limitParam(filter.limit) };
+    let where = "profile_id = $profile";
+    if (filter.statuses) where += ` AND ${statusIn(filter.statuses, params)}`;
+    const rows = this.db.all(
+      `SELECT * FROM bounties WHERE ${where} ORDER BY created_at DESC, rowid DESC LIMIT $limit`,
+      params,
+    );
+    return rows.map(bountyFromRow);
+  }
 }
 
 // ---- module state -------------------------------------------------------------------------
@@ -633,6 +1476,59 @@ class SqliteDecisionLog implements DecisionLog {
     }
   }
 
+  async appendOutcome(profile: ProfileId, record: TurnOutcomeRecord): Promise<void> {
+    const params = {
+      id: record.turn,
+      profile,
+      key: contextLookupKey(record.context),
+      ts: toMicros(record.at),
+      outcome: record.outcome.type,
+      record: JSON.stringify(record),
+    };
+    try {
+      this.db.tx(() => {
+        this.db.run(
+          "INSERT INTO turn_outcomes (id, profile_id, context_key, ts, outcome, record) " +
+            "VALUES ($id, $profile, $key, $ts, $outcome, $record) " +
+            "ON CONFLICT(id) DO UPDATE SET profile_id = excluded.profile_id, " +
+            "context_key = excluded.context_key, ts = excluded.ts, " +
+            "outcome = excluded.outcome, record = excluded.record",
+          params,
+        );
+        if (this.cap !== null) {
+          this.db.run(
+            "DELETE FROM turn_outcomes WHERE id IN (SELECT id FROM turn_outcomes WHERE " +
+              "profile_id = $p ORDER BY ts DESC, id DESC LIMIT -1 OFFSET $cap)",
+            { p: profile, cap: this.cap },
+          );
+        }
+      });
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot append turn outcome", { cause });
+    }
+  }
+
+  async recentOutcomes(
+    profile: ProfileId,
+    context: ContextKey | null,
+    limit: number,
+  ): Promise<TurnOutcomeRecord[]> {
+    const rows =
+      context === null
+        ? this.db.all(
+            "SELECT record FROM turn_outcomes WHERE profile_id = $profile " +
+              "ORDER BY ts DESC, id DESC LIMIT $limit",
+            { profile, limit: limitParam(limit) },
+          )
+        : this.db.all(
+            "SELECT record FROM turn_outcomes WHERE profile_id = $profile AND " +
+              "context_key = $key ORDER BY ts DESC, id DESC LIMIT $limit",
+            { profile, key: contextLookupKey(context), limit: limitParam(limit) },
+          );
+    return rows.map((r) => json<TurnOutcomeRecord>(r, "record", "turn outcome"));
+  }
+
   #trim(profile: ProfileId, cap: number): void {
     let count = this.#counts.get(profile);
     if (count === undefined) {
@@ -788,6 +1684,8 @@ function memoryFromRow(row: Row): MemoryRecord {
     source_context:
       sourceContext === null ? null : parseJson<ContextKey>(sourceContext, "memory source context"),
     source: source === null ? null : parseJson<MemorySource>(source, "memory source"),
+    origin: memoryOrigin(str(row, "origin")),
+    source_events: sourceEvents(json<unknown>(row, "source_events", "memory source events")),
     due: optTs(row, "due"),
     done: bool(row, "done"),
     superseded_by: optStr(row, "superseded_by"),
@@ -824,10 +1722,12 @@ class SqliteMemories implements MemoryRecordStore {
       this.db.run(
         "INSERT INTO memory_records (id, profile_id, kind, scope, scope_key, subjects, " +
           "content, tokens, embedding, importance, confidence, created_at, updated_at, " +
-          "last_accessed, access_count, source_context, source, due, done, superseded_by) " +
+          "last_accessed, access_count, source_context, source, origin, source_events, due, done, " +
+          "superseded_by) " +
           "VALUES ($id, $profile, $kind, $scope, $scope_key, $subjects, $content, $tokens, " +
           "$embedding, $importance, $confidence, $created_at, $updated_at, $last_accessed, " +
-          "$access_count, $source_context, $source, $due, $done, $superseded_by) " +
+          "$access_count, $source_context, $source, $origin, $source_events, $due, $done, " +
+          "$superseded_by) " +
           "ON CONFLICT (id) DO UPDATE SET " +
           "profile_id = excluded.profile_id, kind = excluded.kind, scope = excluded.scope, " +
           "scope_key = excluded.scope_key, subjects = excluded.subjects, content = " +
@@ -835,7 +1735,8 @@ class SqliteMemories implements MemoryRecordStore {
           "importance = excluded.importance, confidence = excluded.confidence, created_at = " +
           "excluded.created_at, updated_at = excluded.updated_at, last_accessed = " +
           "excluded.last_accessed, access_count = excluded.access_count, source_context = " +
-          "excluded.source_context, source = excluded.source, due = excluded.due, " +
+          "excluded.source_context, source = excluded.source, origin = excluded.origin, " +
+          "source_events = excluded.source_events, due = excluded.due, " +
           "done = excluded.done, superseded_by = excluded.superseded_by",
         {
           id: record.id,
@@ -856,6 +1757,8 @@ class SqliteMemories implements MemoryRecordStore {
           source_context:
             record.source_context === null ? null : contextLookupKey(record.source_context),
           source: memorySourceJson(record.source),
+          origin: memoryOrigin(record.origin ?? "unknown"),
+          source_events: JSON.stringify(sourceEvents(record.source_events)),
           due: optionalMicros(record.due),
           done: record.done ? 1 : 0,
           superseded_by: record.superseded_by,
@@ -967,14 +1870,30 @@ class SqliteMemories implements MemoryRecordStore {
     );
   }
 
-  async dueFollowups(profile: ProfileId, now: Timestamp): Promise<MemoryRecord[]> {
+  async dueFollowups(
+    profile: ProfileId,
+    now: Timestamp,
+    maxAgeMs: number | null = null,
+  ): Promise<MemoryRecord[]> {
     const rows = this.db.all(
       "SELECT * FROM memory_records WHERE profile_id = $profile AND kind = 'followup' AND " +
-        "NOT done AND due IS NOT NULL AND superseded_by IS NULL AND due <= $now " +
-        "ORDER BY due ASC, id ASC",
-      { profile, now: toMicros(now) },
+        "NOT done AND due IS NOT NULL AND superseded_by IS NULL AND due <= $now AND " +
+        "($since IS NULL OR due >= $since) ORDER BY due DESC, id DESC",
+      {
+        profile,
+        now: toMicros(now),
+        since: maxAgeMs === null ? null : toMicros(now) - Math.round(maxAgeMs * 1000),
+      },
     );
     return rows.map(memoryFromRow);
+  }
+
+  async expireFollowups(profile: ProfileId, dueBefore: Timestamp): Promise<number> {
+    return this.db.run(
+      "UPDATE memory_records SET done = 1 WHERE profile_id = $profile AND kind = 'followup' " +
+        "AND NOT done AND due IS NOT NULL AND due < $before",
+      { profile, before: toMicros(dueBefore) },
+    );
   }
 
   async prune(profile: ProfileId, policy: PrunePolicy): Promise<number> {
@@ -1300,6 +2219,311 @@ class SqliteAuth implements AuthStore {
   }
 }
 
+// ---- event log ----------------------------------------------------------------------------
+
+const DAY_MICROS = 86_400_000_000;
+
+function logEventFromRow(row: Row): LogEvent {
+  const context = optStr(row, "context");
+  return {
+    id: str(row, "id"),
+    at: ts(row, "at"),
+    kind: str(row, "kind") as LogEventKind,
+    source: str(row, "source"),
+    cause: optStr(row, "cause"),
+    context: context === null ? null : parseJson<ContextKey>(context, "event context"),
+    person: optStr(row, "person"),
+    body: json<JsonValue>(row, "body", "event body"),
+  };
+}
+
+/** The lookup columns of an event: `observation` keeps them in its `Observation`. */
+function eventLookups(event: LogEvent): { key: string | null; salience: string | null } {
+  const body = event.body;
+  if (!isJsonObject(body)) return { key: null, salience: null };
+  const fields = isJsonObject(body.observation) ? body.observation : body;
+  const { attention_key: key, salience } = fields;
+  return {
+    key: typeof key === "string" ? key : null,
+    salience: typeof salience === "string" ? salience : null,
+  };
+}
+
+function directiveFromRow(row: Row): DirectiveRecord {
+  return {
+    id: str(row, "id"),
+    issuer: json<AccountRef>(row, "issuer", "directive issuer"),
+    authority: str(row, "authority") as DirectiveRecord["authority"],
+    scope: json<DirectiveRecord["scope"]>(row, "scope", "directive scope"),
+    effect: str(row, "effect") as DirectiveRecord["effect"],
+    text: str(row, "text"),
+    expires: optTs(row, "expires") ?? "until_revoked",
+    source_event: str(row, "source_event"),
+    created_at: ts(row, "created_at"),
+    revoked_at: optTs(row, "revoked_at"),
+    revoked_by: optStr(row, "revoked_by"),
+  };
+}
+
+class SqliteDirectives implements DirectiveStore {
+  constructor(private readonly db: Db) {}
+
+  async insert(profile: ProfileId, d: Directive): Promise<void> {
+    try {
+      this.db.run(
+        "INSERT INTO directives (id, profile_id, issuer, authority, scope, effect, text, " +
+          "expires, source_event, created_at) VALUES ($id, $profile, $issuer, $authority, " +
+          "$scope, $effect, $text, $expires, $source_event, $created_at)",
+        {
+          id: d.id,
+          profile,
+          issuer: JSON.stringify(d.issuer),
+          authority: d.authority,
+          scope: JSON.stringify(d.scope),
+          effect: d.effect,
+          text: d.text,
+          expires: d.expires === "until_revoked" ? null : toMicros(d.expires),
+          source_event: d.source_event,
+          created_at: toMicros(d.created_at),
+        },
+      );
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot store the directive", { cause });
+    }
+  }
+
+  async active(profile: ProfileId, now: Timestamp): Promise<DirectiveRecord[]> {
+    return this.db
+      .all(
+        "SELECT * FROM directives WHERE profile_id = $profile AND revoked_at IS NULL " +
+          "AND (expires IS NULL OR expires > $now) ORDER BY created_at, id",
+        { profile, now: toMicros(now) },
+      )
+      .map(directiveFromRow);
+  }
+
+  async all(profile: ProfileId, limit: number): Promise<DirectiveRecord[]> {
+    return this.db
+      .all(
+        "SELECT * FROM directives WHERE profile_id = $profile " +
+          "ORDER BY created_at DESC, id DESC LIMIT $limit",
+        { profile, limit: limitParam(limit) },
+      )
+      .map(directiveFromRow);
+  }
+
+  async revoke(profile: ProfileId, id: string, by: string, at: Timestamp): Promise<boolean> {
+    const changed = this.db.run(
+      "UPDATE directives SET revoked_at = $at, revoked_by = $by " +
+        "WHERE id = $id AND profile_id = $profile AND revoked_at IS NULL",
+      { id, profile, by, at: toMicros(at) },
+    );
+    return changed > 0;
+  }
+
+  async prune(profile: ProfileId, before: Timestamp): Promise<number> {
+    return this.db.run(
+      "DELETE FROM directives WHERE profile_id = $profile " +
+        "AND (revoked_at < $before OR expires < $before)",
+      { profile, before: toMicros(before) },
+    );
+  }
+}
+
+class SqliteEventLog implements EventLogStore {
+  constructor(private readonly db: Db) {}
+
+  async append(profile: ProfileId, events: readonly LogEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    try {
+      this.db.tx(() => {
+        for (const event of events) {
+          const { key, salience } = eventLookups(event);
+          this.db.run(
+            "INSERT INTO log_events (id, profile_id, at, kind, source, cause, context_key, " +
+              "context, person, attention_key, salience, body) VALUES ($id, $profile, $at, " +
+              "$kind, $source, $cause, $context_key, $context, $person, $key, $salience, $body) " +
+              "ON CONFLICT (id) DO NOTHING",
+            {
+              id: event.id,
+              profile,
+              at: toMicros(event.at),
+              kind: event.kind,
+              source: event.source,
+              cause: event.cause,
+              context_key: event.context === null ? null : contextLookupKey(event.context),
+              context: event.context === null ? null : JSON.stringify(event.context),
+              person: event.person,
+              key,
+              salience,
+              body: JSON.stringify(event.body),
+            },
+          );
+        }
+      });
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot append to the event log", { cause });
+    }
+  }
+
+  async get(profile: ProfileId, id: string): Promise<LogEvent | null> {
+    const row = this.db.get("SELECT * FROM log_events WHERE id = $id AND profile_id = $profile", {
+      id,
+      profile,
+    });
+    return row ? logEventFromRow(row) : null;
+  }
+
+  async query(profile: ProfileId, filter: LogEventFilter): Promise<LogEvent[]> {
+    const where = ["profile_id = $profile"];
+    const params: Params = { profile, limit: limitParam(filter.limit ?? 100) };
+    const add = (clause: string, name: string, value: SQLInputValue) => {
+      where.push(clause);
+      params[name] = value;
+    };
+    if (filter.kinds) {
+      add("kind IN (SELECT value FROM json_each($kinds))", "kinds", JSON.stringify(filter.kinds));
+    }
+    if (filter.sources) {
+      add(
+        "source IN (SELECT value FROM json_each($sources))",
+        "sources",
+        JSON.stringify(filter.sources),
+      );
+    }
+    if (filter.context) add("context_key = $context", "context", contextLookupKey(filter.context));
+    if (filter.person !== undefined) add("person = $person", "person", filter.person);
+    if (filter.attention_key !== undefined) {
+      add("attention_key = $key", "key", filter.attention_key);
+    }
+    if (filter.turn !== undefined) {
+      add(
+        "COALESCE(json_extract(body, '$.turn'), json_extract(body, '$.turn_outcome.turn')) = $turn",
+        "turn",
+        filter.turn,
+      );
+    }
+    if (filter.since !== undefined) add("at >= $since", "since", toMicros(filter.since));
+    if (filter.until !== undefined) add("at < $until", "until", toMicros(filter.until));
+    if (filter.before !== undefined) add("id < $before", "before", filter.before);
+    if (filter.after !== undefined) add("id > $after", "after", filter.after);
+    const order = filter.order === "asc" ? "ASC" : "DESC";
+    const rows = this.db.all(
+      `SELECT * FROM log_events WHERE ${where.join(" AND ")} ORDER BY id ${order} LIMIT $limit`,
+      params,
+    );
+    return rows.map(logEventFromRow);
+  }
+
+  async effectsOf(
+    profile: ProfileId,
+    causes: readonly string[],
+    limit: number,
+  ): Promise<LogEvent[]> {
+    if (causes.length === 0) return [];
+    const rows = this.db.all(
+      "SELECT * FROM log_events WHERE cause IN (SELECT value FROM json_each($causes)) " +
+        "AND profile_id = $profile ORDER BY id ASC LIMIT $limit",
+      { causes: JSON.stringify(causes), profile, limit: limitParam(limit) },
+    );
+    return rows.map(logEventFromRow);
+  }
+
+  /** Rows that may go: `tier` matches and no other row names them as its cause. */
+  #leaves(profile: ProfileId, tier: string, before: Timestamp, limit: number): Row[] {
+    return this.db.all(
+      "SELECT e.seq, e.at, e.kind, e.source FROM log_events e WHERE e.profile_id = $profile " +
+        `AND e.at < $before AND ${tier} AND NOT EXISTS ` +
+        "(SELECT 1 FROM log_events c WHERE c.cause = e.id) ORDER BY e.at LIMIT $limit",
+      { profile, before: toMicros(before), limit },
+    );
+  }
+
+  /** Counts `rows` in the rollups and deletes them. */
+  #remove(profile: ProfileId, rows: readonly Row[]): void {
+    const groups = new Map<string, { day: number; kind: string; source: string; rows: Row[] }>();
+    for (const row of rows) {
+      const day = Math.floor(num(row, "at") / DAY_MICROS) * DAY_MICROS;
+      const key = `${day}|${str(row, "kind")}|${str(row, "source")}`;
+      let group = groups.get(key);
+      if (!group) {
+        group = { day, kind: str(row, "kind"), source: str(row, "source"), rows: [] };
+        groups.set(key, group);
+      }
+      group.rows.push(row);
+    }
+    for (const group of groups.values()) {
+      const times = group.rows.map((r) => num(r, "at"));
+      this.db.run(
+        "INSERT INTO log_event_rollups (profile_id, day, kind, source, count, first_at, last_at) " +
+          "VALUES ($profile, $day, $kind, $source, $count, $first, $last) " +
+          "ON CONFLICT (profile_id, day, kind, source) DO UPDATE SET " +
+          "count = count + excluded.count, first_at = min(first_at, excluded.first_at), " +
+          "last_at = max(last_at, excluded.last_at)",
+        {
+          profile,
+          day: group.day,
+          kind: group.kind,
+          source: group.source,
+          count: group.rows.length,
+          first: Math.min(...times),
+          last: Math.max(...times),
+        },
+      );
+    }
+    this.db.run("DELETE FROM log_events WHERE seq IN (SELECT value FROM json_each($seqs))", {
+      seqs: JSON.stringify(rows.map((r) => num(r, "seq"))),
+    });
+  }
+
+  async compact(profile: ProfileId, policy: EventCompaction): Promise<EventCompactionResult> {
+    const limit = Math.max(1, Math.floor(policy.max_rows));
+    try {
+      return this.db.tx(() => {
+        const ambient = this.#leaves(
+          profile,
+          "e.kind = 'observation' AND e.salience = 'ambient'",
+          policy.fold_before,
+          limit,
+        );
+        if (ambient.length > 0) this.#remove(profile, ambient);
+        const left = limit - ambient.length;
+        const old =
+          policy.expire_before === null || left === 0
+            ? []
+            : this.#leaves(profile, "1 = 1", policy.expire_before, left);
+        if (old.length > 0) this.#remove(profile, old);
+        return {
+          folded: ambient.length,
+          expired: old.length,
+          more: ambient.length + old.length > 0,
+        };
+      });
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot compact the event log", { cause });
+    }
+  }
+
+  async rollups(profile: ProfileId, limit: number): Promise<EventRollup[]> {
+    const rows = this.db.all(
+      "SELECT * FROM log_event_rollups WHERE profile_id = $profile " +
+        "ORDER BY day DESC, kind, source LIMIT $limit",
+      { profile, limit: limitParam(limit) },
+    );
+    return rows.map((r) => ({
+      day: ts(r, "day"),
+      kind: str(r, "kind"),
+      source: str(r, "source"),
+      count: num(r, "count"),
+      first_at: ts(r, "first_at"),
+      last_at: ts(r, "last_at"),
+    }));
+  }
+}
+
 class SqliteAudit implements AuditLog {
   constructor(private readonly db: Db) {}
 
@@ -1361,6 +2585,14 @@ export class SqliteStore implements Store {
   readonly auth: AuthStore;
   readonly audit: AuditLog;
   readonly profileData: ProfileDataStore;
+  readonly events: EventLogStore;
+  readonly directives: DirectiveStore;
+  readonly cards: MemberCardStore;
+  readonly coins: CoinLedgerStore;
+  readonly deals: DealStore;
+  readonly fortunes: FortuneStore;
+  readonly goals: GoalStore;
+  readonly bounties: BountyStore;
   readonly #db: Db;
 
   private constructor(db: Db, maxDecisions: number | null) {
@@ -1377,6 +2609,14 @@ export class SqliteStore implements Store {
     this.auth = new SqliteAuth(db);
     this.audit = new SqliteAudit(db);
     this.profileData = new SqliteProfileData(db);
+    this.events = new SqliteEventLog(db);
+    this.directives = new SqliteDirectives(db);
+    this.cards = new SqliteMemberCards(db);
+    this.coins = new SqliteCoins(db);
+    this.deals = new SqliteDeals(db);
+    this.fortunes = new SqliteFortunes(db);
+    this.goals = new SqliteGoals(db);
+    this.bounties = new SqliteBounties(db);
   }
 
   /**

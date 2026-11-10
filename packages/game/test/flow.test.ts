@@ -1,7 +1,8 @@
-// "去玩 Minecraft" end to end with a fake adapter: the start checks that the game runs, starts
-// the session (published for the stage's scene director), sets the first goal, goes live
-// through the gate when asked, and the director acts as `director`. In-game chat lines are
-// sanitized on the way to the adapter.
+// "去玩 Minecraft" end to end with a fake task executor: the start checks that the game runs
+// (starting it with the `launch` task and waiting for that task's end), starts the session
+// (published for the stage's scene director), sets the first goal, goes live through the gate
+// when asked, and the director acts as `director`. In-game chat lines are sanitized on the way
+// to the adapter.
 
 import {
   ActuatorRegistry,
@@ -11,32 +12,38 @@ import {
 } from "@miyoria/actions";
 import { Supervisor } from "@miyoria/kernel";
 import { LlmRouter, LlmRouterKey, MockProvider, parseModelRef } from "@miyoria/llm";
-import { type Tool, type ToolContext, ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
+import { ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
 import {
   type AccountRef,
+  ARBITER_IMPULSE_TOPIC,
   type ContextKey,
   type Event,
+  type JsonObject,
   type JsonValue,
   type Principal,
   Principals,
+  v2Payload,
 } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   GameChatKey,
   GameControlKey,
+  GameHandleKey,
   GameModule,
+  GOAL_TOPIC,
   SESSION_TOPIC,
   safeActCall,
 } from "../src/index.js";
+import { FakeExecutor, FakeExecutors, MINECRAFT_GOALS } from "./fake-executor.js";
 
 const TEXT: ContextKey = { platform: "discord", scope: "g1", channel: "text1", kind: "channel" };
 const VOICE: ContextKey = { platform: "discord", scope: "g1", channel: "voice1", kind: "voice" };
 const OWEN: AccountRef = { platform: "discord", id: "7" };
 
-const READY = '血量 20/20\n\n狀態:{"connected":true,"in_game":true,"busy":false}';
-const MENU = '還在主選單。\n\n狀態:{"connected":true,"in_game":false}';
-const DOWN = '沒有連上 Minecraft。\n\n狀態:{"connected":false}';
+const READY: JsonObject = { connected: true, in_game: true };
+const MENU: JsonObject = { connected: true, in_game: false };
+const DOWN: JsonObject = { connected: false };
 
 async function settle(): Promise<void> {
   await vi.advanceTimersByTimeAsync(5);
@@ -49,10 +56,7 @@ class Flow {
   readonly gate: GateDecision[] = [];
   readonly events: Event[] = [];
   readonly streams: { principal: Principal; args: JsonValue }[] = [];
-  readonly acts: { args: JsonValue; principal: Principal | undefined }[] = [];
-  observeText = READY;
-  /** What the act tool answers (default: success). */
-  actResult: (args: JsonValue) => string = () => "成功:好";
+  readonly exec: FakeExecutor;
 
   private constructor() {
     this.registry = new ActuatorRegistry({
@@ -65,28 +69,18 @@ class Flow {
         }
       },
     });
-    const observe: Tool = {
-      spec: { name: "game_minecraft_observe", description: "看", parameters: { type: "object" } },
-      call: async () => this.observeText,
-    };
-    const act: Tool = {
-      spec: {
-        name: "game_minecraft_act",
-        description: "在 Minecraft 裡做一個高階動作。可用動作:\n- mine:挖\n- chat:說話",
-        parameters: {
-          type: "object",
-          properties: {
-            action: { type: "string", enum: ["mine", "chat", "stop", "launch", "quit"] },
-          },
-        },
+    this.exec = new FakeExecutor(
+      (e) => this.sup.bus.publish("ext.miyoria.minecraft", e),
+      Date.now,
+      {
+        goals: [
+          ...MINECRAFT_GOALS,
+          { name: "launch", description: "開遊戲", parameters: null, budget_s: null },
+          { name: "quit", description: "關遊戲", parameters: null, budget_s: 10 },
+        ],
       },
-      call: async (ctx: ToolContext, args) => {
-        this.acts.push({ args, principal: ctx.principal });
-        return this.actResult(args);
-      },
-    };
-    this.tools.register(observe);
-    this.tools.register(act);
+    );
+    this.exec.state = READY;
     // Go Live, faked: the real one is the voice module's.
     this.registry.register(
       defineCapability({
@@ -128,6 +122,7 @@ class Flow {
     const services = f.sup.services;
     services.provide("app", ActuatorRegistryKey, f.registry);
     services.provide("app", ToolRegistryKey, f.tools);
+    new FakeExecutors(f.exec).provide(services);
     services.provide("app", LlmRouterKey, router);
     await f.sup.register(new GameModule("DeepSeek醬", "傲嬌"), null, true);
     await f.sup.startAll();
@@ -160,6 +155,16 @@ class Flow {
     return out;
   }
 
+  /** Goals started on the executor, in order. */
+  get acts(): { goal: string; args: JsonObject }[] {
+    return this.exec.starts.map((t) => ({ goal: t.goal, args: t.args }));
+  }
+
+  /** Who ran `game.act` through the gate, in order. */
+  actors(): string[] {
+    return this.gate.filter((d) => d.capability === "game.act").map((d) => d.principal.kind);
+  }
+
   sessions(): JsonValue[] {
     return this.events.flatMap((e) =>
       e.type === "custom" && e.data.topic === SESSION_TOPIC ? [e.data.payload] : [],
@@ -185,7 +190,7 @@ afterEach(() => {
 describe("去玩 Minecraft", () => {
   it("refuses when the game is not running, so she can tell the owner", async () => {
     const f = await Flow.create();
-    f.observeText = DOWN;
+    f.exec.state = DOWN;
     await expect(f.startTool({})).rejects.toThrow(/還沒開.*請擁有者先在直播機開遊戲/);
     expect(f.sup.services.require(GameControlKey)).toBeDefined();
     expect(f.sessions()).toEqual([]);
@@ -195,7 +200,7 @@ describe("去玩 Minecraft", () => {
 
   it("starts from the main menu with a note", async () => {
     const f = await Flow.create();
-    f.observeText = MENU;
+    f.exec.state = MENU;
     const text = await f.startTool({});
     expect(text).toContain("她開始玩 Minecraft 了");
     expect(text).toContain("還在主選單");
@@ -223,7 +228,7 @@ describe("去玩 Minecraft", () => {
     // The director's first action goes through the gate as `director`.
     await vi.advanceTimersByTimeAsync(100);
     expect(f.acts.length).toBeGreaterThan(0);
-    expect(f.acts[0]?.principal?.kind).toBe("director");
+    expect(f.actors()[0]).toBe("director");
     const kinds = f.gate.map((d) => [d.capability, d.principal.kind, d.allowed]);
     expect(kinds).toContainEqual(["game.start", "self", true]);
     expect(kinds).toContainEqual(["stream.start", "self", true]);
@@ -231,7 +236,47 @@ describe("去玩 Minecraft", () => {
 
     // Stopping publishes the end of the session.
     expect(await f.sup.services.require(GameControlKey).stop()).toContain("已停止");
+    await settle();
     expect(f.sessions().at(-1)).toMatchObject({ state: "stopped", game: "minecraft" });
+    await f.stop();
+  });
+
+  it("a steered event is not the end of the goal's task", async () => {
+    const f = await Flow.create();
+    await f.startTool({ goal: "去挖鐵礦" });
+    await vi.advanceTimersByTimeAsync(100);
+    const task = f.exec.last();
+    expect(f.sup.services.require(GameHandleKey).status()?.last_action).toContain("開始了");
+    expect(f.exec.running.has(task.id)).toBe(true);
+    const ends = () =>
+      f.events.filter((e) => e.type === "custom" && e.data.topic === GOAL_TOPIC).length;
+    const before = ends();
+    f.exec.emit({
+      type: "steered",
+      task: task.id,
+      steer: "01S1",
+      outcome: "applied",
+      detail: "目標改成石鎬",
+      at: new Date().toISOString(),
+    });
+    await settle();
+    f.exec.emit({
+      type: "steered",
+      task: task.id,
+      steer: "01S2",
+      outcome: "too_late",
+      detail: "來不及",
+      at: new Date().toISOString(),
+    });
+    await settle();
+    // The task still runs, nothing was cancelled and the goal did not end or fail.
+    expect(f.exec.running.has(task.id)).toBe(true);
+    expect(f.exec.cancels).toEqual([]);
+    expect(ends()).toBe(before);
+    const status = f.sup.services.require(GameHandleKey).status();
+    expect(status?.goal?.text).toBe("去挖鐵礦");
+    expect(status?.last_action).not.toContain("失敗");
+    expect(status?.last_action).not.toContain("undefined");
     await f.stop();
   });
 
@@ -255,7 +300,10 @@ describe("去玩 Minecraft", () => {
     await f.startTool({});
     await vi.advanceTimersByTimeAsync(100);
     const hints = () =>
-      f.events.flatMap((e) => (e.type === "agent_initiative" ? [e.data.hint] : []));
+      f.events.flatMap((e) => {
+        const hint = v2Payload(e, ARBITER_IMPULSE_TOPIC)?.hint;
+        return hint ? [hint] : [];
+      });
     const before = hints().length;
     const chat = (message: string, system = false) =>
       f.publish({
@@ -298,43 +346,35 @@ describe("去玩 Minecraft", () => {
       turn: null,
     });
     expect(out.status).toBe("done");
-    expect(f.acts.at(-1)?.args).toEqual({ action: "chat", args: { message: "goto 0 0 好" } });
+    expect(f.acts.at(-1)).toEqual({ goal: "chat", args: { message: "goto 0 0 好" } });
     await f.stop();
   });
 });
 
-const LAUNCHABLE =
-  '沒有連上 Minecraft。\n\n狀態:{"connected":false,"launch":{"available":true,"state":"idle"}}';
-const STARTING =
-  '沒有連上 Minecraft。遊戲正在用 Prism 開。\n\n狀態:{"connected":false,"launch":{"available":true,"state":"starting","world":"New World"}}';
-const actions = (f: Flow) =>
-  f.acts.map((a) => (a.args as { action?: string } | null)?.action ?? "?");
+const LAUNCHABLE: JsonObject = { connected: false, launch: { available: true, state: "idle" } };
+const actions = (f: Flow) => f.acts.map((a) => a.goal);
 
 describe("她自己開遊戲", () => {
-  it("launches the game through the gate, waits for it to connect and load, then plays", async () => {
+  it("runs the launch task through the gate, waits for its end, then plays", async () => {
     const f = await Flow.create();
-    f.observeText = LAUNCHABLE;
-    f.actResult = (args) => {
-      if ((args as { action?: string }).action === "launch") f.observeText = STARTING;
-      return "成功:正在用 Prism Launcher 開 Miyoria-1.21.1";
-    };
+    f.exec.state = LAUNCHABLE;
     const started = f.startTool({});
     await vi.advanceTimersByTimeAsync(4_000);
-    // Connected, still loading the world it asked for: keep waiting.
-    f.observeText = MENU;
-    await vi.advanceTimersByTimeAsync(4_000);
+    // The launch is a task with the launch budget; nothing is polled meanwhile.
+    expect(f.exec.starts[0]).toMatchObject({ goal: "launch", budget_s: 240 });
+    const polls = f.exec.observeCalls;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.exec.observeCalls).toBe(polls);
     expect(f.sessions()).toEqual([]);
-    f.observeText = READY;
-    await vi.advanceTimersByTimeAsync(2_000);
+    // The adapter says it is up (connected, the world loaded).
+    f.exec.state = READY;
+    f.exec.done("連上了");
+    await settle();
     const text = await started;
     expect(text).toContain("她開始玩 Minecraft 了");
     expect(text).not.toContain("主選單");
     expect(actions(f)[0]).toBe("launch");
-    expect(f.acts[0]?.principal?.kind).toBe("director");
-    expect(f.gate.map((d) => [d.capability, d.principal.kind])).toContainEqual([
-      "game.act",
-      "director",
-    ]);
+    expect(f.actors()[0]).toBe("director");
 
     // Stopping also asks the adapter to close the game (it decides whether it does).
     await f.sup.services.require(GameControlKey).stop();
@@ -343,48 +383,70 @@ describe("她自己開遊戲", () => {
     await f.stop();
   });
 
-  it("a launcher that fails is a failed start with the reason", async () => {
+  it("a launch that fails is a failed start with the reason and its code", async () => {
     const f = await Flow.create();
-    f.observeText = LAUNCHABLE;
-    f.actResult = () => {
-      f.observeText =
-        '沒有連上。\n\n狀態:{"connected":false,"launch":{"available":true,"state":"failed","error":"Prism Launcher 結束了(代碼 1),遊戲沒有開起來"}}';
-      return "成功:正在開";
-    };
-    const started = f.startTool({});
-    const outcome = expect(started).rejects.toThrow(/Minecraft 開不起來.*代碼 1/);
-    await vi.advanceTimersByTimeAsync(3_000);
+    f.exec.state = LAUNCHABLE;
+    const control = f.sup.services.require(GameControlKey);
+    const started = control.start("minecraft", TEXT, OWEN, "here");
+    const outcome = expect(started).rejects.toMatchObject({
+      code: "crashed",
+      message: expect.stringMatching(/Minecraft 開不起來.*代碼 1/),
+    });
+    await settle();
+    f.exec.fail("crashed", "Prism Launcher 結束了(代碼 1),遊戲沒有開起來");
+    await settle();
     await outcome;
     expect(f.sessions()).toEqual([]);
     await f.stop();
   });
 
-  it("gives up after launch_wait_secs", async () => {
+  it("a launch that runs out of its budget says so", async () => {
     const f = await Flow.create();
-    f.observeText = LAUNCHABLE;
-    f.actResult = () => {
-      f.observeText = STARTING;
-      return "成功:正在開";
-    };
+    f.exec.state = LAUNCHABLE;
     const started = f.startTool({});
     const outcome = expect(started).rejects.toThrow(/等了 240 秒.*還是沒有連上/);
-    await vi.advanceTimersByTimeAsync(242_000);
+    await settle();
+    f.exec.fail("timeout", "took longer than 240 s");
+    await settle();
     await outcome;
     await f.stop();
   });
 
-  it("a refused launch action fails the start with what the adapter said", async () => {
+  it("a refused launch fails the start with what the adapter said", async () => {
     const f = await Flow.create();
-    f.observeText = LAUNCHABLE;
-    f.actResult = () => "失敗:沒辦法開遊戲:找不到 Prism Launcher";
+    f.exec.state = LAUNCHABLE;
+    f.exec.refuse = (spec) =>
+      spec.goal === "launch"
+        ? Object.assign(new Error("沒辦法開遊戲:找不到 Prism Launcher"), { code: "precondition" })
+        : null;
     await expect(f.startTool({})).rejects.toThrow(/開不起來.*找不到 Prism Launcher/);
+    await f.stop();
+  });
+
+  it("cancelling the start cancels the launch task, which has the caller's task id", async () => {
+    const f = await Flow.create();
+    f.exec.state = LAUNCHABLE;
+    const controller = new AbortController();
+    const control = f.sup.services.require(GameControlKey);
+    const task = "01JMANAGERTASK000000000000";
+    const started = control.start("minecraft", TEXT, OWEN, "here", controller.signal, task);
+    const outcome = expect(started).rejects.toMatchObject({ code: "cancelled" });
+    await settle();
+    expect(f.exec.starts[0]).toMatchObject({ id: task, goal: "launch" });
+    controller.abort(new Error("game.stop"));
+    await settle();
+    await outcome;
+    expect(f.exec.cancels).toEqual([task]);
+    expect(f.sessions()).toEqual([]);
     await f.stop();
   });
 
   it("says why it cannot start the game itself", async () => {
     const f = await Flow.create();
-    f.observeText =
-      '沒有連上。\n\n狀態:{"connected":false,"launch":{"available":false,"problem":"找不到 Prism Launcher(prismlauncher)"}}';
+    f.exec.state = {
+      connected: false,
+      launch: { available: false, problem: "找不到 Prism Launcher(prismlauncher)" },
+    };
     await expect(f.startTool({})).rejects.toThrow(/還沒開.*沒辦法自己開：找不到 Prism Launcher/);
     expect(f.acts).toEqual([]);
     await f.stop();

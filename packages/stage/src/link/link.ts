@@ -16,6 +16,7 @@ import {
   type CoreMessage,
   defaultStageStatus,
   type GazeTarget,
+  type GiftExpression,
   parseStageMessage,
   type SceneTransition,
   type StageMessage,
@@ -150,12 +151,24 @@ export class StageLink {
 
   /** Starts or stops streaming in OBS. */
   stream(action: StreamAction): Promise<StageStatus> {
-    return this.#request((id) => ({ type: "stream", action, id }));
+    // The node answers once OBS reports the change (`stream_wait_ms`, 15 s by default).
+    return this.#request(
+      (id) => ({ type: "stream", action, id }),
+      this.#timings.requestTimeoutMs * 2,
+    );
   }
 
   /** Triggers a VTube Studio hotkey by name (or id). */
   hotkey(name: string): Promise<StageStatus> {
     return this.#request((id) => ({ type: "avatar_hotkey", name: name.trim(), id }));
+  }
+
+  /**
+   * Shows a gift expression on her for `seconds`, then lets her own expression come back. Resolves
+   * once the node has it on; rejects when no node is connected or VTube Studio refuses.
+   */
+  expression(expression: GiftExpression, seconds: number): Promise<StageStatus> {
+    return this.#request((id) => ({ type: "avatar_expression", expression, seconds, id }));
   }
 
   /** Asks the node for a fresh status. */
@@ -175,7 +188,10 @@ export class StageLink {
     return this.#conn?.trySendJson(msg) ?? false;
   }
 
-  #request(build: (id: number) => CoreMessage): Promise<StageStatus> {
+  #request(
+    build: (id: number) => CoreMessage,
+    timeoutMs = this.#timings.requestTimeoutMs,
+  ): Promise<StageStatus> {
     const conn = this.#conn;
     if (!conn) return Promise.reject(new StageLinkError("stage node not connected"));
     const id = this.#nextRequest;
@@ -184,7 +200,7 @@ export class StageLink {
       const timer = setTimeout(() => {
         conn.pending.delete(id);
         reject(new StageLinkError("stage node did not answer in time"));
-      }, this.#timings.requestTimeoutMs);
+      }, timeoutMs);
       conn.pending.set(id, {
         resolve: (status) => {
           clearTimeout(timer);

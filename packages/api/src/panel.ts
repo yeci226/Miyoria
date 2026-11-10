@@ -1,6 +1,7 @@
 // Serves the built admin panel (`apps/panel/dist`) at `/`. Static files never need the bearer
 // token; the panel asks for it and sends it to `/api`.
 
+import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
@@ -89,7 +90,14 @@ function segments(path: string): string[] | null {
 }
 
 /** Serves one panel file with caching headers (GET / HEAD only, like `ServeDir`). */
-export async function servePanel(dir: string, request: Request): Promise<Response> {
+/** Rewrites a page of HTML for the request that asked for it (the tags of a link preview). */
+export type HtmlRewrite = (html: string, request: Request) => Promise<string>;
+
+export async function servePanel(
+  dir: string,
+  request: Request,
+  rewrite?: HtmlRewrite,
+): Promise<Response> {
   const method = request.method;
   if (method !== "GET" && method !== "HEAD") {
     return new Response(null, { status: 405, headers: { allow: "GET,HEAD" } });
@@ -112,13 +120,44 @@ export async function servePanel(dir: string, request: Request): Promise<Respons
       path = join(path, "index.html");
       info = await stat(path).catch(() => null);
     }
-    if (!info?.isFile()) return notFound();
+    if (!info?.isFile()) {
+      // The panel's own pages (`/card/MYR-…`, `/people/…`, `/me`) are routes in the page, not files:
+      // a path whose last part has no extension gets `index.html`. A missing asset stays a 404.
+      const last = parts[parts.length - 1] ?? "";
+      if (last.includes(".")) return notFound();
+      path = join(root, "index.html");
+      info = await stat(path).catch(() => null);
+      if (!info?.isFile()) return notFound();
+    }
+
+    if (rewrite && extname(path).toLowerCase() === ".html") {
+      // The tags differ per page and change with a card, so it revalidates on the page as sent
+      // (an ETag), never on the file's date.
+      const html = await rewrite((await readFile(path)).toString("utf8"), request);
+      const bytes = Buffer.from(html, "utf8");
+      const headers = new Headers({
+        "content-type": MIME[".html"] ?? "text/html",
+        "cache-control": REVALIDATE,
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "content-length": String(bytes.length),
+        etag: `"${createHash("sha1").update(bytes).digest("base64url")}"`,
+      });
+      if (request.headers.get("if-none-match") === headers.get("etag")) {
+        headers.delete("content-type");
+        headers.delete("content-length");
+        return new Response(null, { status: 304, headers });
+      }
+      return new Response(method === "HEAD" ? null : bytes, { status: 200, headers });
+    }
 
     const assets = url.pathname.startsWith("/assets/");
     const headers = new Headers({
       "content-type": MIME[extname(path).toLowerCase()] ?? "application/octet-stream",
       "cache-control": assets ? IMMUTABLE : REVALIDATE,
       "x-content-type-options": "nosniff",
+      // The page is open to the internet and has buttons that delete: nobody may frame it.
+      "x-frame-options": "DENY",
       "last-modified": new Date(Math.floor(info.mtimeMs / 1000) * 1000).toUTCString(),
       "accept-ranges": "bytes",
     });

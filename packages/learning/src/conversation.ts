@@ -14,7 +14,13 @@ import {
   userMessage,
   withLlmTag,
 } from "@miyoria/llm";
-import type { LogEntry, MessageLog, PeopleStore, SettingsStore } from "@miyoria/store";
+import {
+  type LogEntry,
+  type MessageLog,
+  type PeopleStore,
+  type SettingsStore,
+  StoredHandleDirectory,
+} from "@miyoria/store";
 import {
   type AccountRef,
   type Clock,
@@ -27,6 +33,7 @@ import {
   customEvent,
   dataBlock,
   type Event,
+  type HandleDirectory,
   isJsonObject,
   type JsonObject,
   type JsonValue,
@@ -35,6 +42,8 @@ import {
   neutralize,
   type PersonId,
   type ProfileId,
+  repairHandleJson,
+  repairHandleText,
   safeName,
   sameAccount,
   timestampMs,
@@ -45,7 +54,7 @@ import { type BudgetState, CallCap } from "./caps.js";
 import type { ConversationConfig } from "./config.js";
 import { applyDrafts, DRAFT_FORMAT, DraftSchema, type RefTable } from "./drafts.js";
 import { checkContent, outline } from "./json-doc.js";
-import { staleness, touchUnits } from "./threads.js";
+import { dropStale, staleness, touchUnits } from "./threads.js";
 
 /** Settings key prefix of conversation states. */
 export const STATE_PREFIX = "conversation:state:";
@@ -145,10 +154,12 @@ const SYSTEM = `你正在整理自己對一段對話的筆記,讓你之後就算
 把新的對話併進之前的筆記(更新,不要重寫全部):
 - "recap":幾句話的前情提要(你的角度),涵蓋到目前為止最重要的事。
 - "notes":你自己的結構化筆記,形狀由你決定(JSON 物件,值可以是文字(可用 Markdown)、清單或物件)。值得記的通常有:現在在聊什麼、誰在場或活躍、還沒回答的問題與懸而未決的事、計畫、決定與承諾(包括你自己的)、提到的事實、梗、氣氛;不需要的就不寫,過時的就刪。保持精簡。
-- "feedback":別人明確對你表達的正面或負面反應(例如叫你閉嘴、說你很吵、稱讚你),沒有就給空陣列;by 填人的代號。
+- "feedback":別人明確對你表達的正面或負面反應(例如叫你閉嘴、說你很吵、稱讚你),沒有就給空陣列;by 填他的名字(逐字稿裡的名字)。
+- 提到人一律寫名字(逐字稿裡的名字,例如 Owen、Owen#2),不要用 u1、p1 這類代號:筆記會留著給以後的你看,代號每次都會變。
+- 沒有新進展的筆記請原樣保留,不要改寫措辭;改寫會讓舊話題看起來像剛聊過。
 {documents}
 只回傳一個 JSON 物件:
-{"recap": "…", "notes": {…}, {documentsShape}"feedback": [{"by": "u1", "tone": "positive / negative", "quote": "原話"}]}`;
+{"recap": "…", "notes": {…}, {documentsShape}"feedback": [{"by": "Owen", "tone": "positive / negative", "quote": "原話"}]}`;
 
 export interface FoldDeps {
   config: ConversationConfig;
@@ -160,6 +171,8 @@ export interface FoldDeps {
   knowledge: () => KnowledgeBase | undefined;
   /** The person behind an account (social), if known. */
   personOf: (account: AccountRef) => PersonId | null;
+  /** Her stable names for people (default: a table of its own, kept in memory). */
+  handles?: HandleDirectory;
   clock: Clock;
   publish: (event: Event) => void;
   log: Logger;
@@ -183,11 +196,13 @@ export class ConversationEngine implements ConversationStates {
   readonly #activity = new Map<string, Activity>();
   readonly #writes = new SerialQueue();
   readonly cap: CallCap;
+  readonly #handles: HandleDirectory;
   #folding = new Set<string>();
   tokens = 0;
 
   constructor(deps: FoldDeps) {
     this.#d = deps;
+    this.#handles = deps.handles ?? new StoredHandleDirectory(null, deps.clock);
     this.cap = new CallCap({
       perHour: deps.config.max_calls_per_hour,
       perDay: deps.config.max_calls_per_day,
@@ -285,7 +300,10 @@ export class ConversationEngine implements ConversationStates {
           person = null;
         }
       }
-      people.set(`u${people.size + 1}`, { person, account: e.author, name: e.author_name });
+      // The person's stable handle (their name; a suffix only for a second person of the same
+      // name), never a per-call code: it ends up in notes and documents she keeps.
+      const handle = this.#handles.ofAccount(e.author, e.author_name, person);
+      people.set(handle, { person, account: e.author, name: e.author_name });
     }
     return people;
   }
@@ -364,7 +382,16 @@ export class ConversationEngine implements ConversationStates {
       );
       this.tokens += result.tokens;
       const reply = result.value;
-      const notes = checkContent(reply.notes as JsonObject, {
+      // What she writes down is kept for later: no per-call codes in it (drop what cannot be
+      // resolved, never guess whose `u7` it was).
+      const clean = repairHandleJson(reply.notes as JsonObject) as JsonObject | undefined;
+      reply.notes = clean ?? {};
+      const repaired = repairHandleText(reply.recap);
+      if (repaired !== reply.recap) {
+        d.log.warn({ context: key }, "a fold wrote a per-call code into its recap");
+      }
+      reply.recap = repaired ?? previous?.recap ?? "";
+      const checked = checkContent(reply.notes as JsonObject, {
         maxDepth: 5,
         maxStringChars: 600,
         maxKeyChars: 48,
@@ -373,6 +400,16 @@ export class ConversationEngine implements ConversationStates {
         maxChars: cfg.max_notes_chars,
       });
       const updated = toTimestamp(d.clock.now());
+      // Rewording does not refresh a thread's age; threads nobody mentions for hours go.
+      const touched = touchUnits(previous, checked, updated, previous?.updated_at ?? null);
+      const kept = dropStale(
+        checked,
+        touched,
+        updated,
+        d.clock.now(),
+        cfg.drop_thread_mins * 60_000,
+      );
+      const notes = kept.notes;
       const state: ConversationState = {
         context,
         updated_at: updated,
@@ -381,7 +418,10 @@ export class ConversationEngine implements ConversationStates {
         lines: (previous?.lines ?? 0) + lines.length,
         recap: cutText(neutralize(reply.recap), cfg.max_recap_chars),
         notes,
-        touched: touchUnits(previous, notes, updated, previous?.updated_at ?? null),
+        touched:
+          kept.dropped > 0
+            ? touchUnits({ notes: checked, touched }, notes, updated, null)
+            : touched,
       };
       this.#states.set(key, state);
       this.#trim();
@@ -478,22 +518,22 @@ export class ConversationEngine implements ConversationStates {
         ),
       );
     }
-    const who = [...table.people.entries()].map(([ref, p]) => `${ref}=${safeName(p.name)}`);
+    const who = [...table.people.keys()].map((handle) => safeName(handle));
     const offset = cfg.utc_offset_minutes * 60_000;
     const transcript = lines.map((e) => {
       const t = new Date(timestampMs(e.ts) + offset).toISOString().slice(11, 16);
       const ref = e.is_self
         ? SELF_LABEL
         : ([...table.people.entries()].find(([, p]) => sameAccount(p.account, e.author))?.[0] ??
-          "?");
-      const name = e.is_self ? SELF_LABEL : `${safeName(e.author_name)}(${ref})`;
+          e.author_name);
+      const name = e.is_self ? SELF_LABEL : safeName(ref);
       return `[${t}] ${name}: ${cutText(neutralize(e.text).replace(/\s+/g, " "), MAX_LINE_CHARS)}`;
     });
     blocks.push(
       dataBlock(
         "transcript",
         `新的對話(${place})`,
-        `${who.length > 0 ? `人:${who.join("、")}\n` : ""}${transcript.join("\n")}`,
+        `${who.length > 0 ? `人(名字就是他們的稱呼,日後寫筆記也用這個名字):${who.join("、")}\n` : ""}${transcript.join("\n")}`,
       ),
     );
     if (kb) {

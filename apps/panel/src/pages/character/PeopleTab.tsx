@@ -27,7 +27,7 @@ export function PeopleTab({ onOpen }: { onOpen: (id: string) => void }) {
             <button
               type="button"
               onClick={() => onOpen(p.person.id)}
-              className="truncate rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="truncate rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
             >
               {p.person.display_name}
             </button>
@@ -65,7 +65,7 @@ export function PeopleTab({ onOpen }: { onOpen: (id: string) => void }) {
         header: "信任",
         meta: { className: "hidden w-24 md:table-cell" },
         cell: ({ row: { original: p } }) =>
-          p.relationship ? <Meter value={p.relationship.trust / 100} tone="success" label={`信任 ${Math.round(p.relationship.trust)}`} /> : null,
+          p.relationship ? <Meter value={p.relationship.trust / 100} tone="brand" label={`信任 ${Math.round(p.relationship.trust)}`} /> : null,
       },
       {
         id: "familiarity",
@@ -105,7 +105,7 @@ export function PeopleTab({ onOpen }: { onOpen: (id: string) => void }) {
       <Toolbar>
         <SearchInput value={q} onChange={setQ} placeholder="名稱或帳號 id" label="搜尋人" />
       </Toolbar>
-      <Card className="overflow-hidden">
+      <Card>
         <QueryView query={people}>
           {(page) => (
             <DataTable

@@ -53,6 +53,18 @@ export const AuthorizerPreloadKey = serviceKey<AuthorizerPreload>("AuthorizerPre
 /** The command registry service, provided by the `commands` module. */
 export const CommandRegistryKey = serviceKey<CommandRegistry>("CommandRegistry");
 
+/** Prefix of a panel's route owner (command keys never contain `/`). */
+const PANEL_OWNER = "/";
+
+/**
+ * The subcommand that opens a panel whose command also has subcommands (`/me i`, `/admin i`):
+ * Discord cannot run a command with subcommands bare. Always listed first.
+ */
+export const PANEL_SUBCOMMAND = "i";
+
+/** Who sees a command's replies (`[modules.commands.visibility]`). */
+export type Visibility = "public" | "private";
+
 /** Deepest supported command path (Discord: group / subcommand group / subcommand). */
 export const MAX_PATH_DEPTH = 3;
 const MAX_NAME_LEN = 32;
@@ -92,6 +104,11 @@ export interface ComponentOutcome {
 export interface DispatchIo {
   /** Sends an extra message (see `Invocation.followUp`). */
   followUp?: FollowUp;
+  /**
+   * `false`: leave no audit entry, whatever the outcome. For a read the platform runs by itself
+   * (a panel's status lines are drawn on every refresh); what a person did is audited as usual.
+   */
+  audit?: boolean;
 }
 
 // ---- system text --------------------------------------------------------------------------
@@ -193,6 +210,8 @@ export class CommandRegistry {
   #services: ServiceLookup | null;
   readonly #clock: Clock;
   readonly #entries = new Map<string, Entry>();
+  readonly #panels = new Map<string, Entry>();
+  readonly #visibility = new Map<string, Visibility>();
   readonly #groups = new Map<string, GroupInfo>();
   readonly #routes = new Map<string, { owner: string; route: AnyComponentRoute }>();
   readonly #subscriptions = new Set<VersionSubscription>();
@@ -231,6 +250,15 @@ export class CommandRegistry {
   register(spec: CommandSpec, handler: CommandHandler, options: RegisterOptions = {}): void {
     validateSpec(spec);
     const key = spec.path.join(" ");
+    if (
+      spec.path.length === 2 &&
+      spec.path[1] === PANEL_SUBCOMMAND &&
+      this.#panels.has(spec.path[0] as string)
+    ) {
+      throw new CommandError(
+        `command \`${commandName(spec)}\`: \`${PANEL_SUBCOMMAND}\` opens the panel of \`${spec.path[0]}\``,
+      );
+    }
     for (const other of this.#entries.values()) {
       const path = other.spec.path;
       if (path.join(" ") !== key && (startsWith(path, spec.path) || startsWith(spec.path, path))) {
@@ -239,6 +267,43 @@ export class CommandRegistry {
         );
       }
     }
+    this.#store(this.#entries, key, key, spec, handler, options);
+  }
+
+  /**
+   * Registers a panel command: a top-level command (one word) whose reply is a panel of
+   * controls that run other registered commands. Panels live beside the command tree: when
+   * the command has subcommands the panel is its `i` subcommand (`/me i` next to `me profile`),
+   * otherwise it is the bare command (`/miyo`). See `panelPath`.
+   */
+  registerPanel(spec: CommandSpec, handler: CommandHandler, options: RegisterOptions = {}): void {
+    validateSpec(spec);
+    if (spec.path.length !== 1) {
+      throw new CommandError(`panel \`${commandName(spec)}\` must be a top-level command`);
+    }
+    const key = spec.path.join(" ");
+    this.#store(this.#panels, key, `${PANEL_OWNER}${key}`, spec, handler, options);
+  }
+
+  /** Removes a panel command (and its component routes). */
+  unregisterPanel(path: string): boolean {
+    const key = splitPath(path).join(" ");
+    const removed = this.#panels.delete(key);
+    if (removed) {
+      this.#dropRoutes(`${PANEL_OWNER}${key}`);
+      this.#bump();
+    }
+    return removed;
+  }
+
+  #store(
+    into: Map<string, Entry>,
+    key: string,
+    owner: string,
+    spec: CommandSpec,
+    handler: CommandHandler,
+    options: RegisterOptions,
+  ): void {
     const routes = [...(options.components ?? [])];
     const seen = new Set<string>();
     for (const route of routes) {
@@ -250,7 +315,7 @@ export class CommandRegistry {
       }
       seen.add(route.route);
       const taken = this.#routes.get(route.route);
-      if (taken && taken.owner !== key) {
+      if (taken && taken.owner !== owner) {
         throw new CommandError(
           `component route \`${route.route}\` of \`${commandName(spec)}\` is already used by \`${taken.owner}\``,
         );
@@ -271,9 +336,9 @@ export class CommandRegistry {
       if (arg.autocomplete && !autocomplete.has(arg.name)) delete arg.autocomplete;
     }
 
-    this.#dropRoutes(key);
-    for (const route of routes) this.#routes.set(route.route, { owner: key, route });
-    this.#entries.set(key, { spec: stored, handler, routes, autocomplete });
+    this.#dropRoutes(owner);
+    for (const route of routes) this.#routes.set(route.route, { owner, route });
+    into.set(key, { spec: stored, handler, routes, autocomplete });
     this.#bump();
   }
 
@@ -322,17 +387,116 @@ export class CommandRegistry {
     return info ? { ...info } : undefined;
   }
 
-  /** All registered commands, ordered by path. */
+  /** All registered commands (panels not included), ordered by path. */
   specs(): CommandSpec[] {
     return [...this.#entries.values()]
       .map((e) => e.spec)
       .sort((a, b) => comparePaths(a.path, b.path))
-      .map((spec) => structuredClone(spec));
+      .map((spec) => this.#view(spec));
   }
 
+  /**
+   * The commands a slash platform registers: the panels first (so `i` leads its level), then
+   * every other command.
+   */
+  slashSpecs(): CommandSpec[] {
+    return [...this.#panelSpecs(), ...this.specs()];
+  }
+
+  #panelSpecs(): CommandSpec[] {
+    return [...this.#panels.values()]
+      .map((e) => this.#view(e.spec, this.panelPath(e.spec.path[0] as string)))
+      .sort((a, b) => comparePaths(a.path, b.path));
+  }
+
+  /**
+   * The path that opens the panel of `command`: `[command, "i"]` when the command has
+   * subcommands, else `[command]`.
+   */
+  panelPath(command: string): string[] {
+    for (const entry of this.#entries.values()) {
+      if (entry.spec.path[0] === command && entry.spec.path.length > 1) {
+        return [command, PANEL_SUBCOMMAND];
+      }
+    }
+    return [command];
+  }
+
+  /** A registered panel by its command word, with the path that opens it. */
+  panelSpec(command: string): CommandSpec | undefined {
+    const entry = this.#panels.get(command);
+    return entry ? this.#view(entry.spec, this.panelPath(command)) : undefined;
+  }
+
+  /** A command or panel by path. */
   get(path: readonly string[]): CommandSpec | undefined {
-    const entry = this.#entries.get(path.join(" "));
-    return entry ? structuredClone(entry.spec) : undefined;
+    const entry = this.#find(path.join(" "));
+    return entry ? this.#view(entry.spec, path) : undefined;
+  }
+
+  /** A panel at its opening path (`panelPath`), else a command. */
+  #find(key: string): Entry | undefined {
+    const head = splitPath(key)[0];
+    const panel = head === undefined ? undefined : this.#panels.get(head);
+    if (panel && head !== undefined && this.panelPath(head).join(" ") === key) return panel;
+    return this.#entries.get(key);
+  }
+
+  /** A copy of `spec` at `path` with the visibility the configuration gives it. */
+  #view(spec: CommandSpec, path: readonly string[] = spec.path): CommandSpec {
+    const out = structuredClone(spec);
+    out.path = [...path];
+    out.ephemeral = this.#ephemeralAt(path, spec.ephemeral);
+    return out;
+  }
+
+  /**
+   * Replaces the visibility overrides (`[modules.commands.visibility]`): command path or group
+   * prefix (`"me wallet"`, `"me"`) to `public` / `private`. The longest matching key wins over
+   * the command's own declaration. Warnings and errors stay ephemeral (`replyEphemeral`).
+   */
+  setVisibility(table: Readonly<Record<string, Visibility>>): void {
+    this.#visibility.clear();
+    for (const [path, visibility] of Object.entries(table)) {
+      const key = splitPath(path).join(" ");
+      if (key !== "") this.#visibility.set(key, visibility);
+    }
+    this.#bump();
+  }
+
+  /** Visibility keys that match no registered command, panel or group (typos). */
+  unknownVisibility(): string[] {
+    const paths: string[][] = [
+      ...[...this.#entries.values()].map((e) => e.spec.path),
+      ...[...this.#panels.keys()].map((c) => this.panelPath(c)),
+      ...[...this.#panels.keys()].map((c) => [c]),
+    ];
+    return [...this.#visibility.keys()].filter((key) => {
+      const words = key.split(" ");
+      return !paths.some((path) => startsWith(path, words));
+    });
+  }
+
+  #ephemeralAt(path: readonly string[], declared: boolean): boolean {
+    for (let n = path.length; n >= 1; n--) {
+      const hit = this.#visibility.get(path.slice(0, n).join(" "));
+      if (hit !== undefined) return hit === "private";
+    }
+    return declared;
+  }
+
+  #owned(owner: string): Entry | undefined {
+    return owner.startsWith(PANEL_OWNER)
+      ? this.#panels.get(owner.slice(PANEL_OWNER.length))
+      : this.#entries.get(owner);
+  }
+
+  /** Whether replies of the command that owns routes `owner` are ephemeral. */
+  #ownerEphemeral(owner: string, entry: Entry): boolean {
+    const path = owner.startsWith(PANEL_OWNER)
+      ? this.panelPath(entry.spec.path[0] as string)
+      : entry.spec.path;
+    return this.#ephemeralAt(path, entry.spec.ephemeral);
   }
 
   /** Every registered component route name, sorted. */
@@ -360,14 +524,29 @@ export class CommandRegistry {
     this.#subscriptions.delete(subscription);
   }
 
-  /** Commands the invoker of `data` may run (its `path` and `args` are ignored). */
-  async permitted(data: InvocationData): Promise<CommandSpec[]> {
+  /**
+   * Commands the invoker of `data` may run (its `path` and `args` are ignored). With `panels`
+   * the panels come first; a panel that has subcommands (`/me i`) is listed only when the
+   * invoker may run one of them, so `/admin i` stays out of a plain member's list.
+   */
+  async permitted(
+    data: InvocationData,
+    options: { panels?: boolean } = {},
+  ): Promise<CommandSpec[]> {
     const invocation = Invocation.from(data);
     const out: CommandSpec[] = [];
     for (const spec of this.specs()) {
       if (await this.#allows(invocation, spec.permission)) out.push(spec);
     }
-    return out;
+    if (!options.panels) return out;
+    const panels: CommandSpec[] = [];
+    for (const spec of this.#panelSpecs()) {
+      if (!(await this.#allows(invocation, spec.permission))) continue;
+      const command = spec.path[0] as string;
+      if (spec.path.length > 1 && !out.some((s) => s.path[0] === command)) continue;
+      panels.push(spec);
+    }
+    return [...panels, ...out];
   }
 
   /**
@@ -378,10 +557,11 @@ export class CommandRegistry {
    */
   async dispatch(data: InvocationData, io: DispatchIo = {}): Promise<CommandReply> {
     const invocation = Invocation.from(data);
-    const entry = this.#entries.get(invocation.path.join(" "));
+    const entry = this.#find(invocation.path.join(" "));
     if (!entry) return notice("warn", TEXT.unknownCommand(invocation.path.join(" ")));
     const { spec, handler } = entry;
-    const audit = isAdminNode(spec.permission) ? this.#service(AuditLogKey) : undefined;
+    const audit =
+      io.audit !== false && isAdminNode(spec.permission) ? this.#service(AuditLogKey) : undefined;
     if (!(await this.#allows(invocation, spec.permission))) {
       if (audit) await this.#appendAudit(audit, invocation, false, "denied");
       return denied(spec.permission);
@@ -425,7 +605,7 @@ export class CommandRegistry {
     });
     if (!found) return refuse(notice("warn", TEXT.staleControl));
     const { name, params, owner, route } = found;
-    const entry = this.#entries.get(owner);
+    const entry = this.#owned(owner);
     if (!entry) return refuse(notice("warn", TEXT.staleControl));
     const inv = new ComponentInvocation(data, entry.spec.path, name, params);
     const nodes = [entry.spec.permission, ...(route.permission ? [route.permission] : [])];
@@ -439,6 +619,8 @@ export class CommandRegistry {
     }
     const session = inv.session;
     if (route.requiresSession && session === null) return refuse(notice("warn", TEXT.expired));
+    // A session binds a panel to its opener unless the panel is shared (a public reply). Either
+    // way a press runs as the presser, with the presser's own permissions (`inv` is theirs).
     if (session?.initiator_only && !sameInvoker(session.initiator, inv)) {
       return refuse(notice("warn", TEXT.notInitiator));
     }
@@ -457,8 +639,9 @@ export class CommandRegistry {
       throw error;
     }
     if (audit) await this.#appendAudit(audit, inv, true, null, name);
-    const ephemeral =
-      result.type === "reply" ? replyEphemeral(route.ephemeral ?? true, result.reply) : true;
+    // Replies follow the command's visibility; a route can only make them more private.
+    const declared = this.#ownerEphemeral(owner, entry) || (route.ephemeral ?? false);
+    const ephemeral = result.type === "reply" ? replyEphemeral(declared, result.reply) : true;
     return { result, ephemeral };
   }
 
@@ -480,7 +663,7 @@ export class CommandRegistry {
    */
   async autocomplete(data: InvocationData, name: string, value: string): Promise<Choice[]> {
     const invocation = Invocation.from(data);
-    const entry = this.#entries.get(invocation.path.join(" "));
+    const entry = this.#find(invocation.path.join(" "));
     const handler = entry?.autocomplete.get(name);
     if (!entry || !handler) return [];
     if (!(await this.#allows(invocation, entry.spec.permission))) return [];

@@ -32,6 +32,31 @@ export interface SourceOptions {
   prebufferMs: number;
   /** Consecutive underrun time (ms) after which the source gives up with `starved`. */
   maxStarveMs: number;
+  /** A paused source that is not resumed within this time (ms) ends as `stopped`. Default 30 000. */
+  maxPauseMs?: number;
+}
+
+/** A gain that moves linearly toward a target, one 20 ms frame at a time. */
+class Ramp {
+  value = 1;
+  private target = 1;
+  private step = 0;
+
+  /** Moves to `target` over `ms` (immediately when `ms <= 0`). */
+  set(target: number, ms: number): void {
+    this.target = target;
+    const frames = Math.max(0, Math.round(ms / FRAME_MS));
+    if (frames === 0) this.value = target;
+    this.step = frames === 0 ? 0 : Math.abs(target - this.value) / frames;
+  }
+
+  /** The gain at the start and at the end of the next frame. */
+  advance(): [number, number] {
+    const from = this.value;
+    if (this.value < this.target) this.value = Math.min(this.target, this.value + this.step);
+    else if (this.value > this.target) this.value = Math.max(this.target, this.value - this.step);
+    return [from, this.value];
+  }
 }
 
 export class PlaybackSource {
@@ -51,6 +76,13 @@ export class PlaybackSource {
   private finished: SourceEndReason | undefined;
 
   private levels: LevelsTrack | undefined;
+
+  /** Ducking: the volume the play was set to (Core's `play_duck`). */
+  private readonly duck = new Ramp();
+  /** Pausing: fades to 0 and then holds until resumed (Core's `play_pause` / `play_resume`). */
+  private readonly hold = new Ramp();
+  private paused = false;
+  private pausedFrames = 0;
 
   constructor(opts: SourceOptions) {
     this.opts = opts;
@@ -146,6 +178,32 @@ export class PlaybackSource {
     this.fadeIdx = 0;
   }
 
+  /** Sets the volume to `gain` (0..1) over `ms`; it stays until changed. */
+  setGain(gain: number, ms: number): void {
+    if (this.finished) return;
+    this.duck.set(Math.min(1, Math.max(0, gain)), ms);
+  }
+
+  /** Fades out over `ms`, then holds the audio (buffered, not consumed) until {@link resume}. */
+  pause(ms: number): void {
+    if (this.finished || this.paused) return;
+    this.paused = true;
+    this.pausedFrames = 0;
+    this.hold.set(0, ms);
+  }
+
+  /** Continues a paused source, fading in over `ms`. */
+  resume(ms: number): void {
+    if (this.finished || !this.paused) return;
+    this.paused = false;
+    this.pausedFrames = 0;
+    this.hold.set(1, ms);
+  }
+
+  get isPaused(): boolean {
+    return this.paused;
+  }
+
   /** Stop right away (next pull returns `end: stopped`). */
   abort(): void {
     if (this.finished) return;
@@ -159,6 +217,13 @@ export class PlaybackSource {
   readFrame(): FrameResult {
     if (this.finished) return { kind: "end", reason: this.finished };
     if (this.pendingEnd !== undefined) return this.finish(this.pendingEnd);
+
+    // Held: faded out completely, nothing is consumed until Core resumes (or gives up).
+    if (this.paused && this.hold.value === 0) {
+      this.pausedFrames++;
+      if (this.pausedFrames * FRAME_MS > (this.opts.maxPauseMs ?? 30_000)) return this.finish("stopped");
+      return { kind: "silence" };
+    }
 
     this.fill(FRAME_SAMPLES);
 
@@ -195,6 +260,11 @@ export class PlaybackSource {
       g1 = 1 - this.fadeIdx / this.fadeTotal;
       if (this.fadeIdx >= this.fadeTotal) this.pendingEnd = "faded";
     }
+
+    const [p0, p1] = this.hold.advance();
+    const [d0, d1] = this.duck.advance();
+    g0 *= p0 * d0;
+    g1 *= p1 * d1;
 
     const pcm = stereoFrame(mono, g0, g1);
     if (!this.levels) return { kind: "audio", pcm };

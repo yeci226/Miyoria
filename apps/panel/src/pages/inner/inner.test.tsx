@@ -381,7 +381,7 @@ describe("Inner", () => {
 
     const status = await screen.findByLabelText("心智迴圈");
     expect(within(status).getByText("3 / 12")).toBeInTheDocument();
-    expect(screen.getByText("運作中")).toBeInTheDocument();
+    expect(within(screen.getByRole("main")).getByText("運作中")).toBeInTheDocument();
 
     const approvals = screen.getByRole("table", { name: "等待確認" });
     expect(within(approvals).getByText("寫一個小工具")).toBeInTheDocument();
@@ -389,8 +389,8 @@ describe("Inner", () => {
     await user.click(within(approvals).getByRole("button", { name: "允許" }));
     expect(await screen.findByText("沒有等待確認的動作")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("switch", { name: "暫停" }));
-    expect(await screen.findByText("已暫停")).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "緊急停止" }));
+    expect(await within(screen.getByRole("main")).findByText("已緊急停止")).toBeInTheDocument();
     const posts = fetch.mock.calls
       .filter(([, init]) => init?.method === "POST")
       .map(([input]) => new URL(String(input), "http://panel.test").pathname);

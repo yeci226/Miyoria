@@ -51,7 +51,10 @@ async function streamPcm(
   const stream = response.body;
   try {
     if (!stream) throw new SpeechError("TTS response has no body");
-    return pcmStream(stream, rateOf(response), idle);
+    const audio = pcmStream(stream, rateOf(response), idle);
+    const queueMs = Number(response.headers.get("x-tts-queue-ms") ?? Number.NaN);
+    if (Number.isFinite(queueMs) && queueMs >= 0) audio.queueMs = queueMs;
+    return audio;
   } catch (error) {
     idle.clear();
     await stream?.cancel().catch(() => undefined);
@@ -107,6 +110,7 @@ export class HttpWorkerTts implements TtsProvider {
     if (request.instruct !== null) body.instruct = request.instruct;
     const voice = request.voice ?? this.#voice;
     if (voice !== null) body.voice = voice;
+    if (request.priority !== undefined) body.priority = request.priority;
     return streamPcm(
       this.#url,
       {},

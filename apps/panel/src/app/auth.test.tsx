@@ -8,7 +8,7 @@ import { type Handler, mockFetch } from "@/test/render";
 import { App } from "./App";
 import { STORAGE_BASE_URL, STORAGE_TOKEN } from "./connection";
 import { createAppRouter } from "./router";
-import { LOGIN_ERRORS, READ_ONLY_HINT } from "./session";
+import { cleanHashAddress, LOGIN_ERRORS, loginNext, READ_ONLY_HINT, wantsTokenLogin } from "./session";
 
 const discordUser = (write: boolean): SessionInfo => ({
   method: "discord",
@@ -28,16 +28,22 @@ const mod: ModuleInfo = {
 
 /** Answers the auth routes; `extra` handles everything else. */
 function core(opts: { discord: boolean; session?: SessionInfo | null; extra?: Handler }) {
-  return mockFetch((method, url, body) => {
+  return mockFetch((method, url, body, headers) => {
     if (url.pathname === "/api/auth/methods") return { body: { token: true, discord: opts.discord } };
     if (url.pathname === "/api/auth/session")
       return opts.session ? { body: opts.session } : { status: 401, body: { error: "missing or invalid bearer token" } };
     if (url.pathname === "/api/health") return { body: { status: "ok", version: "0.4.0" } };
-    return opts.extra?.(method, url, body);
+    return opts.extra?.(method, url, body, headers);
   });
 }
 
-const renderApp = (path = "/") => render(<App router={createAppRouter(createMemoryHistory({ initialEntries: [path] }))} />);
+/** The app at the address the test set (`window.location`), as the browser would open it. */
+const routerAt = () =>
+  createAppRouter(createMemoryHistory({ initialEntries: [`${window.location.pathname}${window.location.search}`] }));
+const renderApp = (path?: string, router?: ReturnType<typeof routerAt>) => {
+  if (path !== undefined) window.history.replaceState(null, "", path);
+  return render(<App router={router ?? routerAt()} />);
+};
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
@@ -46,13 +52,39 @@ afterEach(() => {
   writeStorage(STORAGE_BASE_URL, null);
 });
 
+describe("addresses", () => {
+  it("turns a link from before clean addresses into the same page", () => {
+    // A QR code on a card printed earlier.
+    window.history.replaceState(null, "", "/#/card/MYR-AB12-CD34-EF56");
+    cleanHashAddress();
+    expect(`${window.location.pathname}${window.location.hash}`).toBe("/card/MYR-AB12-CD34-EF56");
+    window.history.replaceState(null, "", "/#/login?error=state");
+    cleanHashAddress();
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/login?error=state");
+    // Clean addresses are left alone.
+    window.history.replaceState(null, "", "/people?q=1");
+    cleanHashAddress();
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/people?q=1");
+  });
+
+  it("comes back to the page it left from, never to the login page", () => {
+    window.history.replaceState(null, "", "/people?q=1");
+    expect(loginNext()).toBe("/people?q=1");
+    window.history.replaceState(null, "", "/login?error=state");
+    expect(loginNext()).toBe("/");
+    expect(wantsTokenLogin("/login")).toBe(true);
+    expect(wantsTokenLogin("/login?error=state")).toBe(false);
+    expect(wantsTokenLogin("/loginx")).toBe(false);
+  });
+});
+
 describe("login screen", () => {
   it("offers Discord first and keeps the token form", async () => {
-    window.history.replaceState(null, "", "/#/people");
+    window.history.replaceState(null, "", "/people");
     core({ discord: true });
     renderApp();
     const link = await screen.findByRole("link", { name: "使用 Discord 登入" });
-    expect(link).toHaveAttribute("href", "/api/auth/oauth/login?next=%2F%23%2Fpeople");
+    expect(link).toHaveAttribute("href", "/api/auth/oauth/login?next=%2Fpeople");
     expect(screen.getByLabelText("Admin token")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "用 token 連線" })).toHaveAttribute("data-variant", "outline");
   });
@@ -73,15 +105,17 @@ describe("login screen", () => {
   });
 
   it.each(Object.entries(LOGIN_ERRORS))("explains the `%s` error and cleans the URL", async (code, message) => {
-    window.history.replaceState(null, "", `/#/login?error=${code}`);
+    window.history.replaceState(null, "", `/login?error=${code}`);
     core({ discord: true });
-    renderApp();
+    const router = routerAt();
+    renderApp(undefined, router);
     expect(await screen.findByRole("alert")).toHaveTextContent(message);
-    expect(window.location.hash).toBe("#/");
+    await waitFor(() => expect(router.history.location.pathname).toBe("/"));
+    expect(router.history.location.search).toBe("");
   });
 
   it("falls back to a generic message for unknown codes", async () => {
-    window.history.replaceState(null, "", "/#/login?error=weird");
+    window.history.replaceState(null, "", "/login?error=weird");
     core({ discord: true });
     renderApp();
     expect(await screen.findByRole("alert")).toHaveTextContent("登入失敗,請再試一次。");

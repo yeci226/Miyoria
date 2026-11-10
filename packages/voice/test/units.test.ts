@@ -3,7 +3,7 @@
 
 import type { AsrHint, SpeechService } from "@miyoria/speech";
 import { MemorySettingsStore, type SettingsStore } from "@miyoria/store";
-import type { AccountRef, JsonObject } from "@miyoria/types";
+import { type AccountRef, EMOTION_NAMES, EMOTION_OUTPUTS, type JsonObject } from "@miyoria/types";
 import { parse as parseToml } from "smol-toml";
 import { describe, expect, it } from "vitest";
 import {
@@ -200,6 +200,7 @@ describe("segment", () => {
     expect(u.speechMs).toBeLessThanOrEqual(1500);
     expect(u.voicedMs).toBeGreaterThanOrEqual(900);
     expect(u.trailingSilenceMs).toBeGreaterThanOrEqual(600);
+    expect(u.endedBy).toBe("silence");
     // Pre-roll + speech + tail.
     expect(msOf(u)).toBeGreaterThanOrEqual(1300);
     expect(msOf(u)).toBeLessThanOrEqual(1800);
@@ -252,6 +253,7 @@ describe("segment", () => {
     const out = feed(s, voice(5000, 0.3));
     expect(out.length).toBeGreaterThanOrEqual(2);
     for (const u of out) expect(msOf(u)).toBeLessThanOrEqual(2000);
+    expect(out[0]?.endedBy).toBe("length");
   });
 
   it("stream_close_flushes", () => {
@@ -260,6 +262,7 @@ describe("segment", () => {
     expect(s.isActive()).toBe(true);
     const u = s.finish();
     expect(u?.speechMs).toBeGreaterThanOrEqual(850);
+    expect(u?.endedBy).toBe("close");
     expect(s.isActive()).toBe(false);
     // Too short to keep.
     feed(s, voice(150, 0.3));
@@ -453,7 +456,7 @@ describe("config", () => {
   it("config_defaults", () => {
     const c = VoiceConfigSchema.parse({});
     expect(c.consent).toBe("opt-out");
-    expect(c.barge_in).toBe("stop");
+    expect(c.barge_in).toBe("selective");
     expect([c.end_silence_ms, c.max_utterance_ms, c.min_utterance_ms]).toEqual([600, 15_000, 300]);
     const d = VoiceConfigSchema.parse({ consent: "opt-in", barge_in: "ignore" });
     expect(d.consent).toBe("opt-in");
@@ -465,17 +468,26 @@ describe("watch messages", () => {
   it("accepts_watch_node_messages", () => {
     expect(
       NodeMessageSchema.parse({ type: "watch", guild: "g", user_id: "u", state: "live" }),
-    ).toEqual({ type: "watch", guild: "g", user_id: "u", state: "live", error: null, reason: null });
-    expect(NodeMessageSchema.safeParse({ type: "watch", guild: "g", user_id: "u", state: "x" }).success).toBe(
-      false,
-    );
+    ).toEqual({
+      type: "watch",
+      guild: "g",
+      user_id: "u",
+      state: "live",
+      error: null,
+      reason: null,
+    });
+    expect(
+      NodeMessageSchema.safeParse({ type: "watch", guild: "g", user_id: "u", state: "x" }).success,
+    ).toBe(false);
     expect(
       NodeMessageSchema.parse({ type: "watch_snapshot_failed", id: 7, error: "no frame" }),
     ).toEqual({ type: "watch_snapshot_failed", id: 7, error: "no frame" });
-    expect(
-      coreMessageJson({ type: "watch_start", guild: "g", user_id: "u" }),
-    ).toBe('{"type":"watch_start","guild":"g","user_id":"u"}');
-    expect(coreMessageJson({ type: "watch_snapshot", id: 7 })).toBe('{"type":"watch_snapshot","id":7}');
+    expect(coreMessageJson({ type: "watch_start", guild: "g", user_id: "u" })).toBe(
+      '{"type":"watch_start","guild":"g","user_id":"u"}',
+    );
+    expect(coreMessageJson({ type: "watch_snapshot", id: 7 })).toBe(
+      '{"type":"watch_snapshot","id":7}',
+    );
   });
 
   it("decodes_snapshot_frames", () => {
@@ -569,5 +581,58 @@ describe("hearing", () => {
   it("allowed_follows_consent_and_fails_closed", async () => {
     const { hearing } = setup(async () => "x");
     expect(await hearing.allowed(acc("1"))).toBe(true);
+  });
+});
+
+describe("the TTS reference of a line", () => {
+  const bank = (clips: string[]) =>
+    VoiceProfile.parse("p", {
+      design: {
+        instruct: "ignored here",
+        bank: {
+          Japanese: Object.fromEntries(clips.map((c) => [c, "line"])),
+          Chinese: { Neutral: "line" },
+        },
+      },
+    });
+
+  it("reads the clips her bank was designed with", () => {
+    expect([...bank(["happy", "sad"]).clips].sort()).toEqual(["happy", "neutral", "sad"]);
+    expect([...VoiceProfile.parse("p", null).clips]).toEqual([]);
+  });
+
+  it("the clip that matches, for a tag or an emotion's own name", () => {
+    const p = bank(["happy", "angry"]);
+    expect(p.referenceFor("happy")).toBe("happy");
+    expect(p.referenceFor(" Happy ")).toBe("happy");
+    expect(p.referenceFor("joy")).toBe("happy");
+    expect(p.referenceFor("frustration")).toBe("angry");
+  });
+
+  it("the next clip that fits, when the bank has no such clip", () => {
+    expect(bank(["embarrassed"]).referenceFor("surprised")).toBe("embarrassed");
+    expect(bank(["surprised", "embarrassed"]).referenceFor("surprised")).toBe("surprised");
+    expect(bank(["embarrassed"]).referenceFor("fear")).toBe("embarrassed");
+  });
+
+  it("past that it is the worker's: it falls back to neutral, then the plain reference", () => {
+    expect(bank(["happy"]).referenceFor("angry")).toBe("angry");
+    expect(bank(["happy"]).referenceFor("thinking")).toBe("thinking");
+  });
+
+  it("a profile that lists no bank, or a line with no tone, asks for nothing in particular", () => {
+    const plain = VoiceProfile.parse("p", null);
+    expect(plain.referenceFor("surprised")).toBe("surprised");
+    expect(plain.referenceFor(null)).toBeNull();
+    expect(plain.referenceFor("  ")).toBeNull();
+  });
+
+  it("every emotion of the table finds a clip in her real bank", () => {
+    const p = VoiceProfile.parse("deepseek-chan", deepseekVoice());
+    expect(p.clips.size).toBeGreaterThan(1);
+    for (const name of EMOTION_NAMES) {
+      const clip = p.referenceFor(EMOTION_OUTPUTS[name].tag) as string;
+      expect(p.clips.has(clip), `${name} → ${clip}`).toBe(true);
+    }
   });
 });

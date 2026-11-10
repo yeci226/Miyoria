@@ -16,7 +16,10 @@
 
 export {
   builtinCapabilities,
+  dmCapability,
+  handleLookup,
   messageDm,
+  type NameLookup,
   priorityFor,
   recipient,
   speak,
@@ -56,6 +59,7 @@ export {
   type Limit,
   type TierLimit,
 } from "./config.js";
+export { type EmergencyDeps, EmergencyStop } from "./emergency.js";
 export {
   FOLLOWUP_MAX_AGE_MS,
   FOLLOWUP_REASON,
@@ -64,7 +68,15 @@ export {
   followupHint,
   MAX_FOLLOWUP_CHARS,
 } from "./followup.js";
+export { GatedToolsKey, isGatedToolName } from "./gated.js";
 export { ActionsModule, actuatorsFor } from "./module.js";
+export {
+  ACTION_OUTCOME_TOPIC,
+  type ActionOutcomeRecord,
+  ledgerSource,
+  NOTICE_TTL_MS,
+  outcomeNotice,
+} from "./outcome.js";
 export {
   DEFAULT_PRIVACY,
   PRIVACY_PROFILE,
@@ -74,12 +86,16 @@ export {
 } from "./privacy.js";
 export { effectiveLimits, type Limits, RateLimiter, tightened } from "./rate.js";
 export {
+  type ActivityMode,
+  type ActivityRouter,
   ActuatorRegistry,
   ActuatorRegistryKey,
   type ActuatorRegistryOptions,
+  type DirectRun,
   GATE_DECISION_TOPIC,
   type InvokeOptions,
   PAUSED_KEY,
+  type RoutedCall,
   SELF_REVIEWER,
   type StatusProvider,
 } from "./registry.js";

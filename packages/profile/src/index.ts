@@ -17,6 +17,21 @@ import type { JsonObject, ProfileId } from "@miyoria/types";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 
+/**
+ * Her own names, not the persona's: Miyoria is who she is whichever persona she plays, so these
+ * always count as addressing her and always appear in her prompt.
+ */
+export const OWN_NAMES = ["Miyoria", "Miyo", "米優", "みよ"] as const;
+
+/** The line that tells her so; `persona` is the persona's display name. */
+export function ownIdentity(persona: string): string {
+  const role =
+    persona.trim() !== "" && persona.trim().toLowerCase() !== "miyoria"
+      ? `現在的角色設定是「${persona.trim()}」,但那是你演的樣子;`
+      : "";
+  return `你的本名是 Miyoria,大家也叫你 Miyo(米優、みよ)。${role}不管用哪個角色設定,有人叫 Miyoria 或 Miyo 都是在叫你,問你叫什麼,你也知道自己叫 Miyoria。`;
+}
+
 export class ProfileError extends Error {
   override readonly name = "ProfileError";
 }
@@ -221,9 +236,16 @@ export class Profile {
     return this.manifest.display_name;
   }
 
-  /** Display name plus nicknames, for "is she being addressed" checks. */
+  /**
+   * Display name, nicknames and her own names (`OWN_NAMES`), for "is she being addressed" checks.
+   */
   names(): string[] {
-    return [this.manifest.display_name, ...this.manifest.nicknames];
+    return [this.manifest.display_name, ...this.manifest.nicknames, ...OWN_NAMES];
+  }
+
+  /** Who she is whatever the persona: the first thing in her prompt. */
+  ownIdentity(): string {
+    return ownIdentity(this.manifest.display_name);
   }
 
   /** Replaces a persona section's text (runtime edit, e.g. from the panel). */
@@ -238,7 +260,7 @@ export class Profile {
    * so providers can cache it as a prefix.
    */
   personaPrompt(): string {
-    let out = "";
+    let out = `${this.ownIdentity()}\n\n`;
     for (const s of this.sections) out += `${s.body}\n\n`;
     if (this.examples.length > 0) {
       out += "# 範例對話(只示範語氣,不要照抄)\n\n";

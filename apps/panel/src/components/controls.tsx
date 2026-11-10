@@ -47,7 +47,7 @@ export function RowActions({ label, children, writes = true }: { label: string; 
           aria-label={label}
           title={disabled ? READ_ONLY_HINT : undefined}
           disabled={disabled}
-          className="data-[state=open]:bg-accent"
+          className="data-[state=open]:bg-control-hover"
         >
           <MoreHorizontal />
         </Button>

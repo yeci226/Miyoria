@@ -12,6 +12,7 @@
 // (interaction.ts). `DiscordHistory` (history.ts) reads earlier messages for the agent.
 
 export { type DiscordConfig, DiscordConfigSchema, validateDiscordConfig } from "./config.js";
+export { ambientChannel, type ChannelIds, messageAllowed } from "./gate.js";
 export {
   DiscordHistory,
   type FetchedLike,
@@ -84,7 +85,18 @@ export {
   renderModal,
   renderReply,
 } from "./render.js";
-export { DiscordSendError, DiscordSink, type RestLike, type RestRequest } from "./sink.js";
+export {
+  DiscordUserResolver,
+  type FetchedMember,
+  type ResolverClientLike,
+} from "./resolver.js";
+export {
+  type DiscordOutgoing,
+  DiscordSendError,
+  DiscordSink,
+  type RestLike,
+  type RestRequest,
+} from "./sink.js";
 export {
   buildTree,
   type GroupLookup,
@@ -108,5 +120,7 @@ export {
   type SyncLoopOptions,
   type SyncOptions,
   type SyncRest,
+  type SyncRunnerOptions,
   syncCommands,
+  syncRunner,
 } from "./sync.js";

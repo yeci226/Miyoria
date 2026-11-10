@@ -13,16 +13,16 @@ export function CharacterPage() {
   const { tab = "persona", person } = route.useSearch();
   const navigate = useNavigate();
   return (
-    <Page>
-      <PageHeader title="角色" />
-      <Tabs value={tab} onValueChange={(t) => void navigate({ to: "/character", search: { tab: t as CharacterTab }, replace: true })}>
-        <TabsList>
-          {CHARACTER_TABS.map((t) => (
-            <TabsTrigger key={t.tab} value={t.tab}>
-              {t.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+    <Tabs value={tab} onValueChange={(t) => void navigate({ to: "/character", search: { tab: t as CharacterTab }, replace: true })}>
+      <TabsList>
+        {CHARACTER_TABS.map((t) => (
+          <TabsTrigger key={t.tab} value={t.tab}>
+            {t.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      <Page>
+        <PageHeader title="角色" />
         <TabsContent value="persona">
           <PersonaTab />
         </TabsContent>
@@ -32,11 +32,11 @@ export function CharacterPage() {
         <TabsContent value="people">
           <PeopleTab onOpen={(id) => void navigate({ to: "/character", search: { tab: "people", person: id } })} />
         </TabsContent>
-      </Tabs>
-      <PersonSheet
-        personId={person}
-        onClose={() => void navigate({ to: "/character", search: { tab } })}
-      />
-    </Page>
+        <PersonSheet
+          personId={person}
+          onClose={() => void navigate({ to: "/character", search: { tab } })}
+        />
+      </Page>
+    </Tabs>
   );
 }

@@ -1,0 +1,8 @@
+# End-of-turn worker (workers/turn/server.py): Silero VAD + Smart Turn v3 on the CPU, no PyTorch.
+# Its own small venv:
+#   python -m venv .venv-turn
+#   .venv-turn/Scripts/pip install -r turn/requirements.txt
+fastapi>=0.115
+uvicorn[standard]>=0.30   # [standard] brings the WebSocket implementation /vad needs
+numpy>=1.26
+onnxruntime>=1.19,<2

@@ -52,10 +52,10 @@ function Marks({ c }: { c: LlmCallRecord }) {
     <span className="inline-flex items-center gap-1 text-muted-foreground [&_svg]:size-3.5">
       {c.thinking && <Brain aria-label="思考" />}
       {c.tool_calls > 0 && <Wrench aria-label={`${c.tool_calls} 個工具呼叫`} />}
-      {c.fallbacks.length > 0 && <Shuffle aria-label={`換了 ${c.fallbacks.length} 次模型`} className="text-warning" />}
-      {c.retries.length > 0 && <RotateCcw aria-label={`重送 ${c.retries.length} 次`} className="text-warning" />}
+      {c.fallbacks.length > 0 && <Shuffle aria-label={`換了 ${c.fallbacks.length} 次模型`} className="text-primary" />}
+      {c.retries.length > 0 && <RotateCcw aria-label={`重送 ${c.retries.length} 次`} className="text-primary" />}
       {c.repair !== null && <Badge variant="warning" className="px-1 py-0 text-[10px]">修正 {c.repair}</Badge>}
-      {c.finish_reason === "length" && <AlertTriangle aria-label="被長度截斷" className="text-warning" />}
+      {c.finish_reason === "length" && <AlertTriangle aria-label="被長度截斷" className="text-primary" />}
     </span>
   );
 }
@@ -69,7 +69,7 @@ function CallRow({ c, onOpen }: { c: LlmCallRecord; onOpen: () => void }) {
         {fmtTime(c.at)}
       </TableCell>
       <TableCell>
-        <button type="button" onClick={onOpen} className="flex min-w-0 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+        <button type="button" onClick={onOpen} className="flex min-w-0 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <Dot tone={STATUS_TONE[c.status]} pulse={c.status === "streaming"} />
           <span className="sr-only">{STATUS_LABEL[c.status]}</span>
           <span className="truncate font-medium">{purposeLabel(c.purpose)}</span>
@@ -92,7 +92,7 @@ function CallRow({ c, onOpen }: { c: LlmCallRecord; onOpen: () => void }) {
       <TableCell className={cn(r, "hidden sm:table-cell text-muted-foreground")}>{fmtMs(c.total_ms)}</TableCell>
       <TableCell className={cn(r, "font-mono text-[12px]")}>{fmtCost(c.cost_usd)}</TableCell>
       <TableCell className="hidden xl:table-cell">
-        {c.status === "error" ? <span className="line-clamp-1 max-w-40 text-xs text-[oklch(0.74_0.16_25)]" title={c.error ?? undefined}>{c.error}</span> : <Marks c={c} />}
+        {c.status === "error" ? <span className="line-clamp-1 max-w-40 text-xs text-primary" title={c.error ?? undefined}>{c.error}</span> : <Marks c={c} />}
       </TableCell>
     </TableRow>
   );
@@ -168,14 +168,14 @@ export function CallsTab({ search }: { search: LlmSearch }) {
           <span className="text-muted-foreground">只顯示</span>
           <Badge variant="brand" className="gap-1 pr-0.5">
             {search.thought ? `想法 ${search.thought.slice(-8)}` : `對話 ${search.turn?.slice(-8)}`} 的呼叫
-            <button type="button" aria-label="清除" className="rounded-sm p-0.5 hover:bg-brand/20" onClick={() => set({ thought: undefined, turn: undefined })}>
+            <button type="button" aria-label="清除" className="rounded-sm p-0.5 hover:bg-primary/20" onClick={() => set({ thought: undefined, turn: undefined })}>
               <X className="size-3" />
             </button>
           </Badge>
         </div>
       )}
-      <Card className="overflow-hidden">
-        <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5 text-[13px] text-muted-foreground">
+      <Card>
+        <div className="flex items-center justify-between gap-3 pb-1 text-[13px] text-muted-foreground">
           <span>
             {first ? (
               <>
@@ -219,7 +219,7 @@ export function CallsTab({ search }: { search: LlmSearch }) {
           </Table>
         )}
         {calls.hasNextPage && (
-          <div className="border-t p-3 text-center">
+          <div className="pt-3 text-center">
             <Button size="sm" variant="outline" busy={calls.isFetchingNextPage} onClick={() => void calls.fetchNextPage()}>
               載入更多
             </Button>

@@ -12,7 +12,7 @@ const n2 = (v: number) => v.toFixed(2);
 
 function Row({ label, value, children }: { label: string; value: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)_3rem] items-center gap-3 px-4 py-2.5">
+    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)_3rem] items-center gap-3 py-(--row-y)">
       <dt className="text-[13px] text-muted-foreground">{label}</dt>
       <dd className="contents">
         <span className="min-w-0">{children}</span>
@@ -38,7 +38,7 @@ function StateCard({ self }: { self: SelfView }) {
       <CardHeader>
         <CardTitle>狀態</CardTitle>
       </CardHeader>
-      <dl className="divide-y" aria-label="她的狀態">
+      <dl className="divide-y divide-line-soft" aria-label="她的狀態">
         {mood && (
           <>
             <Row label="心情" value={n2(mood.valence)}>
@@ -48,7 +48,7 @@ function StateCard({ self }: { self: SelfView }) {
               <Meter value={mood.arousal} label={`興奮 ${n2(mood.arousal)}`} />
             </Row>
             <Row label="精神" value={n2(mood.energy)}>
-              <Meter value={mood.energy} tone="success" label={`精神 ${n2(mood.energy)}`} />
+              <Meter value={mood.energy} tone="brand" label={`精神 ${n2(mood.energy)}`} />
             </Row>
           </>
         )}
@@ -69,22 +69,22 @@ function PolicyCard({ self }: { self: SelfView }) {
   const p = self.policy;
   const rows = Object.entries(p.talkativeness).sort(([a], [b]) => (a < b ? -1 : 1));
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>方針</CardTitle>
       </CardHeader>
-      <div className="border-b">
+      <div className="border-b border-line-soft">
         <dl>
           <Row label="主動程度" value={n2(p.initiative)}>
             <Meter value={p.initiative} tone="brand" label={`主動程度 ${n2(p.initiative)}`} />
           </Row>
         </dl>
         {p.initiative_why && (
-          <p className="-mt-1 pr-4 pb-2.5 pl-[7.25rem] text-[13px] text-muted-foreground">{p.initiative_why}</p>
+          <p className="-mt-1 pb-2.5 pl-[6.25rem] text-[13px] text-muted-foreground">{p.initiative_why}</p>
         )}
       </div>
       {rows.length === 0 ? (
-        <EmptyLine className="py-8">沒有自己定的多話程度</EmptyLine>
+        <EmptyLine>沒有自己定的多話程度</EmptyLine>
       ) : (
         <Table aria-label="多話程度">
           <TableHeader>
@@ -122,7 +122,7 @@ function PolicyCard({ self }: { self: SelfView }) {
 
 function AgendaCard({ self }: { self: SelfView }) {
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>議程</CardTitle>
         {self.agenda.some((a) => a.status === "open") && (
@@ -132,7 +132,7 @@ function AgendaCard({ self }: { self: SelfView }) {
         )}
       </CardHeader>
       {self.agenda.length === 0 ? (
-        <EmptyLine className="py-8">沒有打算做的事</EmptyLine>
+        <EmptyLine>沒有打算做的事</EmptyLine>
       ) : (
         <Table aria-label="議程">
           <TableHeader>
@@ -173,11 +173,12 @@ function StateTrend({ self }: { self: SelfView }) {
 
 export function StateTab({ self }: { self: SelfView }) {
   return (
-    <div className="grid gap-6">
+    <div className="grid gap-(--stage-gap)">
       <StateTrend self={self} />
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+      <div className="grid items-start gap-(--stage-gap) lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
         <PolicyCard self={self} />
-        <AgendaCard self={self} />
+        {/* Her plans live in GoalAgenda (the 目標 tab); this list only fills without the mind. */}
+        {self.agenda.length > 0 && <AgendaCard self={self} />}
       </div>
     </div>
   );

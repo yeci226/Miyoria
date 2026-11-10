@@ -67,8 +67,8 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
 const ACTIVITY = [
   { key: "messages", label: "聊天訊息", color: "var(--chart-1)" },
-  { key: "utterances", label: "語音發言", color: "var(--chart-3)" },
-  { key: "turns", label: "她的回覆", color: "var(--chart-2)" },
+  { key: "utterances", label: "語音發言", color: "var(--chart-2)" },
+  { key: "turns", label: "她的回覆", color: "var(--chart-3)" },
   { key: "initiatives", label: "主動開口", color: "var(--chart-4)" },
 ];
 
@@ -157,19 +157,17 @@ export function StateFacets({
     ...DRIVE_ORDER.map((d) => ({ key: d, label: DRIVE_LABEL[d], values: pick(p, (x) => x.drives?.[d]), domain: [0, 1] as const })),
   ];
   return (
-    <section className="overflow-hidden rounded-lg border bg-card" aria-label={title}>
-      <header className="flex min-h-12 items-center justify-between gap-3 border-b px-4 py-2 sm:px-5">
+    <section className="flex min-w-0 flex-col gap-3" aria-label={title}>
+      <header className="flex min-h-[26px] items-center justify-between gap-3">
         <h2 className="text-[13px] font-medium text-muted-foreground">{title}</h2>
         {action}
       </header>
       {p.length >= 2 ? (
         <Facets times={times} facets={facets} />
       ) : (
-        <div className="p-4">
-          <Gate trend={trend} height={120}>
-            {() => null}
-          </Gate>
-        </div>
+        <Gate trend={trend} height={120}>
+          {() => null}
+        </Gate>
       )}
     </section>
   );
@@ -258,7 +256,7 @@ export function SpendBlock() {
           <dl className="grid gap-3.5">
             {meters.map((m) => {
               const frac = m.limit ? Math.min(1, m.used / m.limit) : null;
-              const tone = frac === null ? "var(--chart-1)" : frac >= 1 ? "var(--destructive)" : frac >= c.degrade_at ? "var(--warning)" : "var(--chart-1)";
+              const tone = frac !== null && frac >= c.degrade_at ? "var(--primary)" : "var(--chart-line)";
               return (
                 <div key={m.key} className="grid gap-1.5">
                   <div className="flex items-baseline justify-between text-[13px]">
@@ -274,9 +272,9 @@ export function SpendBlock() {
                     aria-valuemin={0}
                     aria-valuemax={1}
                     aria-valuenow={frac === null ? undefined : Number(frac.toFixed(2))}
-                    className="relative h-2 overflow-hidden rounded-full bg-muted"
+                    className="relative h-1 overflow-hidden rounded-[2px] bg-muted"
                   >
-                    <span className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${(frac ?? 0) * 100}%`, background: tone }} />
+                    <span className="absolute inset-y-0 left-0 rounded-[2px]" style={{ width: `${(frac ?? 0) * 100}%`, background: tone }} />
                     {m.limit !== null && (
                       <span aria-hidden className="absolute inset-y-0 w-px bg-foreground/40" style={{ left: `${c.degrade_at * 100}%` }} title="降級門檻" />
                     )}

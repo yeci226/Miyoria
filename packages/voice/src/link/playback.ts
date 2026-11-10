@@ -3,7 +3,7 @@
 import { errorMessage, getLogger } from "@miyoria/kernel";
 import type { AudioChunk, AudioStream } from "@miyoria/speech";
 import type { PlaybackState } from "@miyoria/types";
-import { encodeAudio, TAG_LEVELS, TAG_PLAYBACK } from "../protocol.js";
+import { type CoreMessage, encodeAudio, TAG_LEVELS, TAG_PLAYBACK } from "../protocol.js";
 import { deferred, Watch } from "../util.js";
 import type { Conn } from "./conn.js";
 
@@ -14,18 +14,94 @@ export interface Stoppable {
   stop(fadeMs: number): void;
 }
 
+/**
+ * How a playback talks to its node beyond the audio: control messages, and whether the node
+ * understands them (`play_duck` / `play_pause` are announced in the node's hello `capabilities`).
+ */
+export interface PlaybackControl {
+  send(msg: CoreMessage): void;
+  supports(capability: string): boolean;
+}
+
+/** Capability names of the node's `hello.capabilities`. */
+export const CAP_DUCK = "play_duck";
+export const CAP_PAUSE = "play_pause";
+
 /** Handle of one playback started with `VoiceLink.play`. */
 export class Playback implements Stoppable {
   readonly id: number;
+  readonly #control: PlaybackControl | null;
   readonly #stop = deferred<void>();
   #stopped = false;
   #fadeMs = 0;
+  /** When the node said it was audible, and when it stopped being (a stop asked for counts). */
+  #startedAt: number | null = null;
+  #endedAt: number | null = null;
+  /** Barge-in held it: that time is nobody hearing anything. */
+  #heldSince: number | null = null;
+  #heldMs = 0;
   /** @internal Written by the pump. */
   readonly state$ = new Watch<PlaybackState | null>(null);
 
   /** @internal Created by `VoiceLink.play`. */
-  constructor(id: number) {
+  constructor(id: number, control: PlaybackControl | null = null) {
     this.id = id;
+    this.#control = control;
+  }
+
+  /**
+   * Sets this playback's volume to `gain` (0..1, 1 = normal) over `fadeMs`. Returns whether the
+   * node supports it (older nodes do not) and the playback is still running.
+   */
+  duck(gain: number, fadeMs: number): boolean {
+    const c = this.#control;
+    if (!c?.supports(CAP_DUCK) || this.#stopped || this.state$.value === "finished") {
+      return false;
+    }
+    c.send({ type: "play_duck", play: this.id, gain, fade_ms: fadeMs });
+    return true;
+  }
+
+  /**
+   * Holds the playback (fading out over `fadeMs`) until `resume`; the audio already sent waits
+   * in the node. Returns whether the node supports it.
+   */
+  pause(fadeMs: number): boolean {
+    const c = this.#control;
+    if (!c?.supports(CAP_PAUSE) || this.#stopped) return false;
+    c.send({ type: "play_pause", play: this.id, fade_ms: fadeMs });
+    this.#heldSince ??= Date.now();
+    return true;
+  }
+
+  /** Continues a paused playback, fading in over `fadeMs`. */
+  resume(fadeMs: number): boolean {
+    const c = this.#control;
+    if (!c?.supports(CAP_PAUSE) || this.#stopped) return false;
+    c.send({ type: "play_resume", play: this.id, fade_ms: fadeMs });
+    this.#release(Date.now());
+    return true;
+  }
+
+  #release(now: number): void {
+    if (this.#heldSince !== null) this.#heldMs += now - this.#heldSince;
+    this.#heldSince = null;
+  }
+
+  /** How long it was audible, in ms: from the node's `started` to its end, holds left out. */
+  heardMs(): number {
+    if (this.#startedAt === null) return 0;
+    const end = this.#endedAt ?? Date.now();
+    const held = this.#heldMs + (this.#heldSince === null ? 0 : end - this.#heldSince);
+    return Math.max(end - this.#startedAt - held, 0);
+  }
+
+  /** @internal The pump's report of where the playback is. */
+  advance(state: PlaybackState): void {
+    const now = Date.now();
+    if (state === "started") this.#startedAt ??= now;
+    else this.#endedAt ??= now;
+    this.state$.set(state);
   }
 
   /**
@@ -36,6 +112,7 @@ export class Playback implements Stoppable {
     if (this.#stopped) return;
     this.#fadeMs = fadeMs;
     this.#stopped = true;
+    this.#endedAt ??= Date.now();
     this.#stop.resolve();
   }
 
@@ -81,8 +158,9 @@ export function startPlayback(
   sampleRate: number,
   audio: AudioStream | AsyncIterable<LeveledChunk>,
   node: Watch<PlaybackState | null>,
+  control: PlaybackControl | null = null,
 ): Playback {
-  const playback = new Playback(id);
+  const playback = new Playback(id, control);
   void pump(conn, playback, sampleRate, audio, node)
     .catch((error: unknown) => {
       log.warn({ play: id, err: errorMessage(error) }, "playback pump failed");
@@ -91,7 +169,7 @@ export function startPlayback(
     .then((end) => {
       conn.state.plays.delete(id);
       log.debug({ play: id, state: end }, "playback ended");
-      playback.state$.set(end);
+      playback.advance(end);
     });
   return playback;
 }
@@ -147,7 +225,7 @@ async function pump(
       if (node.version !== seen) {
         seen = node.version;
         const state = node.value;
-        if (state === "started") playback.state$.set("started");
+        if (state === "started") playback.advance("started");
         else if (state !== null) return state;
         continue;
       }

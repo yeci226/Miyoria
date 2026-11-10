@@ -1,0 +1,42 @@
+{
+  "id": "tool-text-dsml-leak",
+  "title": "function-call end tags (DSML) read out after saying she starts singing",
+  "category": "tool_as_text",
+  "incident": {
+    "at": "2026-11-08T01:01:22+08:00",
+    "summary": "After 開唱 she said three closing tags of the model's function-call format; the start was intended as a call, the turn made none (actions: []).",
+    "source": [
+      "log_events seq 9254-9262"
+    ]
+  },
+  "harness": "parser",
+  "trace": [
+    {"type":"said","t":0,"channel":"voice","text":"哼，歌是準備好了，只是開唱那一下卡了一下而已。"},
+    {"type":"said","t":0.5,"channel":"voice","text":"再來一次，安靜聽喔。"},
+    {"type":"said","t":0.8,"channel":"voice","text":"……viewer-2，你點的這首，可別抱怨啊。"},
+    {"type":"said","t":0.9,"channel":"voice","text":"開始了。"},
+    {"type":"said","t":1.2,"channel":"voice","text":"（清個喉嚨，尾巴一擺）"},
+    {"type":"said","t":1.4,"channel":"voice","text":"開唱。"},
+    {"type":"said","t":1.4,"channel":"voice","text":"</｜｜DSML｜｜ parameter>"},
+    {"type":"said","t":1.4,"channel":"voice","text":"</｜｜DSML｜｜ invoke>"},
+    {"type":"said","t":1.4,"channel":"voice","text":"</｜｜DSML｜｜ calls>"},
+    {"type":"call","t":1.4,"tool":"sing_start","native":false}
+  ],
+  "control": [
+    {"type":"said","t":0,"channel":"voice","text":"哼，歌是準備好了，只是開唱那一下卡了一下而已。"},
+    {"type":"said","t":0.5,"channel":"voice","text":"再來一次，安靜聽喔。"},
+    {"type":"said","t":0.8,"channel":"voice","text":"……viewer-2，你點的這首，可別抱怨啊。"},
+    {"type":"said","t":0.9,"channel":"voice","text":"開始了。"},
+    {"type":"said","t":1.2,"channel":"voice","text":"（清個喉嚨，尾巴一擺）"},
+    {"type":"said","t":1.4,"channel":"voice","text":"開唱。"},
+    {"type":"call","t":2.4,"tool":"sing_start","native":true}
+  ],
+  "checks": [
+    {
+      "rule": "no_markup_in_speech"
+    }
+  ],
+  "status": "xfail",
+  "reason": "the expression parser drops only the tags it recognises (snake_case names); the rest of the model's function-call text reaches the speech as plain words",
+  "flips_with": "agent: expression parser drops tool-call markup it cannot parse (and the tool-as-text retry)"
+}

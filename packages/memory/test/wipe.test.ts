@@ -95,7 +95,7 @@ async function setup() {
   services.provide("app", SettingsStoreKey, store.settings);
   services.provide("app", ProfileDataStoreKey, store.profileData);
   services.provide("app", AuditLogKey, store.audit);
-  const counting = ["social", "mood", "agent", "initiative"].map((id) => new Counting(id));
+  const counting = ["social", "mood", "agent", "arbiter"].map((id) => new Counting(id));
   await sup.register(new LlmStub(router(new MockProvider("sum").reply("{}"))), null, true);
   await sup.register(new CommandsModule(), { owners: ["discord:1"] }, true);
   await sup.register(new MemoryModule(profile(), embeddingConfig()), {}, true);
@@ -196,10 +196,12 @@ describe("memory wipe", () => {
     );
     expect(settingsOf("memories")).not.toContain("self:feeling:");
     expect(settingsOf("relationships")).toContain("mind:thought:");
-    expect(settingsOf("everything")).toContain("initiative:state");
+    expect(settingsOf("everything")).toEqual(
+      expect.arrayContaining(["arbiter:state", "initiative:state"]),
+    );
     expect(wipeModules("history")).toEqual([
       "memory",
-      "initiative",
+      "arbiter",
       "social",
       "agent",
       "self",
@@ -208,8 +210,9 @@ describe("memory wipe", () => {
       "reflect",
       "conversation",
       "mood",
+      "facts",
     ]);
-    expect(wipeModules("memories")).toEqual(["memory", "initiative", "knowledge"]);
+    expect(wipeModules("memories")).toEqual(["memory", "arbiter", "knowledge"]);
   });
 
   it("is_owner_only_and_walks_through_select_confirm_and_modal", async () => {

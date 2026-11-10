@@ -3,18 +3,19 @@ import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 import { cn } from "@/lib/utils";
 
+// State has no colours of its own: neutral tags, and the primary for what needs attention.
 const badgeVariants = cva(
-  "inline-flex w-fit shrink-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border px-1.5 py-0.5 text-xs font-medium transition-colors [&>svg]:pointer-events-none [&>svg]:size-3",
+  "inline-flex w-fit shrink-0 items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border border-transparent px-1.5 py-0.5 text-xs font-medium [text-shadow:none] transition-colors [&>svg]:pointer-events-none [&>svg]:size-3",
   {
     variants: {
       variant: {
-        default: "border-transparent bg-primary text-primary-foreground",
-        secondary: "border-transparent bg-secondary text-secondary-foreground",
-        outline: "border-border text-muted-foreground",
-        success: "border-success/25 bg-success/10 text-success",
-        warning: "border-warning/25 bg-warning/10 text-warning",
-        destructive: "border-destructive/30 bg-destructive/12 text-[oklch(0.74_0.16_25)]",
-        brand: "border-brand/30 bg-brand/12 text-[oklch(0.78_0.12_267)]",
+        default: "bg-primary text-primary-foreground",
+        secondary: "bg-control text-foreground",
+        outline: "bg-black/40 text-muted-foreground",
+        success: "bg-control text-foreground",
+        warning: "border-primary/50 bg-black/40 text-primary",
+        destructive: "bg-primary text-primary-foreground",
+        brand: "bg-control text-primary",
       },
     },
     defaultVariants: { variant: "outline" },

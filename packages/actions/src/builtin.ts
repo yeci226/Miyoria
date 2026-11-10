@@ -2,16 +2,20 @@
 // sinks and the scheduler), `speak` (say a line in the voice channel she is in; the panel's
 // "say") and the placeholder high-risk `test.high`.
 
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/kernel";
 import {
   type AccountRef,
   ActionSinkKey,
-  filterOutgoing,
+  HandleDirectoryKey,
+  isEphemeralHandle,
+  ModerationKey,
+  MouthKey,
   newAction,
   newId,
   PlatformSinksKey,
   type Principal,
   type Priority,
+  safeOutgoing,
   textLane,
   VoiceSinkKey,
 } from "@miyoria/types";
@@ -36,15 +40,32 @@ export function priorityFor(principal: Principal): Priority {
   }
 }
 
+/** The account a name she uses for someone (their handle) belongs to, or `null`. */
+export type NameLookup = (name: string) => AccountRef | null;
+
+/** Names resolved through the handle table: the names she sees for people in her prompts. */
+export function handleLookup(services: ServiceLookup): NameLookup {
+  return (name) => {
+    if (isEphemeralHandle(name)) return null;
+    const handles = services.get(HandleDirectoryKey);
+    return handles?.resolve(name)?.account ?? null;
+  };
+}
+
 /**
  * The account `to` names: `speaker` (default) is the person asking; otherwise a mention
- * (`<@123>`) or a bare id on the requester's platform.
+ * (`<@123>`), a bare id on the requester's platform, or (with `names`) the name she knows them
+ * by, `@` optional.
  */
-export function recipient(to: string | null | undefined, principal: Principal): AccountRef | null {
+export function recipient(
+  to: string | null | undefined,
+  principal: Principal,
+  names: NameLookup | null = null,
+): AccountRef | null {
   const raw = (to ?? "").trim();
   if (raw === "" || raw === "speaker") return principal.requester;
   const id = /^<@!?(\d+)>$/.exec(raw)?.[1] ?? (/^\d+$/.test(raw) ? raw : null);
-  if (id === null) return null;
+  if (id === null) return names ? (names(raw) ?? names(raw.replace(/^@/, ""))) : null;
   const platform = principal.requester?.platform ?? principal.context?.platform ?? "discord";
   return { platform, id };
 }
@@ -55,51 +76,63 @@ const DmArgs = z.object({
 });
 type DmArgs = z.output<typeof DmArgs>;
 
-export const messageDm: Capability<DmArgs> = defineCapability<DmArgs>({
-  name: "message.dm",
-  summary: "私訊某個人",
-  risk: "medium",
-  args: DmArgs,
-  permission: "chat.dm",
-  consent: "dm",
-  tool: {
-    name: "message_dm",
-    description:
-      "私訊某個人(Discord DM)。to 省略或填 speaker = 正在跟你說話的人;也可以填對方的 mention(<@id>)。" +
-      "不要私訊陌生人,也不要一直傳。",
-    properties: {
-      to: { type: "string", description: "speaker,或對方的 mention <@id>" },
-      text: { type: "string", description: "要私訊的內容(用你平常說話的方式)" },
+/** `message.dm`, resolving names with `names` when given. */
+export function dmCapability(names: NameLookup | null = null): Capability<DmArgs> {
+  return defineCapability<DmArgs>({
+    name: "message.dm",
+    summary: "私訊某個人",
+    risk: "medium",
+    args: DmArgs,
+    permission: "chat.dm",
+    consent: "dm",
+    tool: {
+      name: "message_dm",
+      description:
+        "私訊某個人(Discord DM)。to 省略或填 speaker = 正在跟你說話的人;也可以填對方的名字(你看到的那個)" +
+        "或 mention(<@id>)。已經在跟對方私訊時直接說就好,不用這個工具。不要私訊陌生人,也不要一直傳。",
+      properties: {
+        to: { type: "string", description: "speaker、對方的名字,或 mention <@id>" },
+        text: { type: "string", description: "要私訊的內容(用你平常說話的方式)" },
+      },
+      required: ["text"],
     },
-    required: ["text"],
-  },
-  target: (args, principal) => recipient(args.to, principal),
-  check: (args, principal) =>
-    recipient(args.to, principal) === null ? "`to` must be speaker, a mention or an id" : null,
-  async execute(args, ctx) {
-    const to = recipient(args.to, ctx.principal);
-    if (to === null) throw new CapabilityError("no recipient");
-    const sink = ctx.services.get(PlatformSinksKey)?.get(to.platform);
-    if (!sink?.openDm) throw new CapabilityError(`cannot send DMs on ${to.platform}`);
-    const text = filterOutgoing(args.text);
-    if (text === "") throw new CapabilityError("nothing left to send after filtering");
-    const context = await sink.openDm(to, ctx.signal);
-    const actions = ctx.services.get(ActionSinkKey);
-    if (actions) {
-      await actions.submit(
-        newAction(
-          textLane(context),
-          priorityFor(ctx.principal),
-          { type: "send_message", context, message: { text, reply_to: null } },
-          { turn: ctx.request.turn },
-        ),
-      );
-    } else {
-      await sink.send(context, { text, reply_to: null }, ctx.signal);
-    }
-    return { text: "已私訊對方。", data: { platform: to.platform, id: to.id } };
-  },
-});
+    target: (args, principal) => recipient(args.to, principal, names),
+    check: (args, principal) =>
+      recipient(args.to, principal, names) === null
+        ? "`to` must be speaker, a name she knows, a mention or an id"
+        : null,
+    async execute(args, ctx) {
+      const to = recipient(args.to, ctx.principal, names);
+      if (to === null) throw new CapabilityError("no recipient");
+      const sink = ctx.services.get(PlatformSinksKey)?.get(to.platform);
+      if (!sink?.openDm) throw new CapabilityError(`cannot send DMs on ${to.platform}`);
+      const { text, blocked } = safeOutgoing(ctx.services.get(ModerationKey), {
+        path: "other",
+        text: args.text,
+        turn: ctx.request.turn,
+      });
+      if (text === "") throw new CapabilityError("nothing left to send after filtering");
+      const context = await sink.openDm(to, ctx.signal);
+      const actions = ctx.services.get(ActionSinkKey);
+      if (actions) {
+        await actions.submit(
+          newAction(
+            textLane(context),
+            priorityFor(ctx.principal),
+            { type: "send_message", context, message: { text, reply_to: null } },
+            { turn: ctx.request.turn, blocked },
+          ),
+        );
+      } else {
+        await sink.send(context, { text, reply_to: null }, ctx.signal);
+      }
+      return { text: "已私訊對方。", data: { platform: to.platform, id: to.id } };
+    },
+  });
+}
+
+/** `message.dm` with mentions and ids only (names need the handle table). */
+export const messageDm: Capability<DmArgs> = dmCapability();
 
 const ContextSchema = z.object({
   platform: z.string(),
@@ -128,7 +161,20 @@ export const speak: Capability<SpeakArgs> = defineCapability<SpeakArgs>({
     const sink = ctx.services.get(VoiceSinkKey);
     if (!sink) throw new CapabilityError("the voice module is not running");
     const turn = args.turn ?? newId();
-    const text = filterOutgoing(args.text);
+    const { text, blocked } = safeOutgoing(ctx.services.get(ModerationKey), {
+      path: "other",
+      text: args.text,
+      aloud: true,
+      context: args.context,
+      turn,
+    });
+    // V3: one mouth. The owner's line goes through the main line like every other.
+    const mouth = ctx.services.get(MouthKey);
+    if (mouth) {
+      const emotion = args.emotion ?? null;
+      await mouth.say({ context: args.context, text, emotion, turn, source: "panel", blocked });
+      return { text: "speaking", data: { turn } };
+    }
     // Speaking lasts as long as the playback; the caller only needs to know it started.
     void sink.speak(args.context, text, args.emotion ?? null, turn).catch((error: unknown) => {
       log.warn({ err: errorMessage(error) }, "speaking failed");
@@ -162,7 +208,8 @@ export const testHigh: Capability<NoteArgs> = defineCapability<NoteArgs>({
   },
 });
 
-/** Registered by every app registry. */
-export function builtinCapabilities(): Capability[] {
-  return [messageDm as Capability, speak as Capability];
+/** Registered by every app registry; with `services`, `message.dm` also takes her names for people. */
+export function builtinCapabilities(services: ServiceLookup | null = null): Capability[] {
+  const dm = services ? dmCapability(handleLookup(services)) : messageDm;
+  return [dm as Capability, speak as Capability];
 }

@@ -2,21 +2,25 @@ import { actuatorsFor } from "@miyoria/actions";
 import { CommandMount } from "@miyoria/commands";
 import { defineManifest, type Module, type ModuleContext } from "@miyoria/kernel";
 import type { Profile } from "@miyoria/profile";
-import { ToolRegistryKey } from "@miyoria/tools";
 import {
   type AccountRef,
+  ActivityManagerKey,
   type ContextKey,
+  GameResumeKey,
+  isLive,
   type PromptContributor,
   type PromptContributors,
   PromptContributorsKey,
   type PromptSection,
   serviceKey,
+  type TaskId,
 } from "@miyoria/types";
 import { gameCapabilities } from "./actions.js";
 import { registerCommands } from "./commands.js";
 import { GameConfigSchema } from "./config.js";
 import { Director, type GameStatus, type Persona, type Placement, View } from "./director.js";
 import { LIVE_TOPICS, LiveState } from "./live.js";
+import { timeoutValues, timeoutViolations } from "./timeouts.js";
 
 /** Prompt contributor key. */
 export const PROMPT_KEY = "game";
@@ -52,7 +56,9 @@ export class GameControl {
 
   /**
    * Starts a session in `context` (used as-is unless `placement` says otherwise), for `account`.
-   * Refuses (`GameError`) when the game is not running or its adapter is not connected.
+   * Refuses (`GameError`, with a code) when the game is not running or its adapter is not
+   * connected. `task`: the id of the `launch` task when it has to start the game (the
+   * ActivityManager passes its own task id, so one id runs end to end).
    */
   async start(
     game: string,
@@ -60,10 +66,16 @@ export class GameControl {
     account: AccountRef,
     placement: Placement = "here",
     signal?: AbortSignal,
+    task: TaskId | null = null,
   ): Promise<string> {
-    const checked = await this.#director.preflight(game, context, signal);
+    const checked = await this.#director.preflight(game, context, signal, task);
     const text = this.#director.start(game, placement, context, account);
     return checked.inMenu ? `${text}（遊戲還在主選單，進入世界後她就會開始動。）` : text;
+  }
+
+  /** The session running now, if any (`game`, `game_name`, `context`). */
+  session(): { game: string; game_name: string; context: ContextKey } | null {
+    return this.#director.session();
   }
 
   /** A voice channel she is in (on `platform` when given), if any. */
@@ -77,6 +89,11 @@ export class GameControl {
 
   async goal(text: string, by: string): Promise<string> {
     return this.#director.goal(text, by);
+  }
+
+  /** A goal for the session that is still starting (applied once it runs). */
+  pendingGoal(text: string, by: string): string {
+    return this.#director.pendingGoal(text, by);
   }
 }
 
@@ -116,13 +133,14 @@ interface Running {
 }
 
 /**
- * Module `game`: the game director. A game adapter extension exposes the tools
- * `game_<id>_observe` / `game_<id>_act` and publishes `game.<id>.*` events; while a session
- * runs (`game start`) the director observes, asks the `game` LLM purpose for goals and actions,
+ * Module `game`: the game director. A game adapter extension registers the task executor of
+ * `game.<id>` (`TaskExecutorsKey`) and publishes `game.<id>.*` events; while a session runs
+ * (`game start`) the director observes through the executor, asks the `game` LLM purpose for
+ * goals, starts each one as a task (id + budget) and follows its `game.<id>.task.*` events,
  * comments live (`agent.initiative`, reason `game`), nudges the mood and consumes
  * `queue.item_activated` items of kind `game_goal`.
  *
- * Services used: `ToolRegistry` (required to play), `LlmRouter`, `RequestQueue`,
+ * Services used: `TaskExecutors` (required to play), `LlmRouter`, `RequestQueue`,
  * `CommandRegistry`, `PromptContributors` (all optional). Provides `GameHandleKey` and
  * `GameControlKey`.
  */
@@ -155,6 +173,12 @@ export class GameModule implements Module {
 
   async start(ctx: ModuleContext): Promise<void> {
     const cfg = ctx.config(GameConfigSchema);
+    for (const problem of timeoutViolations(timeoutValues(cfg))) {
+      ctx.log.warn(
+        { problem },
+        "game timeouts are out of order (see packages/game/src/timeouts.ts)",
+      );
+    }
     const view = new View();
     const persona: Persona = {
       ...this.#persona,
@@ -164,14 +188,20 @@ export class GameModule implements Module {
     const director = new Director(cfg, ctx, persona, view, actuators);
     const control = new GameControl(director);
     const live = new LiveState();
+    // The ActivityManager's broadcast when it runs (one copy of "is she live"), else the bus.
+    const isStreaming = (): boolean => {
+      const manager = ctx.services.get(ActivityManagerKey);
+      return manager ? isLive(manager.snapshot()) : live.live();
+    };
     const capabilities = gameCapabilities({
       control,
       defaultGame: cfg.default_game,
       permissions: cfg.permissions,
       toolTimeoutMs: cfg.tool_timeout_secs * 1000,
-      tools: () => ctx.services.get(ToolRegistryKey),
+      taskBudgetSecs: cfg.task_budget_secs,
+      maxBudgetSecs: cfg.max_goal_secs,
       actuators,
-      live: () => live.live(),
+      live: isStreaming,
     }).map((c) => actuators.register(c));
 
     let paths: string[] = [];
@@ -189,6 +219,7 @@ export class GameModule implements Module {
     prompts?.register(new GamePrompt(view, cfg.prompt_summary_chars));
     ctx.provide(GameHandleKey, new GameHandle(view));
     ctx.provide(GameControlKey, control);
+    ctx.provide(GameResumeKey, director);
 
     const events = ctx.subscribe([
       "game.*",
@@ -198,6 +229,7 @@ export class GameModule implements Module {
       "voice.participants",
       LIVE_TOPICS.golive,
       LIVE_TOPICS.stage,
+      "system.module.state",
     ]);
     ctx.spawn("director", async () => {
       try {

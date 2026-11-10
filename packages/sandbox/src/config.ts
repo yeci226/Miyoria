@@ -98,6 +98,32 @@ export const SandboxSessionsSchema = z.object({
 export type SandboxSessions = z.output<typeof SandboxSessionsSchema>;
 
 /**
+ * `[modules.sandbox.files]`: files people send her. The bytes are downloaded by Core (bounded,
+ * allowlisted hosts) and only ever opened by the extractor inside a container.
+ */
+export const SandboxFilesSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** Larger files are declined, from the size the platform reports and again while downloading. */
+  max_bytes: z.number().int().min(1).default(2_500_000),
+  /** Characters of extracted text she gets (the rest is cut and marked as cut). */
+  max_chars: z.number().int().min(200).default(6000),
+  /** Wall-clock limit of the extractor run, in milliseconds. */
+  timeout_ms: z.number().int().min(1000).default(20_000),
+  /** Time limit for downloading one file, in milliseconds. */
+  download_timeout_ms: z.number().int().min(500).default(8000),
+  /** Files are only downloaded from these hosts (the platform's CDN), over HTTPS. */
+  allowed_hosts: z.array(z.string()).default(["cdn.discordapp.com", "media.discordapp.net"]),
+  /** Files one person may have her read per `window_s` seconds. */
+  per_person: z.number().int().min(0).default(4),
+  /** Files everyone together may have her read per `window_s` seconds. */
+  global: z.number().int().min(0).default(12),
+  window_s: z.number().int().min(1).default(600),
+  /** Extracted results kept in memory, by attachment id (a cached read costs no limit). */
+  cache_entries: z.number().int().min(0).default(16),
+});
+export type SandboxFiles = z.output<typeof SandboxFilesSchema>;
+
+/**
  * `[modules.sandbox]` config section. The module is opt-in: it only runs with
  * `enabled = true` (see the core's `OPT_IN_MODULES`).
  *
@@ -143,6 +169,7 @@ export const SandboxConfigSchema = z.object({
   limits: SandboxLimitsSchema.prefault({}),
   caps: SandboxCapsSchema.prefault({}),
   sessions: SandboxSessionsSchema.prefault({}),
+  files: SandboxFilesSchema.prefault({}),
   /**
    * Started, idle containers kept ready per language image, so a fresh run skips the container
    * start. Each serves exactly one run, then it is destroyed and replaced. Default 0 (off):

@@ -1,0 +1,37 @@
+{
+  "id": "tool-text-sing-request-malformed-tag",
+  "title": "sing_request written as text with a stray quote, spoken aloud",
+  "category": "tool_as_text",
+  "incident": {
+    "at": "2026-11-08T00:52:32+08:00",
+    "summary": "She promised to prepare the song again and wrote the call as text (<sing_request\">). The voice channel got the markup as a line; the turn made no call (actions: []).",
+    "source": [
+      "log_events seq 8856-8860"
+    ]
+  },
+  "harness": "parser",
+  "trace": [
+    {"type":"said","t":0,"channel":"voice","text":"……哈啊,歌又失敗了喔?"},
+    {"type":"said","t":0.2,"channel":"voice","text":"viewer-2 點的這首……嗯,我再試一次好了。"},
+    {"type":"said","t":0.4,"channel":"voice","text":"深海藍鯨不欠帳的啦。"},
+    {"type":"said","t":0.7,"channel":"voice","text":"不過下次別拖到半夜啊。"},
+    {"type":"said","t":0.9,"channel":"voice","text":"好啦,我再準備一次,等我一下。\n\n<sing_request\">\n<query>ESSE CARA! - Sayfalse</query>\n<by>viewer-2</by>\n</sing_request>"},
+    {"type":"call","t":0.9,"tool":"sing_request","native":false}
+  ],
+  "control": [
+    {"type":"said","t":0,"channel":"voice","text":"……哈啊,歌又失敗了喔?"},
+    {"type":"said","t":0.2,"channel":"voice","text":"viewer-2 點的這首……嗯,我再試一次好了。"},
+    {"type":"said","t":0.4,"channel":"voice","text":"深海藍鯨不欠帳的啦。"},
+    {"type":"said","t":0.7,"channel":"voice","text":"不過下次別拖到半夜啊。"},
+    {"type":"said","t":0.9,"channel":"voice","text":"好啦,我再準備一次,等我一下。\nESSE CARA! - Sayfalse\nviewer-2"},
+    {"type":"call","t":1.9,"tool":"sing_request","native":true}
+  ],
+  "checks": [
+    {
+      "rule": "no_markup_in_speech"
+    }
+  ],
+  "status": "xfail",
+  "reason": "the expression parser drops only the tags it recognises (snake_case names); the rest of the model's function-call text reaches the speech as plain words",
+  "flips_with": "agent: expression parser drops tool-call markup it cannot parse (and the tool-as-text retry)"
+}

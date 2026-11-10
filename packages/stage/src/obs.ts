@@ -1,7 +1,7 @@
 // OBS control (obs-websocket v5 via `obs-websocket-js`), behind `Obs` so it can be faked in
 // tests.
 
-import { errorMessage, getLogger, sleep, withTimeout } from "@miyoria/kernel";
+import { errorMessage, getLogger, SerialQueue, sleep, withTimeout } from "@miyoria/kernel";
 import OBSWebSocket, { type OBSRequestTypes, type OBSResponseTypes } from "obs-websocket-js/json";
 import { z } from "zod";
 import type { SceneTransition, StreamAction } from "./protocol.js";
@@ -58,8 +58,15 @@ export interface Obs {
   sceneList?(): Promise<string[]>;
   setScene(name: string): Promise<void>;
   /**
-   * Makes `name` OBS's current scene transition and, when given, sets its duration (optional;
-   * without it scene switches use whatever transition is current).
+   * Sets the transition used when switching *to* `scene` (OBS's per-scene transition override),
+   * with its duration when given (optional; without it scene switches use whatever transition is
+   * current). Unlike the old `setTransition`, OBS's global current transition is never changed,
+   * so one switch's transition cannot leak into another.
+   */
+  setSceneTransition?(scene: string, name: string, durationMs: number | null): Promise<void>;
+  /**
+   * @deprecated Changed OBS's *global* current transition (and so every later switch); not
+   * called any more. Implement `setSceneTransition`.
    */
   setTransition?(name: string, durationMs: number | null): Promise<void>;
   streaming(): Promise<boolean>;
@@ -194,17 +201,16 @@ class ObsWebSocketObs implements Obs {
     await this.#call("SetCurrentProgramScene", { sceneName: name });
   }
 
-  async setTransition(name: string, durationMs: number | null): Promise<void> {
-    await this.#call("SetCurrentSceneTransition", { transitionName: name });
-    if (durationMs === null) return;
-    try {
-      await this.#call("SetCurrentSceneTransitionDuration", {
-        transitionDuration: Math.min(Math.max(Math.round(durationMs), 50), 20_000),
-      });
-    } catch (error) {
-      // Fixed transitions (Cut, stingers) have no duration.
-      log.debug({ err: errorMessage(error), transition: name }, "transition has no duration");
-    }
+  async setSceneTransition(scene: string, name: string, durationMs: number | null): Promise<void> {
+    // The scene's own override: used for switches to this scene only, OBS's current
+    // (global) transition stays what the owner set.
+    await this.#call("SetSceneSceneTransitionOverride", {
+      sceneName: scene,
+      transitionName: name,
+      ...(durationMs === null
+        ? {}
+        : { transitionDuration: Math.min(Math.max(Math.round(durationMs), 50), 20_000) }),
+    });
   }
 
   async streaming(): Promise<boolean> {
@@ -362,6 +368,8 @@ export class ObsController {
   readonly #state = new Watch<ObsState>(defaultObsState(), sameObsState);
   #subtitleGeneration = 0;
   readonly #clearTimers = new Set<ReturnType<typeof setTimeout>>();
+  /** Scene switches, one at a time. */
+  readonly #switches = new SerialQueue();
 
   constructor(connector: ObsConnector, config: ObsConfig) {
     this.#connector = connector;
@@ -457,23 +465,27 @@ export class ObsController {
   }
 
   /**
-   * Switches the program scene, with `transition` made OBS's current transition first (a
-   * transition OBS does not have is logged and the switch happens with the current one).
+   * Switches the program scene, with `transition` set for this switch only (the target scene's
+   * transition override; OBS's global transition is never changed). A transition OBS does not
+   * have is logged and the switch happens with the current one. Switches are serialized: a
+   * second one waits for the first to finish, so their transitions never interleave.
    */
-  async setScene(name: string, transition: SceneTransition | null = null): Promise<ObsState> {
-    const obs = this.#obs();
-    if (transition !== null && obs.setTransition) {
-      try {
-        await obs.setTransition(transition.name, transition.duration_ms);
-      } catch (error) {
-        log.warn(
-          { err: errorMessage(error), transition: transition.name },
-          "cannot set the scene transition; switching with the current one",
-        );
+  setScene(name: string, transition: SceneTransition | null = null): Promise<ObsState> {
+    return this.#switches.run(async () => {
+      const obs = this.#obs();
+      if (transition !== null && obs.setSceneTransition) {
+        try {
+          await obs.setSceneTransition(name, transition.name, transition.duration_ms);
+        } catch (error) {
+          log.warn(
+            { err: errorMessage(error), transition: transition.name, scene: name },
+            "cannot set the scene transition; switching with the current one",
+          );
+        }
       }
-    }
-    await obs.setScene(name);
-    return this.refresh();
+      await obs.setScene(name);
+      return this.refresh();
+    });
   }
 
   /** Starts / stops streaming and waits (up to `stream_wait_ms`) for OBS to report it. */

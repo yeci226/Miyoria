@@ -11,7 +11,11 @@ import {
   type AccountRef,
   type Clock,
   type ContextKey,
+  type ContextKind,
   type DecisionTrace,
+  type Directive,
+  type DirectiveRecord,
+  type JsonObject,
   type JsonValue,
   type ModuleId,
   newId,
@@ -19,9 +23,11 @@ import {
   type PlatformId,
   type ProfileId,
   type Timestamp,
+  type TurnOutcomeRecord,
 } from "@miyoria/types";
 import pg from "pg";
 import {
+  allowedDeltaAsync,
   authScopeKey,
   canonicalMemoryScope,
   cleanEmbedding,
@@ -29,15 +35,18 @@ import {
   embeddingFromF32,
   fromMicros,
   memoryKind,
+  memoryOrigin,
   memoryScopeKey,
   memorySourceJson,
   normalizeTimestamp,
   parseJson,
   queryTokens,
   StoreError,
+  sourceEvents,
   sqlLimit,
   toMicros,
   u32,
+  walletWith,
 } from "./common.js";
 import {
   addCount,
@@ -55,9 +64,26 @@ import {
 import type {
   Account,
   AuditEntry,
+  AuthoredEntry,
   AuthScope,
+  Bounty,
+  BountyPatch,
+  BountyStatus,
+  CoinCap,
+  CoinEntry,
+  CoinPost,
+  CoinRule,
+  Deal,
+  DealPatch,
+  DealStatus,
   DecisionRecord,
+  FortuneRecord,
+  Goal,
+  GoalPatch,
+  GoalPledge,
+  GoalStatus,
   LogEntry,
+  MemberCardRecord,
   MemoryFilter,
   MemoryHit,
   MemoryKind,
@@ -78,8 +104,15 @@ import type {
 import type {
   AuditLog,
   AuthStore,
+  BountyStore,
+  CoinLedgerStore,
+  DealStore,
   DecisionLog,
+  DirectiveStore,
+  FortuneStore,
+  GoalStore,
   IdentityStore,
+  MemberCardStore,
   MemoryRecordStore,
   MessageLog,
   ModuleStateStore,
@@ -402,6 +435,817 @@ class PgMessageLog implements MessageLog {
     );
     return rows.map(logEntryFromRow);
   }
+
+  async authoredSince(
+    profile: ProfileId,
+    authors: readonly AccountRef[],
+    since: Timestamp,
+    limit: number,
+  ): Promise<AuthoredEntry[]> {
+    if (authors.length === 0) return [];
+    const params: unknown[] = [profile, tsParam(since), limitParam(limit)];
+    const who = authors.map((a) => {
+      params.push(a.platform, a.id);
+      return `(author_platform = $${params.length - 1} AND author_id = $${params.length})`;
+    });
+    const rows = await this.db.query(
+      "SELECT * FROM (SELECT ts, kind, seq FROM message_log WHERE profile_id = $1 AND " +
+        `NOT is_self AND ts >= $2 AND (${who.join(" OR ")}) ORDER BY ts DESC, seq DESC ` +
+        "LIMIT $3) authored ORDER BY ts ASC, seq ASC",
+      params,
+    );
+    return rows.map((row) => ({ ts: ts(row, "ts"), kind: str(row, "kind") as ContextKind }));
+  }
+}
+
+// ---- member cards -------------------------------------------------------------------------
+
+const MEMBER_CARD_COLUMNS =
+  "serial, profile_id, author_platform, author_id, person_id, issued_at, " +
+  "snapshot::text AS snapshot";
+
+function memberCardFromRow(row: Row): MemberCardRecord {
+  return {
+    serial: str(row, "serial"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    person: optStr(row, "person_id"),
+    issued_at: ts(row, "issued_at"),
+    snapshot: parseJson<JsonObject>(str(row, "snapshot"), "member card"),
+  };
+}
+
+/** `(author_platform = … AND author_id = …) OR …` over `accounts`, its parameters added to `params`. */
+function authorsWhere(accounts: readonly AccountRef[], params: unknown[]): string {
+  return accounts
+    .map((a) => {
+      params.push(a.platform, a.id);
+      return `(author_platform = $${params.length - 1} AND author_id = $${params.length})`;
+    })
+    .join(" OR ");
+}
+
+class PgMemberCards implements MemberCardStore {
+  constructor(private readonly db: Pg) {}
+
+  async issue(card: MemberCardRecord): Promise<void> {
+    try {
+      await this.db.execute(
+        "INSERT INTO member_cards (serial, profile_id, author_platform, author_id, person_id, " +
+          "issued_at, snapshot) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)",
+        [
+          card.serial,
+          card.profile,
+          card.account.platform,
+          card.account.id,
+          card.person,
+          tsParam(card.issued_at),
+          JSON.stringify(card.snapshot),
+        ],
+      );
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      if (pgCode(cause) === UNIQUE_VIOLATION) {
+        throw new StoreError(`member card \`${card.serial}\` already exists`, { cause });
+      }
+      throw new StoreError("cannot store the member card", { cause });
+    }
+  }
+
+  async bySerial(profile: ProfileId, serial: string): Promise<MemberCardRecord | null> {
+    const rows = await this.db.query(
+      `SELECT ${MEMBER_CARD_COLUMNS} FROM member_cards WHERE profile_id = $1 AND serial = $2`,
+      [profile, serial],
+    );
+    return rows[0] ? memberCardFromRow(rows[0]) : null;
+  }
+
+  async amend(profile: ProfileId, serial: string, snapshot: JsonObject): Promise<boolean> {
+    const changed = await this.db.execute(
+      "UPDATE member_cards SET snapshot = $3::jsonb WHERE profile_id = $1 AND serial = $2",
+      [profile, serial, JSON.stringify(snapshot)],
+    );
+    return changed > 0;
+  }
+
+  async listFor(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    limit: number,
+  ): Promise<MemberCardRecord[]> {
+    if (accounts.length === 0) return [];
+    const params: unknown[] = [profile, limitParam(limit)];
+    const rows = await this.db.query(
+      `SELECT ${MEMBER_CARD_COLUMNS} FROM member_cards WHERE profile_id = $1 AND ` +
+        `(${authorsWhere(accounts, params)}) ORDER BY issued_at DESC, seq DESC LIMIT $2`,
+      params,
+    );
+    return rows.map(memberCardFromRow);
+  }
+
+  async countSince(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    since: Timestamp,
+  ): Promise<number> {
+    if (accounts.length === 0) return 0;
+    const params: unknown[] = [profile, tsParam(since)];
+    const rows = await this.db.query(
+      "SELECT COUNT(*) AS n FROM member_cards WHERE profile_id = $1 AND issued_at >= $2 AND " +
+        `(${authorsWhere(accounts, params)})`,
+      params,
+    );
+    return rows[0] ? num(rows[0], "n") : 0;
+  }
+
+  async countFor(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    if (accounts.length === 0) return 0;
+    const params: unknown[] = [profile];
+    const rows = await this.db.query(
+      "SELECT COUNT(*) AS n FROM member_cards WHERE profile_id = $1 AND " +
+        `(${authorsWhere(accounts, params)})`,
+      params,
+    );
+    return rows[0] ? num(rows[0], "n") : 0;
+  }
+
+  async deleteFor(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    if (accounts.length === 0) return 0;
+    const params: unknown[] = [profile];
+    return this.db.execute(
+      `DELETE FROM member_cards WHERE profile_id = $1 AND (${authorsWhere(accounts, params)})`,
+      params,
+    );
+  }
+}
+
+// ---- coins ---------------------------------------------------------------------------------
+
+const COIN_COLUMNS = "id, profile_id, author_platform, author_id, delta, reason, ref, idem_key, ts";
+
+function coinFromRow(row: Row): CoinEntry {
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    delta: num(row, "delta"),
+    reason: str(row, "reason"),
+    ref: optStr(row, "ref"),
+    idem_key: optStr(row, "idem_key"),
+    ts: ts(row, "ts"),
+  };
+}
+
+/** `reason = ANY(…)` over `reasons`, its parameter added to `params`. */
+function reasonsIn(reasons: readonly string[], params: unknown[]): string {
+  params.push([...reasons]);
+  return `reason = ANY($${params.length}::text[])`;
+}
+
+class PgCoins implements CoinLedgerStore {
+  constructor(private readonly db: Pg) {}
+
+  async #balance(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    on?: Queryable,
+  ): Promise<number> {
+    if (accounts.length === 0) return 0;
+    const params: unknown[] = [profile];
+    const rows = await this.db.query(
+      "SELECT COALESCE(SUM(delta), 0)::bigint AS n FROM coin_ledger WHERE profile_id = $1 AND " +
+        `(${authorsWhere(accounts, params)})`,
+      params,
+      on,
+    );
+    return rows[0] ? num(rows[0], "n") : 0;
+  }
+
+  async #sum(profile: ProfileId, cap: CoinCap, on: Queryable): Promise<number> {
+    if (cap.reasons.length === 0 || cap.accounts?.length === 0) return 0;
+    const params: unknown[] = [profile, tsParam(cap.since)];
+    const reasons = reasonsIn(cap.reasons, params);
+    const who = cap.accounts === null ? "" : ` AND (${authorsWhere(cap.accounts, params)})`;
+    const rows = await this.db.query(
+      "SELECT COALESCE(SUM(delta), 0)::bigint AS n FROM coin_ledger WHERE profile_id = $1 AND " +
+        `ts >= $2 AND ${reasons}${who}`,
+      params,
+      on,
+    );
+    return rows[0] ? num(rows[0], "n") : 0;
+  }
+
+  async #byKey(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    key: string,
+    on?: Queryable,
+  ): Promise<CoinEntry | null> {
+    if (accounts.length === 0) return null;
+    const params: unknown[] = [profile, key];
+    const rows = await this.db.query(
+      `SELECT ${COIN_COLUMNS} FROM coin_ledger WHERE profile_id = $1 AND idem_key = $2 AND ` +
+        `(${authorsWhere(accounts, params)}) ORDER BY ts, seq LIMIT 1`,
+      params,
+      on,
+    );
+    return rows[0] ? coinFromRow(rows[0]) : null;
+  }
+
+  async post(entry: CoinEntry, rule: CoinRule): Promise<CoinPost> {
+    if (!Number.isSafeInteger(entry.delta)) throw new StoreError("a coin delta must be whole");
+    const wallet = walletWith(entry.account, rule.wallet);
+    const profile = entry.profile;
+    try {
+      // Posts of one profile take turns: the checks and the insert see the same ledger.
+      return await this.db.tx(async (client): Promise<CoinPost> => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          `coin_ledger/${profile}`,
+        ]);
+        if (entry.idem_key !== null) {
+          const first = await this.#byKey(profile, wallet, entry.idem_key, client);
+          if (first) {
+            const balance = await this.#balance(profile, wallet, client);
+            return { status: "duplicate", entry: first, balance };
+          }
+        }
+        const balance = await this.#balance(profile, wallet, client);
+        const delta = await allowedDeltaAsync(entry.delta, rule, (cap) =>
+          this.#sum(profile, cap, client),
+        );
+        if (delta === null) return { status: "capped", balance };
+        if (rule.covered && balance + delta < 0) return { status: "short", balance };
+        await this.db.execute(
+          "INSERT INTO coin_ledger (id, profile_id, author_platform, author_id, delta, reason, " +
+            "ref, idem_key, ts) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+          [
+            entry.id,
+            profile,
+            entry.account.platform,
+            entry.account.id,
+            delta,
+            entry.reason,
+            entry.ref,
+            entry.idem_key,
+            tsParam(entry.ts),
+          ],
+          client,
+        );
+        return { status: "posted", entry: { ...entry, delta }, balance: balance + delta };
+      });
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot write to the coin ledger", { cause });
+    }
+  }
+
+  balance(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    return this.#balance(profile, accounts);
+  }
+
+  async entries(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    filter: { reasons?: readonly string[]; since?: Timestamp; limit: number },
+  ): Promise<CoinEntry[]> {
+    if (accounts.length === 0 || filter.reasons?.length === 0) return [];
+    const params: unknown[] = [profile, limitParam(filter.limit)];
+    let where = `profile_id = $1 AND (${authorsWhere(accounts, params)})`;
+    if (filter.reasons) where += ` AND ${reasonsIn(filter.reasons, params)}`;
+    if (filter.since !== undefined) {
+      params.push(tsParam(filter.since));
+      where += ` AND ts >= $${params.length}`;
+    }
+    const rows = await this.db.query(
+      `SELECT ${COIN_COLUMNS} FROM coin_ledger WHERE ${where} ORDER BY ts DESC, seq DESC LIMIT $2`,
+      params,
+    );
+    return rows.map(coinFromRow);
+  }
+
+  byKey(profile: ProfileId, accounts: readonly AccountRef[], key: string) {
+    return this.#byKey(profile, accounts, key);
+  }
+
+  async selectedFrame(profile: ProfileId, accounts: readonly AccountRef[]): Promise<string | null> {
+    if (accounts.length === 0) return null;
+    const params: unknown[] = [profile];
+    const rows = await this.db.query(
+      "SELECT frame FROM coin_wallets WHERE profile_id = $1 AND " +
+        `(${authorsWhere(accounts, params)}) ORDER BY updated_at DESC LIMIT 1`,
+      params,
+    );
+    return rows[0] ? optStr(rows[0], "frame") : null;
+  }
+
+  async selectFrame(
+    profile: ProfileId,
+    account: AccountRef,
+    frame: string | null,
+    at: Timestamp,
+  ): Promise<void> {
+    await this.db.execute(
+      "INSERT INTO coin_wallets (profile_id, author_platform, author_id, frame, updated_at) " +
+        "VALUES ($1, $2, $3, $4, $5) ON CONFLICT (profile_id, author_platform, author_id) " +
+        "DO UPDATE SET frame = EXCLUDED.frame, updated_at = EXCLUDED.updated_at",
+      [profile, account.platform, account.id, frame, tsParam(at)],
+    );
+  }
+
+  async onBoard(profile: ProfileId, accounts: readonly AccountRef[]): Promise<boolean> {
+    if (accounts.length === 0) return true;
+    const params: unknown[] = [profile];
+    const rows = await this.db.query(
+      "SELECT 1 AS x FROM coin_wallets WHERE profile_id = $1 AND off_board AND " +
+        `(${authorsWhere(accounts, params)}) LIMIT 1`,
+      params,
+    );
+    return rows.length === 0;
+  }
+
+  async setOnBoard(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    on: boolean,
+  ): Promise<void> {
+    // A row made only for the board is the oldest, so it never hides a chosen frame.
+    await this.db.tx(async (client) => {
+      for (const account of accounts) {
+        await this.db.execute(
+          "INSERT INTO coin_wallets (profile_id, author_platform, author_id, frame, updated_at, " +
+            "off_board) VALUES ($1, $2, $3, NULL, to_timestamp(0), $4) ON CONFLICT (profile_id, " +
+            "author_platform, author_id) DO UPDATE SET off_board = EXCLUDED.off_board",
+          [profile, account.platform, account.id, !on],
+          client,
+        );
+      }
+    });
+  }
+
+  async offBoardAccounts(profile: ProfileId, limit: number): Promise<AccountRef[]> {
+    const rows = await this.db.query(
+      "SELECT author_platform, author_id FROM coin_wallets WHERE profile_id = $1 AND off_board " +
+        "ORDER BY author_platform, author_id LIMIT $2",
+      [profile, limitParam(limit)],
+    );
+    return rows.map((r) => ({ platform: str(r, "author_platform"), id: str(r, "author_id") }));
+  }
+
+  async spent(
+    profile: ProfileId,
+    reasons: readonly string[],
+    since: Timestamp,
+    limit: number,
+  ): Promise<{ account: AccountRef; spent: number }[]> {
+    if (reasons.length === 0) return [];
+    const params: unknown[] = [profile, tsParam(since), limitParam(limit)];
+    const names = reasonsIn(reasons, params).replace("reason", "l.reason");
+    const rows = await this.db.query(
+      "SELECT l.author_platform AS author_platform, l.author_id AS author_id, " +
+        "(-SUM(l.delta))::bigint AS n FROM coin_ledger l WHERE l.profile_id = $1 AND l.ts >= $2 " +
+        `AND l.delta < 0 AND ${names} AND (l.reason <> 'deal_escrow' ` +
+        "OR EXISTS (SELECT 1 FROM deals d WHERE d.escrow_entry = l.id AND d.status = 'settled')) " +
+        "AND NOT EXISTS (SELECT 1 FROM coin_ledger r WHERE r.profile_id = l.profile_id AND " +
+        "r.reason = 'refund' AND r.ref = l.id) GROUP BY l.author_platform, l.author_id " +
+        "HAVING SUM(l.delta) < 0 ORDER BY n DESC, l.author_platform, l.author_id LIMIT $3",
+      params,
+    );
+    return rows.map((r) => ({
+      account: { platform: str(r, "author_platform"), id: str(r, "author_id") },
+      spent: num(r, "n"),
+    }));
+  }
+}
+
+// ---- fortunes ------------------------------------------------------------------------------
+
+const FORTUNE_COLUMNS =
+  "id, profile_id, author_platform, author_id, person_id, day, issued_at, entry_id, " +
+  "slip::text AS slip";
+
+function fortuneFromRow(row: Row): FortuneRecord {
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    person: optStr(row, "person_id"),
+    day: num(row, "day"),
+    issued_at: ts(row, "issued_at"),
+    entry: optStr(row, "entry_id"),
+    slip: parseJson<JsonObject>(str(row, "slip"), "fortune"),
+  };
+}
+
+class PgFortunes implements FortuneStore {
+  constructor(private readonly db: Pg) {}
+
+  async put(record: FortuneRecord, accounts: readonly AccountRef[]): Promise<boolean> {
+    const wallet = walletWith(record.account, accounts);
+    try {
+      return await this.db.tx(async (client): Promise<boolean> => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          `fortunes/${record.profile}`,
+        ]);
+        const params: unknown[] = [record.profile, record.day];
+        const taken = await this.db.query(
+          "SELECT id FROM fortunes WHERE profile_id = $1 AND day = $2 AND " +
+            `(${authorsWhere(wallet, params)}) LIMIT 1`,
+          params,
+          client,
+        );
+        if (taken.length > 0) return false;
+        await this.db.execute(
+          "INSERT INTO fortunes (id, profile_id, author_platform, author_id, person_id, day, " +
+            "issued_at, entry_id, slip) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)",
+          [
+            record.id,
+            record.profile,
+            record.account.platform,
+            record.account.id,
+            record.person,
+            record.day,
+            tsParam(record.issued_at),
+            record.entry,
+            JSON.stringify(record.slip),
+          ],
+          client,
+        );
+        return true;
+      });
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot store the fortune", { cause });
+    }
+  }
+
+  async forDay(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    day: number,
+  ): Promise<FortuneRecord | null> {
+    if (accounts.length === 0) return null;
+    const params: unknown[] = [profile, day];
+    const rows = await this.db.query(
+      `SELECT ${FORTUNE_COLUMNS} FROM fortunes WHERE profile_id = $1 AND day = $2 AND ` +
+        `(${authorsWhere(accounts, params)}) ORDER BY issued_at DESC, seq DESC LIMIT 1`,
+      params,
+    );
+    return rows[0] ? fortuneFromRow(rows[0]) : null;
+  }
+
+  async listFor(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    limit: number,
+  ): Promise<FortuneRecord[]> {
+    if (accounts.length === 0) return [];
+    const params: unknown[] = [profile, limitParam(limit)];
+    const rows = await this.db.query(
+      `SELECT ${FORTUNE_COLUMNS} FROM fortunes WHERE profile_id = $1 AND ` +
+        `(${authorsWhere(accounts, params)}) ORDER BY issued_at DESC, seq DESC LIMIT $2`,
+      params,
+    );
+    return rows.map(fortuneFromRow);
+  }
+
+  async deleteFor(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    if (accounts.length === 0) return 0;
+    const params: unknown[] = [profile];
+    return this.db.execute(
+      `DELETE FROM fortunes WHERE profile_id = $1 AND (${authorsWhere(accounts, params)})`,
+      params,
+    );
+  }
+}
+
+// ---- deals ---------------------------------------------------------------------------------
+
+function dealFromRow(row: Row): Deal {
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    item: str(row, "reward_item"),
+    count: num(row, "reward_count"),
+    value: num(row, "reward_value"),
+    task: str(row, "task"),
+    prepaid: bool(row, "prepaid"),
+    escrow: optStr(row, "escrow_entry"),
+    status: str(row, "status") as DealStatus,
+    created_at: ts(row, "created_at"),
+    done_at: optTs(row, "done_at"),
+    due_at: optTs(row, "due_at"),
+    closed_at: optTs(row, "closed_at"),
+  };
+}
+
+/** `status = ANY(...)` over `statuses`, its parameter added to `params`. */
+function statusIn(statuses: readonly string[], params: unknown[]): string {
+  params.push([...statuses]);
+  return `status = ANY($${params.length}::text[])`;
+}
+
+class PgDeals implements DealStore {
+  constructor(private readonly db: Pg) {}
+
+  async create(deal: Deal): Promise<void> {
+    try {
+      await this.db.execute(
+        "INSERT INTO deals (id, profile_id, author_platform, author_id, reward_item, " +
+          "reward_count, reward_value, task, prepaid, escrow_entry, status, created_at, " +
+          "done_at, due_at, closed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, " +
+          "$12, $13, $14, $15)",
+        [
+          deal.id,
+          deal.profile,
+          deal.account.platform,
+          deal.account.id,
+          deal.item,
+          deal.count,
+          deal.value,
+          deal.task,
+          deal.prepaid,
+          deal.escrow,
+          deal.status,
+          tsParam(deal.created_at),
+          optTsParam(deal.done_at),
+          optTsParam(deal.due_at),
+          optTsParam(deal.closed_at),
+        ],
+      );
+    } catch (cause) {
+      throw new StoreError("cannot write the deal", { cause });
+    }
+  }
+
+  async get(id: string): Promise<Deal | null> {
+    const rows = await this.db.query("SELECT * FROM deals WHERE id = $1", [id]);
+    return rows[0] ? dealFromRow(rows[0]) : null;
+  }
+
+  async transition(id: string, from: readonly DealStatus[], patch: DealPatch): Promise<boolean> {
+    if (from.length === 0) return false;
+    const params: unknown[] = [id, patch.status];
+    const sets = ["status = $2"];
+    for (const [column, value] of [
+      ["done_at", patch.done_at],
+      ["due_at", patch.due_at],
+      ["closed_at", patch.closed_at],
+    ] as const) {
+      if (value === undefined) continue;
+      params.push(optTsParam(value));
+      sets.push(`${column} = $${params.length}::timestamptz`);
+    }
+    const changed = await this.db.execute(
+      `UPDATE deals SET ${sets.join(", ")} WHERE id = $1 AND ${statusIn(from, params)}`,
+      params,
+    );
+    return changed > 0;
+  }
+
+  async forAccounts(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    filter: { statuses?: readonly DealStatus[]; since?: Timestamp; limit: number },
+  ): Promise<Deal[]> {
+    if (accounts.length === 0 || filter.statuses?.length === 0) return [];
+    const params: unknown[] = [profile, limitParam(filter.limit)];
+    let where = `profile_id = $1 AND (${authorsWhere(accounts, params)})`;
+    if (filter.statuses) where += ` AND ${statusIn(filter.statuses, params)}`;
+    if (filter.since !== undefined) {
+      params.push(tsParam(filter.since));
+      where += ` AND created_at >= $${params.length}`;
+    }
+    const rows = await this.db.query(
+      `SELECT * FROM deals WHERE ${where} ORDER BY created_at DESC, seq DESC LIMIT $2`,
+      params,
+    );
+    return rows.map(dealFromRow);
+  }
+
+  async byStatus(
+    profile: ProfileId,
+    statuses: readonly DealStatus[],
+    filter: { since?: Timestamp; limit: number },
+  ): Promise<Deal[]> {
+    if (statuses.length === 0) return [];
+    const params: unknown[] = [profile, limitParam(filter.limit)];
+    let where = `profile_id = $1 AND ${statusIn(statuses, params)}`;
+    if (filter.since !== undefined) {
+      params.push(tsParam(filter.since));
+      where += ` AND created_at >= $${params.length}`;
+    }
+    const rows = await this.db.query(
+      `SELECT * FROM deals WHERE ${where} ORDER BY created_at, seq LIMIT $2`,
+      params,
+    );
+    return rows.map(dealFromRow);
+  }
+}
+
+// ---- goals and bounties --------------------------------------------------------------------
+
+function goalFromRow(row: Row): Goal {
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    title: str(row, "title"),
+    promise: str(row, "promise"),
+    target: num(row, "target"),
+    status: str(row, "status") as GoalStatus,
+    created_at: ts(row, "created_at"),
+    deadline: ts(row, "deadline"),
+    closed_at: optTs(row, "closed_at"),
+  };
+}
+
+function pledgeFromRow(row: Row): GoalPledge {
+  return {
+    id: str(row, "id"),
+    goal: str(row, "goal_id"),
+    profile: str(row, "profile_id"),
+    account: { platform: str(row, "author_platform"), id: str(row, "author_id") },
+    amount: num(row, "amount"),
+    created_at: ts(row, "created_at"),
+  };
+}
+
+class PgGoals implements GoalStore {
+  constructor(private readonly db: Pg) {}
+
+  async create(goal: Goal): Promise<void> {
+    try {
+      await this.db.execute(
+        "INSERT INTO goals (id, profile_id, title, promise, target, status, created_at, " +
+          "deadline, closed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        [
+          goal.id,
+          goal.profile,
+          goal.title,
+          goal.promise,
+          goal.target,
+          goal.status,
+          tsParam(goal.created_at),
+          tsParam(goal.deadline),
+          optTsParam(goal.closed_at),
+        ],
+      );
+    } catch (cause) {
+      throw new StoreError("cannot write the goal", { cause });
+    }
+  }
+
+  async get(id: string): Promise<Goal | null> {
+    const rows = await this.db.query("SELECT * FROM goals WHERE id = $1", [id]);
+    return rows[0] ? goalFromRow(rows[0]) : null;
+  }
+
+  async transition(id: string, from: readonly GoalStatus[], patch: GoalPatch): Promise<boolean> {
+    if (from.length === 0) return false;
+    const params: unknown[] = [id, patch.status];
+    const sets = ["status = $2"];
+    if (patch.closed_at !== undefined) {
+      params.push(optTsParam(patch.closed_at));
+      sets.push(`closed_at = $${params.length}::timestamptz`);
+    }
+    const changed = await this.db.execute(
+      `UPDATE goals SET ${sets.join(", ")} WHERE id = $1 AND ${statusIn(from, params)}`,
+      params,
+    );
+    return changed > 0;
+  }
+
+  async list(
+    profile: ProfileId,
+    filter: { statuses?: readonly GoalStatus[]; limit: number },
+  ): Promise<Goal[]> {
+    if (filter.statuses?.length === 0) return [];
+    const params: unknown[] = [profile, limitParam(filter.limit)];
+    let where = "profile_id = $1";
+    if (filter.statuses) where += ` AND ${statusIn(filter.statuses, params)}`;
+    const rows = await this.db.query(
+      `SELECT * FROM goals WHERE ${where} ORDER BY created_at DESC, seq DESC LIMIT $2`,
+      params,
+    );
+    return rows.map(goalFromRow);
+  }
+
+  async addPledge(pledge: GoalPledge): Promise<void> {
+    try {
+      await this.db.execute(
+        "INSERT INTO goal_pledges (id, goal_id, profile_id, author_platform, author_id, " +
+          "amount, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        [
+          pledge.id,
+          pledge.goal,
+          pledge.profile,
+          pledge.account.platform,
+          pledge.account.id,
+          pledge.amount,
+          tsParam(pledge.created_at),
+        ],
+      );
+    } catch (cause) {
+      throw new StoreError("cannot write the pledge", { cause });
+    }
+  }
+
+  async pledges(goal: string): Promise<GoalPledge[]> {
+    const rows = await this.db.query(
+      "SELECT * FROM goal_pledges WHERE goal_id = $1 ORDER BY created_at, seq",
+      [goal],
+    );
+    return rows.map(pledgeFromRow);
+  }
+}
+
+function bountyFromRow(row: Row): Bounty {
+  const platform = optStr(row, "winner_platform");
+  const id = optStr(row, "winner_id");
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    task: str(row, "task"),
+    reward: num(row, "reward"),
+    hold: str(row, "hold_entry"),
+    status: str(row, "status") as BountyStatus,
+    created_at: ts(row, "created_at"),
+    expires_at: ts(row, "expires_at"),
+    closed_at: optTs(row, "closed_at"),
+    winner: platform !== null && id !== null ? { platform, id } : null,
+  };
+}
+
+class PgBounties implements BountyStore {
+  constructor(private readonly db: Pg) {}
+
+  async create(bounty: Bounty): Promise<void> {
+    try {
+      await this.db.execute(
+        "INSERT INTO bounties (id, profile_id, task, reward, hold_entry, status, created_at, " +
+          "expires_at, closed_at, winner_platform, winner_id) VALUES ($1, $2, $3, $4, $5, $6, " +
+          "$7, $8, $9, $10, $11)",
+        [
+          bounty.id,
+          bounty.profile,
+          bounty.task,
+          bounty.reward,
+          bounty.hold,
+          bounty.status,
+          tsParam(bounty.created_at),
+          tsParam(bounty.expires_at),
+          optTsParam(bounty.closed_at),
+          bounty.winner?.platform ?? null,
+          bounty.winner?.id ?? null,
+        ],
+      );
+    } catch (cause) {
+      throw new StoreError("cannot write the bounty", { cause });
+    }
+  }
+
+  async get(id: string): Promise<Bounty | null> {
+    const rows = await this.db.query("SELECT * FROM bounties WHERE id = $1", [id]);
+    return rows[0] ? bountyFromRow(rows[0]) : null;
+  }
+
+  async transition(
+    id: string,
+    from: readonly BountyStatus[],
+    patch: BountyPatch,
+  ): Promise<boolean> {
+    if (from.length === 0) return false;
+    const params: unknown[] = [id, patch.status];
+    const sets = ["status = $2"];
+    if (patch.closed_at !== undefined) {
+      params.push(optTsParam(patch.closed_at));
+      sets.push(`closed_at = $${params.length}::timestamptz`);
+    }
+    if (patch.winner !== undefined) {
+      params.push(patch.winner?.platform ?? null, patch.winner?.id ?? null);
+      sets.push(`winner_platform = $${params.length - 1}`, `winner_id = $${params.length}`);
+    }
+    const changed = await this.db.execute(
+      `UPDATE bounties SET ${sets.join(", ")} WHERE id = $1 AND ${statusIn(from, params)}`,
+      params,
+    );
+    return changed > 0;
+  }
+
+  async list(
+    profile: ProfileId,
+    filter: { statuses?: readonly BountyStatus[]; limit: number },
+  ): Promise<Bounty[]> {
+    if (filter.statuses?.length === 0) return [];
+    const params: unknown[] = [profile, limitParam(filter.limit)];
+    let where = "profile_id = $1";
+    if (filter.statuses) where += ` AND ${statusIn(filter.statuses, params)}`;
+    const rows = await this.db.query(
+      `SELECT * FROM bounties WHERE ${where} ORDER BY created_at DESC, seq DESC LIMIT $2`,
+      params,
+    );
+    return rows.map(bountyFromRow);
+  }
 }
 
 // ---- module state -------------------------------------------------------------------------
@@ -715,6 +1559,42 @@ class PgDecisionLog implements DecisionLog {
       trace: parseJson<DecisionTrace>(str(r, "trace"), "decision trace"),
     }));
   }
+
+  async appendOutcome(profile: ProfileId, record: TurnOutcomeRecord): Promise<void> {
+    try {
+      await this.db.execute(
+        "INSERT INTO turn_outcomes (id, profile_id, context_key, ts, outcome, record) " +
+          "VALUES ($1, $2, $3, $4, $5, $6::jsonb) " +
+          "ON CONFLICT (id) DO UPDATE SET profile_id = EXCLUDED.profile_id, " +
+          "context_key = EXCLUDED.context_key, ts = EXCLUDED.ts, " +
+          "outcome = EXCLUDED.outcome, record = EXCLUDED.record",
+        [
+          record.turn,
+          profile,
+          contextLookupKey(record.context),
+          tsParam(record.at),
+          record.outcome.type,
+          JSON.stringify(record),
+        ],
+      );
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot append turn outcome", { cause });
+    }
+  }
+
+  async recentOutcomes(
+    profile: ProfileId,
+    context: ContextKey | null,
+    limit: number,
+  ): Promise<TurnOutcomeRecord[]> {
+    const rows = await this.db.query(
+      "SELECT record::text AS record FROM turn_outcomes WHERE profile_id = $1 AND " +
+        '($2::text IS NULL OR context_key = $2) ORDER BY ts DESC, id COLLATE "C" DESC LIMIT $3',
+      [profile, context === null ? null : contextLookupKey(context), limitParam(limit)],
+    );
+    return rows.map((r) => parseJson<TurnOutcomeRecord>(str(r, "record"), "turn outcome"));
+  }
 }
 
 // ---- settings -----------------------------------------------------------------------------
@@ -823,7 +1703,8 @@ class PgProfileData implements ProfileDataStore {
 const MEMORY_COLUMNS =
   "id, profile_id, kind, scope::text AS scope, subjects, content, tokens, " +
   "embedding::text AS embedding, importance, confidence, created_at, updated_at, " +
-  "last_accessed, access_count, source_context, source, due, done, superseded_by";
+  "last_accessed, access_count, source_context, source, origin, source_events, due, done, " +
+  "superseded_by";
 
 function memoryFromRow(row: Row): MemoryRecord {
   const embedding = optStr(row, "embedding");
@@ -847,6 +1728,8 @@ function memoryFromRow(row: Row): MemoryRecord {
     source_context:
       sourceContext === null ? null : parseJson<ContextKey>(sourceContext, "memory source context"),
     source: source === null ? null : parseJson<MemorySource>(source, "memory source"),
+    origin: memoryOrigin(str(row, "origin")),
+    source_events: sourceEvents(row.source_events),
     due: optTs(row, "due"),
     done: bool(row, "done"),
     superseded_by: optStr(row, "superseded_by"),
@@ -863,9 +1746,10 @@ class PgMemories implements MemoryRecordStore {
       await this.db.execute(
         "INSERT INTO memory_records (id, profile_id, kind, scope, scope_key, subjects, " +
           "content, tokens, embedding, importance, confidence, created_at, updated_at, " +
-          "last_accessed, access_count, source_context, due, done, superseded_by, source) " +
+          "last_accessed, access_count, source_context, due, done, superseded_by, source, " +
+          "origin, source_events) " +
           "VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9::vector, $10, $11, $12, $13, " +
-          "$14, $15, $16, $17, $18, $19, $20) " +
+          "$14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb) " +
           "ON CONFLICT (id) DO UPDATE SET profile_id = EXCLUDED.profile_id, " +
           "kind = EXCLUDED.kind, scope = EXCLUDED.scope, scope_key = EXCLUDED.scope_key, " +
           "subjects = EXCLUDED.subjects, content = EXCLUDED.content, " +
@@ -875,7 +1759,8 @@ class PgMemories implements MemoryRecordStore {
           "last_accessed = EXCLUDED.last_accessed, access_count = EXCLUDED.access_count, " +
           "source_context = EXCLUDED.source_context, due = EXCLUDED.due, " +
           "done = EXCLUDED.done, superseded_by = EXCLUDED.superseded_by, " +
-          "source = EXCLUDED.source",
+          "source = EXCLUDED.source, origin = EXCLUDED.origin, " +
+          "source_events = EXCLUDED.source_events",
         [
           record.id,
           record.profile,
@@ -897,6 +1782,8 @@ class PgMemories implements MemoryRecordStore {
           record.done,
           record.superseded_by,
           memorySourceJson(record.source),
+          memoryOrigin(record.origin ?? "unknown"),
+          JSON.stringify(sourceEvents(record.source_events)),
         ],
       );
     } catch (cause) {
@@ -1019,14 +1906,27 @@ class PgMemories implements MemoryRecordStore {
     );
   }
 
-  async dueFollowups(profile: ProfileId, now: Timestamp): Promise<MemoryRecord[]> {
+  async dueFollowups(
+    profile: ProfileId,
+    now: Timestamp,
+    maxAgeMs: number | null = null,
+  ): Promise<MemoryRecord[]> {
     const rows = await this.db.query(
       `SELECT ${MEMORY_COLUMNS} FROM memory_records WHERE profile_id = $1 AND ` +
-        "kind = 'followup' AND NOT done AND superseded_by IS NULL AND due <= $2 " +
-        'ORDER BY due ASC, id COLLATE "C" ASC',
-      [profile, tsParam(now)],
+        "kind = 'followup' AND NOT done AND superseded_by IS NULL AND due <= $2 AND " +
+        "($3::bigint IS NULL OR due >= $2::timestamptz - ($3::bigint * interval '1 millisecond')) " +
+        'ORDER BY due DESC, id COLLATE "C" DESC',
+      [profile, tsParam(now), maxAgeMs === null ? null : Math.round(maxAgeMs)],
     );
     return rows.map(memoryFromRow);
+  }
+
+  async expireFollowups(profile: ProfileId, dueBefore: Timestamp): Promise<number> {
+    return this.db.execute(
+      "UPDATE memory_records SET done = TRUE WHERE profile_id = $1 AND kind = 'followup' " +
+        "AND NOT done AND due IS NOT NULL AND due < $2",
+      [profile, tsParam(dueBefore)],
+    );
   }
 
   async prune(profile: ProfileId, policy: PrunePolicy): Promise<number> {
@@ -1348,6 +2248,89 @@ class PgAuth implements AuthStore {
   }
 }
 
+function directiveFromRow(row: Row): DirectiveRecord {
+  return {
+    id: str(row, "id"),
+    issuer: parseJson<AccountRef>(str(row, "issuer"), "directive issuer"),
+    authority: str(row, "authority") as DirectiveRecord["authority"],
+    scope: parseJson<DirectiveRecord["scope"]>(str(row, "scope"), "directive scope"),
+    effect: str(row, "effect") as DirectiveRecord["effect"],
+    text: str(row, "text"),
+    expires: optTs(row, "expires") ?? "until_revoked",
+    source_event: str(row, "source_event"),
+    created_at: ts(row, "created_at"),
+    revoked_at: optTs(row, "revoked_at"),
+    revoked_by: optStr(row, "revoked_by"),
+  };
+}
+
+const DIRECTIVE_COLUMNS =
+  "id, issuer::text AS issuer, authority, scope::text AS scope, effect, text, expires, " +
+  "source_event, created_at, revoked_at, revoked_by";
+
+class PgDirectives implements DirectiveStore {
+  constructor(private readonly db: Pg) {}
+
+  async insert(profile: ProfileId, d: Directive): Promise<void> {
+    try {
+      await this.db.execute(
+        "INSERT INTO directives (id, profile_id, issuer, authority, scope, effect, text, " +
+          "expires, source_event, created_at) " +
+          "VALUES ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7, $8, $9, $10)",
+        [
+          d.id,
+          profile,
+          JSON.stringify(d.issuer),
+          d.authority,
+          JSON.stringify(d.scope),
+          d.effect,
+          d.text,
+          d.expires === "until_revoked" ? null : tsParam(d.expires),
+          d.source_event,
+          tsParam(d.created_at),
+        ],
+      );
+    } catch (cause) {
+      if (cause instanceof StoreError) throw cause;
+      throw new StoreError("cannot store the directive", { cause });
+    }
+  }
+
+  async active(profile: ProfileId, now: Timestamp): Promise<DirectiveRecord[]> {
+    const rows = await this.db.query(
+      `SELECT ${DIRECTIVE_COLUMNS} FROM directives WHERE profile_id = $1 ` +
+        "AND revoked_at IS NULL AND (expires IS NULL OR expires > $2) ORDER BY created_at, id",
+      [profile, tsParam(now)],
+    );
+    return rows.map(directiveFromRow);
+  }
+
+  async all(profile: ProfileId, limit: number): Promise<DirectiveRecord[]> {
+    const rows = await this.db.query(
+      `SELECT ${DIRECTIVE_COLUMNS} FROM directives WHERE profile_id = $1 ` +
+        "ORDER BY created_at DESC, id DESC LIMIT $2",
+      [profile, limitParam(limit)],
+    );
+    return rows.map(directiveFromRow);
+  }
+
+  async revoke(profile: ProfileId, id: string, by: string, at: Timestamp): Promise<boolean> {
+    const changed = await this.db.execute(
+      "UPDATE directives SET revoked_at = $4, revoked_by = $3 " +
+        "WHERE id = $2 AND profile_id = $1 AND revoked_at IS NULL",
+      [profile, id, by, tsParam(at)],
+    );
+    return changed > 0;
+  }
+
+  async prune(profile: ProfileId, before: Timestamp): Promise<number> {
+    return this.db.execute(
+      "DELETE FROM directives WHERE profile_id = $1 AND (revoked_at < $2 OR expires < $2)",
+      [profile, tsParam(before)],
+    );
+  }
+}
+
 class PgAudit implements AuditLog {
   constructor(private readonly db: Pg) {}
 
@@ -1410,6 +2393,13 @@ export class PostgresStore implements Store {
   readonly auth: AuthStore;
   readonly audit: AuditLog;
   readonly profileData: ProfileDataStore;
+  readonly directives: DirectiveStore;
+  readonly cards: MemberCardStore;
+  readonly coins: CoinLedgerStore;
+  readonly deals: DealStore;
+  readonly fortunes: FortuneStore;
+  readonly goals: GoalStore;
+  readonly bounties: BountyStore;
   readonly #pool: pg.Pool;
   #closed = false;
 
@@ -1427,6 +2417,13 @@ export class PostgresStore implements Store {
     this.auth = new PgAuth(db);
     this.audit = new PgAudit(db);
     this.profileData = new PgProfileData(db);
+    this.directives = new PgDirectives(db);
+    this.cards = new PgMemberCards(db);
+    this.coins = new PgCoins(db);
+    this.deals = new PgDeals(db);
+    this.fortunes = new PgFortunes(db);
+    this.goals = new PgGoals(db);
+    this.bounties = new PgBounties(db);
   }
 
   /** Connects and runs pending migrations. */

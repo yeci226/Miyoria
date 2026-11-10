@@ -12,7 +12,6 @@ import {
   type JsonValue,
   PromptContributors,
   PromptContributorsKey,
-  type PromptRequest,
   SelfStateKey,
   SocialSignalsKey,
   toTimestamp,
@@ -21,7 +20,7 @@ import {
   WorldStateKey,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type EmotionPrompt, SelfModule, type SelfService } from "../src/index.js";
+import { SelfModule, type SelfService } from "../src/index.js";
 
 const T0 = Date.parse("2026-11-02T12:00:00.000Z");
 const MINUTE = 60_000;
@@ -179,37 +178,70 @@ function makeCrush(h: Booted, person = "p1") {
 
 /** Waits until every event published before is handled (the bus keeps order). */
 async function settle(h: Booted) {
-  const before = value(h, "surprise");
-  h.publish(customEvent("self.feel", { emotion: "surprise", amount: 0.1 }));
-  await vi.waitFor(() => expect(value(h, "surprise")).toBeGreaterThan(before));
+  const before = h.self.drives().curiosity;
+  h.publish(customEvent("self.nudge", { curiosity: 0.1 }));
+  await vi.waitFor(() => expect(h.self.drives().curiosity).toBeGreaterThan(before));
 }
 
 const value = (h: Booted, name: string) =>
   h.self.emotions(0).find((e) => e.name === name)?.intensity ?? 0;
 
 describe("rule triggers", () => {
-  it("praise stirs joy, shyness and pride together; romance grows only with people she likes", async () => {
+  it("gift: joy and gratitude; food the giver counted itself takes only what it says", async () => {
     const h = await boot();
-    h.publish(socialEvent("p1", "praise"));
-    await vi.waitFor(() => expect(value(h, "pride")).toBeGreaterThan(0.2));
-    expect(value(h, "joy")).toBeGreaterThan(0.15);
-    expect(value(h, "shy")).toBeGreaterThan(0.4);
-    expect(h.self.heart("p1")?.romance).toBeGreaterThan(0);
-    // Esteem satisfied.
-    expect(h.self.drives().esteem).toBeLessThan(0.3);
-
-    h.publish(socialEvent("p2", "praise"));
-    await settle(h);
-    expect(h.self.heart("p2")?.romance ?? 0).toBe(0);
+    h.self.adjust({ hunger: 0.9 - h.self.drives().hunger }, "test");
+    h.publish(socialEvent("p1", "gift", { source: "economy", scale: 0.36, hunger: 0 }));
+    await vi.waitFor(() => expect(value(h, "gratitude")).toBeGreaterThan(0));
+    expect(h.self.drives().hunger).toBeCloseTo(0.9, 5);
+    h.publish(socialEvent("p2", "gift"));
+    await vi.waitFor(() => expect(h.self.drives().hunger).toBeCloseTo(0.6, 5));
   });
 
-  it("insults are not capped: every one stirs anger and 不爽 toward the person", async () => {
+  it("broken_promise: anger and resentment toward the person who did not pay", async () => {
+    const h = await boot();
+    h.publish(socialEvent("p2", "broken_promise", { source: "economy" }));
+    await vi.waitFor(() =>
+      expect(h.self.heart("p2")?.emotions.resentment ?? 0).toBeGreaterThan(0.3),
+    );
+    expect(value(h, "anger")).toBeGreaterThan(0.15);
+    expect(h.self.heart("p1")?.emotions.resentment ?? 0).toBe(0);
+  });
+
+  it("praise: joy (medium) and, for a tsundere, a little shyness; attachment does not grow by itself", async () => {
+    const h = await boot();
+    h.publish(socialEvent("p1", "praise"));
+    await vi.waitFor(() => expect(value(h, "joy")).toBeGreaterThan(0.15));
+    // shy weak 0.1 × her gain 1.8.
+    expect(value(h, "shy")).toBeGreaterThan(0.15);
+    // Not pride: that is for her songs.
+    expect(value(h, "pride")).toBeLessThan(0.2);
+    // Attachment only moves on Reflect's proposal (a bond change), never from events.
+    expect(h.self.heart("p1")?.romance ?? 0).toBe(0);
+    // Esteem satisfied.
+    expect(h.self.drives().esteem).toBeLessThan(0.3);
+  });
+
+  it("the same praise again within two hours counts for less (habituation)", async () => {
+    const h = await boot();
+    h.publish(socialEvent("p1", "praise"));
+    await vi.waitFor(() => expect(value(h, "joy")).toBeGreaterThan(0.15));
+    const first = value(h, "joy");
+    h.publish(socialEvent("p1", "praise"));
+    await vi.waitFor(() => expect(value(h, "joy")).toBeGreaterThan(first));
+    const second = value(h, "joy") - first;
+    // 0.2 × 0.8 of room first, then half of it.
+    expect(second).toBeLessThan(first * 0.6);
+  });
+
+  it("insults are not capped but habituate: anger and 不爽 toward the person, never to the top", async () => {
     const h = await boot();
     for (let i = 0; i < 6; i++) h.publish(socialEvent("p2", "insult"));
     await vi.waitFor(() =>
-      expect(h.self.heart("p2")?.emotions.resentment ?? 0).toBeGreaterThan(0.9),
+      expect(h.self.heart("p2")?.emotions.resentment ?? 0).toBeGreaterThan(0.4),
     );
-    expect(value(h, "anger")).toBeGreaterThan(0.7);
+    expect(value(h, "anger")).toBeGreaterThan(0.3);
+    // 0.35 × (1 + ½ + ¼ ...) at most, and the ten-minute budget holds.
+    expect(value(h, "anger")).toBeLessThan(0.8);
     // Her own mind's hints are not counted twice.
     const before = value(h, "joy");
     h.publish(socialEvent("p1", "warm", { source: "mind" }));
@@ -223,25 +255,28 @@ describe("rule triggers", () => {
     h.publish(
       customEvent("game.minecraft.death", { type: "death", data: { text: "被苦力怕炸死" } }),
     );
-    await vi.waitFor(() => expect(value(h, "frustration")).toBeGreaterThan(0.4));
-    expect(value(h, "anger")).toBeGreaterThan(0.2);
+    await vi.waitFor(() => expect(value(h, "frustration")).toBeGreaterThan(0.15));
+    expect(value(h, "anger")).toBeGreaterThan(0.05);
     h.publish(customEvent("game.minecraft.event", { type: "advancement", data: {} }));
-    await vi.waitFor(() => expect(value(h, "pride")).toBeGreaterThan(0.3));
+    await vi.waitFor(() => expect(value(h, "pride")).toBeGreaterThan(0.25));
   });
 
   it("a song finished: 得意, and praise right after is pride in the song; a song cut off: 哀 / 不甘心", async () => {
     const h = await boot();
     h.publish(customEvent("sing.cue", { state: "started", song: "s1", title: "t" }));
     h.publish(customEvent("sing.cue", { state: "ended", song: "s1", outcome: "finished" }));
-    await vi.waitFor(() => expect(value(h, "pride")).toBeGreaterThan(0.25));
+    await vi.waitFor(() => expect(value(h, "pride")).toBeGreaterThan(0.18));
     const afterSong = value(h, "pride");
     h.publish(socialEvent("p3", "praise"));
-    await vi.waitFor(() => expect(value(h, "pride")).toBeGreaterThan(afterSong + 0.3));
+    // Praise right after a song: the song applauded (medium).
+    await vi.waitFor(() => expect(value(h, "pride")).toBeGreaterThan(afterSong + 0.1));
     expect(h.self.emotions(0).find((e) => e.name === "pride")?.cause).toContain("歌");
 
+    // (Everything stirred in the last ten minutes counts against the budget: let it pass.)
+    h.clock.at += 11 * MINUTE;
     h.publish(customEvent("sing.cue", { state: "ended", song: "s2", outcome: "interrupted" }));
-    await vi.waitFor(() => expect(value(h, "sorrow")).toBeGreaterThan(0.25));
-    expect(value(h, "frustration")).toBeGreaterThan(0.3);
+    await vi.waitFor(() => expect(value(h, "sorrow")).toBeGreaterThan(0.08));
+    expect(value(h, "frustration")).toBeGreaterThan(0.15);
   });
 
   it("promises kept and broken, from the appraisal", async () => {
@@ -257,19 +292,23 @@ describe("rule triggers", () => {
       }),
     );
     await vi.waitFor(() =>
-      expect(h.self.heart("p3")?.emotions.resentment ?? 0).toBeGreaterThan(0.2),
+      expect(h.self.heart("p3")?.emotions.resentment ?? 0).toBeGreaterThan(0.15),
     );
-    expect(h.self.heart("p1")?.emotions.gratitude ?? 0).toBeGreaterThan(0.2);
-    expect(value(h, "sorrow")).toBeGreaterThan(0.1);
+    expect(h.self.heart("p1")?.emotions.gratitude ?? 0).toBeGreaterThan(0.15);
+    expect(value(h, "sorrow")).toBeGreaterThan(0.05);
+    // The appraisal's `joy: 0.4` is one medium appraisal, and the kept promise adds a weak one.
     expect(value(h, "joy")).toBeGreaterThan(0.2);
+    expect(value(h, "joy")).toBeLessThan(0.5);
   });
 
   it("someone she likes keeps talking to others and ignores her: 嫉妒 (more for her crush)", async () => {
     const h = await boot();
     makeCrush(h);
     for (let i = 0; i < 3; i++) h.publish(message("1", { replyTo: "9" }));
-    await vi.waitFor(() => expect(h.self.heart("p1")?.emotions.jealousy ?? 0).toBeGreaterThan(0.3));
-    expect(value(h, "jealousy")).toBeGreaterThan(0.3);
+    await vi.waitFor(() =>
+      expect(h.self.heart("p1")?.emotions.jealousy ?? 0).toBeGreaterThan(0.15),
+    );
+    expect(value(h, "jealousy")).toBeGreaterThan(0.15);
     expect(h.self.drives().longing).toBeGreaterThan(0);
     // Someone she does not care about: no jealousy.
     for (let i = 0; i < 3; i++) h.publish(message("2", { replyTo: "9" }));
@@ -307,69 +346,39 @@ describe("rule triggers", () => {
     expect(h.self.drives().longing).toBeLessThan(away);
   });
 
-  it("extensions can stir emotions with `self.feel` (bounded)", async () => {
+  it("extensions can stir emotions with `self.feel`: the amount only picks a step", async () => {
     const h = await boot();
     h.publish(customEvent("self.feel", { emotion: "surprise", amount: 3, cause: "嚇到" }));
     h.publish(customEvent("self.feel", { toward: "gratitude", person: "p3", amount: 0.4 }));
-    await vi.waitFor(() => expect(value(h, "surprise")).toBeCloseTo(0.5, 2));
+    // Clamped to 0.5, which reads as a strong step (0.35).
+    await vi.waitFor(() => expect(value(h, "surprise")).toBeCloseTo(0.35, 2));
     await vi.waitFor(() => expect(h.self.heart("p3")?.emotions.gratitude ?? 0).toBeCloseTo(0.4, 2));
   });
 });
 
-describe("emotion prompt", () => {
-  const request = (people: [string, string][]): PromptRequest => ({
-    profile: "p",
-    turn: "t",
-    context: text,
-    participants: people.map(([id, name]) => ({
-      account: acc(id),
-      display_name: name,
-      person: `p${id}`,
-    })),
-    speakers: [],
-    query: "",
-    recent: [],
-    voice: false,
-    now: toTimestamp(T0),
-  });
-
-  it("shows the felt and the shown emotion, her secret crush and feelings toward who is present", async () => {
+describe("felt and shown emotions", () => {
+  it("keeps the felt and the shown emotion, her secret crush and feelings toward people", async () => {
     const h = await boot();
-    const prompt = h.contributors.all().find((c) => c.key === "emotion") as EmotionPrompt;
-    expect(await prompt.contribute(request([]))).toEqual([]);
+    expect(h.self.emotions()).toEqual([]);
 
     makeCrush(h);
-    h.self.feel("shy", 0.4, "Owen 誇我", "p1");
     h.self.feel("joy", 0.3, "Owen 誇我", "p1");
+    h.clock.at += 11 * MINUTE;
+    h.self.feel("shy", 0.4, "Owen 誇我", "p1");
     h.self.feelToward("p3", "resentment", 0.5, "Carol 罵我");
-    const [section] = await prompt.contribute(
-      request([
-        ["1", "Owen"],
-        ["3", "Carol"],
-      ]),
-    );
-    expect(section).toMatchObject({ key: "emotion", title: "你的情緒", order: 34 });
-    const lines = section?.body.split("\n") ?? [];
-    // Strongest first, with what stirred the strongest one.
-    expect(lines[0]).toMatch(/^你心裡真正的感受:害羞 0\.\d\d、怒 0\.\d\d、喜 0\.\d\d/);
-    expect(lines[0]).toContain("Owen 誇我");
-    expect(lines[1]).toBe("表現出來的樣子:兇回去、嫌棄對方,但臉紅了(<emo:embarrassed>)");
-    expect(lines[2]).toContain("你偷偷喜歡Owen(他現在在這裡)。這是祕密");
-    expect(lines).toContain("你對在場的人:");
-    expect(lines).toContain("- Carol:不爽 0.50");
-    expect(lines.at(-1)).toContain("照「表現出來的樣子」走");
-    // Away: the line says so.
-    const [away] = await prompt.contribute(request([["3", "Carol"]]));
-    expect(away?.body).toContain("他現在不在這裡");
+    // Strongest first, with what stirred it.
+    const felt = h.self.emotions();
+    expect(felt[0]?.name).toBe("shy");
+    expect(felt.map((e) => e.name)).toContain("joy");
+    expect(h.self.shown()).toMatchObject({ from: "shy", tag: "embarrassed" });
+    expect(h.self.crush()?.person).toBe("p1");
+    expect(h.self.heart("p3")?.emotions.resentment ?? 0).toBeGreaterThan(0.4);
   });
 
-  it("open display rules show the felt emotion as it is; no crush, no crush line", async () => {
+  it("open display rules show the felt emotion as it is; no crush", async () => {
     const h = await boot("open");
     h.self.feel("missing", 0.5, "想念某個人");
-    const prompt = h.contributors.all().find((c) => c.key === "emotion") as EmotionPrompt;
-    const [section] = await prompt.contribute(request([]));
-    expect(section?.body).toContain("表現出來的樣子:想念(<emo:sad>)");
-    expect(section?.body).not.toContain("偷偷喜歡");
+    expect(h.self.shown()).toMatchObject({ from: "missing", tag: "sad", masked: false });
     // The snapshot has it all for the panel.
     const snap = h.self.snapshot();
     expect(snap.emotions?.[0]?.name).toBe("missing");

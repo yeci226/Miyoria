@@ -1,5 +1,7 @@
 # Threads 擴充(滑 Threads)
 
+> **已關閉**(`docs/design/v2-architecture.md` §3.8、§6 第 7 項)。它沒有目標,遊戲導演不再驅動它:`[modules.game] directed_games` 預設只有 `minecraft`,`game start threads` 會被拒絕。之後要接回,會改成 ActivityManager 的 `browse` 活動、有自己的迴圈。下面的說明是關閉前的狀態。
+
 讓她在直播機上用瀏覽器滑**她自己的** Threads 動態:一則一則看貼文,有興趣就打開看留言,然後用語音講感想,像在實況玩遊戲一樣。
 
 - **只看不碰**:能做的動作只有 `next`(下一則)、`open`(看留言)、`back`、`refresh`、`launch`、`quit`。沒有按讚、留言、發文、追蹤,她在 Threads 上不會留下任何東西。

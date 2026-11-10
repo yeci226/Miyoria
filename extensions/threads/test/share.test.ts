@@ -3,8 +3,8 @@ import { runInNewContext } from "node:vm";
 
 import { describe, expect, it } from "vitest";
 import type { Browser, Pictures } from "../src/adapter.js";
-import type { Post, RawPost } from "../src/feed.js";
 import { READ_POSTS } from "../src/browser.js";
+import type { Post, RawPost } from "../src/feed.js";
 import { worthReading } from "../src/feed.js";
 import threads from "../src/index.js";
 import { ShareTools } from "../src/share.js";

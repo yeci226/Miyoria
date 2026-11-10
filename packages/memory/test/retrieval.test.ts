@@ -55,7 +55,7 @@ describe.each(BACKENDS)("retrieval (%s store)", (backend) => {
     const scopes = visibleScopes(guildCtx("g1", "c1"), [acct("2")], [owen]);
 
     let got = await e.engine.recall(scopes, [owen], "拉麵", PROMPT_KINDS, 8, now);
-    let ids = got.map((r) => r.record.id);
+    const ids = got.map((r) => r.record.id);
     expect(ids[0], "text + subject wins").toBe(ramen);
     expect(ids.indexOf(newRamen), "recency breaks the tie").toBeLessThan(ids.indexOf(oldRamen));
     expect(ids.indexOf(oldRamen)).toBeGreaterThanOrEqual(0);
@@ -64,16 +64,18 @@ describe.each(BACKENDS)("retrieval (%s store)", (backend) => {
       expect(got[i - 1]?.score ?? 0).toBeGreaterThanOrEqual(got[i]?.score ?? 0);
     }
 
-    // Present people are candidates even without a text match.
+    // Being about someone present is not enough on its own: "早安" shares nothing with them.
     got = await e.engine.recall(scopes, [owen, amy], "早安", PROMPT_KINDS, 8, now);
-    ids = got.map((r) => r.record.id);
-    expect(ids, "importance and recency order them").toEqual([cat, ramen]);
+    expect(got, "present but unrelated memories are not recalled").toEqual([]);
+    // With a word in common they are, and the person who is here ranks first.
+    got = await e.engine.recall(scopes, [owen, amy], "你的貓", PROMPT_KINDS, 8, now);
+    expect(got.map((r) => r.record.id)).toEqual([cat]);
 
     // Recalled records are touched; the limit applies.
     got = await e.engine.recall(scopes, [owen], "拉麵", PROMPT_KINDS, 1, now);
     expect(got).toHaveLength(1);
     const touched = await e.rec(ramen);
-    expect(touched?.access_count).toBe(3);
+    expect(touched?.access_count).toBe(2);
     expect(Date.parse(touched?.last_accessed ?? "")).toBe(Date.parse(now));
 
     // Only the requested kinds come back.

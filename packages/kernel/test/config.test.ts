@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { Config, ConfigError, expandEnv, loadDotenv } from "../src/index.js";
+import { Config, ConfigError, expandEnv, loadDotenv, presentKeys } from "../src/index.js";
 
 describe("Config", () => {
   it("expands_env_references", () => {
@@ -76,5 +76,16 @@ describe("Config", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("presentKeys", () => {
+  it("lists the deprecated dotted keys a raw section still sets", () => {
+    const raw = { prompt: false, voice: { ambient_factor: 0.5 }, other: 1 };
+    expect(
+      presentKeys(raw, ["prompt", "voice.ambient_factor", "voice.cooldown_ms", "gone"]),
+    ).toEqual(["prompt", "voice.ambient_factor"]);
+    expect(presentKeys(null, ["prompt"])).toEqual([]);
+    expect(presentKeys({ voice: 3 }, ["voice.x"])).toEqual([]);
   });
 });

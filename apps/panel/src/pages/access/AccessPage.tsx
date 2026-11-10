@@ -83,7 +83,7 @@ function RolesCard() {
   );
 
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>角色</CardTitle>
         <CardAction>
@@ -115,7 +115,6 @@ function RolesCard() {
         open={deleting !== null}
         title={`刪除角色「${deleting?.name}」?`}
         confirmLabel="刪除"
-        destructive
         busy={deleteRole.isPending}
         onClose={() => setDeleting(null)}
         onConfirm={() =>
@@ -185,11 +184,11 @@ function AssignmentsCard() {
   );
 
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>指派</CardTitle>
         <CardAction>
-          <Button writes size="sm" disabled={!roles.isSuccess} onClick={() => setAssigning(true)}>
+          <Button writes size="sm" variant="secondary" disabled={!roles.isSuccess} onClick={() => setAssigning(true)}>
             <UserPlus />
             指派角色
           </Button>
@@ -211,7 +210,6 @@ function AssignmentsCard() {
         open={revoking !== null}
         title="撤銷這個角色?"
         confirmLabel="撤銷"
-        destructive
         busy={revoke.isPending}
         onClose={() => setRevoking(null)}
         onConfirm={() =>
@@ -266,7 +264,7 @@ function MappingsCard() {
   );
 
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>身分組對應</CardTitle>
         <CardAction className="flex-wrap">
@@ -318,7 +316,6 @@ function MappingsCard() {
         open={removing !== null}
         title="移除這個對應?"
         confirmLabel="移除"
-        destructive
         busy={removeMapping.isPending}
         onClose={() => setRemoving(null)}
         onConfirm={() =>

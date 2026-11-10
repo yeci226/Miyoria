@@ -35,5 +35,13 @@ coverage/
 /data/
 workers/.venv-*/
 
-# Claude Code 子代理的暫存 worktree
+# Claude Code 子代理的暫存 worktree,和它的預覽設定
 /.claude/worktrees/
+/.claude/launch.json
+
+# 測試和建置的暫存資料夾(pytest --basetemp、esbuild 被防毒卡住時改用的 TMP)
+pytest-of-*/
+.pytest-tmp/
+.tmp-build/
+# The owner's panel pictures (background, login): game art, local only
+apps/panel/public/*.local.*

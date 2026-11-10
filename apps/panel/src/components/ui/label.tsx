@@ -7,7 +7,7 @@ function Label({ className, ...props }: React.ComponentProps<typeof LabelPrimiti
     <LabelPrimitive.Root
       data-slot="label"
       className={cn(
-        "flex select-none items-center gap-2 text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+        "flex select-none items-center gap-2 text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
         className,
       )}
       {...props}
@@ -34,7 +34,7 @@ function Field({
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
       {error && (
-        <p id={`${htmlFor}-error`} className="text-[13px] text-[oklch(0.74_0.16_25)]">
+        <p id={`${htmlFor}-error`} className="text-[13px] text-primary">
           {error}
         </p>
       )}

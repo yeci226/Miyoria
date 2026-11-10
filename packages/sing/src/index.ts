@@ -4,6 +4,8 @@
 
 export { singCapabilities } from "./actions.js";
 export {
+  type GpuContext,
+  type GpuStatus,
   HttpSingWorker,
   type LyricLine,
   type SingWorker,
@@ -15,7 +17,7 @@ export {
   type WorkerJob,
   WorkerJobSchema,
 } from "./client.js";
-export { listCard, registerCommands } from "./commands.js";
+export { backingOf, listCard, registerCommands } from "./commands.js";
 export {
   defaultSingConfig,
   type SingConfig,
@@ -32,9 +34,21 @@ export {
   renderCard,
 } from "./lyrics-card.js";
 export { SingerKey, SingModule } from "./module.js";
+export {
+  dedicationProblem,
+  MAX_DEDICATION_CHARS,
+  type SongCharge,
+  type SongPaidItem,
+  type SongPayments,
+  SongPaymentsKey,
+} from "./payments.js";
 export { paced, singSong, sleep, songVideoPath } from "./player.js";
 export { PROMPT_KEY, SingPrompt } from "./prompt.js";
 export {
+  BACKING_LABELS,
+  BACKING_MODES,
+  type BackingMode,
+  dedicationNote,
   type NewSong,
   SetList,
   SetListError,
@@ -53,3 +67,4 @@ export {
   skipVotesNeeded,
   workerQuery,
 } from "./singer.js";
+export { KEY_RANGE, parseSongPatch, type SongPatch, songNo, songTask } from "./steer.js";

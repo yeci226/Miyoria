@@ -7,12 +7,15 @@
 //   it, and a song she already sang goes back on the list (the worker has it cached); a song not
 //   on the list has to go through `sing.request`, with its permission and limits.
 // * `sing.stop` (tool `sing_stop`): stop the song (skip), or with `all` also drop the rest.
+// * `sing.steer` (no tool): change a song that has not started (its place in the list, its key).
+//   Only the ActivityManager's steer calls it, for the main line (docs/design/v3-architecture.md
+//   §10.6); it answers with the outcome as its data.
 
 import { type Capability, defineCapability } from "@miyoria/actions";
-import { type Principal, safeName } from "@miyoria/types";
+import { type JsonObject, type Principal, safeName } from "@miyoria/types";
 import { z } from "zod";
 import type { SingPermissions } from "./config.js";
-import { type SongNo, songLabel } from "./setlist.js";
+import { BACKING_MODES, type SongNo, songLabel } from "./setlist.js";
 import { SingError, type Singer } from "./singer.js";
 
 const RequestArgs = z.object({
@@ -20,17 +23,33 @@ const RequestArgs = z.object({
   query: z.string().trim().min(1).max(300),
   /** Whole-song transposition in semitones. */
   key: z.number().int().min(-6).max(6).nullish(),
+  /** What becomes of the song's own backing voices (kept as recorded by default). */
+  backing: z.enum(BACKING_MODES).nullish(),
   /** How to call the person who asked (shown in the list and to her later). */
   by: z.string().trim().min(1).max(64).nullish(),
+  /** Commands only: use a ticket when the person is at the limit. */
+  ticket: z.boolean().nullish(),
+  /** Commands only: a paid dedication (up to 40 characters). */
+  dedication: z.string().trim().max(200).nullish(),
 });
 const PlayArgs = z.object({
   /** A number on the set list (also written as text, `#3`) or a song's name. */
   song: z.union([z.number().int().positive(), z.string().trim().min(1).max(300)]).nullish(),
 });
-const StopArgs = z.object({ all: z.boolean().nullish() });
+const StopArgs = z.object({ all: z.boolean().nullish(), current: z.boolean().nullish() });
+const SteerArgs = z.object({
+  steer: z.object({
+    id: z.string().min(1).max(64),
+    task: z.string().min(1).max(64),
+    patch: z.record(z.string(), z.unknown()),
+    why: z.string().max(400),
+    cause: z.string().max(64),
+  }),
+});
 type RequestArgs = z.output<typeof RequestArgs>;
 type PlayArgs = z.output<typeof PlayArgs>;
 type StopArgs = z.output<typeof StopArgs>;
+type SteerArgs = z.output<typeof SteerArgs>;
 
 /** The song she means: a set list number, a name, or `null` for the first ready one. */
 function songRef(song: PlayArgs["song"]): SongNo | string | null {
@@ -78,11 +97,18 @@ export function singCapabilities(
           ? "有人點歌的時候用;準備的時候照常聊天,好了就會開始唱,不用再做別的。"
           : "有人點歌、你想唱的時候用;準備的時候照常聊天,好了會告訴你,再用 sing_start 開唱。") +
         "一次點好幾首就每首各用一次 sing_request。" +
-        "query 寫歌名(加上歌手更準),也可以是 YouTube 連結。" +
+        "query 寫歌名(加上歌手更準),也可以是 YouTube 或 bilibili 連結。" +
         "歌不適合可以拒絕,但已經唱過不是拒絕的理由:唱過的歌有人點就再唱一次。",
       properties: {
-        query: { type: "string", description: "歌名 + 歌手,或 YouTube 連結" },
+        query: { type: "string", description: "歌名 + 歌手,或 YouTube / bilibili 連結" },
         key: { type: "integer", description: "整首升降幾個半音(-6 到 6,通常省略)" },
+        backing: {
+          type: "string",
+          enum: [...BACKING_MODES],
+          description:
+            "原曲的伴唱(和聲、合唱)怎麼處理,沒人提就省略:keep 保留原本的(預設)、drop 不要伴唱、" +
+            "convert 伴唱也用你的聲音唱、acapella 清唱(只有你的主唱,沒有伴奏)",
+        },
         by: { type: "string", description: "點歌的人怎麼稱呼(可省略)" },
       },
       required: ["query"],
@@ -93,10 +119,15 @@ export function singCapabilities(
         {
           query: args.query,
           key: args.key ?? 0,
+          backing: args.backing ?? "keep",
           requester: p.requester,
           requester_name: byOf(p, args.by),
           context: p.context,
           forced: forced(p) || onlyOnRequest,
+          // Money moves only on the person's own command, never on her tool call.
+          ...(p.kind === "command"
+            ? { ticket: args.ticket === true, dedication: args.dedication ?? null }
+            : {}),
         },
         ctx.signal,
       );
@@ -156,6 +187,7 @@ export function singCapabilities(
           {
             query: listed.query,
             key: listed.key,
+            backing: listed.backing,
             requester: listed.requester,
             requester_name: listed.requester_name,
             context: p.context ?? listed.context,
@@ -185,17 +217,46 @@ export function singCapabilities(
     permission: perms.skip,
     tool: {
       name: "sing_stop",
-      description: "停止正在唱的歌;all = true 時歌單上其他還沒唱的也一起取消。",
-      properties: { all: { type: "boolean", description: "也取消歌單上其他的歌" } },
+      description:
+        "停止唱歌。預設停掉正在唱的這首;all = true 時歌單上還沒唱的也一起取消。" +
+        "想讓這首唱完、只把後面的清掉(例如要收尾),用 all = true 加 current = false。",
+      properties: {
+        all: { type: "boolean", description: "也取消歌單上其他還沒唱的歌" },
+        current: {
+          type: "boolean",
+          description: "要不要停掉正在唱的這首(預設 true;false = 讓它唱完)",
+        },
+      },
     },
     async execute(args) {
-      const { stopped, dropped } = await singer.stop(args.all === true);
+      const keep = args.current === false;
+      const { stopped, dropped } = await singer.stop(args.all === true, !keep);
       const parts: string[] = [];
-      parts.push(stopped ? `已停止 ${songLabel(stopped)}。` : "現在沒有在唱歌。");
+      if (keep) parts.push(singer.playing() ? "這首會唱完。" : "現在沒有在唱歌。");
+      else parts.push(stopped ? `已停止 ${songLabel(stopped)}。` : "現在沒有在唱歌。");
       if (dropped > 0) parts.push(`取消了歌單上的 ${dropped} 首。`);
       return { text: parts.join(""), data: { stopped: stopped?.no ?? null, dropped } };
     },
   });
 
-  return [request, play, stop] as Capability[];
+  const steer = defineCapability<SteerArgs>({
+    name: "sing.steer",
+    summary: "改一首還沒開唱的歌(順序、key)",
+    risk: "low",
+    args: SteerArgs,
+    permission: null,
+    async execute(args) {
+      const s = args.steer;
+      const answer = await singer.steer({
+        id: s.id,
+        task: s.task,
+        patch: s.patch as JsonObject,
+        why: s.why,
+        cause: s.cause,
+      });
+      return { text: answer.detail, data: { outcome: answer.outcome, detail: answer.detail } };
+    },
+  });
+
+  return [request, play, stop, steer] as Capability[];
 }

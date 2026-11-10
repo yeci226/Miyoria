@@ -27,7 +27,7 @@ import type {
 } from "@miyoria/types";
 import { EMOTION_LABELS, PERSON_EMOTION_LABELS, toTimestamp } from "@miyoria/types";
 import type { SelfConfig } from "./config.js";
-import { shownEmotion } from "./display.js";
+import { type Audience, shownEmotion } from "./display.js";
 import type { Circumstances, SelfEngine } from "./engine.js";
 import type { FeelingsBook } from "./feelings.js";
 
@@ -41,6 +41,8 @@ export interface SelfServiceDeps {
   mood: () => Mood | null;
   /** The social numbers of someone, when the social module runs. */
   attitudeOf?: (person: PersonId) => Attitude | null;
+  /** Who she is with right now (for what she shows); `undefined` = nobody in particular. */
+  audience?: () => Audience | undefined;
   /** Called after every change of the persisted state. */
   changed: (reason: string) => void;
 }
@@ -52,6 +54,33 @@ export class SelfService implements SelfState {
   #sampledAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly d: SelfServiceDeps) {}
+
+  /** The engine (the affect service of the same module works on it). */
+  get engine(): SelfEngine {
+    return this.d.engine;
+  }
+
+  get feelingsBook(): FeelingsBook {
+    return this.d.feelings;
+  }
+
+  get config(): SelfConfig {
+    return this.d.config;
+  }
+
+  get clock(): Clock {
+    return this.d.clock;
+  }
+
+  /** The social numbers of someone, when the social module runs. */
+  attitudeOf(person: PersonId): Attitude | null {
+    return this.d.attitudeOf?.(person) ?? null;
+  }
+
+  /** Records that something changed (the module saves it). */
+  changed(reason: string): void {
+    this.d.changed(reason);
+  }
 
   /** Advances the engine to now and returns now. */
   now(): number {
@@ -104,7 +133,10 @@ export class SelfService implements SelfState {
     if (!Number.isFinite(amount) || amount === 0) return;
     const now = this.now();
     const e = this.d.engine;
-    const v = e.hearts.feel(person, emotion, amount, now);
+    // The same cause again within two hours counts less (toward someone as for her own).
+    const factor =
+      amount > 0 ? e.emotions.habituate(`toward|${person}|${emotion}|${cause}`, now) : 1;
+    const v = e.hearts.feel(person, emotion, amount * factor, now);
     // The matching feeling of her own (不爽 toward someone is anger).
     const own: EmotionName = emotion === "resentment" ? "anger" : emotion;
     const why = cause || PERSON_EMOTION_LABELS[emotion];
@@ -118,7 +150,12 @@ export class SelfService implements SelfState {
 
   #shown(felt: readonly EmotionReading[]): ShownEmotion | null {
     const e = this.d.engine.emotions;
-    return shownEmotion(felt, e.temperament.display, this.d.config.emotions.notice);
+    return shownEmotion(
+      felt,
+      e.temperament.display,
+      this.d.config.emotions.notice,
+      this.d.audience?.(),
+    );
   }
 
   /** Never advances through `circumstances` (which reads the mood, which reads this). */
@@ -179,15 +216,6 @@ export class SelfService implements SelfState {
     const romance = this.d.engine.hearts.romanceOf(person);
     if (romance >= 0.15) care = Math.max(care, romance + 0.2);
     return clamp01(care);
-  }
-
-  /** How much romance can grow with someone, 0..1 (0 below the minimum affinity). */
-  liking(person: PersonId): number {
-    const a = this.d.attitudeOf?.(person) ?? null;
-    if (a === null || a.blocked) return 0;
-    const min = this.d.config.heart.min_affinity;
-    if (a.affinity < min) return 0;
-    return clamp01(0.3 + (0.7 * (a.affinity - min)) / Math.max(100 - min, 1));
   }
 
   /**

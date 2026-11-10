@@ -155,9 +155,8 @@ describe("the mood follows her emotions", () => {
       energy: 0,
     }));
     expect(withSelf.handle(relationship, noon)).toBeNull();
-    // Her own tags still nudge it.
-    expect(
-      withSelf.handle(customEvent("agent.emotion", { emotion: "angry" }), noon),
-    ).not.toBeNull();
+    // Her own tags are expression only: they never move the mood (with or without emotions).
+    expect(withSelf.handle(customEvent("agent.emotion", { emotion: "angry" }), noon)).toBeNull();
+    expect(without.handle(customEvent("agent.emotion", { emotion: "angry" }), noon)).toBeNull();
   });
 });

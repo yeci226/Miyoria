@@ -9,11 +9,17 @@
 // | admin | 80 | everything below plus `admin.*`, `module.*`, `memory.*`, `stream.*` | |
 // | moderator | 60 | trusted plus `voice.*`, `queue.*`, `game.*`, `stream.scene`, ... | `tools.mcp.*` |
 // | trusted | 40 | user plus `chat.*`, `tools.*`, `queue.priority`, `game.suggest`, `stream.clip` | `tools.mcp.*` |
-// | user | 20 | restricted plus `chat.talk`, `voice.join`, `queue.request`, views of settings, ... | |
+// | user | 20 | restricted plus `chat.talk`, `voice.join`, `queue.request`, `tools.web`, `tools.file`, views of settings, ... | |
 // | restricted | 10 | `help`, `me.*`, `memory.self.*`, `voice.consent` | |
 // | blocked | 0 | nothing | |
 
-import { builtinRoleGrants, SANDBOX_CODE_RUN } from "@miyoria/commands";
+import {
+  builtinRoleGrants,
+  DIRECTIVE_MODERATE,
+  FILE_READ,
+  SANDBOX_CODE_RUN,
+  WEB_TOOL,
+} from "@miyoria/commands";
 import type { RoleDefinition } from "@miyoria/store";
 
 export const OWNER = "owner";
@@ -83,10 +89,29 @@ const V1_MODERATOR = [
 ];
 const V1_ADMIN = ["admin.*", "module.*", "memory.*", "stream.*"];
 
+/** A built-in role's grants before moderators could make rules. */
+function beforeDirectives(name: string): string[] {
+  const role = builtinRoleGrants().find((r) => r.name === name);
+  return (role?.grants ?? []).filter(
+    (n) => n !== DIRECTIVE_MODERATE && n !== WEB_TOOL && n !== FILE_READ,
+  );
+}
+
+/** A built-in role's grants before members could ask her to search the web. */
+function beforeWeb(name: string): string[] {
+  const role = builtinRoleGrants().find((r) => r.name === name);
+  return (role?.grants ?? []).filter((n) => n !== WEB_TOOL && n !== FILE_READ);
+}
+
+/** A built-in role's grants before members could send her files. */
+function beforeFiles(name: string): string[] {
+  const role = builtinRoleGrants().find((r) => r.name === name);
+  return (role?.grants ?? []).filter((n) => n !== FILE_READ);
+}
+
 /** A built-in role's grants before trusted people could ask her to run code. */
 function beforeSandbox(name: string): string[] {
-  const role = builtinRoleGrants().find((r) => r.name === name);
-  return (role?.grants ?? []).filter((n) => n !== SANDBOX_CODE_RUN);
+  return beforeDirectives(name).filter((n) => n !== SANDBOX_CODE_RUN);
 }
 
 /**
@@ -97,18 +122,34 @@ export const LEGACY_BUILTIN_GRANTS: Readonly<Record<string, readonly (readonly s
   admin: [
     [...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED, ...V1_MODERATOR, ...V1_ADMIN],
     beforeSandbox("admin"),
+    beforeDirectives("admin"),
+    beforeWeb("admin"),
+    beforeFiles("admin"),
   ],
   moderator: [
     [...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED, ...V1_MODERATOR],
     beforeSandbox("moderator"),
+    beforeDirectives("moderator"),
+    beforeWeb("moderator"),
+    beforeFiles("moderator"),
   ],
-  trusted: [[...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED], beforeSandbox("trusted")],
-  user: [[...V1_PRIVACY, ...V1_EVERYDAY]],
+  trusted: [
+    [...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED],
+    beforeSandbox("trusted"),
+    beforeWeb("trusted"),
+    beforeFiles("trusted"),
+  ],
+  user: [[...V1_PRIVACY, ...V1_EVERYDAY], beforeWeb("user"), beforeFiles("user")],
   restricted: [V1_PRIVACY],
 };
 
-const sameList = (a: readonly string[], b: readonly string[]) =>
-  a.length === b.length && a.every((x, i) => x === b[i]);
+/** The same nodes, in any order: a store may hand them back sorted differently than they were seeded. */
+const sameList = (a: readonly string[], b: readonly string[]) => {
+  if (a.length !== b.length) return false;
+  const x = [...a].sort();
+  const y = [...b].sort();
+  return x.every((n, i) => n === y[i]);
+};
 
 /**
  * What to do with a stored role named like a built-in one: `current` (nothing to do),

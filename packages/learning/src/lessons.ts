@@ -12,6 +12,7 @@ import {
   type Lessons,
   type PersonId,
   type ProfileId,
+  repairHandleText,
   systemClock,
   talkativenessScopes,
   timestampMs,
@@ -27,6 +28,18 @@ export const LESSON_PREFIX = "reflect:lesson:";
  */
 const TALK_STEP = 0.1;
 const MAX_SHIFT = 0.15;
+
+/**
+ * Whether a lesson is about how much she talks ("安靜一點", "可以更活躍"), as opposed to how she
+ * talks (tone, jokes, wording, topics). Only the first kind may shift her talkativeness: when
+ * every complaint about style also turned her down, a handful of bad evenings kept her near mute.
+ */
+const VOLUME =
+  /安靜|閉嘴|話(?:太)?多|少說|少講|多說|多講|說話|講話|話少|吵|沉默|活潑|活躍|主動|開話題|插話|頻率|quiet|chatty|talk less|talk more|speak up/i;
+
+export function isTalkLesson(text: string): boolean {
+  return VOLUME.test(text);
+}
 
 export class LessonStore implements Lessons {
   readonly #items = new Map<string, Lesson>();
@@ -79,11 +92,26 @@ export class LessonStore implements Lessons {
   }
 
   talkShift(context: ContextKey | null, people: readonly PersonId[]): number {
-    const sum = this.applicable(context, people).reduce((n, l) => n + (l.talk ?? 0), 0);
+    // A style lesson never turns into a talkativeness offset, whatever `talk` it was saved with
+    // (older lessons carry one); the owner's own lessons (`panel`) are taken as set.
+    const sum = this.applicable(context, people).reduce(
+      (n, l) => n + (l.source === "panel" || isTalkLesson(l.text) ? (l.talk ?? 0) : 0),
+      0,
+    );
     return Math.max(-MAX_SHIFT, Math.min(MAX_SHIFT, sum * TALK_STEP));
   }
 
-  add(lesson: Lesson): void {
+  /**
+   * Adds a lesson. A text with a per-call code (`u7`) is rewritten without it, or refused when
+   * nothing is left; `false` = not added.
+   */
+  add(lesson: Lesson): boolean {
+    const text = repairHandleText(lesson.text);
+    if (text === null) {
+      log.warn({ id: lesson.id }, "refused a lesson that only says a per-call code");
+      return false;
+    }
+    lesson = { ...lesson, text };
     // The same lesson again replaces the old one.
     for (const l of this.#items.values()) {
       if (l.text === lesson.text && l.person === lesson.person && l.scope === lesson.scope) {
@@ -94,6 +122,7 @@ export class LessonStore implements Lessons {
     this.#save(lesson.id);
     const all = [...this.#items.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
     for (const old of all.slice(0, Math.max(all.length - this.keep, 0))) this.remove(old.id);
+    return true;
   }
 
   remove(id: string): boolean {

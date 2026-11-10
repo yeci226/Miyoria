@@ -18,17 +18,25 @@ import {
   parseModelRef,
 } from "@miyoria/llm";
 import { RequestQueue, RequestQueueKey } from "@miyoria/queue";
-import { type Tool, ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
 import {
   type AccountRef,
+  ARBITER_IMPULSE_TOPIC,
   type ContextKey,
   type Event,
+  GameResumeKey,
+  type Impulse,
+  impulseReason,
   type JsonValue,
+  type NewProposal,
   PromptContributors,
   PromptContributorsKey,
   type PromptRequest,
+  ProposalBoardKey,
+  type RestoredGame,
+  v2Payload,
 } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SELF_GOAL_BY } from "../src/decision.js";
 import {
   DECISION_TOPIC,
   GameControl,
@@ -38,13 +46,12 @@ import {
   GameHandleKey,
   GameModule,
   type GameStatus,
+  GOAL_TOPIC,
+  SESSION_TOPIC,
 } from "../src/index.js";
+import { FakeExecutor, FakeExecutors } from "./fake-executor.js";
 
 // ----- fakes -----
-
-const IDLE = '血量 20/20\n位置 (0, 64, 0)\n\n狀態:{"connected":true,"in_game":true,"busy":false}';
-const BUSY =
-  '血量 20/20\n位置 (5, 64, 5)\nBaritone 執行中(Mine)\n\n狀態:{"connected":true,"in_game":true,"busy":true}';
 
 /** Replies computed from the request's user message. */
 class FnProvider implements ChatProvider {
@@ -103,62 +110,46 @@ function collect<T>(sub: AsyncIterable<unknown>, pick: (event: Event) => T | nul
 
 class Harness {
   readonly sup = new Supervisor();
-  observeText = IDLE;
-  observeCalls = 0;
-  actCalls: JsonValue[] = [];
-  actContexts: ContextKey[] = [];
-  actReply = "成功:開始了";
-  readonly tools = new ToolRegistry();
+  readonly exec: FakeExecutor;
+  readonly executors: FakeExecutors;
   readonly commands = new CommandRegistry(Permissions.fromStrings(["discord:1"]));
   readonly prompts = new PromptContributors();
   readonly queue: RequestQueue;
   readonly hintLog: Log<string>;
+  readonly lineLog: Log<Impulse>;
   readonly hintContexts: Log<ContextKey>;
   readonly nudgeLog: Log<Record<string, JsonValue>>;
   readonly traceLog: Log<Record<string, JsonValue>>;
+  readonly goalLog: Log<Record<string, JsonValue>>;
 
   private constructor() {
-    const observe: Tool = {
-      spec: {
-        name: "game_minecraft_observe",
-        description: "查看 Minecraft 現在的狀態",
-        parameters: { type: "object", properties: {} },
-      },
-      call: async () => {
-        this.observeCalls += 1;
-        return this.observeText;
-      },
-    };
-    const act: Tool = {
-      spec: {
-        name: "game_minecraft_act",
-        description:
-          "在 Minecraft 裡做一個高階動作。可用動作:\n- goto:走\n- mine:挖\n- get:取得\n- chat:說話",
-        parameters: { type: "object", properties: { action: { type: "string" } } },
-      },
-      call: async (ctx, args) => {
-        this.actCalls.push(args);
-        this.actContexts.push(ctx.context);
-        return this.actReply;
-      },
-    };
-    this.tools.register(observe);
-    this.tools.register(act);
+    this.exec = new FakeExecutor((event) => this.sup.bus.publish("ext.miyoria.minecraft", event));
+    this.executors = new FakeExecutors(this.exec);
     this.queue = new RequestQueue(undefined, {
       publisher: (event) => this.sup.bus.publish("queue", event),
     });
-    this.hintLog = collect(this.sup.bus.subscribe("agent.initiative"), (e) => {
-      if (e.type !== "agent_initiative") return null;
-      expect(e.data.reason).toBe("game");
-      return e.data.hint;
+    // Her commentary: impulses of source `game` for the Arbiter.
+    this.hintLog = collect(this.sup.bus.subscribe(ARBITER_IMPULSE_TOPIC), (e) => {
+      const impulse = v2Payload(e, ARBITER_IMPULSE_TOPIC);
+      if (!impulse) return null;
+      expect(impulse.source).toBe("game");
+      expect(impulseReason(impulse)).toBe("game");
+      return impulse.hint;
     });
-    this.hintContexts = collect(this.sup.bus.subscribe("agent.initiative"), (e) =>
-      e.type === "agent_initiative" ? e.data.context : null,
+    this.lineLog = collect(this.sup.bus.subscribe(ARBITER_IMPULSE_TOPIC), (e) =>
+      v2Payload(e, ARBITER_IMPULSE_TOPIC),
+    );
+    this.hintContexts = collect(
+      this.sup.bus.subscribe(ARBITER_IMPULSE_TOPIC),
+      (e) => v2Payload(e, ARBITER_IMPULSE_TOPIC)?.target.context ?? null,
     );
     this.nudgeLog = collect(this.sup.bus.subscribe("mood.nudge"), (e) =>
       e.type === "custom" ? (e.data.payload as Record<string, JsonValue>) : null,
     );
     this.traceLog = collect(this.sup.bus.subscribe(DECISION_TOPIC), (e) =>
+      e.type === "custom" ? (e.data.payload as Record<string, JsonValue>) : null,
+    );
+    this.goalLog = collect(this.sup.bus.subscribe(GOAL_TOPIC), (e) =>
       e.type === "custom" ? (e.data.payload as Record<string, JsonValue>) : null,
     );
   }
@@ -175,7 +166,7 @@ class Harness {
     );
     const services = h.sup.services;
     if (actuators) services.provide("app", ActuatorRegistryKey, actuators(h));
-    services.provide("app", ToolRegistryKey, h.tools);
+    h.executors.provide(services);
     services.provide("app", CommandRegistryKey, h.commands);
     services.provide("app", RequestQueueKey, h.queue);
     services.provide("app", PromptContributorsKey, h.prompts);
@@ -229,11 +220,22 @@ class Harness {
   }
 
   acts(): Array<Record<string, JsonValue>> {
-    return this.actCalls as Array<Record<string, JsonValue>>;
+    return this.exec.acts();
   }
 
   actNames(): JsonValue[] {
-    return this.acts().map((a) => a.action ?? "");
+    return this.exec.names();
+  }
+
+  /** Ends the last started task with `done` (and lets the director see it). */
+  async taskDone(detail = "好了"): Promise<void> {
+    this.exec.done(detail);
+    await settle();
+  }
+
+  async taskFailed(code: Parameters<FakeExecutor["fail"]>[0], detail: string): Promise<void> {
+    this.exec.fail(code, detail);
+    await settle();
   }
 
   status(): GameStatus | null {
@@ -283,6 +285,69 @@ afterEach(() => {
 
 // ----- tests -----
 
+describe("picking a session back up after a restart", () => {
+  const left = (context: ContextKey | null = voiceCtx()): RestoredGame => ({
+    game: "minecraft",
+    name: "Minecraft",
+    context,
+    since: "2026-11-07T10:00:00.000Z",
+  });
+
+  async function rig() {
+    const h = await Harness.create(new MockProvider("mock").reply(decision("閒晃", null)));
+    return { h, resume: h.sup.services.require(GameResumeKey) };
+  }
+
+  it("resumes when the game is there, and says so on the bus", async () => {
+    const { h, resume } = await rig();
+    const sessions = h.sup.bus.subscribe(SESSION_TOPIC);
+    expect(await resume.resume(left())).toBe("resumed");
+    expect(h.status()).toMatchObject({ game: "minecraft", game_name: "Minecraft" });
+    expect(h.status()?.context).toEqual(voiceCtx());
+    expect(sessions.tryRecv()?.event).toMatchObject({
+      data: { payload: { state: "started", game: "minecraft" } },
+    });
+    await h.stop();
+  });
+
+  it("never launches a game that is closed", async () => {
+    const { h, resume } = await rig();
+    h.exec.state = { connected: false, launch: { available: true } };
+    expect(await resume.resume(left())).toBe("waiting");
+    expect(h.status()).toBeNull();
+    expect(h.actNames()).toEqual([]);
+    await h.stop();
+  });
+
+  it("waits for an adapter that is not there yet", async () => {
+    const { h, resume } = await rig();
+    expect(await resume.resume({ ...left(), game: "terraria" })).toBe("waiting");
+    await h.stop();
+  });
+
+  it("does not guess where a session without a place goes", async () => {
+    const { h, resume } = await rig();
+    expect(await resume.resume(left(null))).toBe("waiting");
+    await h.stop();
+  });
+
+  it("leaves a session that already runs alone", async () => {
+    const { h, resume } = await rig();
+    await h.start();
+    const context = h.status()?.context;
+    expect(await resume.resume(left())).toBe("resumed");
+    expect(h.status()?.context).toEqual(context);
+    await h.stop();
+  });
+
+  it("can be stopped like any session", async () => {
+    const { h, resume } = await rig();
+    await resume.resume(left());
+    expect(await h.command("game stop")).toContain("她已停止玩");
+    await h.stop();
+  });
+});
+
 describe("game director", () => {
   it("decide_loop_keeps_the_goal_while_the_bot_works", async () => {
     const llm = new MockProvider("mock")
@@ -303,8 +368,9 @@ describe("game director", () => {
     expect(req.messages[1]?.content).toContain("剛開始玩");
     expect(h.status()?.goal?.text).toBe("挖鐵礦");
 
-    // The bot is busy: switching to another goal is refused until the goal is old enough.
-    h.observeText = BUSY;
+    // The goal's task runs: switching to another goal is refused until the goal is old enough.
+    const first = h.exec.last();
+    expect(first.budget_s).toBe(300); // the executor's suggestion for `mine`
     await secs(20);
     expect(llm.requests()).toHaveLength(2);
     expect(llm.requests()[1]?.messages[1]?.content).toContain("目前目標:挖鐵礦");
@@ -317,11 +383,22 @@ describe("game director", () => {
     expect(h.acts()).toHaveLength(2);
     expect((h.acts()[1]?.args as { block: string } | undefined)?.block).toBe("oak_log");
     expect(h.status()?.goal?.text).toBe("砍樹");
+    // The replaced goal's task is cancelled; each task has its own id.
+    expect(h.exec.cancels).toContain(first.id);
+    expect(h.exec.last().id).not.toBe(first.id);
 
-    // Same action again while busy: not re-issued; once idle it is.
+    // Same action again while its task runs: not re-issued; once it ended it is.
     await secs(20);
     expect(h.acts()).toHaveLength(2);
-    h.observeText = IDLE;
+    await h.taskDone("挖到了");
+    expect(h.goalLog.take()).toEqual([
+      expect.objectContaining({
+        goal: "砍樹",
+        status: "done",
+        code: "done",
+        task: h.exec.last().id,
+      }),
+    ]);
     await secs(20);
     expect(h.acts()).toHaveLength(3);
     await h.stop();
@@ -390,13 +467,16 @@ describe("game director", () => {
 
   it("queue_goals_are_consumed_and_finished", async () => {
     const llm = new FnProvider((user) => {
+      if (user.includes("這一步做完了")) {
+        return JSON.stringify({ goal: "挖鑽石", goal_status: "done", action: null });
+      }
       if (user.includes("目前目標:沒有")) return decision("閒晃", null);
       if (user.includes("蓋房子") && user.includes("目前目標:蓋房子")) {
         return decision("蓋房子", { name: "goto", args: { x: 1, z: 2 } });
       }
       return decision("挖鑽石", { name: "goto", args: { block: "diamond_ore" } });
     });
-    const h = await Harness.create(llm);
+    const h = await Harness.create(llm, { max_attempts: 1 });
     await h.start();
     h.hints();
     expect(h.acts()).toEqual([]);
@@ -424,11 +504,15 @@ describe("game director", () => {
     expect(h.actNames()).toEqual(["goto"]);
     expect(llm.requests.at(-1)?.messages[1]?.content).toContain("觀眾 Amy 的請求");
 
-    // Events right after the action belong to the previous goal.
+    // Event names mean nothing any more; a stale task's end neither.
     await h.gameEvent("goal_reached", "抵達目標了", false);
+    h.exec.stray("01OLDTASK0000000000000000");
+    await settle();
     expect(h.queue.get(first)?.state).toBe("active");
-    await secs(3);
-    await h.gameEvent("goal_reached", "抵達目標了", false);
+    // Her step is done: a requested goal is done when she says so.
+    await h.taskDone("走到鑽石旁邊了");
+    expect(h.queue.get(first)?.state).toBe("active");
+    await secs(4);
     expect(h.queue.get(first)?.state).toBe("done");
     expect(h.hints().some((x) => x.includes("完成了觀眾 Amy 的請求"))).toBe(true);
 
@@ -437,12 +521,27 @@ describe("game director", () => {
     await secs(4);
     expect(h.acts()).toHaveLength(2);
     expect(h.acts()[1]?.args).toEqual({ x: 1, z: 2 });
-    await secs(4);
-    await h.gameEvent("goal_failed", "找不到路,目標失敗", false);
+    await h.taskFailed("unreachable", "找不到路");
     expect(h.queue.get(second)?.state).toBe("skipped");
     expect(h.status()?.goal).toBeNull();
     // Other kinds are left alone.
     expect(h.queue.get(song)?.state).toBe("active");
+    // Every goal that ended carries a code.
+    expect(h.goalLog.take()).toEqual([
+      expect.objectContaining({
+        goal: "挖鑽石",
+        source: "queue",
+        status: "done",
+        code: "reported",
+      }),
+      expect.objectContaining({
+        goal: "蓋房子",
+        source: "queue",
+        status: "failed",
+        code: "unreachable",
+        detail: "找不到路",
+      }),
+    ]);
     await h.stop();
   });
 
@@ -461,6 +560,25 @@ describe("game director", () => {
     await h.stop();
   });
 
+  it("under_v3_a_free_line_is_a_proposal_not_an_impulse", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null, "看看四周"));
+    const h = await Harness.create(llm, { decide_secs: 5 });
+    const proposed: NewProposal[] = [];
+    h.sup.services.provide("app", ProposalBoardKey, {
+      propose: async (p) => {
+        proposed.push(p);
+        return { id: "x", state: "open", detail: "", turn: null };
+      },
+      open: () => [],
+    });
+    await h.command("game start");
+    await h.publish({ type: "voice_joined", data: { context: voiceCtx(), participants: [] } });
+    await secs(20);
+    expect(h.hintContexts.take()).toEqual([]);
+    expect(proposed.at(-1)).toMatchObject({ source: "game.director", context: voiceCtx() });
+    await h.stop();
+  });
+
   it("commentary_is_rate_limited_but_deaths_get_through", async () => {
     const llm = new MockProvider("mock").reply(decision("閒晃", null, "吐槽一下天氣"));
     const h = await Harness.create(llm, { decide_secs: 5 });
@@ -473,15 +591,19 @@ describe("game director", () => {
     expect(hints[0]).toContain("實況:吐槽一下天氣");
     expect(hints[0]).toContain("你正在直播玩 Minecraft");
 
-    // An important event bypasses the regular limit (only the short urgent one applies).
+    // A death is never rate-limited: not even right after a line.
     await secs(1);
-    await h.gameEvent("death", "死掉了(苦力怕)", true);
-    expect(h.hints()).toEqual([]);
-    await secs(3);
     await h.gameEvent("death", "死掉了(苦力怕)", true);
     const urgent = h.hints();
     expect(urgent).toHaveLength(1);
     expect(urgent[0]).toBe("(你正在直播玩 Minecraft)剛剛死掉了(苦力怕)!馬上用一兩句話反應。");
+
+    // An important event that is still narration has only the short urgent limit.
+    await h.gameEvent("advancement", "達成成就「石器時代」", true, { title: "石器時代" });
+    expect(h.hints()).toEqual([]);
+    await secs(3);
+    await h.gameEvent("advancement", "達成成就「石器時代」", true, { title: "石器時代" });
+    expect(h.hints()).toHaveLength(1);
     await h.stop();
   });
 
@@ -515,8 +637,7 @@ describe("game director", () => {
     const goal = h.status()?.goal;
     expect(goal?.text).toBe("去挖鐵礦");
     expect(goal?.note).toContain("Owen");
-    // While the bot is busy the same action is not repeated...
-    h.observeText = BUSY;
+    // While its task runs the same action is not repeated...
     await secs(20);
     expect(h.acts()).toHaveLength(3);
     // ...but after a death the goal starts over, so it is issued again.
@@ -589,8 +710,6 @@ describe("game director", () => {
     await h.command("game start");
     expect(h.status()?.context).toEqual(voiceCtx());
     await h.command("game stop");
-    // The final `stop` action runs with the session's context.
-    expect(h.actContexts.at(-1)).toEqual(voiceCtx());
 
     await h.publish({ type: "voice_left", data: { context: voiceCtx(), reason: null } });
     const reply = await h.command("game start", { where: "voice" });
@@ -602,17 +721,20 @@ describe("game director", () => {
     const llm = new MockProvider("mock").reply(decision("閒晃", null));
     // Without the start check, a session can run while the game is unreachable.
     const h = await Harness.create(llm, { require_connected: false });
-    h.observeText = '沒有連上 Minecraft。\n\n狀態:{"connected":false}';
+    h.exec.state = { connected: false };
+    h.exec.summary = "沒有連上 Minecraft。";
     await h.start();
     await secs(40);
-    expect(h.observeCalls).toBe(3);
+    expect(h.exec.observeCalls).toBe(3);
     expect(llm.requests()).toEqual([]);
     expect(h.status()?.summary).toContain("沒有連上");
 
-    // Losing the adapter tools shows up as an observation error.
-    h.tools.unregister("game_minecraft_observe");
+    // Losing the adapter's executor (its extension crashed) ends the session: the scene goes
+    // back and the ActivityManager shows `failed(crashed)`, instead of a session that plays
+    // nothing.
+    h.executors.byOwner.clear();
     await secs(20);
-    expect(h.status()?.summary).toContain("看不到遊戲");
+    expect(h.status()).toBeNull();
     await h.stop();
   });
 
@@ -621,17 +743,30 @@ describe("game director", () => {
       decision("蓋房子", { name: "get", args: { item: "oak_planks" } }),
     );
     const h = await Harness.create(llm, { max_attempts: 2 });
-    h.actReply = "失敗:沒有安裝 AltoClef";
+    h.exec.autoEnd = () => ({ type: "failed", code: "precondition", detail: "沒有安裝 AltoClef" });
     await h.start();
-    // Her own goal is not adopted when its action fails.
+    // Her own goal ends with the task's code.
     expect(h.status()?.goal).toBeNull();
-    expect(h.status()?.last_action).toContain("失敗");
+    expect(h.status()?.last_action).toBe(
+      'get {"item":"oak_planks"} → 失敗(precondition):沒有安裝 AltoClef',
+    );
+    expect(h.goalLog.take()).toEqual([
+      expect.objectContaining({ goal: "蓋房子", status: "failed", code: "precondition" }),
+    ]);
 
     await h.command("game goal", { text: "蓋房子" });
     await secs(4);
     expect(h.status()?.goal).not.toBeNull();
     await secs(4);
     expect(h.status()?.goal).toBeNull();
+    expect(h.goalLog.take()).toEqual([
+      expect.objectContaining({ goal: "蓋房子", source: "command", code: "precondition" }),
+    ]);
+    // A start the executor refuses counts the same way.
+    h.exec.refuse = () => Object.assign(new Error("busy with a reflex"), { code: "busy" });
+    await h.command("game goal", { text: "蓋房子" });
+    await secs(4);
+    expect(h.status()?.last_action).toContain("失敗(busy)");
     await h.stop();
   });
 
@@ -644,19 +779,21 @@ describe("game director", () => {
     ];
     const llm = new FnProvider(() => replies.shift() ?? decision("挖鐵礦", null));
     const h = await Harness.create(llm);
-    h.actReply = "失敗:附近看不到鐵礦";
+    h.exec.autoEnd = (spec) =>
+      spec.goal === "mine" && h.exec.starts.length === 1
+        ? { type: "failed", code: "not_found", detail: "附近看不到鐵礦" }
+        : { type: "done", detail: "好了" };
     await h.start();
     expect(h.actNames()).toEqual(["mine"]);
 
     // The same kind of retry right away is not sent; she is told why in the next prompt.
-    h.actReply = "成功:開始了";
     await secs(5);
     expect(h.actNames()).toEqual(["mine"]);
     const prompt = contentText(llm.requests[1]?.messages.at(-1)?.content ?? "");
     expect(prompt).toContain("暫時不能用 goto、mine、look、attack");
     expect(prompt).toContain("附近看不到鐵礦");
     expect(h.traceLog.items.at(-1)?.verdict).toBe(
-      'Keep("withheld after a failure: 失敗:附近看不到鐵礦")',
+      'Keep("withheld after a failure: 附近看不到鐵礦")',
     );
     expect(h.status()?.last_action).toContain("暫時不行");
 
@@ -669,14 +806,18 @@ describe("game director", () => {
     await h.stop();
   });
 
-  it("a failed plan event also starts the guard", async () => {
+  it("a failed obtain task also starts the guard", async () => {
     const replies = [decision("拿鐵鎬", { name: "obtain", args: { item: "iron_pickaxe" } })];
     const llm = new FnProvider(() => replies.shift() ?? decision("拿鐵鎬", null));
     const h = await Harness.create(llm);
     await h.start();
     expect(h.actNames()).toEqual(["obtain"]);
+    expect(h.exec.last().budget_s).toBe(600);
     await secs(4);
-    await h.gameEvent("plan_failed", "取得鐵鎬失敗,卡在「挖粗鐵×3」:附近看不到鐵礦", true);
+    // The old event name alone does nothing; the task's own end does.
+    await h.gameEvent("plan_failed", "取得鐵鎬失敗", true);
+    expect(h.status()?.goal?.text).toBe("拿鐵鎬");
+    await h.taskFailed("not_found", "取得鐵鎬失敗,卡在「挖粗鐵×3」:附近看不到鐵礦");
     expect(h.status()?.goal).toBeNull();
     // the failure triggers the next decision, which is told what is withheld
     await secs(1);
@@ -684,6 +825,171 @@ describe("game director", () => {
     expect(contentText(llm.requests.at(-1)?.messages.at(-1)?.content ?? "")).toContain(
       "暫時不能用",
     );
+    await h.stop();
+  });
+});
+
+describe("narration and the lines she has to say", () => {
+  const MIN45 = 45 * 60_000;
+
+  it("every way of bringing up the same thing has the same key", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null, "石鎬做好了,木鎬太慢了"));
+    const h = await Harness.create(llm, { decide_secs: 20 });
+    await h.start();
+    await h.gameEvent("craft_finished", "做好了 石鎬×1", false, { item: "stone_pickaxe" });
+    h.lineLog.take();
+    for (let i = 0; i < 6; i++) await secs(20);
+    const lines = h.lineLog.take();
+    expect(lines.length).toBeGreaterThan(3);
+    for (const l of lines) {
+      expect(l.attention).toEqual({ key: "game:craft:stone_pickaxe", repeat_after_ms: MIN45 });
+    }
+    await h.stop();
+  });
+
+  it("something new to say has its own key", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null, "這裡的風景好漂亮喔"));
+    const h = await Harness.create(llm, { decide_secs: 20 });
+    await h.start();
+    await h.gameEvent("craft_finished", "做好了 石鎬×1", false, { item: "stone_pickaxe" });
+    h.lineLog.take();
+    await secs(20);
+    expect(h.lineLog.take().at(-1)?.attention?.key).toMatch(/^game:remark:/);
+    await h.stop();
+  });
+
+  it("repeat windows and keys are configurable", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null));
+    const h = await Harness.create(llm, { narration_repeat_mins: 10, hazard_repeat_secs: 30 });
+    await h.start();
+    h.lineLog.take();
+    await h.gameEvent("advancement", "達成成就「石器時代」", true, { title: "石器時代" });
+    expect(h.lineLog.take().at(-1)?.attention).toEqual({
+      key: "game:advancement:石器時代",
+      repeat_after_ms: 600_000,
+    });
+    await secs(4);
+    await h.gameEvent("damage", "受傷 -5(殭屍),剩 11 血", true, { attacker: "zombie" });
+    expect(h.lineLog.take().at(-1)?.attention).toEqual({
+      key: "game:damage:zombie",
+      repeat_after_ms: 30_000,
+    });
+    await h.stop();
+  });
+
+  it("urgent events are not narration: no key, no rate limit, and they can wait for a turn", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null));
+    const h = await Harness.create(llm);
+    await h.start();
+    h.lineLog.take();
+    await h.gameEvent("low_health", "血量很低(3)", true);
+    await h.gameEvent("death", "死掉了(苦力怕)", true);
+    await h.gameEvent("reflex", "掉進岩漿 / 著火了,身體自己逃開", true, { kind: "lava" });
+    const lines = h.lineLog.take();
+    expect(lines).toHaveLength(3);
+    for (const l of lines) {
+      expect(l.attention ?? null).toBeNull();
+      // Merged away by nothing, and it outlives the Arbiter's retry while she is talking.
+      expect(l.coalesce_key).toBeNull();
+      expect(Date.parse(l.expires_at) - Date.parse(l.created_at)).toBe(30_000);
+    }
+    await h.stop();
+  });
+
+  it("a fight is narration, a short one", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null));
+    const h = await Harness.create(llm);
+    await h.start();
+    h.lineLog.take();
+    await h.gameEvent("reflex", "被攻擊,自己反擊", true, { kind: "fight" });
+    expect(h.lineLog.take().at(-1)?.attention).toEqual({
+      key: "game:reflex:fight",
+      repeat_after_ms: 120_000,
+    });
+    await h.stop();
+  });
+
+  it("what a viewer asked for is owed to them: announced and reported without a key", async () => {
+    const llm = new FnProvider((user) =>
+      user.includes("這一步做完了")
+        ? JSON.stringify({ goal: "挖鑽石", goal_status: "done", action: null })
+        : decision("挖鑽石", { name: "goto", args: { block: "diamond_ore" } }),
+    );
+    const h = await Harness.create(llm);
+    await h.start();
+    h.lineLog.take();
+    h.submit("挖鑽石", "Amy");
+    h.queue.next();
+    await settle();
+    await secs(25);
+    await h.taskDone();
+    await secs(25);
+    const lines = h.lineLog.take().filter((l) => (l.hint ?? "").includes("Amy"));
+    expect(lines.map((l) => l.hint)).toEqual([
+      expect.stringContaining("觀眾 Amy 想要你:挖鑽石"),
+      expect.stringContaining("完成了觀眾 Amy 的請求"),
+    ]);
+    for (const l of lines) {
+      expect(l.attention ?? null).toBeNull();
+      expect(Date.parse(l.expires_at) - Date.parse(l.created_at)).toBe(300_000);
+    }
+    await h.stop();
+  });
+
+  it("a goal someone set is reported without a key; one she set herself is narration", async () => {
+    const llm = new FnProvider((user) =>
+      user.includes("這一步做完了")
+        ? JSON.stringify({ goal: "蓋房子", goal_status: "done", action: null })
+        : decision("蓋房子", { name: "obtain", args: { item: "stone_pickaxe" } }),
+    );
+    const finished = async (by: string): Promise<Impulse | undefined> => {
+      const h = await Harness.create(llm);
+      await h.start();
+      await h.sup.services.require(GameControlKey).goal("蓋房子", by);
+      await secs(25);
+      await h.taskDone();
+      await secs(25);
+      const line = h.lineLog.take().find((l) => (l.hint ?? "").includes("剛完成"));
+      await h.stop();
+      return line;
+    };
+    expect((await finished("聊天室"))?.attention ?? null).toBeNull();
+    expect((await finished(SELF_GOAL_BY))?.attention?.key).toBe("game:craft:stone_pickaxe");
+  });
+
+  it("someone talking in game chat without game.chat is an answer, not narration", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null));
+    const h = await Harness.create(llm);
+    await h.start();
+    h.lineLog.take();
+    await h.gameEvent("chat", "Steve 在遊戲裡說:你好", true, { sender: "Steve" });
+    expect(h.lineLog.take().at(-1)?.attention ?? null).toBeNull();
+    await h.stop();
+  });
+
+  it("she keeps knowing what happened, and the decision model sees what she already said", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null, "石鎬做好了,木鎬太慢了"));
+    const h = await Harness.create(llm, { decide_secs: 20 });
+    await h.start();
+    await h.gameEvent("craft_finished", "做好了 石鎬×1", false, { item: "stone_pickaxe" });
+    for (let i = 0; i < 3; i++) await secs(20);
+    const section = (await h.prompts.all()[0]?.contribute(promptRequest())) ?? [];
+    expect(section.find((s) => s.key === "game")?.body).toContain("做好了 石鎬×1");
+    const user = llm.requests().at(-1)?.messages.at(-1)?.content ?? "";
+    expect(user).toContain("最近實況提過");
+    expect(user).toContain("石鎬做好了,木鎬太慢了");
+    await h.stop();
+  });
+
+  it("what she said is remembered without the instructions around it", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null));
+    const h = await Harness.create(llm, { decide_secs: 20 });
+    await h.start();
+    await h.gameEvent("advancement", "達成成就「石器時代」", true, { title: "石器時代" });
+    await secs(20);
+    const user = contentText(llm.requests().at(-1)?.messages.at(-1)?.content ?? "");
+    expect(user).toContain("- 達成成就「石器時代」");
+    expect(user.split("最近實況提過")[1]).not.toContain("馬上用一兩句話反應");
     await h.stop();
   });
 });
@@ -721,14 +1027,19 @@ describe("game director details", () => {
       decision("挖鐵礦", { name: "mine", args: { block: "iron_ore" } }),
     );
     const h = await Harness.create(llm, { max_goal_secs: 30 });
-    h.observeText = BUSY;
     await h.start();
     expect(h.status()?.goal?.text).toBe("挖鐵礦");
+    // The task's budget is capped at the goal limit.
+    const task = h.exec.last();
+    expect(task.budget_s).toBe(30);
     await secs(20);
     expect(h.status()?.goal?.text).toBe("挖鐵礦");
     await secs(20);
-    // The old goal failed ("太久了,放棄") and the next decision adopted a new one.
+    // The old goal failed ("太久了,放棄", code `timeout`), its task was cancelled, and the
+    // next decision adopted a new one.
     expect(h.status()?.recent).toContain("目標失敗:挖鐵礦(太久了,放棄)");
+    expect(h.exec.cancels).toContain(task.id);
+    expect(h.goalLog.take()[0]).toMatchObject({ status: "failed", code: "timeout", task: task.id });
     await h.stop();
   });
 
@@ -739,10 +1050,13 @@ describe("game director details", () => {
     const h = await Harness.create(llm);
     await h.start();
     const acted = h.acts().length;
+    const running = h.exec.last().id;
     await h.stop();
     await secs(120);
     expect(h.acts()).toHaveLength(acted);
     expect(llm.requests()).toHaveLength(1);
+    // The goal's task is cancelled with the module.
+    expect(h.exec.cancels).toEqual([running]);
   });
 
   it("restarting the module drops the old session and keeps services consistent", async () => {
@@ -765,7 +1079,8 @@ describe("game status command", () => {
       decision("挖鐵礦", { name: "mine", args: { block: "iron_ore" } }),
     );
     const h = await Harness.create(llm);
-    h.observeText = BUSY;
+    h.exec.summary = "血量 20/20\n位置 (5, 64, 5)\nBaritone 執行中(Mine)";
+    h.exec.reportTask = "01RUNNING0000000000000000";
     await h.start();
     const out = await h.command("game status");
     expect(out).toBe(
@@ -856,7 +1171,7 @@ describe("GameModule", () => {
     await sup.startAll();
     const control = sup.services.require(GameControlKey);
     await expect(control.start("minecraft", textCtx(), owner())).rejects.toThrow(
-      "工具系統沒有啟用，無法玩遊戲。",
+      "擴充套件系統沒有啟用，無法玩遊戲。",
     );
     const stopping = sup.stopAll();
     await vi.advanceTimersByTimeAsync(10);
@@ -871,20 +1186,7 @@ describe("GameModule", () => {
       personaPrompt: () => "傲嬌的鯨魚女孩",
     };
     const sup = new Supervisor();
-    const tools = new ToolRegistry();
-    tools.register({
-      spec: {
-        name: "game_minecraft_observe",
-        description: "x",
-        parameters: { type: "object" },
-      },
-      call: async () => IDLE,
-    });
-    tools.register({
-      spec: { name: "game_minecraft_act", description: "在 Minecraft 裡做事", parameters: {} },
-      call: async () => "成功",
-    });
-    sup.services.provide("app", ToolRegistryKey, tools);
+    new FakeExecutors(new FakeExecutor((e) => sup.bus.publish("ext", e))).provide(sup.services);
     sup.services.provide(
       "app",
       LlmRouterKey,
@@ -901,5 +1203,87 @@ describe("GameModule", () => {
     const stopping = sup.stopAll();
     await vi.advanceTimersByTimeAsync(10);
     await stopping;
+  });
+});
+
+describe("session end and gated tools", () => {
+  it("a disconnect ends the session with its code, without commentary", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null));
+    const h = await Harness.create(llm);
+    const sessions = collect(h.sup.bus.subscribe(SESSION_TOPIC), (e) =>
+      e.type === "custom" ? (e.data.payload as Record<string, JsonValue>) : null,
+    );
+    await h.start();
+    h.hints();
+    await h.gameEvent("disconnected", "跟 Minecraft 的連線斷了", true);
+    expect(h.status()).toBeNull();
+    const stopped = sessions.take().filter((s) => s.state === "stopped");
+    expect(stopped).toEqual([
+      expect.objectContaining({
+        game: "minecraft",
+        code: "disconnected",
+        reason: "跟 Minecraft 的連線斷了",
+      }),
+    ]);
+    expect(h.hints()).toEqual([]);
+    // No `stop` / `quit` sent to a game that is gone.
+    expect(h.actNames()).not.toContain("quit");
+    await h.stop();
+  });
+
+  it("only games with goals are directed; Threads stays out", async () => {
+    const llm = new MockProvider("mock").reply(decision("閒晃", null));
+    const h = await Harness.create(llm);
+    const threads = new FakeExecutor((e) => h.sup.bus.publish("ext", e), Date.now, {
+      owner: "game.threads",
+      name: "Threads",
+    });
+    h.executors.byOwner.set("game.threads", threads);
+    expect(await h.command("game start", { game: "threads" })).toContain("不是有目標的遊戲");
+    expect(h.status()).toBeNull();
+    expect(threads.observeCalls).toBe(0);
+    await h.stop();
+  });
+
+  it("a task the extension crashed in ends the session with its code", async () => {
+    const llm = new MockProvider("mock").reply(
+      decision("挖鐵礦", { name: "mine", args: { block: "iron_ore" } }),
+    );
+    const h = await Harness.create(llm);
+    const sessions = collect(h.sup.bus.subscribe(SESSION_TOPIC), (e) =>
+      e.type === "custom" ? (e.data.payload as Record<string, JsonValue>) : null,
+    );
+    await h.start();
+    await h.taskFailed("crashed", "擴充套件結束了(exit code: 1)");
+    expect(h.status()).toBeNull();
+    expect(sessions.take().filter((x) => x.state === "stopped")).toEqual([
+      expect.objectContaining({ code: "crashed" }),
+    ]);
+    await h.stop();
+  });
+
+  it("an interrupted task is not a failed goal", async () => {
+    const llm = new MockProvider("mock").reply(
+      decision("挖鐵礦", { name: "mine", args: { block: "iron_ore" } }),
+    );
+    const h = await Harness.create(llm);
+    await h.start();
+    await h.taskFailed("busy", "被身體的本能反應打斷");
+    expect(h.status()?.goal?.text).toBe("挖鐵礦");
+    expect(h.goalLog.take()).toEqual([]);
+    // The next decision may issue the same action again: its task ended.
+    await secs(4);
+    expect(h.actNames()).toEqual(["mine", "mine"]);
+    await h.stop();
+  });
+
+  it("a goal set while the game is starting waits for the session", async () => {
+    const llm = new MockProvider("mock").reply(decision("挖鐵礦", null));
+    const h = await Harness.create(llm);
+    const control = h.sup.services.require(GameControlKey);
+    expect(control.pendingGoal("挖鐵礦", "Owen")).toContain("開好後");
+    await h.start();
+    expect(h.status()?.goal?.text).toBe("挖鐵礦");
+    await h.stop();
   });
 });

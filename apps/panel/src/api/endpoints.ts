@@ -13,7 +13,14 @@ import type {
   DataCategoryId,
   DataInventory,
   DataWipeResult,
+  AddDirectiveRequest,
+  CauseChain,
+  Delivery,
+  DirectiveChange,
+  DirectivesView,
   ExtensionInfo,
+  FactEventsQuery,
+  LogEvent,
   McpServerInfo,
   MemoryItem,
   MemoryQuery,
@@ -34,6 +41,9 @@ import type {
   UpdateMemoryRequest,
   UpdatePersonRequest,
   UpsertRoleRequest,
+  PersonWalletView,
+  WalletAdjustRequest,
+  WalletAdjustResult,
   VoiceState,
   SelfView,
   WorldView,
@@ -50,8 +60,29 @@ import type {
   HealthInfo,
   ModuleAction,
   ModuleInfo,
+  IssuedCard,
+  BoardView,
+  BountyView,
+  FortuneDraw,
+  FortuneToday,
+  GoalView,
+  PledgeResult,
+  TransferResult,
+  CheckinResult,
+  FeedItem,
+  FeedResult,
+  FramesResult,
+  GiftExpression,
+  MemberCards,
+  MemberForgetResult,
+  MemberSession,
+  MemberView,
+  SpendResult,
+  WalletView,
   PersonaOverride,
   PersonaSectionInfo,
+  PublicSongs,
+  PublicStatus,
   SessionInfo,
   SetPersonaRequest,
   SetPersonaResponse,
@@ -65,9 +96,25 @@ import type {
   LlmCallsPage,
   LlmCallsQuery,
   LlmCallStats,
+  ActivitySnapshot,
+  ActivityTask,
+  AffectSnapshot,
+  ArbiterDecisionsView,
+  ArbiterVerdict,
+  DayPlanView,
+  GoalsView,
+  LedgerView,
+  PersonCard,
+  PromptSummary,
+  SavedPrompt,
+  TurnOutcomeKind,
+  TurnOutcomeRecord,
 } from "./types";
 
 type Opts = { signal?: AbortSignal };
+
+/** A spend: the member routes, with its idempotency key. */
+const spend = (key: string) => ({ public: true, headers: { "Idempotency-Key": key } });
 
 export function createApi(client: ApiClient) {
   return {
@@ -78,8 +125,49 @@ export function createApi(client: ApiClient) {
     session: (o?: Opts) => client.get<SessionInfo>("/api/auth/session", o),
     /** Ends the Discord session (clears the cookie); harmless for the token. */
     logout: () => client.post<void>("/api/auth/logout", undefined, { public: true }),
-    /** Where the browser goes to start a Discord login; `next` is a local path such as `/#/people`. */
+    /** Where the browser goes to start a Discord login; `next` is a local path such as `/people`. */
     discordLoginUrl: (next: string) => client.url("/api/auth/oauth/login", { next }),
+
+    // what anyone may see, and what a logged-in person has of their own: the cookie alone
+    publicStatus: (o?: Opts) => client.get<PublicStatus>("/api/public/status", { ...o, public: true }),
+    publicSongs: (o?: Opts) => client.get<PublicSongs>("/api/public/songs", { ...o, public: true }),
+    memberSession: (o?: Opts) => client.get<MemberSession>("/api/member/session", { ...o, public: true }),
+    memberMe: (o?: Opts) => client.get<MemberView>("/api/member/me", { ...o, public: true }),
+    memberExportUrl: () => client.url("/api/member/export"),
+    memberForget: () => client.post<MemberForgetResult>("/api/member/forget", { confirm: true }, { public: true }),
+    memberRequestSong: (query: string) =>
+      client.post<{ accepted: boolean }>("/api/member/songs", { query }, { public: true }),
+    memberCards: (o?: Opts) => client.get<MemberCards>("/api/member/card", { ...o, public: true }),
+    memberIssueCard: (req: { pose?: string; foil?: boolean } = {}, key?: string) =>
+      client.post<IssuedCard>("/api/member/card", req, key ? spend(key) : { public: true }),
+    memberRerollCard: (key: string) =>
+      client.post<IssuedCard>("/api/member/card/reroll", {}, spend(key)),
+    memberWallet: (o?: Opts) => client.get<WalletView>("/api/member/wallet", { ...o, public: true }),
+    memberCheckin: () => client.post<CheckinResult>("/api/member/checkin", {}, { public: true }),
+    // Spends carry one key per click, so a retried request is charged once.
+    memberFeed: (item: FeedItem, count: number, key: string) =>
+      client.post<FeedResult>("/api/member/feed", { item, count }, spend(key)),
+    memberLetter: (text: string, key: string) =>
+      client.post<SpendResult>("/api/member/letter", { text }, spend(key)),
+    memberExpression: (expression: GiftExpression, key: string) =>
+      client.post<SpendResult>("/api/member/expression", { expression }, spend(key)),
+    memberFrame: (req: { buy?: string; select?: string | null }, key: string) =>
+      client.post<FramesResult>("/api/member/frame", req, spend(key)),
+    memberScreen: (text: string, key: string) =>
+      client.post<SpendResult>("/api/member/screen", { text }, spend(key)),
+    memberFortune: (o?: Opts) => client.get<FortuneToday>("/api/member/fortune", { ...o, public: true }),
+    memberDrawFortune: (key: string) => client.post<FortuneDraw>("/api/member/fortune", {}, spend(key)),
+    memberTransfer: (to_discord_id: string, amount: number, key: string) =>
+      client.post<TransferResult>("/api/member/transfer", { to_discord_id, amount }, spend(key)),
+    memberBoard: (on: boolean) => client.post<{ on_board: boolean }>("/api/member/board", { on }, { public: true }),
+    publicBoard: (o?: Opts) => client.get<BoardView>("/api/public/board", { ...o, public: true }),
+    memberGoals: (o?: Opts) => client.get<{ goals: GoalView[] }>("/api/member/goals", { ...o, public: true }),
+    memberPledge: (id: string, amount: number, key: string) =>
+      client.post<PledgeResult>(`/api/member/goals/${seg(id)}/pledge`, { amount }, spend(key)),
+    memberBounties: (o?: Opts) =>
+      client.get<{ bounties: BountyView[] }>("/api/member/bounties", { ...o, public: true }),
+    publicCard: (serial: string, o?: Opts) =>
+      client.get<IssuedCard>(`/api/public/card/${seg(serial)}`, { ...o, public: true }),
 
     modules: (o?: Opts) => client.get<ModuleInfo[]>("/api/modules", o),
     moduleAction: (id: string, action: ModuleAction) =>
@@ -108,6 +196,9 @@ export function createApi(client: ApiClient) {
       client.patch<PersonSummary>(`/api/people/${seg(id)}`, req),
     adjustPerson: (id: string, req: AdjustPersonRequest) =>
       client.post<PersonSummary>(`/api/people/${seg(id)}/adjust`, req),
+    personWallet: (id: string, o?: Opts) => client.get<PersonWalletView>(`/api/people/${seg(id)}/wallet`, o),
+    adjustWallet: (id: string, req: WalletAdjustRequest) =>
+      client.post<WalletAdjustResult>(`/api/people/${seg(id)}/wallet/adjust`, req),
 
     memory: (q: MemoryQuery = {}, o?: Opts) =>
       client.get<Page<MemoryItem>>("/api/memory", { ...o, query: { ...q } }),
@@ -226,6 +317,52 @@ export function createApi(client: ApiClient) {
       client.get<{ call: LlmCallRecord; detail: LlmCallDetail | null }>(`/api/llm/calls/${seg(id)}`, o),
     llmStats: (minutes: number | null, o?: Opts) =>
       client.get<LlmCallStats>("/api/llm/stats", { ...o, query: { minutes: minutes ?? undefined } }),
+
+    // body, arbiter, affect, plan, prompts
+    activity: (o?: Opts) => client.get<ActivitySnapshot>("/api/activity", o),
+    activityTasks: (limit: number, o?: Opts) =>
+      client.get<ActivityTask[]>("/api/activity/tasks", { ...o, query: { limit } }),
+    ledger: (context: ContextKey | undefined, limit: number, o?: Opts) =>
+      client.get<LedgerView>("/api/arbiter/ledger", {
+        ...o,
+        query: { limit, context: context ? JSON.stringify(context) : undefined },
+      }),
+    arbiterDecisions: (q: { limit?: number; verdict?: ArbiterVerdict; context?: ContextKey }, o?: Opts) =>
+      client.get<ArbiterDecisionsView>("/api/arbiter/decisions", {
+        ...o,
+        query: { limit: q.limit, verdict: q.verdict, context: q.context ? JSON.stringify(q.context) : undefined },
+      }),
+    affect: (o?: Opts) => client.get<AffectSnapshot>("/api/affect", o),
+    affectPeople: (o?: Opts) => client.get<PersonCard[]>("/api/affect/people", o),
+    goals: (closed: boolean, o?: Opts) =>
+      client.get<GoalsView>("/api/mind/goals", { ...o, query: { closed: closed ? "true" : undefined } }),
+    dayPlan: (o?: Opts) => client.get<DayPlanView>("/api/mind/plan", o),
+    prompts: (limit: number, context?: ContextKey, o?: Opts) =>
+      client.get<PromptSummary[]>("/api/prompts", {
+        ...o,
+        query: { limit, context: context ? JSON.stringify(context) : undefined },
+      }),
+    prompt: (turn: string, o?: Opts) => client.get<SavedPrompt>(`/api/prompts/${seg(turn)}`, o),
+    turnOutcomes: (q: { limit?: number; outcome?: TurnOutcomeKind; context?: ContextKey }, o?: Opts) =>
+      client.get<TurnOutcomeRecord[]>("/api/turns/outcomes", {
+        ...o,
+        query: { limit: q.limit, outcome: q.outcome, context: q.context ? JSON.stringify(q.context) : undefined },
+      }),
+
+    factEvents: (q: FactEventsQuery, o?: Opts) =>
+      client.get<LogEvent[]>("/api/facts/events", {
+        ...o,
+        query: { kind: q.kind?.join(","), source: q.source?.join(","), turn: q.turn, since: q.since, until: q.until, before: q.before, order: q.order, limit: q.limit },
+      }),
+    factDeliveries: (limit: number, o?: Opts) => client.get<Delivery[]>("/api/facts/deliveries", { ...o, query: { limit } }),
+
+    directives: (history: boolean, o?: Opts) =>
+      client.get<DirectivesView>("/api/directives", { ...o, query: { history: history ? "1" : undefined } }),
+    addDirective: (req: AddDirectiveRequest) => client.post<DirectiveChange>("/api/directives", req),
+    removeDirective: (id: string) => client.delete<DirectiveChange>(`/api/directives/${seg(id)}`),
+    factChain: (id: string, o?: Opts) => client.get<CauseChain>(`/api/facts/events/${seg(id)}/chain`, o),
+    factEffects: (id: string, limit: number, o?: Opts) =>
+      client.get<LogEvent[]>(`/api/facts/events/${seg(id)}/effects`, { ...o, query: { limit } }),
 
     telemetry: (minutes: number, o?: Opts) =>
       client.get<TelemetryView>("/api/telemetry", { ...o, query: { minutes } }),

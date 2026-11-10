@@ -13,6 +13,7 @@ import {
   parseModelRef,
 } from "@miyoria/llm";
 import {
+  type AuthoredEntry,
   type LogEntry,
   MemorySettingsStore,
   type MessageLog,
@@ -34,6 +35,7 @@ import {
   PromptContributorsKey,
   type PromptRequest,
   SocialSignalsKey,
+  type Timestamp,
   toTimestamp,
 } from "@miyoria/types";
 import { vi } from "vitest";
@@ -61,6 +63,27 @@ export class FakeLog implements MessageLog {
       (e) => e.profile === profile && contextKeyEquals(e.context, context),
     );
     return all.slice(Math.max(all.length - limit, 0)).map((e) => structuredClone(e));
+  }
+
+  async authoredSince(
+    profile: ProfileId,
+    authors: readonly AccountRef[],
+    since: Timestamp,
+    limit: number,
+  ): Promise<AuthoredEntry[]> {
+    const from = Date.parse(since);
+    const all = this.entries
+      .filter(
+        (e) =>
+          e.profile === profile &&
+          !e.is_self &&
+          Date.parse(e.ts) >= from &&
+          authors.some((a) => a.platform === e.author.platform && a.id === e.author.id),
+      )
+      .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+    return all
+      .slice(Math.max(all.length - limit, 0))
+      .map((e) => ({ ts: e.ts, kind: e.context.kind }));
   }
   async purge(): Promise<number> {
     const n = this.entries.length;

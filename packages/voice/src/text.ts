@@ -86,6 +86,43 @@ export function cleanTranscript(
   return traditional ? toTraditional(t) : t;
 }
 
+/** A compiled `asr_aliases` table. */
+export type AsrAliases = readonly (readonly [RegExp, string])[];
+
+const LATIN_WORD = "[\\p{Script=Latin}\\p{N}]";
+const LATIN_EDGE = new RegExp(`^${LATIN_WORD}|${LATIN_WORD}$`, "u");
+
+/**
+ * Compiles `asr_aliases` (what ASR hears → what was said). Longest first, so a long form is not
+ * eaten by a short one. A Latin alias matches whole words only and any case: "meo" must not hit
+ * "someone"; CJK has no word boundaries, there the characters are enough.
+ */
+export function compileAliases(
+  table: Readonly<Record<string, string>>,
+  traditional: boolean,
+): AsrAliases {
+  return Object.entries(table)
+    .map(([heard, said]): [string, string] => [
+      (traditional ? toTraditional(heard) : heard).trim(),
+      said,
+    ])
+    .filter(([heard]) => heard !== "")
+    .sort(([a], [b]) => b.length - a.length)
+    .map(([heard, said]) => {
+      const body = heard.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const latin = LATIN_EDGE.test(heard);
+      const source = latin ? `(?<!${LATIN_WORD})${body}(?!${LATIN_WORD})` : body;
+      return [new RegExp(source, latin ? "giu" : "gu"), said] as const;
+    });
+}
+
+/** `text` with what ASR misheard put right. */
+export function applyAliases(text: string, aliases: AsrAliases): string {
+  let out = text;
+  for (const [pattern, said] of aliases) out = out.replace(pattern, () => said);
+  return out;
+}
+
 /** Longest `<...>` treated as a markup tag. */
 const MAX_TAG_LEN = 48;
 

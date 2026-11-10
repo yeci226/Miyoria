@@ -118,6 +118,32 @@ describe("parseCoreMessage", () => {
     expect(ok({ type: "play_stop", play: 3, fade_ms: "x" }).ok).toBe(false);
   });
 
+  it("parses play_duck, play_pause and play_resume", () => {
+    expect(ok({ type: "play_duck", play: 3, gain: 0.3, fade_ms: 120 })).toEqual({
+      ok: true,
+      value: { type: "play_duck", play: 3, gain: 0.3, fade_ms: 120 },
+    });
+    expect(ok({ type: "play_duck", play: 3, gain: 1 })).toEqual({
+      ok: true,
+      value: { type: "play_duck", play: 3, gain: 1, fade_ms: 0 },
+    });
+    expect(ok({ type: "play_duck", play: 3, gain: 1.5 }).ok).toBe(false);
+    expect(ok({ type: "play_duck", play: 3, gain: -0.1 }).ok).toBe(false);
+    expect(ok({ type: "play_duck", play: 3 }).ok).toBe(false);
+    expect(ok({ type: "play_duck", play: 3, gain: 0.5, fade_ms: -1 }).ok).toBe(false);
+    expect(ok({ type: "play_pause", play: 3, fade_ms: 80 })).toEqual({
+      ok: true,
+      value: { type: "play_pause", play: 3, fade_ms: 80 },
+    });
+    expect(ok({ type: "play_resume", play: 3 })).toEqual({
+      ok: true,
+      value: { type: "play_resume", play: 3, fade_ms: 0 },
+    });
+    expect(ok({ type: "play_pause", play: 1.5 }).ok).toBe(false);
+    const big = ok({ type: "play_resume", play: 3, fade_ms: 1e9 });
+    expect(big.ok && big.value).toEqual({ type: "play_resume", play: 3, fade_ms: MAX_FADE_MS });
+  });
+
   it("reports malformed input", () => {
     expect(parseCoreMessage("not json").ok).toBe(false);
     expect(parseCoreMessage("[]").ok).toBe(false);

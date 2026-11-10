@@ -16,14 +16,17 @@ import { MemorySettingsStore, SettingsStoreKey } from "@miyoria/store";
 import { type ToolContext, ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
 import {
   type AccountRef,
+  ARBITER_IMPULSE_TOPIC,
   AuthorizerKey,
   BaseAuthorizer,
   type ContextKey,
   type Event,
+  impulseReason,
   type MessageRef,
   type Principal,
   Principals,
   type Subject,
+  v2Payload,
 } from "@miyoria/types";
 import {
   ProposedTools,
@@ -246,9 +249,20 @@ export function proposal(over: Partial<ToolProposal> = {}): ToolProposal {
   };
 }
 
-/** The `agent_initiative` events published so far. */
+/** The follow-up impulses published so far (in the old `agent_initiative` shape). */
 export function initiatives(events: readonly Event[]) {
-  return events.flatMap((e) => (e.type === "agent_initiative" ? [e.data] : []));
+  return events.flatMap((e) => {
+    const impulse = v2Payload(e, ARBITER_IMPULSE_TOPIC);
+    if (!impulse) return [];
+    return [
+      {
+        context: impulse.target.context,
+        reason: impulseReason(impulse),
+        hint: impulse.hint ?? "",
+        about: impulse.about,
+      },
+    ];
+  });
 }
 
 export async function waitFor(check: () => boolean, timeoutMs = 2000): Promise<void> {

@@ -78,7 +78,7 @@ export {
   similarTitles,
   sourceTag,
 } from "./knowledge.js";
-export { LESSON_PREFIX, LessonStore } from "./lessons.js";
+export { isTalkLesson, LESSON_PREFIX, LessonStore } from "./lessons.js";
 export {
   CONVERSATION_CONTRIBUTOR,
   ConversationModule,
@@ -91,6 +91,8 @@ export {
   subjectsFor,
 } from "./modules.js";
 export {
+  MAX_PUBLIC_FEELING,
+  MAX_STANCE,
   parseContextString,
   REFLECT_STATE_KEY,
   type ReflectDeps,
@@ -99,4 +101,11 @@ export {
   Reflector,
   RUN_PREFIX,
 } from "./reflect.js";
+export {
+  maskCodes,
+  type RepairOptions,
+  type RepairReport,
+  repairEphemeralHandles,
+} from "./repair.js";
+export { dropStale, noteUnits, similarity, touchUnits } from "./threads.js";
 export { KNOWLEDGE_TOOL, KnowledgeTool, type ToolDeps } from "./tool.js";

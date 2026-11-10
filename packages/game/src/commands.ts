@@ -149,7 +149,6 @@ export function registerCommands(
   add(
     commandSpec("game status", "查看她正在玩什麼、目前的目標", {
       permission: perms.status,
-      ephemeral: true,
     }),
     () => statusCard(view.current),
     {

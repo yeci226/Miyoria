@@ -4,6 +4,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { isDeepStrictEqual } from "node:util";
+import { GatedToolsKey, isGatedToolName } from "@miyoria/actions";
 import {
   type CommandRegistry,
   CommandRegistryKey,
@@ -32,6 +33,9 @@ import {
   type ModuleId,
   type PromptContributors,
   PromptContributorsKey,
+  TaskExecutorsKey,
+  taskTopic,
+  V2_TOPIC_PREFIXES,
 } from "@miyoria/types";
 import { z } from "zod";
 import { type HostConfig, runtimeCommand } from "./config.js";
@@ -41,6 +45,8 @@ import { validPattern, validTopic } from "./manifest.js";
 import {
   CommandSpecSchema,
   type Contributions,
+  type ExecutorDecl,
+  ExecutorDeclSchema,
   type InitializeParams,
   InitializeResultSchema,
   PROTOCOL_VERSION,
@@ -60,6 +66,7 @@ import {
   UNAVAILABLE,
 } from "./rpc.js";
 import { ProfileIdKey } from "./services.js";
+import { ProxyExecutor, TaskExecutorRegistry } from "./tasks.js";
 
 /** Version sent as `initialize.host.version`. */
 export const HOST_VERSION = "0.1.0";
@@ -69,9 +76,26 @@ export const EXTENSIONS_MODULE_ID = "extensions";
 
 /**
  * Topic prefixes of built-in events; extensions can never publish on them (except a game
- * adapter on its own `game.<id>.*`).
+ * adapter on its own `game.<id>.*`). The v2 prefixes (`activity`, `arbiter`, `affect`, `plan`)
+ * are trusted by their consumers (`v2Payload` only checks for an object), and `gate` /
+ * `actions` carry the gate's decisions and outcomes: forging them is not allowed either.
  */
-const RESERVED_PREFIXES = ["platform", "agent", "voice", "action", "system", "game"];
+export const RESERVED_PREFIXES: readonly string[] = [
+  "platform",
+  "agent",
+  "voice",
+  "action",
+  "system",
+  "game",
+  "gate",
+  "actions",
+  ...V2_TOPIC_PREFIXES,
+];
+
+/** Whether an extension may never publish on `topic` (outside its own namespaces). */
+export function reservedTopic(topic: string): boolean {
+  return RESERVED_PREFIXES.some((r) => topic === r || topic.startsWith(`${r}.`));
+}
 
 /** Lines an extension writes to stderr and `log` calls go here (legacy target `miyoria_ext`). */
 const extLog = getLogger("miyoria_ext");
@@ -215,6 +239,8 @@ export class ExtensionModule implements Module {
         child.kill();
         status = "closed its stdout";
       }
+      // Its tasks die with it (a terminal event each, code `crashed`).
+      session.failTasks("crashed", `擴充套件結束了(${status})`);
       if (protocolError !== null) {
         throw new ExtensionProcessError(
           `extension \`${id}\` protocol error: ${errorMessage(protocolError)} (${status})`,
@@ -371,6 +397,7 @@ class Session implements RpcHandler {
   #tools = new Map<string, ToolReg>();
   #commands = new Map<string, CommandReg>();
   #prompts = new Map<string, PromptContributors>();
+  #executor: { proxy: ProxyExecutor; registry: TaskExecutorRegistry } | null = null;
 
   constructor(
     ctx: ModuleContext,
@@ -461,6 +488,68 @@ class Session implements RpcHandler {
         );
       }
     }
+    if (c.executor !== null) {
+      try {
+        this.registerExecutor(c.executor);
+      } catch (e) {
+        if (fatal(e)) throw new ExtensionStartError(`executor: ${message(e)}`);
+        this.ctx.log.warn({ ext: this.id, error: message(e) }, "task executor not registered");
+      }
+    }
+  }
+
+  /** Topic prefix of this extension's task events: its game's namespace, else `ext.<id>`. */
+  taskOwner(): string {
+    const game = this.spec.manifest.gameId();
+    return game !== null ? `game.${game}` : `ext.${this.id}`;
+  }
+
+  /** `tasks.register`: (re)places this extension's executor in the `TaskExecutors` registry. */
+  registerExecutor(decl: ExecutorDecl): JsonValue {
+    const registry = this.ctx.services.get(TaskExecutorsKey);
+    if (!(registry instanceof TaskExecutorRegistry)) {
+      throw new RpcError(UNAVAILABLE, "the task executor registry is not available");
+    }
+    if (this.stopping) throw Session.closedError();
+    const owner = this.taskOwner();
+    const current = registry.get(owner);
+    if (current !== undefined && current !== this.#executor?.proxy) {
+      throw new RpcError(CONFLICT, `an executor for \`${owner}\` is already registered`);
+    }
+    if (this.#executor) {
+      this.#executor.proxy.close("superseded", "擴充套件換了一個執行器");
+      this.#executor.registry.unregister(this.#executor.proxy);
+    }
+    const proxy = new ProxyExecutor(
+      this.peer,
+      {
+        owner,
+        name: decl.name,
+        goals: decl.goals.map((g) => ({ ...g })),
+        guide: decl.guide,
+      },
+      {
+        callTimeoutMs: this.host.call_timeout_ms,
+        steer: decl.steer,
+        graceMs: this.host.task_grace_ms,
+        publish: (event) => {
+          this.ctx.publish(
+            customEvent(taskTopic(owner, event.type), event as unknown as JsonValue),
+          );
+        },
+        now: () => this.ctx.clock.now(),
+      },
+    );
+    registry.register(proxy);
+    this.#executor = { proxy, registry };
+    return { owner };
+  }
+
+  /** The process is gone: every task it was running fails with `code`. */
+  failTasks(code: "crashed" | "disconnected", detail: string): void {
+    const executor = this.#executor;
+    if (!executor) return;
+    executor.proxy.close(code, detail);
   }
 
   subscribe(topics: readonly string[]): JsonValue {
@@ -483,7 +572,7 @@ class Session implements RpcHandler {
     const own = `ext.${this.id}.`;
     const game = this.spec.manifest.gameId();
     const ownGame = game !== null && p.topic.startsWith(`game.${game}.`);
-    const reserved = RESERVED_PREFIXES.some((r) => p.topic === r || p.topic.startsWith(`${r}.`));
+    const reserved = reservedTopic(p.topic);
     const allowed =
       p.topic.startsWith(own) || ownGame || (!reserved && this.grants.matches(p.topic));
     if (!allowed) throw RpcError.denied(`publishing on \`${p.topic}\` is not permitted`);
@@ -505,9 +594,19 @@ class Session implements RpcHandler {
         `tool \`${decl.name}\` is in another game's namespace; only the adapter declaring that \`game\` may use \`game.<id>.*\``,
       );
     }
-    const registry = this.ctx.services.get(ToolRegistryKey);
-    if (!registry) throw new RpcError(UNAVAILABLE, "the tool registry is not available");
     const name = registryToolName(decl.name);
+    // A game adapter's raw tools (`game_<id>_*`: launch, quit, game chat) are never offered to
+    // chat turns: they go to the gated registry, which only capabilities behind the gate use.
+    const gated = isGatedToolName(name);
+    const registry = gated
+      ? this.ctx.services.get(GatedToolsKey)
+      : this.ctx.services.get(ToolRegistryKey);
+    if (!registry) {
+      throw new RpcError(
+        UNAVAILABLE,
+        gated ? "the gated tool registry is not available" : "the tool registry is not available",
+      );
+    }
     if (this.stopping) throw Session.closedError();
     if (registry.get(name) !== undefined && !this.#tools.has(name)) {
       throw new RpcError(CONFLICT, `tool \`${name}\` is already registered`);
@@ -642,6 +741,12 @@ class Session implements RpcHandler {
     for (const [name, reg] of tools) unregisterToolIfOurs(reg, name);
     for (const reg of commands.values()) unregisterCommandIfOurs(reg);
     for (const [key, registry] of prompts) registry.unregister(key);
+    const executor = this.#executor;
+    this.#executor = null;
+    if (executor) {
+      executor.proxy.close("disconnected", "擴充套件停止了");
+      executor.registry.unregister(executor.proxy);
+    }
   }
 
   async request(method: string, p: JsonValue): Promise<JsonValue> {
@@ -662,6 +767,8 @@ class Session implements RpcHandler {
         const path = params(CommandPathSchema, p).path;
         return this.unregisterCommand(typeof path === "string" ? splitPath(path) : path);
       }
+      case "tasks.register":
+        return this.registerExecutor(params(ExecutorDeclSchema, p));
       case "prompt.register":
         return this.registerPrompt(params(KeyedSchema, p).key);
       case "prompt.unregister":
@@ -696,6 +803,7 @@ class Session implements RpcHandler {
 
   notification(method: string, p: JsonValue): void {
     if (method === "log") this.log(p);
+    else if (method === "task.event") this.#executor?.proxy.onEvent(p);
     else this.ctx.log.debug({ ext: this.id, method }, "ignored notification");
   }
 }

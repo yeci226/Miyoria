@@ -16,9 +16,9 @@
 // # cookie_secure = true   # default: on when redirect_uri is https
 // ```
 //
-// Every `/api` route except `GET /api/health` and the login routes requires
-// `Authorization: Bearer <token>` or a panel session cookie; panel files at `/` never do.
-// `GET /metrics` (Prometheus) needs the same unless `metrics_public = true`.
+// Every `/api` route except `GET /api/health`, the login routes, `/api/public/*` and
+// `/api/member/*` requires `Authorization: Bearer <token>` or an admin session cookie; panel files
+// at `/` never do. `GET /metrics` (Prometheus) needs the same unless `metrics_public = true`.
 
 import type { AddressInfo } from "node:net";
 import { isIPv4, isIPv6 } from "node:net";
@@ -32,14 +32,17 @@ import {
 } from "@miyoria/kernel";
 import { tokenize } from "@miyoria/memory";
 import { SettingsStoreKey } from "@miyoria/store";
+import { ActivityManagerKey, SONG_TOPIC } from "@miyoria/types";
 import { z } from "zod";
 import { MONITOR_TOPICS, Monitor } from "./monitor.js";
 import { DiscordOAuthConfigSchema, OAuth, recheckMs, sessionTtlMs } from "./oauth.js";
 import { PANEL_DIR_ENV, pickDir } from "./panel.js";
+import { PublicConfigSchema, PublicSide, STATS_EVERY_MS } from "./public.js";
 import { createApp } from "./server.js";
 import { Sessions } from "./session.js";
 import { ApiState, type PanelAuth, type Tokenizer } from "./state.js";
 import { SAMPLE_EVERY_MS, TELEMETRY_TOPICS } from "./telemetry.js";
+import { TRAIL_TOPIC } from "./trail.js";
 
 /** How often expired panel sessions are dropped. */
 export const PRUNE_EVERY_MS = 60 * 60_000;
@@ -67,6 +70,8 @@ export const ApiConfigSchema = z.object({
    * can reach `bind` (or a reverse proxy in front of it) can then read the metrics.
    */
   metrics_public: z.boolean().default(false),
+  /** The page anyone can see and the page of each logged-in person. On by default. */
+  public: PublicConfigSchema.prefault({}),
 });
 export type ApiConfig = z.output<typeof ApiConfigSchema>;
 
@@ -81,6 +86,8 @@ export interface ApiModuleOptions {
   env?: (name: string) => string | undefined;
   /** Emotions the profile's avatar knows (`avatarEmotions`), for `/api/stage`. */
   emotions?: readonly string[];
+  /** Uniform in [0, 1) for choices that need no secrecy (a card's pose). Default `Math.random`. */
+  random?: () => number;
 }
 
 /**
@@ -172,12 +179,14 @@ export class ApiModule implements Module {
   readonly #tokenize: Tokenizer;
   readonly #env: (name: string) => string | undefined;
   readonly #emotions: readonly string[];
+  readonly #random: () => number;
   #address: AddressInfo | null = null;
 
   constructor(options: ApiModuleOptions = {}) {
     this.#tokenize = options.tokenize ?? tokenize;
     this.#env = options.env ?? ((name) => process.env[name]);
     this.#emotions = [...(options.emotions ?? [])];
+    this.#random = options.random ?? Math.random;
   }
 
   /** The address the server is bound to while running (useful with port 0). */
@@ -223,7 +232,20 @@ export class ApiModule implements Module {
     };
 
     const monitor = new Monitor();
-    const state = new ApiState(ctx, auth, monitor, panelDir, this.#tokenize, this.#emotions);
+    const publicSide = new PublicSide(config.public, () => ctx.clock.now());
+    const state = new ApiState(
+      ctx,
+      auth,
+      monitor,
+      panelDir,
+      this.#tokenize,
+      this.#emotions,
+      undefined,
+      undefined,
+      undefined,
+      publicSide,
+      this.#random,
+    );
     const app = createApp(state, { metricsPublic: config.metrics_public });
     const server = createAdaptorServer({ fetch: app.fetch });
     let address: AddressInfo;
@@ -249,10 +271,36 @@ export class ApiModule implements Module {
     ctx.spawn("telemetry.events", async () => {
       for await (const env of counted) state.telemetry.handle(env);
     });
+    const decided = ctx.subscribe([TRAIL_TOPIC]);
+    ctx.spawn("arbiter.trail", async () => {
+      for await (const env of decided) state.trail.handle(env);
+    });
     ctx.spawn("telemetry", async (signal) => {
       state.telemetry.sample(state);
       for await (const _ of interval(SAMPLE_EVERY_MS, signal)) state.telemetry.sample(state);
     });
+
+    if (config.public.enabled) {
+      const store = () => ctx.services.get(SettingsStoreKey);
+      const sung = ctx.subscribe([SONG_TOPIC]);
+      ctx.spawn("public.songs", async () => {
+        for await (const env of sung) {
+          publicSide.stats.handle(env, ctx.clock.now());
+          await publicSide.stats.save(store());
+        }
+      });
+      ctx.spawn("public.stats", async (signal) => {
+        await publicSide.stats.load(store(), ctx.clock.now());
+        for await (const _ of interval(STATS_EVERY_MS, signal)) {
+          const now = ctx.services.get(ActivityManagerKey)?.snapshot();
+          publicSide.stats.sample(ctx.clock.now(), {
+            live: now?.broadcast.type === "live",
+            inVoice: now?.presence.type === "in",
+          });
+          await publicSide.stats.save(store());
+        }
+      });
+    }
 
     if (oauth) {
       ctx.spawn("sessions", async (signal) => {

@@ -11,7 +11,7 @@ import {
   RUN_PREFIX,
   STATE_PREFIX,
 } from "@miyoria/learning";
-import { DIGEST_PREFIX } from "@miyoria/mind";
+import { DIGEST_PREFIX, GOAL_MIGRATION_KEY, GOAL_PREFIX, PLAN_STATE_KEY } from "@miyoria/mind";
 import { DATA_CATEGORIES, MemorySettingsStore } from "@miyoria/store";
 import {
   type ConversationState,
@@ -146,8 +146,16 @@ describe("learning routes", () => {
       REFLECT_STATE_KEY,
       FEEDBACK_PREFIX,
       DIGEST_PREFIX,
+      GOAL_PREFIX,
     ]) {
       expect(names, name).toContain(name);
+    }
+    // Her plan state and the agenda migration record live under one prefix.
+    for (const key of [GOAL_MIGRATION_KEY, PLAN_STATE_KEY]) {
+      expect(
+        names.some((n) => key.startsWith(n)),
+        key,
+      ).toBe(true);
     }
   });
 });

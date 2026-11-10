@@ -189,6 +189,37 @@ export interface ThoughtEffects {
   documents: { type: string; title: string | null; ok: boolean; error: string | null }[];
 }
 
+/**
+ * The `body` of a `thought` line of the EventLog that the mind wrote (source `mind`): the
+ * journal entry without what she saw (`ThoughtInput`).
+ */
+export interface MindThoughtBody {
+  thought: string;
+  changes: string[];
+  intents: ThoughtIntent[];
+  error: string | null;
+}
+
+/**
+ * The `body` of a `thought` line of the game director (source `game.director`): one decision
+ * about a goal, with what woke it. The `game.director.decision` event carries the same fields.
+ */
+export interface DirectorThoughtBody {
+  game: string;
+  /** What woke the director, one line each. */
+  trigger: string[];
+  goal: string | null;
+  /** The action it picked, as the call reads. */
+  action: string | null;
+  /** `Step`, `Replace` or `Keep("...")`: what the anti-spam rule made of it. */
+  verdict: string | null;
+  commentary: string | null;
+  busy: boolean | null;
+}
+
+/** What a `thought` line says; `source` tells which. */
+export type ThoughtBody = MindThoughtBody | DirectorThoughtBody;
+
 /** One entry of her thought journal. */
 export interface Thought {
   id: string;

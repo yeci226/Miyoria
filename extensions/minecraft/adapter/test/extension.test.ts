@@ -16,19 +16,11 @@ afterEach(async () => {
   mod = undefined;
 });
 
-const context = { platform: "discord", scope: null, channel: "c1", kind: "voice" };
-const toolContext = {
-  turn: "01J00000000000000000000000",
-  context,
-  account: { platform: "discord", id: "42" },
-  message: { context, id: "m1" },
-  priority: "initiative",
-};
-
 function host() {
   const hostToExt = new PassThrough();
   const extToHost = new PassThrough();
   const published: Array<{ topic: string; payload: unknown }> = [];
+  const taskEvents: Array<Record<string, unknown>> = [];
   const runtime = runExtension(extension, { input: hostToExt, output: extToHost, exit: () => {}, timeoutMs: 2000 });
   const peer = new RpcPeer({
     input: extToHost,
@@ -38,10 +30,12 @@ function host() {
       if (method === "events.publish") published.push(params as { topic: string; payload: unknown });
       return {};
     },
-    onNotification: () => {},
+    onNotification: (method, params) => {
+      if (method === "task.event") taskEvents.push((params as { event: Record<string, unknown> }).event);
+    },
   });
   shutdown = () => runtime.shutdown();
-  return { peer, published };
+  return { peer, published, taskEvents };
 }
 
 function initialize(peer: RpcPeer, config: Record<string, unknown>, game: string | null = "minecraft") {
@@ -55,25 +49,41 @@ function initialize(peer: RpcPeer, config: Record<string, unknown>, game: string
 }
 
 describe("extension", () => {
-  it("registers game.minecraft tools and publishes game events", async () => {
+  it("registers the game.minecraft executor and publishes game events", async () => {
     mod = await FakeMod.start();
+    mod.capabilities = { baritone: true, altoclef: false, screenshot: true, tasks: true };
     mod.respond = (req) => (req.type === "observe" ? { ok: true, data: SNAPSHOT } : { ok: true, data: {} });
-    const { peer, published } = host();
+    const { peer, published, taskEvents } = host();
     const result = await initialize(peer, { url: mod.url, token: mod.token, reconnect_min_ms: 20 });
-    expect(result.contributions.tools.map((t) => t.name)).toEqual(["game.minecraft.observe", "game.minecraft.act"]);
+    // No raw tools: the executor is the only way in.
+    expect(result.contributions.tools).toEqual([]);
+    expect(result.contributions.executor?.name).toBe("Minecraft");
+    expect(result.contributions.executor?.goals.map((g) => g.name)).toContain("obtain");
+    expect(result.contributions.executor?.goals.find((g) => g.name === "goto")?.budget_s).toBe(120);
+    expect(result.contributions.executor?.guide).toContain("生存的進度");
     expect(result.contributions.prompts).toEqual([]);
     const m = mod;
     await waitFor(() => m.hellos === 1);
     await waitFor(() => published.some((p) => p.topic === "game.minecraft.connected"));
 
-    const call = (name: string, args: unknown) =>
-      peer.request<{ content: string }>("tools.call", { name, args, context: toolContext });
-    const observed = (await call("game.minecraft.observe", {})).content;
-    expect(observed).toContain("血量 17.5/20");
-    expect(observed).toContain('狀態:{"connected":true,"in_game":true,"busy":true');
-    const acted = (await call("game.minecraft.act", { action: "goto", args: { x: 10, y: 64, z: 5 } })).content;
-    expect(acted).toBe("成功:走到 (10, 64, 5)\n{}");
-    expect(m.requests.at(-1)).toMatchObject({ type: "baritone", command: "goto", x: 10, y: 64, z: 5 });
+    const observed = await peer.request<{ state: Record<string, unknown>; summary: string; task: string | null }>(
+      "task.observe",
+      {},
+    );
+    expect(observed.summary).toContain("血量 17.5/20");
+    expect(observed.state).toMatchObject({ connected: true, in_game: true, busy: true });
+    expect(observed.task).toBeNull();
+
+    await peer.request("task.start", { task: { id: "t1", goal: "goto", args: { x: 10, y: 64, z: 5 }, budget_s: 60 } });
+    await waitFor(() => m.requests.some((r) => r.type === "baritone"));
+    expect(m.requests.at(-1)).toMatchObject({ type: "baritone", command: "goto", x: 10, y: 64, z: 5, task: "t1" });
+    m.emit("task_done", { task: "t1", kind: "goto", detail: "到了" });
+    await waitFor(() => taskEvents.some((e) => e.type === "done"));
+    expect(taskEvents.map((e) => [e.type, e.task])).toEqual([
+      ["started", "t1"],
+      ["done", "t1"],
+    ]);
+    expect(taskEvents[1]).toMatchObject({ detail: "到了" });
 
     m.emit("death", { last_damage_source: "fall" });
     await waitFor(() => published.some((p) => p.topic === "game.minecraft.death"));
@@ -82,6 +92,8 @@ describe("extension", () => {
       data: { last_damage_source: "fall", text: "死掉了(摔落)" },
       important: true,
     });
+    // Task lifecycle never goes out as a game event.
+    expect(published.some((p) => p.topic.startsWith("game.minecraft.task"))).toBe(false);
   });
 
   it("fails activation when the manifest does not declare the game", async () => {

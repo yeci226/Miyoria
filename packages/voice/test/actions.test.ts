@@ -19,7 +19,12 @@ import {
   type WorldState,
 } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
-import { joinTarget, STAY_AFTER_INVITE_MS, voiceCapabilities } from "../src/actions.js";
+import {
+  channelIdOf,
+  joinTarget,
+  STAY_AFTER_INVITE_MS,
+  voiceCapabilities,
+} from "../src/actions.js";
 import type { VoiceLink } from "../src/index.js";
 
 const CTX: ContextKey = { platform: "discord", scope: "g1", channel: "c1", kind: "channel" };
@@ -170,6 +175,15 @@ describe("leaving on her own", () => {
     // Someone asking her to leave is not her own idea.
     expect(await s.tools.get("voice_leave")?.call(s.ctx, {})).toBe("left the voice channel");
     expect(s.link.calls).toEqual(["leave g1"]);
+  });
+
+  it("takes the channel id out of a context key or a mention", async () => {
+    const s = setup(["voice.join"], { others: 0, now: () => 1 });
+    await s.tools.get("voice_join")?.call(s.ctx, { channel: "g1:1408410900859326665" });
+    expect(s.link.calls).toEqual(["join g1 1408410900859326665 null"]);
+    expect(channelIdOf("discord:g1:vc2")).toBe("vc2");
+    expect(channelIdOf("<#123>")).toBe("123");
+    expect(channelIdOf("456")).toBe("456");
   });
 
   it("is refused for a while after someone brought her in, while people are still there", async () => {

@@ -176,6 +176,10 @@ Docker 可用時(啟動時檢查,之後每 `recheck_ms` 再檢查),module 在 ap
 - **擁有者看得到的地方**:`/admin autonomy status`(Docker 狀態、能力是否開放、已核准 / 待審 / 已拒絕的工具);API `GET /api/sandbox/tools`(清單與 Docker 狀態,不含程式碼)、`GET /api/sandbox/tools/:name`(含程式碼)、`POST /api/sandbox/tools/:name/approve|reject`(body `{ "version": n, "note"?: "..." }`;版本不是目前版本 → 409;需要 token,或面板帳號有 `owner.autonomy.approve` 與寫入權限)。面板頁面尚未做。
 - 工具工作區(`sandbox.tools.save` 等)沒有開放給模型;`code_run` 的工具說明沒有列出 `mount_tools`(schema 仍接受,掛載是唯讀的)。
 
+## 別人傳來的檔案(`src/files.ts`、`src/extract.ts`)
+
+模組另外提供 `FileReaderKey`(`[modules.sandbox.files]`):agent 把使用者傳的文字、程式碼、pdf、docx、xlsx、pptx 交給它,它下載位元組(只搬運),再把檔案當輸入檔放進一次性、斷網的容器,由標準庫寫的抽取程式讀出文字,回傳成不可信的資料區塊。沙箱不能用時拒絕,不在 Core 裡處理。設計與限制見 `docs/design/file-attachments.md`。
+
 ## 設定
 
 見 `miyoria.example.toml` 的 `[modules.sandbox]` 與 `src/config.ts`(每個欄位都有預設值)。

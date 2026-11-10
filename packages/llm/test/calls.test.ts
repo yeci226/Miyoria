@@ -152,3 +152,17 @@ describe("redactSecrets", () => {
     expect(out).toContain("今天天氣很好");
   });
 });
+
+describe("which model answered", () => {
+  it("the stream says when a fallback model is answering", async () => {
+    const healthy = router(
+      new MockProvider("a").reply("嗨。"),
+      new MockProvider("b").reply("嗨。"),
+    );
+    expect((await healthy.stream("chat", { messages: [] })).fallback).toBe(false);
+    const broken = router(new MockProvider("a").fail("down"), new MockProvider("b").reply("嗨。"));
+    const stream = await broken.stream("chat", { messages: [] });
+    expect(stream.model).toContain("b");
+    expect(stream.fallback).toBe(true);
+  });
+});

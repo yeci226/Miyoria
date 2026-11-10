@@ -181,8 +181,8 @@ describe("data categories", () => {
       "world",
       "memory",
     ]);
-    // Her conversation notes are made from the log and go with it.
-    expect(resolveCategories(["messages"])).toEqual(["conversation", "messages"]);
+    // Her conversation notes are made from the log and go with it; the EventLog repeats it.
+    expect(resolveCategories(["messages"])).toEqual(["conversation", "messages", "event_log"]);
   });
 
   it("factory reset leaves a fresh install: audit, LLM usage and sessions kept", async () => {
@@ -190,7 +190,8 @@ describe("data categories", () => {
     const { owen, ctx } = await seed(store);
     const before = await store.profileData.inventory(P);
     for (const c of before.categories) {
-      if (c.id === "decisions" || c.id === "proposed_tools" || c.id === "extensions") continue;
+      const unseeded = ["decisions", "event_log", "directives", "proposed_tools", "extensions"];
+      if (unseeded.includes(c.id)) continue;
       expect(c.count, c.id).toBeGreaterThan(0);
     }
 

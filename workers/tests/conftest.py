@@ -21,6 +21,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+# The stubbed model packages live in this process; test_engine_process.py covers the real child.
+os.environ["TTS_ENGINE_PROCESS"] = "0"
+os.environ["ASR_ENGINE_PROCESS"] = "0"
 for sub in ("fake", "tts", "asr"):
     sys.path.insert(0, str(ROOT / sub))
 

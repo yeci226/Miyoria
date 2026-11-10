@@ -21,7 +21,14 @@ import {
 } from "../types.js";
 import { MIYORIA_VERSION } from "../version.js";
 import { SseParser } from "./sse.js";
-import { ChunkSchema, requestBody, wireUsage } from "./wire.js";
+import {
+  bodyJson,
+  ChunkSchema,
+  DEFAULT_REASONING_MAX_TOKENS,
+  type ReasoningWire,
+  requestBody,
+  wireUsage,
+} from "./wire.js";
 
 const log = getLogger("llm.openai");
 
@@ -59,6 +66,12 @@ export class OpenAiConfig {
    * `deepseek` and `opencode` default to `{"thinking": {"type": "disabled"}}`.
    */
   thinkingOff: Record<string, JsonValue> | null = null;
+  /**
+   * How reasoning levels (`[llm.reasoning]`) are sent: `effort` sends `reasoning_effort`
+   * (default for `openai`); otherwise levels only switch thinking on and `maxTokens` caps the
+   * length per level (`reasoning_effort` / `reasoning_max_tokens` in the provider settings).
+   */
+  reasoning: ReasoningWire = { effort: false, maxTokens: { ...DEFAULT_REASONING_MAX_TOKENS } };
   /** Max idle time while waiting for response bytes (headers or stream), in ms. */
   timeoutMs = 120_000;
   /**
@@ -119,6 +132,11 @@ export class OpenAiConfig {
     } else if (config.kind === "deepseek" || config.kind === "opencode") {
       out.thinkingOff = { thinking: { type: "disabled" } };
     }
+    const effort = extra.reasoning_effort ?? config.kind === "openai";
+    out.reasoning = {
+      effort,
+      maxTokens: { ...DEFAULT_REASONING_MAX_TOKENS, ...(extra.reasoning_max_tokens ?? {}) },
+    };
     if (extra.timeout_secs != null) out.timeoutMs = extra.timeout_secs * 1000;
     if (extra.connect_timeout_secs != null) {
       out.connectTimeoutMs = extra.connect_timeout_secs * 1000;
@@ -136,6 +154,7 @@ export class OpenAiConfig {
       userAgent: this.userAgent,
       sessionHeader: this.sessionHeader,
       thinkingOff: this.thinkingOff,
+      reasoning: this.reasoning,
       timeoutMs: this.timeoutMs,
       connectTimeoutMs: this.connectTimeoutMs,
       maxRetries: this.maxRetries,
@@ -157,6 +176,17 @@ const ExtraSchema = z.object({
   session_header: z.string().nullable().optional(),
   /** Body fields that turn thinking off; `{}` or null sends nothing. */
   thinking_off: z.record(z.string(), z.json()).nullable().optional(),
+  /** Send `reasoning_effort` for reasoning levels (default: only for `openai`). */
+  reasoning_effort: z.boolean().nullable().optional(),
+  /** `max_tokens` cap per reasoning level when there is no `reasoning_effort`. */
+  reasoning_max_tokens: z
+    .object({
+      low: z.number().int().positive().nullable().optional(),
+      medium: z.number().int().positive().nullable().optional(),
+      high: z.number().int().positive().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -175,6 +205,7 @@ export class OpenAiProvider implements ChatProvider {
   readonly #headers: Readonly<Record<string, string>>;
   readonly #sessionHeader: string | null;
   readonly #thinkingOff: Record<string, JsonValue> | null;
+  readonly #reasoning: ReasoningWire;
   /** Stable for the provider's lifetime, so background requests share one cache route. */
   readonly #fallbackSession = `miyoria-${randomBytes(8).toString("hex")}`;
   readonly #timeoutMs: number;
@@ -205,6 +236,7 @@ export class OpenAiProvider implements ChatProvider {
     this.#headers = headers;
     this.#sessionHeader = config.sessionHeader?.toLowerCase() ?? null;
     this.#thinkingOff = config.thinkingOff;
+    this.#reasoning = config.reasoning;
     this.#timeoutMs = config.timeoutMs;
     this.#connectTimeoutMs = config.connectTimeoutMs;
     this.#maxRetries = config.maxRetries;
@@ -227,7 +259,7 @@ export class OpenAiProvider implements ChatProvider {
   }
 
   async stream(request: ChatRequest, signal?: AbortSignal): Promise<ChatStream> {
-    const body = JSON.stringify(requestBody(request, this.#thinkingOff));
+    const body = bodyJson(requestBody(request, this.#thinkingOff, this.#reasoning));
     log.debug(
       { provider: this.name, model: request.model, url: this.url },
       "chat completion request",

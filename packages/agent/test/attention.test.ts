@@ -1,10 +1,4 @@
-import {
-  type ContextKind,
-  type IncomingMessage,
-  type Mood,
-  newId,
-  toTimestamp,
-} from "@miyoria/types";
+import { type ContextKind, type IncomingMessage, newId, toTimestamp } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
   type Activeness,
@@ -15,6 +9,7 @@ import {
   type ChannelMode,
   decide,
   directReason,
+  effectiveTalk,
   isQuestion,
   mentionsTopic,
   type RandomSource,
@@ -52,8 +47,6 @@ function runWith(
     inputs,
     now: Date.now(),
     voice: null,
-    affinity: null,
-    mood: null,
   });
 }
 
@@ -125,8 +118,8 @@ describe("attention", () => {
     expect(run(cfg, "normal", s2, q).gate.kind).toBe("sample");
   });
 
-  it("follow_up_cooldown_and_share", () => {
-    const cfg = config({ llm_check: false, cooldown_ms: 0 });
+  it("follow_up_and_share", () => {
+    const cfg = config({ llm_check: false });
     const s = sessionWith([msg("channel", "a", "早")]);
     s.recordOwn("Her", me, "早啊", newId(), Date.now());
     const reply = [msg("channel", "a", "妳今天幹嘛")];
@@ -134,11 +127,8 @@ describe("attention", () => {
     let a = run(cfg, "normal", s, reply);
     expect(a.reasons.some((r) => r.startsWith("follow-up"))).toBe(true);
     expect(sample(a)).toBeGreaterThanOrEqual(0.6);
-
-    const strict = { ...cfg, cooldown_ms: 60_000 };
-    a = run(strict, "normal", s, reply);
-    expect(a.gate).toEqual({ kind: "ignore" });
-    expect(a.reasons.some((r) => r.startsWith("cooldown"))).toBe(true);
+    // No cooldown after she spoke any more (v2 §3.3): the share cap spaces her lines.
+    expect(a.reasons.some((r) => r.startsWith("cooldown"))).toBe(false);
 
     for (let i = 0; i < 10; i++) s.recordOwn("Her", me, "spam", newId(), Date.now());
     a = run(cfg, "normal", s, reply);
@@ -167,78 +157,70 @@ describe("attention", () => {
     expect(mentionsTopic("anything", " ")).toBe(false);
   });
 
-  it("activeness_scales_ambient_probability_and_cooldown", () => {
-    const cfg = config({ llm_check: false, cooldown_ms: 10_000 });
+  it("activeness_moves_her_default_talkativeness", () => {
+    const cfg = config({ llm_check: false });
     const q = [msg("channel", "a", "你們看過鯨魚嗎?")];
     let s = sessionWith(q);
     const medium = sample(run(cfg, "normal", s, q));
     const low = sample(runWith(cfg, "normal", "low", [], s, q));
     const high = sample(runWith(cfg, "normal", "high", [], s, q));
+    // The same ×0.5 / ×1.6 as before, now as her default talkativeness (0.25 / 0.5 / 0.67).
     expect(Math.abs(low - medium * 0.5)).toBeLessThan(1e-6);
-    expect(Math.abs(high - Math.min(medium * 1.6, 1))).toBeLessThan(1e-6);
+    expect(Math.abs(high - Math.min(medium * 1.6, 1))).toBeLessThan(0.01);
+    expect(effectiveTalk({ ...input(cfg, s, q), activeness: "low" }).level).toBe(0.25);
 
     // Direct turns are not scaled.
     const named = [msg("channel", "a", "小鯨魚早安")];
-    let a = runWith(cfg, "normal", "low", [], s, named);
+    const a = runWith(cfg, "normal", "low", [], s, named);
     expect(a.gate).toEqual({ kind: "sample", probability: 1 });
 
-    // She spoke 7s ago: inside the normal cooldown, outside the high one.
+    // She spoke 1 s ago: no cooldown holds her back, her share does.
     s = sessionWith(q);
-    s.recordOwn("Her", me, "嗯", newId(), Date.now() - 7000);
+    s.recordOwn("Her", me, "嗯", newId(), Date.now() - 1000);
     s.recordMessage(q[0] as IncomingMessage, false);
-    a = run(cfg, "normal", s, q);
-    expect(a.reasons.some((r) => r.startsWith("cooldown"))).toBe(true);
-    a = runWith(cfg, "normal", "high", [], s, q);
-    expect(a.reasons.some((r) => r.startsWith("cooldown"))).toBe(false);
-    expect(a.gate.kind).toBe("sample");
+    expect(runWith(cfg, "normal", "high", [], s, q).gate.kind).toBe("sample");
   });
 
-  function voiceRun(
-    cfg: AttentionConfig,
-    session: Session,
-    inputs: IncomingMessage[],
-    someoneSpeaking: boolean,
-    interruptScale = 0,
-    others: number | null = 3,
-  ): Assessment {
-    return assess({
+  function input(cfg: AttentionConfig, session: Session, inputs: IncomingMessage[]) {
+    return {
       config: cfg,
-      mode: "normal",
-      activeness: "medium",
+      mode: "normal" as const,
+      activeness: "medium" as const,
       names: NAMES,
       interests: [],
       maxShare: 0.3,
       session,
       inputs,
       now: Date.now(),
-      voice: {
-        someoneSpeaking,
-        ambientFactor: 0.5,
-        questionWindowMs: 8000,
-        interruptScale,
-        others,
-      },
-      affinity: null,
-      mood: null,
+      voice: null,
+    };
+  }
+
+  function voiceRun(
+    cfg: AttentionConfig,
+    session: Session,
+    inputs: IncomingMessage[],
+    someoneSpeaking: boolean,
+    others: number | null = 3,
+  ): Assessment {
+    return assess({
+      ...input(cfg, session, inputs),
+      voice: { someoneSpeaking, questionWindowMs: 8000, others },
     });
   }
 
   it("voice_rules", () => {
-    const cfg = config({ llm_check: false, cooldown_ms: 0 });
+    const cfg = config({ llm_check: false });
     const q = [msg("voice", "a", "你們看過鯨魚嗎?")];
     let s = sessionWith(q);
     const text = sample(run(cfg, "normal", s, q));
-    const voice = sample(voiceRun(cfg, s, q, false));
-    expect(Math.abs(voice - text * 0.5)).toBeLessThan(1e-6);
-    // With interrupt_scale 0 she never joins in while someone speaks...
+    // No voice ambient factor: her talkativeness alone decides.
+    expect(sample(voiceRun(cfg, s, q, false))).toBe(text);
+    // She does not join in while someone speaks (the cheap voice prefilter).
     let a = voiceRun(cfg, s, q, true);
     expect(a.gate).toEqual({ kind: "ignore" });
     expect(a.reasons).toContain("someone is speaking");
-    // ...otherwise the chance is scaled down, not zero.
-    a = voiceRun(cfg, s, q, true, 0.4);
-    expect(Math.abs(sample(a) - voice * 0.4)).toBeLessThan(1e-6);
-    expect(a.reasons).toContain("someone is speaking ×0.40");
-    // Direct address still counts either way.
+    // Direct address still counts.
     const named = [msg("voice", "a", "deep seek chan 妳覺得呢")];
     a = voiceRun(cfg, s, named, true);
     expect(a.direct, a.reasons.join("; ")).toBe(true);
@@ -246,10 +228,10 @@ describe("attention", () => {
 
     // Alone with one person in voice: everything they say is said to her.
     const plain = [msg("voice", "a", "你可以叫我歐文")];
-    a = voiceRun(cfg, sessionWith(plain), plain, false, 0, 1);
+    a = voiceRun(cfg, sessionWith(plain), plain, false, 1);
     expect(a.direct, a.reasons.join("; ")).toBe(true);
     expect(a.reasons).toContain("direct: one-on-one in voice");
-    expect(voiceRun(cfg, sessionWith(plain), plain, false, 0, 2).direct).toBe(false);
+    expect(voiceRun(cfg, sessionWith(plain), plain, false, 2).direct).toBe(false);
 
     // A question right after she spoke addresses her.
     s = sessionWith([]);
@@ -263,72 +245,31 @@ describe("attention", () => {
     const late = { ...(follow[0] as IncomingMessage), ts: toTimestamp(Date.now() + 30_000) };
     expect(voiceRun(cfg, s, [late], false).direct).toBe(false);
 
-    // In voice, a reply to what she just said is not held back by her cooldown; in text it is.
-    const slow = config({ llm_check: false, cooldown_ms: 60_000 });
+    // Someone answering what she just said: a conversation, even while someone still talks.
     s = sessionWith([]);
     s.recordSpeech("Her", me, "我最喜歡深海了。", null, Date.now());
     const reply = [msg("voice", "a", "我也是耶")];
     s.recordUtterance(reply[0] as IncomingMessage);
-    a = voiceRun(slow, s, reply, false);
-    expect(
-      a.reasons.some((r) => r.startsWith("cooldown")),
-      a.reasons.join("; "),
-    ).toBe(false);
+    a = voiceRun(cfg, s, reply, true);
+    expect(a.gate.kind, a.reasons.join("; ")).toBe("sample");
     expect(a.reasons).toContain("follow-up to her +0.35");
-    const inText = [msg("channel", "a", "我也是耶")];
-    expect(run(slow, "normal", s, inText).reasons.some((r) => r.startsWith("cooldown"))).toBe(true);
   });
 
-  it("affinity_and_energy_scale_ambient_turns", () => {
-    const cfg = config({ llm_check: false, cooldown_ms: 10_000 });
-    const names = ["小鯨魚"];
-    const q = [msg("channel", "a", "你們看過鯨魚嗎?")];
-    const named = [msg("channel", "a", "小鯨魚早安")];
-    const assessWith = (
-      s: Session,
-      inputs: IncomingMessage[],
-      affinity: number | null,
-      mood: Mood | null,
-    ) =>
-      assess({
-        config: cfg,
-        mode: "normal",
-        activeness: "medium",
-        names,
-        interests: [],
-        maxShare: 0.3,
-        session: s,
-        inputs,
-        now: Date.now(),
-        voice: null,
-        affinity,
-        mood,
-      });
-    let s = sessionWith(q);
-    const base = sample(assessWith(s, q, null, null));
-    const liked = assessWith(s, q, 100, null);
-    expect(Math.abs(sample(liked) - Math.min(base * 1.4, 1))).toBeLessThan(1e-6);
-    expect(Math.abs(liked.ambientScale - 1.4)).toBeLessThan(1e-6);
-    const disliked = sample(assessWith(s, q, -100, null));
-    expect(Math.abs(disliked - base * 0.3)).toBeLessThan(1e-6);
-
-    // Direct address: answered unless affinity is very low.
-    expect(assessWith(s, named, -79, null).gate).toEqual({ kind: "sample", probability: 1 });
-    const hated = assessWith(s, named, -90, null);
-    expect(Math.abs(sample(hated) - 0.4)).toBeLessThan(1e-6);
-
-    const tired: Mood = { valence: 0, arousal: 0.5, energy: 0 };
-    const fresh: Mood = { ...tired, energy: 1 };
-    const low = sample(assessWith(s, q, null, tired));
-    expect(Math.abs(low - base * 0.7)).toBeLessThan(1e-6);
-    // She spoke 8 s ago: inside the cooldown (10 s; 13 s tired), outside the fresh one (7 s).
-    s = sessionWith(q);
-    s.recordOwn("Her", me, "嗯", newId(), Date.now() - 8000);
-    s.recordMessage(q[0] as IncomingMessage, false);
-    let a = assessWith(s, q, null, tired);
-    expect(a.reasons.some((r) => r.startsWith("cooldown"))).toBe(true);
-    a = assessWith(s, q, null, fresh);
-    expect(a.reasons.some((r) => r.startsWith("cooldown"))).toBe(false);
+  it("her quiet setting never shuts out someone answering her", () => {
+    const cfg = config({ llm_check: false });
+    const s = sessionWith([msg("channel", "a", "早")]);
+    s.recordOwn("Her", me, "早啊", newId(), Date.now());
+    const reply = [msg("channel", "a", "妳今天幹嘛")];
+    s.recordMessage(reply[0] as IncomingMessage, false);
+    const quiet = { level: 0.05, scope: "here" };
+    const a = assess({ ...input(cfg, s, reply), talkativeness: quiet });
+    expect(a.gate.kind, a.reasons.join("; ")).toBe("sample");
+    expect(a.ambientScale).toBe(1);
+    const plain = [msg("channel", "b", "今天好熱")];
+    const t = sessionWith(plain);
+    expect(assess({ ...input(cfg, t, plain), talkativeness: quiet }).gate).toEqual({
+      kind: "ignore",
+    });
   });
 
   it("sampling_is_seedable", () => {

@@ -11,8 +11,10 @@ Self voice node(`apps/voice-node`,TS)和 Core 的 `voice.link` 模組之間的�
 1. Node 連上後 5 秒內送出:
    ```json
    {"type":"hello","version":1,"token":"<VOICE_LINK_TOKEN>","node":"voice-node",
-    "self_account":{"platform":"discord","id":"<self 帳號 user id>"}}
+    "self_account":{"platform":"discord","id":"<self 帳號 user id>"},
+    "capabilities":["play_duck","play_pause"]}
    ```
+   `capabilities`(可選,字串陣列,預設空)是這個 node 支援的**選用功能**,Core 只會對宣告過的 node 送對應的訊息,所以新的 Core 配舊的 node(或反過來)照常運作,版本號不變(仍是 1)。目前有:`play_duck`(`play_duck`)、`play_pause`(`play_pause` + `play_resume`)。不認得的名稱忽略。
 2. Core 回 `{"type":"welcome","session":"<ulid>"}`。token 錯誤時用 close code `4401` 關閉;版本不符用 `4400`。
 3. 同一個 `self_account` 只允許一條連線,新的連線會取代舊的(舊的用 `4409` 關閉)。
 4. 心跳:Core 每 15 秒送 `{"type":"ping"}`,node 回 `{"type":"pong"}`;45 秒沒回應就斷線。
@@ -26,12 +28,19 @@ Self voice node(`apps/voice-node`,TS)和 Core 的 `voice.link` 模組之間的�
 | `play_start` | `play`(u32), `guild`, `sample_rate`, `levels?` | 開始一段播放;接著用二進位訊框送音訊。`levels: true`:這段播放另外帶一條**嘴型音軌**(`0x03`,例如歌曲的人聲),嘴型跟它走而不是跟播出的音訊走(舊的 node 會忽略) |
 | `play_end` | `play` | 這段音訊送完了。Node 播完緩衝裡的音訊後回 `playback` `finished` |
 | `play_stop` | `play`, `fade_ms` | 立刻停止(插話 / barge-in),淡出 `fade_ms` 毫秒 |
+| `play_duck` | `play`, `gain`(0~1), `fade_ms` | 把這段播放的音量設成 `gain`(1 = 原音量),用 `fade_ms` 毫秒漸變;之後一直維持到再次設定。別人在講話(不是在跟她說話)時 Core 先把她降音量,不用停。需要 capability `play_duck` |
+| `play_pause` | `play`, `fade_ms` | 淡出 `fade_ms` 毫秒後**暫停**:緩衝裡的音訊原封不動留著、不計入「沒收到音訊」逾時,node 持續送靜音。超過 30 秒(node 的 `maxPauseMs`)沒有 `play_resume` 就當被打斷(`playback` `interrupted`)。需要 capability `play_pause` |
+| `play_resume` | `play`, `fade_ms` | 繼續暫停的播放,`fade_ms` 毫秒淡入(回到 `play_duck` 設的音量)。需要 capability `play_pause` |
 | `golive_start` | `guild`, `source`, `channel?`, `width?`, `height?`, `fps?`, `bitrate_kbps?`, `encoder?`, `audio?`, `listen?` | 開始 Go Live,見下面〈Go Live〉 |
 | `golive_stop` | `guild` | 停止 Go Live |
 | `watch_start` | `guild`, `user_id` | 開始看某人的 Go Live,見下面〈看直播〉 |
 | `watch_stop` | `guild` | 結束觀看 |
 | `watch_snapshot` | `id`(u32) | 要一張目前畫面 |
 | `ping` | | |
+
+`play_duck` / `play_pause` / `play_resume` 對已經結束或不存在的 `play` 無作用;`gain` 超出 0~1、`fade_ms` 為負數的訊息被拒絕(node 回 `error`)。`fade_ms` 上限 10 秒,省略視為 0。音量調整同樣套用在嘴型音量上(她小聲嘴就小動)。
+
+**選擇性 barge-in(Core 端的規則,node 只負責執行上面的訊息)**:別人講話時 Core 先對播放送 `play_duck`;這回合要回的人講超過 `barge_in_ms` 就送 `play_pause`;語音辨識(ASR)回來後,如果是叫她名字、或要回的人說了實質內容就送 `play_stop`,否則(「嗯」、回音、跟她無關的話)送 `play_resume` 與 `play_duck` `gain: 1`,她接著講完剩下的句子。node 不宣告這兩個 capability(舊 node)時,Core 不送 duck、把「暫停」改成 `play_stop`(等於以前的行為)。這些決定都會以 `voice.barge_in` 事件(`{context, turn, account, action: duck|pause|resume|stop, reason}`)發到 Core 的事件匯流排。
 
 二進位 `0x02`(播放音訊):`[0x02][play: u32 LE][PCM s16le 單聲道 …]`。
 
@@ -120,6 +129,9 @@ OBS 端:RTMP 設定→串流→自訂,伺服器 `rtmp://127.0.0.1:1935/live`、�
 - 開播者關播、她離開語音、被踢時,node 送 `stopped`。
 - Core 連線斷掉時,node 立刻停止觀看(和 Go Live 不同,Go Live 會繼續推流)。
 - 舊版 node 會忽略這些訊息;Core 等 `live` 超過 15 秒就視為失敗。
+## 她聽起來講了多少
+
+Core 的 `voice_playback` 事件在 `finished` / `interrupted` 時帶 `heard_ms`(node 回報 `started` 到結束的時間,扣掉 `play_pause` 暫停的部分)和 `total_ms`(這句音訊的總長;被打斷時還沒合成完就是 `null`)。她的歷史用 `heard_ms / total_ms` 算聽到了幾成,沒有 `total_ms` 才用 `ms_per_char` 估。`speak` 被 abort signal 取消(Floor 切掉這句、排程逾時、緊急停止)也一樣:送 `play_stop`、發 `interrupted`。
 
 ## 嘴型音量(不在這個協定裡)
 
@@ -148,12 +160,27 @@ voice node 另外把**實際送去 Discord 的 PCM**(重新取樣成 48 kHz 之�
   ```
 - 回應:`200`,`Content-Type: audio/L16; rate=24000; channels=1`,body 是**串流**的原始 PCM s16le(chunked transfer)。標頭 `X-Sample-Rate` 一定要有。Worker 應該在產生第一段音訊後就開始送。
 - `voice` 是 worker 端註冊好的聲音名稱(例如由參考音檔建立的 clone prompt)。
+- `emotion` 是這句話要用的情緒音庫片段(`TTS_VOICE_BANK=1` 時才有作用)。台詞沒有自己的 `<emo:…>` 時用她現在表現出來的情緒;Core 依 `EMOTION_OUTPUTS` 的 `voice`(`packages/types/src/affect-outputs.ts`)和 `voice.toml` 的 `[design.bank.*]` 挑第一個有的片段。Worker 沒有那個片段時退回 `neutral`,再退回一般參考音。`instruct` 還是看原本的情緒標籤。
+
+## TTS 的排隊
+
+`POST /tts` 可以帶 `priority`:`now`(省略時的值,她接下來要講的)排在 `ahead`(先合成的後面幾句)前面。回應多兩個標頭:`X-Tts-Queue-Ms`(等 GPU 鎖的毫秒數,Core 算進 `tts_queue`)、`X-Tts-Reference`(用了哪個參考音,`ref`、`ref.ja`、`bank/ja/happy`)。`emotion` 在 `TTS_VOICE_BANK=1` 時用來選參考音,其他時候仍然只是資訊。
+
+`GET /busy`(TTS、ASR)→ `{"busy": n}`:正在處理的請求數,歌曲 worker 共用顯示卡時用它讓路。
+
+## 判斷講完(`workers/turn`,預設 `127.0.0.1:8006`)
+
+- `POST /turn`:本體是 PCM s16le 單聲道 16 kHz,這個回合到現在為止的聲音(只看最後 8 秒),標頭 `X-Sample-Rate: 16000` → `{"complete": bool, "probability": 0..1, "inference_ms": …}`。模型沒載入回 `503 {"error": …}`。
+- `WS /vad`:一條連線對一條音訊串流。每則二進位訊息 512 個樣本(32 ms),每則回一個文字訊息,內容是語音機率(`"0.923"`)。模型沒載入時關閉連線(1011)。
+- `GET /health` → `{"status":"ok","smart_turn":bool,"silero":bool,"threshold":…,"errors":{…}}`。模型缺了 worker 照常跑。
+
+Core 的 `voice_utterance` 這時多一個 `turn: {ended_by, probability}`:`ended_by` 是 `turn`(模型判定講完)、`timeout`(等到 `turn_max_silence_ms`)或 `silence` / `length` / `close`。
 
 ## 讓出顯示卡:`POST /offload`、`POST /reload`(TTS、ASR)
 
 歌曲 worker 轉換時要整張顯示卡(12 GB 的卡上跟 TTS / ASR 一起跑會慢 10 倍以上),所以 `tts/` 和 `asr/` worker 可以暫時放掉模型:
 
-- `POST /offload`(JSON 可省略):`{"reason"?: "sing", "max_s"?: 900}` → `{"state":"offloaded","offload_ms":…,"vram_before_mb":…,"vram_after_mb":…}`。整個模型(TTS 還有 CUDA graphs 和聲音的 prompt)丟掉、`torch.cuda.empty_cache()`。正在合成的那一句會先做完。CUDA graphs 綁在當初的記憶體位址上,不能搬到 CPU 再搬回來,所以是刪掉、之後重建。
+- `POST /offload`(JSON 可省略):`{"reason"?: "sing", "max_s"?: 900, "drain_s"?: 15}`(`drain_s` 只有 TTS)→ `{"state":"offloaded","offload_ms":…,"drained":bool,"vram_before_mb":…,"vram_after_mb":…}`。新的請求馬上回 503;TTS 正在合成的整段話最多等 `drain_s`(`TTS_OFFLOAD_DRAIN_S`)做完,超過才在下一個 chunk 中斷(`drained: false`)。然後整個模型(TTS 還有 CUDA graphs 和聲音的 prompt)丟掉、`torch.cuda.empty_cache()`。CUDA graphs 綁在當初的記憶體位址上,不能搬到 CPU 再搬回來,所以是刪掉、之後重建。
 - 放掉期間 `POST /tts`、`GET /voices`、`POST /asr` 都回 **`503 {"error":"offloaded"}`**(不會自動重新載入:那樣就不算讓出了);`GET /health` 仍是 `status: "ok"`,多 `offloaded: true`、`reason`、`since`、`reload_at`。
 - `POST /reload` → `{"state":"ready","reload_ms":…}`:跟啟動一樣重建(TTS:權重、CUDA graphs、聲音 priming;ASR:模型 + 暖機)。重複呼叫回 `already: true`。
 - 保險:放掉超過 `max_s`(`TTS_OFFLOAD_MAX_S` / `ASR_OFFLOAD_MAX_S`,預設 900 秒,0 = 不會)沒人叫 reload 就自己載回來(歌曲 worker 當掉也不會讓她永遠沒聲音)。
@@ -166,8 +193,8 @@ voice node 另外把**實際送去 Discord 的 PCM**(重新取樣成 48 kHz 之�
 - `POST /jobs`(JSON):`{"query"|"url"|"path": "...", "title"?, "artist"?, "pitch"?, "key"?: 0, "force"?: false, "exclusive_ack"?: false}`,三選一。`url` 只接受 `SING_URL_HOSTS` 的網域;`path` 是歌庫裡的相對路徑。`pitch` 是人聲移調(半音,省略 = 自動挑八度),`key` 是整首轉調(伴奏跟著移;給了 `key` 就不做自動轉調)。回 `{"job": Job}`;已經做過的歌(同一個查詢 / 連結 / 檔案與同樣的音高設定)直接回 `state: "done"`、`cached: true`。
 - `GET /jobs/{id}` → `{"job": Job}`;`DELETE /jobs/{id}` 取消。`Job`:`id`、`state`(`queued` / `running` / `done` / `failed` / `cancelled`)、`stage`(`resolve` / `download` / `exclusive` / `separate` / `convert` / `mix` / `lyrics` / `video`)、`progress`(0..1)、`error`、`song_id`、`source`、`position`、`song`(做好時的 meta)、`video`(`{state, progress, error}`,在抓影片時)、`exclusive`(`null` / `waiting` / `offloading` / `active` / `reloading` / `done`)與 `exclusive_info`(`{offloaded, errors, exclusive_wait_s?, offload_s, reload_s?}`)。
 - **獨佔顯示卡**(`SING_OFFLOAD_URLS`,例如 `http://127.0.0.1:8002,http://127.0.0.1:8003`,預設不開):從第一個用 GPU 的階段(分離,沒有就轉換)開始,先對每個 URL `POST /offload`,轉換一結束(成功、失敗、取消都一樣)就 `POST /reload`;reload 跟混音、歌詞平行跑,工作要等它們回來才算結束(她的開場白才有聲音)。某個 worker 放不掉就跳過它(記在 `exclusive_info.errors`)。`exclusive_ack: true` 的工作在 offload 前先停在 `exclusive: "waiting"`(`stage: "exclusive"`),等 Core `POST /jobs/{id}/exclusive`(她說完「我去準備一下歌喔」)或 `SING_EXCLUSIVE_WAIT_S`(30 秒)。
-- `GET /songs`、`GET /songs/{id}` → meta:`title`、`artist`、`duration_s`、`lyrics`(`{synced, lines: [{t, text}]}` 或 `null`,來自 lrclib.net)、`play`(`{sample_rate: 48000, samples}`)、`pitch`(`octave_shift`、`auto_key`、`song_key`、`vocal_shift`、`source_median_hz` / `source_top_hz`、`target_note`、`ceiling_note`、`top_after_note`、`f0_clean`、`transposer`)、`timings`、`peak_vram_mb`、`has_video` / `video` / `video_error`。
-- `GET /songs/{id}/files/{name}`:`mix.wav`、`vocals.wav`、`instrumental.wav`、`lyrics.lrc`、`video.mp4`(本機歌庫可能是 `video.mkv` 等),以及 Core 串流用的 `play_mix.pcm` / `play_vocals.pcm`(PCM s16le 單聲道 48 kHz,標頭 `X-Sample-Rate`)。
+- `GET /songs`、`GET /songs/{id}` → meta:`title`、`artist`、`duration_s`、`lyrics`(`{synced, lines: [{t, text}], provider, how, confidence, checks, ...}` 或 `null`,來自 lrclib.net / 網易雲;`confidence` 與 `how` 說明來源與把握)、`play`(`{sample_rate: 48000, samples}`)、`pitch`(`octave_shift`、`auto_key`、`song_key`、`vocal_shift`、`source_median_hz` / `source_top_hz`、`target_note`、`ceiling_note`、`top_after_note`、`f0_clean`、`transposer`)、`timings`、`peak_vram_mb`、`has_video` / `video` / `video_error`。
+- `POST /songs/{id}/lyrics`(`{title?, artist?, fresh?}`)重找一首歌的歌詞、不重做音訊,回 `{found, previous, lyrics}`;`GET /songs/{id}/files/{name}`:`mix.wav`、`vocals.wav`、`instrumental.wav`、`lyrics.lrc`、`video.mp4`(本機歌庫可能是 `video.mkv` 等),以及 Core 串流用的 `play_mix.pcm` / `play_vocals.pcm`(PCM s16le 單聲道 48 kHz,標頭 `X-Sample-Rate`)。
 - `GET /library` → `{"entries": [{path, title, artist, split}]}`(`split` = 資料夾裡已經有 `vocals.*` + `instrumental.*`)。
 - 標題、歌手、歌詞都來自 YouTube / lrclib / 點歌的人,Core 一律當不可信資料。
 

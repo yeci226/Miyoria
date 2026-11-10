@@ -78,6 +78,7 @@ describe("mind routes", () => {
       accepting: false,
       stats: null,
       pending_approvals: 0,
+      emergency: null,
     });
     h.sup.services.provide("mind", MindKey, fakeMind);
     expect(await h.client.thoughts(10)).toEqual([
@@ -98,6 +99,26 @@ describe("mind routes", () => {
     expect((await h.client.autonomyPause(true)).paused).toBe(true);
     expect(h.registry.paused).toBe(true);
     expect((await h.client.autonomyPause(false)).paused).toBe(false);
+  });
+
+  it("the emergency stop answers step by step, and the view remembers it", async () => {
+    const h = await harness();
+    const view = await h.client.autonomyPause(true);
+    expect(view.emergency?.by).toBeTruthy();
+    expect(view.emergency?.steps.map((s) => s.step)).toEqual([
+      "pause",
+      "silence",
+      "song",
+      "stream",
+      "voice",
+      "game",
+    ]);
+    // Nothing can confirm the broadcast over here: that is said, not swallowed.
+    const stream = view.emergency?.steps.find((s) => s.step === "stream");
+    expect(stream).toMatchObject({ ok: false, detail: "活動管理沒有啟用,確認不了" });
+    expect((await h.client.mind()).emergency).toEqual(view.emergency);
+    const back = await h.client.autonomyPause(false);
+    expect(back.emergency?.steps).toMatchObject([{ step: "resume", ok: true }]);
   });
 
   it("list pending approvals and answer them", async () => {

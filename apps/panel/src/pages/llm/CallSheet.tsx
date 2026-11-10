@@ -81,7 +81,7 @@ export function TextBlock({ text, fold = 1600, open: initial = false, mono = fal
       <pre
         aria-label={label}
         className={cn(
-          "max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border bg-background/70 px-3 py-2.5 text-[13px] leading-relaxed",
+          "max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border bg-well px-3 py-2.5 text-[13px] leading-relaxed",
           mono ? "font-mono text-[12px]" : "font-sans",
           !open && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]",
         )}
@@ -89,7 +89,7 @@ export function TextBlock({ text, fold = 1600, open: initial = false, mono = fal
         {text || "(空的)"}
       </pre>
       {text.length > fold && (
-        <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 justify-self-start rounded-sm text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-center gap-1 justify-self-start rounded-sm text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
           <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
           {open ? "收起" : `展開全部(${fmtInt(text.length)} 字)`}
         </button>
@@ -140,12 +140,12 @@ function CallBody({ call, detail }: { call: LlmCallRecord; detail: LlmCallDetail
             call.thought || call.turn ? (
               <span key="b" className="flex flex-wrap gap-x-3 gap-y-1">
                 {call.thought && (
-                  <Link to="/inner" search={{ tab: "thoughts", thought: call.thought }} className="text-brand underline-offset-4 hover:underline">
+                  <Link to="/inner" search={{ tab: "thoughts", thought: call.thought }} className="text-primary underline-offset-4 hover:underline">
                     她的想法 <code className="text-xs">{call.thought.slice(-8)}</code>
                   </Link>
                 )}
                 {call.turn && (
-                  <Link to="/llm" search={{ tab: "calls", turn: call.turn }} className="text-brand underline-offset-4 hover:underline">
+                  <Link to="/llm" search={{ tab: "calls", turn: call.turn }} className="text-primary underline-offset-4 hover:underline">
                     這一輪對話的呼叫 <code className="text-xs">{call.turn.slice(-8)}</code>
                   </Link>
                 )}
@@ -159,7 +159,7 @@ function CallBody({ call, detail }: { call: LlmCallRecord; detail: LlmCallDetail
       />
 
       <Section title="時間與用量">
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">
           {(
             [
               ["首字", fmtMs(call.first_token_ms)],
@@ -172,7 +172,7 @@ function CallBody({ call, detail }: { call: LlmCallRecord; detail: LlmCallDetail
               ["結束", call.finish_reason ? (FINISH_LABEL[call.finish_reason] ?? call.finish_reason) : "—"],
             ] as const
           ).map(([k, v]) => (
-            <div key={k} className="bg-popover px-3 py-2.5">
+            <div key={k}>
               <p className="text-xs text-muted-foreground">{k}</p>
               <p className="text-sm font-medium tabular-nums">{v}</p>
             </div>
@@ -217,7 +217,7 @@ function CallBody({ call, detail }: { call: LlmCallRecord; detail: LlmCallDetail
         <Section title="錯誤與重試">
           <ul className="grid gap-2 text-sm">
             {call.fallbacks.map((f, i) => (
-              <li key={i} className="rounded-md border border-warning/25 bg-warning/[0.05] px-3 py-2">
+              <li key={i} className="rounded-md bg-control px-3 py-2">
                 <span className="font-medium">換下一個模型</span> · <code className="text-xs">{f.model}</code> {ERROR_LABEL[f.kind] ?? f.kind}
                 <p className="mt-1 font-mono text-xs text-muted-foreground">{f.error}</p>
               </li>
@@ -228,9 +228,9 @@ function CallBody({ call, detail }: { call: LlmCallRecord; detail: LlmCallDetail
               </li>
             ))}
             {call.error && (
-              <li className="rounded-md border border-destructive/30 bg-destructive/[0.06] px-3 py-2">
+              <li className="rounded-md border border-primary/50 px-3 py-2">
                 <span className="font-medium">{call.error_kind ? (ERROR_LABEL[call.error_kind] ?? call.error_kind) : "錯誤"}</span>
-                <p className="mt-1 font-mono text-xs text-[oklch(0.78_0.12_25)]">{call.error}</p>
+                <p className="mt-1 font-mono text-xs text-primary">{call.error}</p>
               </li>
             )}
           </ul>
@@ -281,7 +281,7 @@ export function CallSheet({ id, onClose }: { id: string | undefined; onClose: ()
                   {STATUS_LABEL[call.status]}
                 </StatusBadge>
                 {purposeLabel(call.purpose)}
-                {call.thinking && <Brain aria-label="思考" className="size-4 text-brand" />}
+                {call.thinking && <Brain aria-label="思考" className="size-4 text-primary" />}
                 <span className="ml-auto font-mono text-sm font-normal text-muted-foreground">{fmtCost(call.cost_usd)}</span>
                 {q.data && <CopyButton text={JSON.stringify(q.data, null, 2)} label="複製整個呼叫(JSON)" />}
               </>

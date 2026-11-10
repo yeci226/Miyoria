@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { GameAdapter, GameEvent } from "../src/game.js";
+import { TaskRunner } from "../src/task.js";
 import { ErrorCode, type InitializeParams } from "../src/types.js";
-import { fakeHost, initParams, toolContext, waitFor } from "./helpers.js";
+import { fakeHost, initParams, waitFor } from "./helpers.js";
 
 function adapter(events: GameEvent[]): GameAdapter & { acted: unknown[] } {
   const acted: unknown[] = [];
@@ -17,7 +18,7 @@ function adapter(events: GameEvent[]): GameAdapter & { acted: unknown[] } {
       prompt: "你正在玩 Minecraft。",
     }),
     observe: async () => ({ state: { hp: 20 }, summary: "白天,血量全滿" }),
-    act: async (action) => {
+    act: async (action: { name: string; args?: Record<string, unknown> }) => {
       acted.push(action);
       return { ok: true, message: `did ${action.name}` };
     },
@@ -28,10 +29,11 @@ function adapter(events: GameEvent[]): GameAdapter & { acted: unknown[] } {
 }
 
 describe("game adapter helper", () => {
-  it("maps an adapter onto tools, a prompt and events", async () => {
+  it("maps an adapter onto a task executor, a prompt and events", async () => {
     const game = adapter([
       { type: "death", data: { cause: "creeper" }, important: true },
       { type: "Bad Type" },
+      { type: "task.done", data: {} },
       { type: "player.joined", data: { name: "Owen" } },
     ]);
     const h = fakeHost({
@@ -41,19 +43,41 @@ describe("game adapter helper", () => {
       },
     });
     const result = await h.initialize(gameInit("mc"));
-    expect(result.contributions.tools.map((t) => t.name)).toEqual(["game.mc.observe", "game.mc.act"]);
-    expect(result.contributions.tools[1]?.parameters).toMatchObject({
-      required: ["action"],
-      properties: { action: { enum: ["goto", "chat"] } },
+    // No raw observe / act tools: the executor is the only way in.
+    expect(result.contributions.tools).toEqual([]);
+    expect(result.contributions.executor).toEqual({
+      name: "Minecraft",
+      goals: [
+        { name: "goto", description: "走到某處", parameters: { type: "object" }, budget_s: null },
+        { name: "chat", description: "說話", parameters: null, budget_s: null },
+      ],
+      guide: null,
     });
     expect(result.contributions.prompts).toEqual(["game.mc"]);
 
-    const call = (name: string, args: unknown) =>
-      h.host.request<{ content: string }>("tools.call", { name, args, context: toolContext });
-    expect((await call("game.mc.observe", {})).content).toBe('白天,血量全滿\n\n狀態:{"hp":20}');
-    expect((await call("game.mc.act", { action: "goto", args: { x: 1 } })).content).toBe("成功:did goto");
+    const observed = await h.host.request<Record<string, unknown>>("task.observe", {});
+    expect(observed).toMatchObject({ state: { hp: 20 }, summary: "白天,血量全滿", task: null });
+    expect(typeof observed.at).toBe("string");
+
+    // `act` wrapped as one-step tasks: done when it returns ok.
+    await h.host.request("task.start", { task: { id: "t1", goal: "goto", args: { x: 1 }, budget_s: 30 } });
+    await waitFor(() => h.notifications.filter((n) => n.method === "task.event").length >= 2);
     expect(game.acted).toEqual([{ name: "goto", args: { x: 1 } }]);
-    expect((await call("game.mc.act", { action: "fly" })).content).toContain("失敗");
+    const events = () =>
+      h.notifications.filter((n) => n.method === "task.event").map((n) => (n.params as { event: { type: string; task: string } }).event);
+    expect(events().map((e) => [e.type, e.task])).toEqual([
+      ["started", "t1"],
+      ["done", "t1"],
+    ]);
+    // An unknown goal is accepted and fails with `invalid`.
+    await h.host.request("task.start", { task: { id: "t2", goal: "fly", args: {}, budget_s: 30 } });
+    await waitFor(() => events().length >= 4);
+    expect(events()[3]).toMatchObject({ type: "failed", task: "t2", code: "invalid" });
+    // A malformed spec is refused with the code in `data`.
+    await expect(h.host.request("task.start", { task: { id: "t3", goal: "goto", args: {}, budget_s: -1 } })).rejects.toMatchObject({
+      code: ErrorCode.InvalidParams,
+      data: { code: "invalid" },
+    });
 
     const prompt = await h.host.request("prompt.contribute", { key: "game.mc", request: {} });
     expect(prompt).toEqual({
@@ -67,6 +91,35 @@ describe("game adapter helper", () => {
       { topic: "game.mc.player.joined", payload: { type: "player.joined", data: { name: "Owen" } } },
     ]);
     expect(h.notifications.some((n) => n.method === "log")).toBe(true);
+  });
+
+  it("a failed act carries its code; the adapter's own executor wins", async () => {
+    const game = adapter([]);
+    game.act = async () => ({ ok: false, message: "看不到", code: "not_found" });
+    const h = fakeHost({
+      async activate(ctx) {
+        await ctx.game.registerAdapter(game);
+      },
+    });
+    await h.initialize(gameInit("mc"));
+    await h.host.request("task.start", { task: { id: "t1", goal: "goto", args: {}, budget_s: 30 } });
+    await waitFor(() => h.notifications.filter((n) => n.method === "task.event").length >= 2);
+    const last = h.notifications.filter((n) => n.method === "task.event").at(-1)?.params as { event: unknown };
+    expect(last.event).toMatchObject({ type: "failed", task: "t1", code: "not_found", detail: "看不到" });
+
+    const own = new TaskRunner({
+      observe: async () => ({ state: { own: true }, summary: "own" }),
+      run: async () => ({ detail: "ok" }),
+    });
+    const withOwn = Object.assign(adapter([]), { tasks: own });
+    const h2 = fakeHost({
+      async activate(ctx) {
+        const reg = await ctx.game.registerAdapter(withOwn);
+        expect(reg.executor).toBe(own);
+      },
+    });
+    await h2.initialize(gameInit("mc"));
+    expect(await h2.host.request("task.observe", {})).toMatchObject({ state: { own: true } });
   });
 
   it("rejects invalid game ids", async () => {

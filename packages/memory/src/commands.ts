@@ -41,6 +41,7 @@ import {
   type WipeCounts,
 } from "@miyoria/store";
 import {
+  type AccountRef,
   type Clock,
   newId,
   type PersonId,
@@ -48,9 +49,10 @@ import {
   systemClock,
   toTimestamp,
 } from "@miyoria/types";
-import type { MemoryEngine } from "./engine.js";
+import type { ForgetReport, MemoryEngine } from "./engine.js";
+import { isEventRef } from "./evidence.js";
 import { hasScope, scopeLabel, visibleScopes } from "./scope.js";
-import { relativeDate } from "./score.js";
+import { effectiveConfidence, relativeDate } from "./score.js";
 
 const log = getLogger("memory.commands");
 
@@ -108,6 +110,13 @@ export function wipeModules(scope: WipeScope): string[] {
   return categoryModules(wipePlan(scope));
 }
 
+/** What `me memory forget` removes, said before it is asked and again after it is done. */
+export const FORGET_REMOVES =
+  "會刪除：關於你的記憶、你告訴她的事，以及從你說過的話整理出來的記憶（經歷、事實、她的筆記）。";
+/** What it leaves, and why. */
+export const FORGET_KEEPS =
+  "不會刪除：聊天紀錄和事件紀錄（那是整理記憶的證據，只有擁有者能用 /admin memory wipe 清除）、她對你的好感與印象，以及和你無關、也不是從你的話整理出來的記憶。之後你再說起同樣的事，她可能會重新記下來。";
+
 const R = {
   showPage: "me:memory:page",
   show: "me:memory:show",
@@ -126,6 +135,38 @@ export interface MemoryCommandDeps {
   clock?: Clock;
 }
 
+/** What `forget` would take from someone, as far as a place may show it. */
+export interface OwnMemories {
+  records: MemoryRecord[];
+  person: PersonId | null;
+  /** Ids of the records derived from what they said (the rest are about them). */
+  derived: ReadonlySet<string>;
+}
+
+/**
+ * The records about `account`, then the ones derived from what they said, newest first, keeping
+ * what `visible` allows. `/me memory` passes the scopes of the invocation, the member page its own
+ * rule. `derived: false` skips those: finding them walks every memory.
+ */
+export async function ownMemories(
+  engine: MemoryEngine,
+  account: AccountRef,
+  visible: (record: MemoryRecord, person: PersonId | null) => boolean,
+  options: { derived?: boolean } = {},
+): Promise<OwnMemories> {
+  const person = await engine.personOf(account);
+  const own = (await engine.memoriesOf(person, account, false)).filter((r) => visible(r, person));
+  const found =
+    options.derived === false
+      ? { records: [] }
+      : await engine.derivedFrom(person, account, new Set(own.map((r) => r.id)));
+  const derived = found.records.filter((r) => r.superseded_by === null && visible(r, person));
+  const records = [...own, ...derived].sort(
+    (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || (b.id < a.id ? -1 : 1),
+  );
+  return { records, person, derived: new Set(derived.map((r) => r.id)) };
+}
+
 class Handler {
   readonly clock: Clock;
 
@@ -140,26 +181,26 @@ class Handler {
     return this.engine.profile;
   }
 
-  /** Records about the invoker that may be shown in the invocation's context. */
-  async visible(inv: Invocation): Promise<{ records: MemoryRecord[]; person: PersonId | null }> {
-    const person = await this.engine.personOf(inv.invoker);
+  /**
+   * What `forget` would take, as far as it may be shown in the invocation's context: the
+   * records about the invoker, then the ones derived from what they said (`derived`).
+   */
+  async visible(inv: Invocation): Promise<OwnMemories> {
     // Only the invoker is "in" the context of the reply, so DM memories show up only in the
     // invoker's own DM.
-    const scopes = visibleScopes(inv.context, [inv.invoker], person === null ? [] : [person]);
-    const records = (await this.engine.memoriesOf(person, inv.invoker, false)).filter((r) =>
-      hasScope(scopes, r.scope),
+    return ownMemories(this.engine, inv.invoker, (r, person) =>
+      hasScope(visibleScopes(inv.context, [inv.invoker], person === null ? [] : [person]), r.scope),
     );
-    return { records, person };
   }
 
   async show(inv: Invocation, page: number): Promise<CommandReply> {
-    const { records } = await this.visible(inv);
+    const { records, derived } = await this.visible(inv);
     if (records.length === 0) return notice("info", "在這裡，她還沒有記得關於你的事。");
     const now = toTimestamp(this.clock.now());
     const view = pageOf(records, page, PAGE_SIZE);
     const lines = view.items.map(
       (r) =>
-        `〔${kindLabel(r.kind)}〕${truncate(r.content.replaceAll("\n", " "), 160)}\n-# ${relativeDate(r.created_at, now)}`,
+        `〔${kindLabel(r.kind)}・${originLabel(r)}〕${truncate(r.content.replaceAll("\n", " "), 160)}\n-# ${relativeDate(r.created_at, now)}・${evidenceLabel(r)}${derived.has(r.id) ? "・出自你說的話" : ""}`,
     );
     const blocks: CardBlock[] = [
       { type: "text", text: lines.join("\n") },
@@ -168,7 +209,10 @@ class Handler {
         type: "buttons",
         buttons: [{ id: componentId(R.forgetAsk), label: "全部忘記", style: "danger" }],
       },
-      { type: "muted", text: "匯出完整內容請使用 /me memory export。" },
+      {
+        type: "muted",
+        text: "這是她整理出來的記憶,不是聊天紀錄。匯出完整內容請使用 /me memory export。",
+      },
     ];
     return cardReply(blocks, {
       title: `她記得的事（${records.length}）`,
@@ -178,9 +222,16 @@ class Handler {
   }
 
   async export(inv: Invocation): Promise<CommandReply> {
-    const { records } = await this.visible(inv);
+    const { records, derived } = await this.visible(inv);
     if (records.length === 0) return notice("info", "在這裡沒有關於你的記憶可以匯出。");
-    const json = `${JSON.stringify(records.map(exportItem), null, 2)}\n`;
+    const now = toTimestamp(this.clock.now());
+    const json = `${JSON.stringify(
+      records.map((r) =>
+        exportItem(r, effectiveConfidence(this.engine.config, r, now), derived.has(r.id)),
+      ),
+      null,
+      2,
+    )}\n`;
     const name = `memories-${toTimestamp(this.clock.now()).slice(0, 10)}.json`;
     return cardReply([{ type: "text", text: `已匯出 ${records.length} 筆記憶。` }], {
       title: "匯出記憶",
@@ -191,15 +242,18 @@ class Handler {
 
   async forget(inv: Invocation, keyword: string | null): Promise<CommandReply> {
     const person = await this.engine.personOf(inv.invoker);
-    const n = await this.engine.forget(person, inv.invoker, keyword);
+    const report = await this.engine.forget(person, inv.invoker, keyword);
+    const n = report.deleted;
+    // Said as it is: what went, how much of it was not about the person themselves, what stayed.
+    const detail = [forgetBreakdown(report), FORGET_KEEPS].filter((t) => t !== "").join("\n");
     if (keyword === null) {
       return n === 0
-        ? notice("info", "她本來就沒有記得關於你的事。")
-        : notice("success", `已讓她忘記關於你的 ${n} 件事。`);
+        ? notice("info", "她本來就沒有記得關於你的事。", unverifiedNote(report) || FORGET_KEEPS)
+        : notice("success", `已讓她忘記關於你的 ${n} 件事。`, detail);
     }
     return n === 0
-      ? notice("info", `她沒有記得和「${keyword}」有關的事。`)
-      : notice("success", `已讓她忘記和「${keyword}」有關的 ${n} 件事。`);
+      ? notice("info", `她沒有記得和「${keyword}」有關的事。`, unverifiedNote(report) || null)
+      : notice("success", `已讓她忘記和「${keyword}」有關的 ${n} 件事。`, detail);
   }
 
   askForget(raw: string): CommandReply {
@@ -209,7 +263,7 @@ class Handler {
       return confirm({
         title: "忘記全部",
         text: "確定要讓她忘記關於你的所有事嗎？這無法復原。",
-        detail: "需要備份的話，請先使用 /me memory export。",
+        detail: `${FORGET_REMOVES}\n${FORGET_KEEPS}\n需要備份的話，請先使用 /me memory export。`,
         confirmId: componentId(R.forgetAll),
         cancelId: componentId(R.forgetNo),
         confirmLabel: "全部忘記",
@@ -218,6 +272,7 @@ class Handler {
     const reply = confirm({
       title: "忘記",
       text: `確定要讓她忘記和「${truncate(target, 50)}」有關的事嗎？這無法復原。`,
+      detail: `${FORGET_REMOVES}\n${FORGET_KEEPS}`,
       confirmId: componentId(R.forgetKeyword),
       cancelId: componentId(R.forgetNo),
       confirmLabel: "忘記",
@@ -410,12 +465,51 @@ function rfc3339(ts: string): string {
     .replace(/Z$/, "+00:00");
 }
 
-function exportItem(r: MemoryRecord): Record<string, unknown> {
+/** How many went, by why, and what could not be checked. */
+function forgetBreakdown(report: ForgetReport): string {
+  const parts: string[] = [];
+  if (report.about > 0) parts.push(`關於你的 ${report.about} 件`);
+  if (report.derived > 0) parts.push(`你告訴她或從你的話整理出來的 ${report.derived} 件`);
+  const lines = parts.length > 0 ? [`其中${parts.join("、")}。`] : [];
+  const unverified = unverifiedNote(report);
+  if (unverified !== "") lines.push(unverified);
+  return lines.join("\n");
+}
+
+function unverifiedNote(report: ForgetReport): string {
+  return report.unverified > 0
+    ? `另有 ${report.unverified} 件記憶的來源事件已從事件紀錄移除，無法確認是否出自你，沒有刪除。`
+    : "";
+}
+
+function originLabel(r: MemoryRecord): string {
+  switch (r.origin ?? "unknown") {
+    case "experienced":
+      return "親歷";
+    case "told":
+      return r.source ? `聽 ${r.source.name} 說` : "聽說";
+    case "unknown":
+      return "來源不明";
+  }
+}
+
+function evidenceLabel(r: MemoryRecord): string {
+  const refs = r.source_events ?? [];
+  if (refs.length === 0) return "舊資料，沒有證據";
+  return refs.some(isEventRef) ? `有 ${refs.length} 筆證據` : "只有聊天紀錄當證據";
+}
+
+function exportItem(r: MemoryRecord, effective: number, derived: boolean): Record<string, unknown> {
   return {
     kind: r.kind,
     content: r.content,
+    derived_from_you: derived,
+    origin: r.origin ?? "unknown",
+    said_by: r.source?.name ?? null,
+    source_events: r.source_events ?? [],
     importance: round2(r.importance),
     confidence: round2(r.confidence),
+    effective_confidence: round2(effective),
     scope: scopeLabel(r.scope),
     created_at: rfc3339(r.created_at),
     due: r.due === null ? null : rfc3339(r.due),

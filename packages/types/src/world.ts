@@ -192,6 +192,11 @@ export interface HerStatus {
   scene: string | null;
   /** Name of the game she is playing. */
   game: string | null;
+  /**
+   * The song she is singing (v2: from the ActivityManager). Optional only so that producers
+   * built before it keep type-checking; the world module always sets it.
+   */
+  singing?: string | null;
 }
 
 export interface TimeContext {

@@ -8,15 +8,31 @@ import type {
   RoleDefinition,
   RoleMapping,
 } from "@miyoria/store";
-import type { ContextKey, Envelope, PlatformId, ThoughtDigest } from "@miyoria/types";
+import type {
+  ActivitySnapshot,
+  ActivityTask,
+  AffectSnapshot,
+  ArbiterVerdict,
+  ContextKey,
+  Envelope,
+  LedgerView,
+  PersonCard,
+  PlatformId,
+  SavedPrompt,
+  ThoughtDigest,
+  TurnOutcomeRecord,
+} from "@miyoria/types";
 import { statusText } from "./errors.js";
 import type {
+  ArbiterDecisionsView,
   AssignRoleRequest,
   AuthMethods,
   ConversationNoteView,
   CostInfo,
+  DayPlanView,
   ErrorBody,
   ExtensionInfo,
+  GoalsView,
   HealthInfo,
   KnowledgeView,
   McpServerInfo,
@@ -30,6 +46,7 @@ import type {
   PersonaSectionInfo,
   PersonDetail,
   PersonSummary,
+  PromptSummary,
   QueueState,
   ReflectionView,
   RemoveMappingRequest,
@@ -40,6 +57,7 @@ import type {
   SetPersonaResponse,
   StageState,
   Thought,
+  TurnOutcomeKind,
   UpdateMemoryRequest,
   UpdatePersonRequest,
   UpsertRoleRequest,
@@ -445,6 +463,96 @@ export class ApiClient {
   /** What she perceives: people, voice channels, channel activity, her own status. */
   world(o?: CallOptions): Promise<WorldView> {
     return this.#json("GET", ["world"], o);
+  }
+
+  // ---- body, arbiter, affect, plan, prompts -----------------------------------------------
+
+  /** Her presence, broadcast, activity and scene. */
+  activity(o?: CallOptions): Promise<ActivitySnapshot> {
+    return this.#json("GET", ["activity"], o);
+  }
+
+  /** Recent activity transition tasks, newest first. */
+  activityTasks(limit = 20, o?: CallOptions): Promise<ActivityTask[]> {
+    return this.#json("GET", ["activity", "tasks"], { ...o, query: { limit: String(limit) } });
+  }
+
+  /** What she did or tried (`context`: entries there first), her limits, topics nobody took up. */
+  ledger(context: ContextKey | null = null, limit = 50, o?: CallOptions): Promise<LedgerView> {
+    return this.#json("GET", ["arbiter", "ledger"], {
+      ...o,
+      query: { limit: String(limit), context: context ? JSON.stringify(context) : undefined },
+    });
+  }
+
+  /** The arbiter's recent verdicts with reasons, newest first (`verdict`: only that kind). */
+  arbiterDecisions(
+    q: { limit?: number; context?: ContextKey | null; verdict?: ArbiterVerdict } = {},
+    o?: CallOptions,
+  ): Promise<ArbiterDecisionsView> {
+    return this.#json("GET", ["arbiter", "decisions"], {
+      ...o,
+      query: {
+        limit: q.limit === undefined ? undefined : String(q.limit),
+        context: q.context ? JSON.stringify(q.context) : undefined,
+        verdict: q.verdict,
+      },
+    });
+  }
+
+  /** Her emotions, derived mood, drives and the behaviour biases they imply. */
+  affect(o?: CallOptions): Promise<AffectSnapshot> {
+    return this.#json("GET", ["affect"], o);
+  }
+
+  /** One card per person, highest attachment first. */
+  affectPeople(o?: CallOptions): Promise<PersonCard[]> {
+    return this.#json("GET", ["affect", "people"], o);
+  }
+
+  /** Her goals (`closed`: also the done and dropped ones when the agenda keeps them). */
+  goals(closed = false, o?: CallOptions): Promise<GoalsView> {
+    return this.#json("GET", ["mind", "goals"], {
+      ...o,
+      query: { closed: closed ? "true" : undefined },
+    });
+  }
+
+  /** Today's plan in her words. */
+  dayPlan(o?: CallOptions): Promise<DayPlanView> {
+    return this.#json("GET", ["mind", "plan"], o);
+  }
+
+  /** The saved prompts of recent turns (no text), newest first. */
+  prompts(
+    context: ContextKey | null = null,
+    limit = 30,
+    o?: CallOptions,
+  ): Promise<PromptSummary[]> {
+    return this.#json("GET", ["prompts"], {
+      ...o,
+      query: { limit: String(limit), context: context ? JSON.stringify(context) : undefined },
+    });
+  }
+
+  /** The saved prompt of one turn, in full. */
+  prompt(turn: string, o?: CallOptions): Promise<SavedPrompt> {
+    return this.#json("GET", ["prompts", turn], o);
+  }
+
+  /** How turns ended, newest first. */
+  turnOutcomes(
+    q: { limit?: number; context?: ContextKey | null; outcome?: TurnOutcomeKind } = {},
+    o?: CallOptions,
+  ): Promise<TurnOutcomeRecord[]> {
+    return this.#json("GET", ["turns", "outcomes"], {
+      ...o,
+      query: {
+        limit: q.limit === undefined ? undefined : String(q.limit),
+        context: q.context ? JSON.stringify(q.context) : undefined,
+        outcome: q.outcome,
+      },
+    });
   }
 
   /** Her mind loop: paused or not, call counts, pending approvals. */

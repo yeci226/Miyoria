@@ -27,11 +27,15 @@ import {
 } from "@miyoria/store";
 import {
   type Event,
+  type Mind,
+  MindKey,
   MoodSignalsKey,
   newId,
   PromptContributors,
   PromptContributorsKey,
-  type PromptRequest,
+  type SelfState,
+  SelfStateKey,
+  SOCIAL_APPRAISAL_TOPIC,
   SocialSignalsKey,
 } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
@@ -42,6 +46,7 @@ import {
   familiarityChange,
   flirtWeight,
   label,
+  lineDepth,
   localDay,
   MoodModule,
   mergeInto,
@@ -49,7 +54,6 @@ import {
   SocialConfigSchema,
   SocialKey,
   SocialModule,
-  SocialPrompt,
   socialConfig,
   stripTags,
 } from "../src/index.js";
@@ -120,13 +124,48 @@ describe("social engine", () => {
     check(-60, 50, "很討厭");
   });
 
-  it("familiarity_grows_per_day_and_decays_without_contact", () => {
+  it("familiarity grows with how much and how deeply people talk, and decays without contact", () => {
     const c = socialConfig();
-    expect(close(familiarityChange(null, t(1, 12), c), 1)).toBe(true);
-    expect(close(familiarityChange(t(1, 9), t(1, 23), c), 0)).toBe(true);
-    expect(close(familiarityChange(t(1, 23), t(2, 1), c), 1)).toBe(true);
+    // Every line counts (not +1 a day), by its depth, slowing toward 100.
+    expect(close(familiarityChange(null, t(1, 12), c), 0.15)).toBe(true);
+    expect(close(familiarityChange(t(1, 9), t(1, 23), c, 0, 1), 0.15)).toBe(true);
+    expect(close(familiarityChange(t(1, 9), t(1, 23), c, 0, 3), 0.45)).toBe(true);
+    expect(close(familiarityChange(t(1, 9), t(1, 23), c, 50, 1), 0.075)).toBe(true);
+    expect(familiarityChange(t(1, 9), t(1, 23), c, 100, 4)).toBe(0);
+    // The next day is just another line.
+    expect(close(familiarityChange(t(1, 23), t(2, 1), c), 0.15)).toBe(true);
     // 19 days without contact, 7 of grace: 12 days of decay.
-    expect(close(familiarityChange(t(1, 12), t(21, 12), c), 1 - 12 * 0.5)).toBe(true);
+    expect(close(familiarityChange(t(1, 12), t(21, 12), c), 0.15 - 12 * 0.5)).toBe(true);
+    // Depth: said to her, long, very long.
+    expect([
+      lineDepth("嗨", false),
+      lineDepth("嗨", true),
+      lineDepth("嗨".repeat(40), true),
+    ]).toEqual([1, 2, 3]);
+    expect(lineDepth("嗨".repeat(120), true)).toBe(4);
+  });
+
+  it("a person who talks a lot is not a stranger (604 lines)", async () => {
+    const h = new Harness();
+    for (let i = 0; i < 604; i++) {
+      await h.say(
+        "discord:2",
+        "Amy",
+        "今天天氣真好,我們一起去走走吧,順便聊聊最近發生的事情吧",
+        dm(),
+        t(1, 10) + i * MINUTE,
+      );
+    }
+    const r = h.rel("discord:2");
+    expect(r.interactions).toBe(604);
+    expect(r.familiarity).toBeGreaterThan(30);
+    expect(r.familiarity).toBeLessThan(100);
+    // Rows are written in steps of half a point, not one per line.
+    const rows = h.store
+      .deltas(h.person("discord:2"))
+      .filter((d) => d.reason === "familiarity: lines");
+    expect(rows.length).toBeGreaterThan(5);
+    expect(rows.length).toBeLessThan(250);
   });
 
   it("rules_are_capped_per_day_and_survive_restart", async () => {
@@ -137,12 +176,13 @@ describe("social engine", () => {
     let r = h.rel("discord:2");
     // thanks: 1 + .5 + .25 ... < 2, praise: 1.5 + .75 ... < 3.
     expect(r.affinity > 4.5 && r.affinity < 5.001, `${r.affinity}`).toBe(true);
-    expect(close(r.familiarity, 1), "one interaction day").toBe(true);
+    // 20 lines said to her (depth 2): 0.3 each, slowing a little.
+    expect(r.familiarity > 5 && r.familiarity < 6.5, `${r.familiarity}`).toBe(true);
     expect(r.interactions).toBe(20);
     const p = h.person("discord:2");
     const reasons = h.store.deltas(p).map((d) => d.reason);
     expect(reasons).toContain("rule: thanks");
-    expect(reasons).toContain("familiarity: day");
+    expect(reasons).toContain("familiarity: lines");
     expect(h.topics()).not.toEqual([]);
 
     // A restart rebuilds today's ledger from the recorded deltas.
@@ -157,7 +197,100 @@ describe("social engine", () => {
     await again.say("discord:2", "Amy", "謝謝", dm(), t(2, 11));
     r = again.rel("discord:2");
     expect(close(r.affinity - before, 1), `${r.affinity - before}`).toBe(true);
-    expect(close(r.familiarity, 2)).toBe(true);
+    // The next day's lines add to what the first day made (it is only a few lines more).
+    expect(r.familiarity > 5.5, `${r.familiarity}`).toBe(true);
+  });
+
+  it("economy gains: tiny, diminishing, a kind cap inside the overall caps, no emotion event", async () => {
+    const h = new Harness();
+    await h.say("discord:2", "Amy", "嗨", dm(), t(1, 10));
+    const p = h.person("discord:2");
+    const start = h.rel("discord:2");
+    const events = () =>
+      h.events.filter((e) => e.type === "custom" && e.data.topic === "social.event").length;
+    const before = events();
+    const treat = (now: number) =>
+      h.social.gain(
+        p,
+        { kind: "treat", affinity: 0.4, trust: 0.1, kind_cap: { affinity: 1.5, trust: 0.5 } },
+        now,
+      );
+    const first = await treat(t(1, 11));
+    expect(close(first.affinity, 0.4) && close(first.trust, 0.1), JSON.stringify(first)).toBe(true);
+    // The n-th of the day is worth repeat_decay^n of it.
+    const second = await treat(t(1, 11));
+    expect(close(second.affinity, 0.2) && close(second.trust, 0.05)).toBe(true);
+    for (let i = 0; i < 10; i++) await treat(t(1, 11));
+    const gained = h.rel("discord:2").affinity - start.affinity;
+    // 0.4 / (1 - .5) is 0.8 at most however many; far below the kind cap.
+    expect(gained > 0.7 && gained < 0.81, `${gained}`).toBe(true);
+    const reasons = h.store.deltas(p).map((d) => d.reason);
+    expect(reasons).toContain("economy: treat");
+    expect(events(), "her emotions are the economy's to publish").toBe(before);
+
+    // The kind's own cap: a big raw gain stops at it, and counts toward the overall cap.
+    const big = new Harness();
+    await big.say("discord:3", "Bob", "嗨", dm(), t(1, 10));
+    const bob = big.person("discord:3");
+    const got = await big.social.gain(
+      bob,
+      { kind: "treat", affinity: 5, trust: 3, kind_cap: { affinity: 1.5, trust: 0.5 } },
+      t(1, 11),
+    );
+    expect(close(got.affinity, 1.5) && close(got.trust, 0.5), JSON.stringify(got)).toBe(true);
+    const more = await big.social.gain(
+      bob,
+      { kind: "treat", affinity: 5, trust: 3, kind_cap: { affinity: 1.5, trust: 0.5 } },
+      t(1, 12),
+    );
+    expect(more).toEqual({ affinity: 0, trust: 0 });
+    const ledger = big.social.today(bob, t(1, 12));
+    expect(close(ledger?.affinity_gained ?? 0, 1.5 + 0.5)).toBe(true);
+    // Used up by gifts, the rest of her day's budget is still there for other things.
+    await big.say("discord:3", "Bob", "謝謝你,你好可愛", dm(), t(1, 13));
+    expect((big.social.today(bob, t(1, 13))?.affinity_gained ?? 0) > 2).toBe(true);
+
+    // A restart rebuilds the kind's total from the recorded deltas.
+    const again = new Harness(socialConfig(), big.store);
+    await again.social.load();
+    const after = await again.social.gain(
+      bob,
+      { kind: "treat", affinity: 5, trust: 3, kind_cap: { affinity: 1.5, trust: 0.5 } },
+      t(1, 14),
+    );
+    expect(after).toEqual({ affinity: 0, trust: 0 });
+    // A new day, a new budget.
+    const next = await again.social.gain(
+      bob,
+      { kind: "treat", affinity: 0.4, trust: 0.1, kind_cap: { affinity: 1.5, trust: 0.5 } },
+      t(2, 10),
+    );
+    expect(close(next.affinity, 0.4)).toBe(true);
+  });
+
+  it("economy gains do nothing for blocked people; a penalty is outside the caps", async () => {
+    const h = new Harness();
+    await h.say("discord:5", "Troll", "嗨", dm(), t(1, 10));
+    const p = h.person("discord:5");
+    const gain = { kind: "deal_kept" as const, affinity: 0, trust: 0.3, kind_cap: null };
+    const kept = await h.social.gain(p, gain, t(1, 11));
+    expect(close(kept.trust, 0.3), JSON.stringify(kept)).toBe(true);
+    // A day of insults used up the loss budget; the penalty still lands in full.
+    for (let i = 0; i < 6; i++) await h.say("discord:5", "Troll", "你這個智障", dm(), t(1, 12));
+    const before = h.rel("discord:5");
+    const hit = await h.social.penalty(
+      p,
+      { affinity: 1.5, trust: 4, reason: "deal: broken_promise" },
+      t(1, 13),
+    );
+    expect(close(hit.affinity, -1.5) && close(hit.trust, -4), JSON.stringify(hit)).toBe(true);
+    expect(close(before.trust - h.rel("discord:5").trust, 4)).toBe(true);
+    expect(h.store.deltas(p).map((d) => d.reason)).toContain("deal: broken_promise");
+
+    expect(await h.social.setTag(p, "blocked", true, "test", t(1, 14))).toBe(true);
+    const n = h.store.deltas(p).length;
+    expect(await h.social.gain(p, gain, t(1, 15))).toEqual({ affinity: 0, trust: 0 });
+    expect(h.store.deltas(p)).toHaveLength(n);
   });
 
   it("rules_only_count_lines_said_to_her", async () => {
@@ -220,11 +353,6 @@ describe("social engine", () => {
     await h.say("discord:5", "Troll", "去死啦白痴", dm(), t(1, 11));
     expect(h.store.deltas(p), "no changes while blocked").toHaveLength(n);
     expect(h.social.attitude(acc("discord:5"))?.blocked).toBe(true);
-    const lines = h.social.describePeople(
-      [{ account: acc("discord:5"), display_name: "Troll", person: null }],
-      [],
-    );
-    expect(lines[0], JSON.stringify(lines)).toContain("不理");
   });
 
   it("llm_appraisal_is_parsed_and_applied", async () => {
@@ -295,27 +423,6 @@ describe("social engine", () => {
     expect(mock.requests()[0]?.messages[1]?.content).toContain("DeepSeek-chan: 鯨魚很可愛吧!");
     expect(h.social.dueNotes(t(1, 10))).toEqual([]);
     await h.social.setCallName(p, "阿美", t(1, 10));
-
-    const prompt = new SocialPrompt(h.social);
-    const request: PromptRequest = {
-      profile: profile(),
-      turn: "turn",
-      context: dm(),
-      participants: [
-        { account: acc("discord:9"), display_name: "Newbie", person: null },
-        { account: acc("discord:2"), display_name: "Amy", person: null },
-      ],
-      speakers: [acc("discord:2")],
-      query: "",
-      recent: [],
-      voice: false,
-      now: new Date(t(1, 10)).toISOString(),
-    };
-    const sections = await prompt.contribute(request);
-    expect(sections[0]?.title).toBe("在場的人");
-    const body = sections[0]?.body ?? "";
-    expect(body.startsWith("- Amy:陌生人;稱呼「阿美」;印象:喜歡鯨魚的人"), body).toBe(true);
-    expect(body).toContain("- Newbie:陌生人");
   });
 
   it("link_code_flow", async () => {
@@ -590,6 +697,7 @@ describe("social engine", () => {
       utc_offset_minutes: 480,
       familiarity_grace_days: 7,
       familiarity_decay_per_day: 0.5,
+      familiarity_per_line: 0.15,
       appraisal_every_lines: 8,
       appraisal_idle_secs: 90,
       appraisal_max_lines: 30,
@@ -598,7 +706,6 @@ describe("social engine", () => {
       notes_min_interval_hours: 12,
       tick_secs: 15,
       auto_owner_tag: true,
-      prompt_max_people: 8,
       llm_purpose: "fast",
     });
   });
@@ -607,21 +714,19 @@ describe("social engine", () => {
     const h = new Harness();
     await h.say("discord:2", "Amy", "謝謝", dm(), t(1, 10));
     const p = h.person("discord:2");
-    const [familiarity, thanks] = h.topics();
-    expect(familiarity).toEqual({
+    // One short line is only a hair of familiarity: no row for it yet.
+    const [thanks] = h.topics();
+    expect(thanks).toMatchObject({
       profile: profile(),
       person: p,
       name: "Amy",
-      reason: "familiarity: day",
-      kind: null,
-      positive: null,
-      affinity: 0,
-      trust: 0,
-      familiarity: 1,
+      reason: "rule: thanks",
+      kind: "thanks",
+      positive: true,
+      trust: expect.any(Number),
       label: "陌生人",
       context: dm(),
     });
-    expect(thanks).toMatchObject({ reason: "rule: thanks", kind: "thanks", positive: true });
     const delta = h.store.deltas(p)[0];
     expect(Object.keys(delta ?? {}).sort()).toEqual([
       "affinity",
@@ -673,6 +778,64 @@ async function eventually(what: string, f: () => boolean): Promise<void> {
 }
 
 describe("modules", () => {
+  /** The module with her feelings around and a line due for its pass. */
+  async function reading(mind: boolean) {
+    const bus = new EventBus();
+    const services = new ServiceRegistry();
+    const store = new FakeStore();
+    services.provide("kernel", PeopleStoreKey, store);
+    services.provide("kernel", RelationshipStoreKey, store);
+    services.provide("kernel", IdentityStoreKey, store);
+    services.provide("kernel", SelfStateKey, {
+      crush: () => null,
+      emotions: () => [],
+      drives: () => ({ esteem: 0, attention: 0, social: 0, longing: 0, hunger: 0 }),
+    } as unknown as SelfState);
+    if (mind) services.provide("kernel", MindKey, {} as Mind);
+    const mock = new MockProvider("mock").reply(
+      '{"people":[{"person_name":"Amy","toward_her":0,"events":[],"romance":0.8}],"her":{"joy":0.9}}',
+    );
+    const sup = new Supervisor({ bus, services });
+    await sup.register(new LlmStub(mock), null, true);
+    await sup.register(
+      new SocialModule(profile(), "DeepSeek-chan", ["DS醬"]),
+      { appraisal_every_lines: 1 },
+      true,
+    );
+    await sup.startAll();
+    const appraisals = bus.subscribe([SOCIAL_APPRAISAL_TOPIC]);
+    bus.publish("platform.test", {
+      type: "platform_message_created",
+      data: {
+        id: { context: channel(), id: "m1" },
+        author: { account: acc("discord:2"), display_name: "Amy", is_bot: false },
+        text: "DS醬今天好可愛",
+        mentions_self: false,
+        reply_to_self: false,
+        attachments: [],
+        ts: new Date().toISOString(),
+      },
+    });
+    await eventually("the pass", () => mock.requests().length > 0);
+    const asked = JSON.stringify(mock.requests()[0]?.messages);
+    const published = await withTimeout(appraisals.recv(), 200);
+    await sup.stopAll();
+    return { asked, published };
+  }
+
+  it("her feelings are Appraise's to read: with the mind running, this pass leaves them", async () => {
+    const { asked, published } = await reading(true);
+    expect(asked).not.toContain("romance");
+    expect(asked).not.toContain("她在乎的事");
+    expect(published).toBeUndefined();
+  });
+
+  it("without the mind, this pass is what reads them", async () => {
+    const { asked, published } = await reading(false);
+    expect(asked).toContain("romance");
+    expect(published).toBeTruthy();
+  });
+
   it("modules_wire_services_and_events", async () => {
     const bus = new EventBus();
     const services = new ServiceRegistry();
@@ -697,7 +860,7 @@ describe("modules", () => {
     const signals = services.require(SocialSignalsKey);
     const mood = services.require(MoodSignalsKey);
     expect(services.has(SocialKey)).toBe(true);
-    expect(contributors.all().map((c) => c.key)).toEqual(["mood", "social"]);
+    expect(contributors.all()).toEqual([]);
     expect(registry.specs().map((s) => s.path.join(" "))).toContain("admin person adjust");
     const valenceBefore = mood.mood().valence;
 

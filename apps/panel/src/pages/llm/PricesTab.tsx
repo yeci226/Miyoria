@@ -95,7 +95,7 @@ function PriceTable() {
   const models = [...new Set([...Object.keys(prices), ...seen])].sort();
   const r = "text-right font-mono text-[13px] tabular-nums";
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>價格(每百萬 token,USD)</CardTitle>
         <span className="ml-auto text-xs text-muted-foreground">
@@ -105,7 +105,7 @@ function PriceTable() {
       {stats.isPending ? (
         <SkeletonRows count={2} />
       ) : models.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">沒有設定價格,也還沒有呼叫</p>
+        <p className="py-3 text-[13px] text-muted-foreground">沒有設定價格,也還沒有呼叫</p>
       ) : (
         <Table aria-label="價格">
           <TableHeader>
@@ -133,7 +133,7 @@ function PriceTable() {
                       <TableCell className={r}>{fmtPerMtok(p.output_per_mtok)}</TableCell>
                     </>
                   ) : (
-                    <TableCell colSpan={3} className="text-right text-[13px] text-[oklch(0.78_0.14_25)]">
+                    <TableCell colSpan={3} className="text-right text-[13px] text-primary">
                       沒有設定價格,呼叫算作 $0
                     </TableCell>
                   )}
@@ -154,21 +154,21 @@ export function PricesTab() {
   const usage = useUsage();
   const cost = useCost();
   return (
-    <div className="grid gap-4">
+    <div className="grid gap-(--stage-gap)">
       <PriceTable />
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-(--stage-gap) lg:grid-cols-2">
         <SpendBlock />
         <CallsByModel />
       </div>
-      <div className="flex items-center justify-between gap-3 pt-2">
-        <h2 className="text-base font-semibold tracking-tight">用量趨勢</h2>
+      <div className="-mb-5 flex items-center justify-between gap-3">
+        <h2 className="text-[15px] font-semibold tracking-[-0.01em]">用量趨勢</h2>
         <RangeToggle range={range} onChange={setRange} />
       </div>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-(--stage-gap) lg:grid-cols-2">
         <TokensBlock trend={trend} />
         <LatencyBlock trend={trend} />
       </div>
-      <Card className="overflow-hidden">
+      <Card>
         <CardHeader>
           <CardTitle>用量明細</CardTitle>
         </CardHeader>

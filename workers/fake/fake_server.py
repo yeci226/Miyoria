@@ -9,12 +9,15 @@ Point both [speech.asr.*] and [speech.tts.*] `url`s at it for end-to-end tests.
     POST /tts    JSON {text, language?, emotion?, instruct?, voice?} -> streamed PCM s16le mono 24 kHz:
                  a sine "voice" — one short tone per non-space character (pitch from the character,
                  shifted by emotion). Streamed per sentence like the real worker.
+    POST /turn   raw PCM -> {"complete","probability"}: always FAKE_TURN_PROB (default 0.9).
+    WS   /vad    512-sample frames -> speech probability from the frame's loudness.
+    GET  /busy   -> {"busy": 0}
     GET  /health
 
 Deterministic length contract (tests rely on it): the body has exactly
 ``non_whitespace_chars(text) * SAMPLES_PER_CHAR * 2`` bytes.
 
-Env: FAKE_ASR_TEXT, FAKE_VOICES (comma list, default "deepseek-chan,default"),
+Env: FAKE_ASR_TEXT, FAKE_TURN_PROB, FAKE_VOICES (comma list, default "deepseek-chan,default"),
      FAKE_TTS_DELAY_MS (sleep per sentence, to emulate synthesis latency), HOST, PORT (8000).
 Needs: fastapi, uvicorn, python-multipart (tests also httpx, pytest). Standard library otherwise.
 """
@@ -32,7 +35,7 @@ from array import array
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -110,6 +113,7 @@ class TtsRequest(BaseModel):
     emotion: str | None = None
     instruct: str | None = None
     voice: str | None = None
+    priority: str | None = None
 
 
 def _freq(ch: str, pitch: float) -> float:
@@ -164,9 +168,38 @@ async def tts(req: TtsRequest) -> Response:
     )
 
 
+# ── end of turn ──────────────────────────────────────────────────────────────
+
+
+@app.post("/turn")
+async def turn(request: Request) -> JSONResponse:
+    await request.body()
+    p = float(os.environ.get("FAKE_TURN_PROB", "0.9"))
+    return JSONResponse({"complete": p >= 0.5, "probability": p, "inference_ms": 0.0})
+
+
+@app.websocket("/vad")
+async def vad(ws: WebSocket) -> None:
+    await ws.accept()
+    try:
+        while True:
+            frame = array("h")
+            frame.frombytes(await ws.receive_bytes())
+            loud = max((abs(s) for s in frame), default=0) > 1000
+            await ws.send_text("0.950" if loud else "0.020")
+    except WebSocketDisconnect:
+        return
+
+
+@app.get("/busy")
+async def busy() -> dict[str, int]:
+    return {"busy": 0}
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
-    return {"status": "ok", "model": "fake", "device": "cpu", "voices": _env_voices(), "sample_rate": SAMPLE_RATE}
+    return {"status": "ok", "model": "fake", "device": "cpu", "voices": _env_voices(), "sample_rate": SAMPLE_RATE,
+            "smart_turn": True, "silero": True}
 
 
 def main() -> None:

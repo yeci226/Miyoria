@@ -1,5 +1,6 @@
 // Stage Link protocol tests: `stage.link` on a real socket and a scripted Stage node.
 
+import { ActuatorRegistry, ActuatorRegistryKey, defineCapability } from "@miyoria/actions";
 import {
   CommandRegistry,
   CommandRegistryKey,
@@ -15,11 +16,13 @@ import {
   type Event,
   type JsonObject,
   newId,
+  Principals,
   SONG_PREPARE_TOPIC,
   SONG_TOPIC,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { z } from "zod";
 import {
   EMOTION_TOPIC,
   formatAddress,
@@ -42,8 +45,12 @@ class Harness {
     readonly module: StageLinkModule,
   ) {}
 
-  static async start(config: JsonObject = {}): Promise<Harness> {
+  static async start(
+    config: JsonObject = {},
+    prepare: (services: ServiceRegistry) => void = () => undefined,
+  ): Promise<Harness> {
     const services = new ServiceRegistry();
+    prepare(services);
     services.provide("commands", CommandRegistryKey, new CommandRegistry(new Permissions()));
     const bus = new EventBus();
     const sup = new Supervisor({ bus, services });
@@ -470,7 +477,7 @@ describe("stage.link", () => {
     req = await answer(node, { vts: false, obs: true, scene: "Game", streaming: true });
     expect(req.type).toBe("status_request");
     reply = await call;
-    expect(registry.get(["stream", "status"])?.ephemeral).toBe(true);
+    expect(registry.get(["stream", "status"])?.ephemeral).toBe(false);
     expect(reply.text).toContain("直播中");
     expect(reply.text).toContain("Game");
 
@@ -487,6 +494,90 @@ describe("stage.link", () => {
     for (const p of STREAM_COMMAND_PATHS) {
       expect(registry.get(p.split(" ")), `${p} unregistered on stop`).toBeUndefined();
     }
+  });
+
+  it("starts and stops the whole broadcast when the voice module is there", async () => {
+    const h = await Harness.start({}, (services) => {
+      services.provide("actuators", ActuatorRegistryKey, new ActuatorRegistry({ services }));
+    });
+    const asked: string[] = [];
+    const actuators = h.services.require(ActuatorRegistryKey);
+    for (const name of ["stream.start", "stream.stop"]) {
+      actuators.register(
+        defineCapability({
+          name,
+          summary: name,
+          risk: "low",
+          args: z.object({}),
+          permission: "voice.golive",
+          async execute() {
+            asked.push(name);
+            return { text: "ok", data: null };
+          },
+        }),
+      );
+    }
+    const registry = h.registry();
+    expect((await registry.dispatch(invocation("stream start"))).text).toBe("已開始直播。");
+    expect((await registry.dispatch(invocation("stream stop"))).text).toBe("已停止直播。");
+    expect(asked).toEqual(["stream.start", "stream.stop"]);
+  });
+
+  it("shows_a_gift_expression_through_the_gate_and_forwards_gifts", async () => {
+    const h = await Harness.start({ request_timeout_ms: 500 }, (services) => {
+      services.provide("actuators", ActuatorRegistryKey, new ActuatorRegistry({ services }));
+    });
+    const actuators = h.services.require(ActuatorRegistryKey);
+    const ask = (args: JsonObject) =>
+      actuators.invoke({
+        principal: Principals.panel("api"),
+        capability: "stage.expression",
+        args,
+        why: "bought",
+        turn: null,
+      });
+
+    // No node: the capability fails (the caller refunds).
+    const none = await ask({ expression: "heart", seconds: 5 });
+    expect(none).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("not connected"),
+    });
+
+    const node = await h.node();
+    const done = ask({ expression: "big_bowl", seconds: 4 });
+    const req = await node.recvJson();
+    expect(req).toMatchObject({ type: "avatar_expression", expression: "big_bowl", seconds: 4 });
+    node.sendJson({ type: "status", vts: true, obs: false, id: req.id });
+    expect(await done).toMatchObject({ status: "done" });
+
+    // The node says no (VTube Studio is off): the capability fails.
+    const failing = ask({ expression: "blush", seconds: 2 });
+    const req2 = await node.recvJson();
+    node.sendJson({ type: "error", message: "VTube Studio is not connected", id: req2.id });
+    expect(await failing).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("VTube Studio is not connected"),
+    });
+
+    // Bad arguments never reach the node.
+    expect((await ask({ expression: "wink", seconds: 5 })).status).toBe("denied");
+    expect((await ask({ expression: "heart", seconds: 99 })).status).toBe("denied");
+
+    // `economy.gift` goes to the node as `gift`; junk is dropped.
+    h.publish(
+      customEvent("economy.gift", { name: "Owen", item: "rice", count: 1, label: "一碗白飯" }),
+    );
+    expect(await node.recvJson()).toStrictEqual({
+      type: "gift",
+      name: "Owen",
+      item: "rice",
+      count: 1,
+      label: "一碗白飯",
+    });
+    h.publish(customEvent("economy.gift", { name: "", item: "rice", count: 1, label: "x" }));
+    h.link().gaze("chat");
+    expect(await node.recvJson()).toStrictEqual({ type: "gaze", target: "chat" });
   });
 
   it("stop_closes_the_node_with_going_away_and_heartbeat_times_out", async () => {

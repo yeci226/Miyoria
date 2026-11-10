@@ -4,9 +4,11 @@
 import type { Readable, Writable } from "node:stream";
 import { type GameAdapter, type RegisteredAdapter, registerGameAdapter } from "./game.js";
 import { RpcError, RpcPeer } from "./rpc.js";
+import { type TaskExecutor, type TaskExecutorInfoInput, TaskFailure, type TaskSteer } from "./task.js";
 import { topicMatches } from "./topics.js";
 import {
   type ArgKind,
+  type ExecutorDecl,
   type CommandReply,
   type CommandSpec,
   type Contributions,
@@ -129,10 +131,21 @@ export interface ExtensionContext {
      */
     readonly id: string | undefined;
     /**
-     * Exposes a game adapter as tools `game.<id>.observe|act` and events
-     * `game.<id>.*`. `describe().id` must equal `ctx.game.id`.
+     * Exposes a game adapter as the task executor of `game.<id>` (its `tasks`, or its `act`
+     * wrapped as one-step tasks) and events `game.<id>.*`. `describe().id` must equal
+     * `ctx.game.id`.
      */
     registerAdapter(adapter: GameAdapter): Promise<RegisteredAdapter>;
+  };
+  /** The task contract (docs/design/v2-architecture.md §3.8). */
+  readonly tasks: {
+    /**
+     * Makes `executor` this extension's task executor (one per extension; a second call
+     * replaces it). The core starts, cancels and observes through it; its events are sent to
+     * the host, which publishes them on `<owner>.task.<type>` (`game.<id>` for a game adapter,
+     * `ext.<id>` otherwise).
+     */
+    register(executor: TaskExecutor, info: TaskExecutorInfoInput): Promise<void>;
   };
   /** Runs before the process exits on `shutdown`. */
   onShutdown(hook: () => void | Promise<void>): void;
@@ -185,6 +198,18 @@ export function commandSpec(command: CommandDefinition): CommandSpec {
   };
 }
 
+/** A refused `task.start` / failed `task.observe`: the failure code travels in `data.code`. */
+function taskError(error: unknown): RpcError {
+  if (error instanceof RpcError) return error;
+  if (error instanceof TaskFailure) {
+    const code = error.code === "invalid" ? ErrorCode.InvalidParams : ErrorCode.InternalError;
+    return new RpcError(code, error.message, { code: error.code });
+  }
+  return new RpcError(ErrorCode.InternalError, error instanceof Error ? error.message : String(error), {
+    code: "internal",
+  });
+}
+
 function toText(value: unknown): string {
   if (typeof value === "string") return value;
   if (value === undefined || value === null) return "";
@@ -216,6 +241,7 @@ export class ExtensionRuntime {
   readonly #prompts = new Map<string, PromptContributor>();
   readonly #handlers = new Map<string, Set<EventHandler>>();
   readonly #shutdownHooks: Array<() => void | Promise<void>> = [];
+  #executor: TaskExecutor | null = null;
 
   constructor(def: ExtensionDefinition, opts: RunOptions) {
     this.#def = def;
@@ -224,7 +250,7 @@ export class ExtensionRuntime {
       input: opts.input,
       output: opts.output,
       timeoutMs: opts.timeoutMs ?? 10_000,
-      onRequest: (method, params) => this.#onRequest(method, params),
+      onRequest: (method, params, signal) => this.#onRequest(method, params, signal),
       onNotification: (method, params) => this.#onNotification(method, params),
       onClose: () => {
         if (this.#phase !== "stopping") this.#exit(0);
@@ -236,7 +262,7 @@ export class ExtensionRuntime {
     return this.#phase;
   }
 
-  async #onRequest(method: string, params: unknown): Promise<unknown> {
+  async #onRequest(method: string, params: unknown, signal: AbortSignal): Promise<unknown> {
     switch (method) {
       case "initialize":
         return this.#initialize(params as InitializeParams);
@@ -244,7 +270,8 @@ export class ExtensionRuntime {
         const p = params as { name: string; args?: Record<string, unknown>; context: ToolCallContext };
         const tool = this.#tools.get(p.name);
         if (!tool) throw new RpcError(ErrorCode.MethodNotFound, `unknown tool "${p.name}"`);
-        return { content: toText(await tool.run(p.args ?? {}, p.context)) };
+        // `signal` aborts when the host stops waiting (timed out, the turn was cancelled).
+        return { content: toText(await tool.run(p.args ?? {}, { ...p.context, signal })) };
       }
       case "commands.invoke": {
         const inv = params as Invocation;
@@ -266,9 +293,65 @@ export class ExtensionRuntime {
         }));
         return { sections };
       }
+      case "task.start": {
+        const executor = this.#taskExecutor();
+        const p = params as { task?: unknown };
+        try {
+          await executor.start(p.task as Parameters<TaskExecutor["start"]>[0], signal);
+        } catch (error) {
+          throw taskError(error);
+        }
+        return {};
+      }
+      case "task.cancel": {
+        const p = params as { task?: unknown };
+        if (typeof p.task !== "string") throw new RpcError(ErrorCode.InvalidParams, "task.cancel needs `task`");
+        await this.#taskExecutor().cancel(p.task);
+        return {};
+      }
+      case "task.steer": {
+        const executor = this.#taskExecutor();
+        const steer = (params as { steer?: unknown } | null)?.steer as Record<string, unknown> | undefined;
+        if (typeof steer !== "object" || steer === null || typeof steer.id !== "string" || typeof steer.task !== "string") {
+          throw new RpcError(ErrorCode.InvalidParams, "task.steer needs `steer` with `id` and `task`");
+        }
+        if (typeof executor.steer !== "function") {
+          throw new RpcError(ErrorCode.MethodNotFound, "this task executor cannot be steered");
+        }
+        try {
+          await executor.steer(steer as unknown as TaskSteer);
+        } catch (error) {
+          throw taskError(error);
+        }
+        return {};
+      }
+      case "task.observe":
+        try {
+          return await this.#taskExecutor().observe(signal);
+        } catch (error) {
+          throw taskError(error);
+        }
       default:
         throw new RpcError(ErrorCode.MethodNotFound, `unknown method "${method}"`);
     }
+  }
+
+  #taskExecutor(): TaskExecutor {
+    if (!this.#executor) throw new RpcError(ErrorCode.MethodNotFound, "this extension has no task executor");
+    return this.#executor;
+  }
+
+  /** Sends every event of `executor` to the host (`task.event`) while it is the registered one. */
+  #pump(executor: TaskExecutor): void {
+    const stream = executor.events()[Symbol.asyncIterator]();
+    void (async () => {
+      for (;;) {
+        const next = await stream.next();
+        if (next.done || this.#executor !== executor) break;
+        this.peer.notify("task.event", { event: next.value });
+      }
+      await stream.return?.();
+    })().catch((error: unknown) => this.#log("error", "task event stream failed", { error: String(error) }));
   }
 
   #onNotification(method: string, params: unknown): void {
@@ -286,6 +369,7 @@ export class ExtensionRuntime {
     this.#phase = "active";
     const contributions = this.#pending;
     this.#pending = { tools: [], commands: [], prompts: [], subscriptions: [] };
+    if (contributions.executor === undefined) delete contributions.executor;
     return { contributions };
   }
 
@@ -447,6 +531,37 @@ export class ExtensionRuntime {
       game: {
         id: init.extension.game ?? undefined,
         registerAdapter: (adapter) => registerGameAdapter(ctx, adapter),
+      },
+      tasks: {
+        async register(executor, info) {
+          const decl: ExecutorDecl = {
+            name: info.name,
+            goals: info.goals.map((g) => ({
+              name: g.name,
+              description: g.description,
+              parameters: g.parameters ?? null,
+              budget_s: g.budget_s ?? null,
+            })),
+            guide: info.guide?.trim() ? info.guide.trim() : null,
+          };
+          // Only said when true: the declaration of an executor without it stays as it was.
+          if (typeof executor.steer === "function") decl.steer = true;
+          const previous = rt.#executor;
+          rt.#executor = executor;
+          try {
+            await rt.#contribute(
+              () => {
+                rt.#pending.executor = decl;
+              },
+              "tasks.register",
+              decl,
+            );
+          } catch (error) {
+            rt.#executor = previous;
+            throw error;
+          }
+          rt.#pump(executor);
+        },
       },
       onShutdown(hook) {
         rt.#shutdownHooks.push(hook);

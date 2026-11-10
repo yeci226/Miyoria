@@ -2,17 +2,19 @@
 // a draft, the prompt text describing them, and turning drafts (with the snapshot's short refs)
 // into `KnowledgeChange`s applied one by one, each all or nothing.
 
-import type {
-  AccountRef,
-  ContextKey,
-  JsonObject,
-  KnowledgeBase,
-  KnowledgeChange,
-  KnowledgeSubject,
-  KnowledgeWriter,
-  PatchOp,
-  PersonId,
-  PlatformId,
+import {
+  type AccountRef,
+  type ContextKey,
+  hasEphemeralHandle,
+  type JsonObject,
+  type JsonValue,
+  type KnowledgeBase,
+  type KnowledgeChange,
+  type KnowledgeSubject,
+  type KnowledgeWriter,
+  type PatchOp,
+  type PersonId,
+  type PlatformId,
 } from "@miyoria/types";
 import { z } from "zod";
 
@@ -69,11 +71,12 @@ export type Draft = z.output<typeof DraftSchema>;
 
 /** The prompt's description of document changes (her choice of shape; examples are optional). */
 export const DRAFT_FORMAT = `"documents" 是你自己整理的資料庫的修改(可省略或給空陣列)。資料怎麼分類、取什麼名字、用什麼結構都由你決定,也可以之後改名、合併或拆開:
-- 新文件:{"type": "create", "subject": "u1 / server / self / topic:你取的主題名", "kind": "你定的種類", "title": "標題", "content": {任意 JSON}, "why": "理由", "said_by": "u1 或 null"}
-- 修改:{"type": "patch", "doc": "#文件代號", "ops": [{"op": "add / replace / remove / move", "path": "/欄位/子欄位", "value": 任意 JSON, "from": "/move 的來源"}], "why": "理由", "said_by": "u1 或 null"}
+- 新文件:{"type": "create", "subject": "人的名字(例如 Owen)/ server / self / topic:你取的主題名", "kind": "你定的種類", "title": "標題", "content": {任意 JSON}, "why": "理由", "said_by": "他的名字或 null"}
+- 修改:{"type": "patch", "doc": "#文件代號", "ops": [{"op": "add / replace / remove / move", "path": "/欄位/子欄位", "value": 任意 JSON, "from": "/move 的來源"}], "why": "理由", "said_by": "他的名字或 null"}
 - 改名 / 刪除 / 合併:{"type": "retitle", "doc": "#代號", "kind": "…", "title": "…"}、{"type": "delete", "doc": "#代號"}、{"type": "merge", "doc": "#代號", "into": "#代號", "path": "/放到哪個欄位"}
 - path 用 JSON Pointer(/a/b,陣列用 /清單/0,加到最後用 /清單/-)。值可以是一段文字(可以用 Markdown)、數字、清單或物件。
-- said_by:這件事是誰說的就填他的代號;是你自己的判斷就填 null。別人說的關於別人的事,系統會標成「X 說」而且信心較低;別人寫的欄位只有他自己或你能改。
+- 提到人一律用名字(資料裡看到的名字,例如 Owen、Owen#2),不要用 u1、p1 這類代號;文件內容裡也一樣,代號每次都會變。
+- said_by:這件事是誰說的就填他的名字;是你自己的判斷就填 null。別人說的關於別人的事,系統會標成「X 說」而且信心較低;別人寫的欄位只有他自己或你能改。
 - 以下只是可能的樣子,不是規定:人物卡 {"喜歡": [...], "最近在忙": "…", "怎麼跟他相處": "…", "界線": [...]};伺服器 {"內梗": [...], "常聊的話題": [...], "規矩": [...]};主題 {"大家的生日": {"Owen": "3/14"}}。`;
 
 /** Who the short refs in a prompt stand for. */
@@ -82,7 +85,7 @@ export interface RefTable {
   guild: { platform: PlatformId; guild: string } | null;
 }
 
-/** A subject ref (`u1`, `server`, `self`, `topic:名稱`) of the table. */
+/** A subject ref (a person's handle, `server`, `self`, `topic:名稱`) of the table. */
 export function resolveSubject(ref: string, table: RefTable): KnowledgeSubject | null {
   const r = ref.trim();
   if (r === "self" || r === "我" || r === "自己") return { type: "self" };
@@ -95,7 +98,8 @@ export function resolveSubject(ref: string, table: RefTable): KnowledgeSubject |
     const name = r.slice("topic:".length).trim();
     return name === "" ? null : { type: "topic", name };
   }
-  const person = table.people.get(r)?.person ?? null;
+  const who = table.people.get(r) ?? [...table.people.values()].find((p) => p.name === r);
+  const person = who?.person ?? null;
   return person === null ? null : { type: "person", person };
 }
 
@@ -164,6 +168,11 @@ export async function applyDrafts(
   const applied: string[] = [];
   const refused: string[] = [];
   for (const draft of drafts) {
+    // Documents are kept for good: no per-call codes in them (and `u1` is no longer a ref).
+    if (hasEphemeralHandle(draft as unknown as JsonValue)) {
+      refused.push("contains a per-call code (u1, p1 ...); write the person's name instead");
+      continue;
+    }
     const change = draftChange(draft, table);
     if (typeof change === "string") {
       refused.push(change);

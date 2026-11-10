@@ -197,7 +197,7 @@ export async function completeJson<S extends z.ZodType>(
     }
     messages = [
       ...messages,
-      assistantMessage(response.text.slice(0, 4000)),
+      assistantMessage([...response.text].slice(0, 4000).join("")),
       userMessage(
         `上面的回覆不能用:\n${issues.map((i) => `- ${i}`).join("\n")}\n請修正後只回傳一個 JSON 物件,不要加其他文字。`,
       ),

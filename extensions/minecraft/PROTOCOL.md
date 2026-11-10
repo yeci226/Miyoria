@@ -1,4 +1,4 @@
-# miyoria-bridge 通訊協定(protocol 1)
+# miyoria-bridge 通訊協定(protocol 1,含任務 id 擴充)
 
 `miyoria-bridge` 是裝在 Minecraft 1.21.1 客戶端裡的 Fabric 模組,在本機開一個 WebSocket 伺服器。TS adapter(`extensions/minecraft/adapter`)連上來,把它包成 `GameAdapter` 的 `describe / observe / act / events`。
 
@@ -72,11 +72,11 @@ adapter 應該從這個檔案讀 `port` 與 `token`(同一台機器上)。
   "protocol": 1,
   "mod_version": "0.1.0",
   "minecraft": "1.21.1",
-  "capabilities": { "baritone": true, "altoclef": false, "screenshot": true }
+  "capabilities": { "baritone": true, "altoclef": false, "screenshot": true, "tasks": true }
 }
 ```
 
-`capabilities.baritone` / `altoclef` 表示對應模組在執行時有沒有安裝。之後可以重送 `hello`(冪等)。
+`capabilities.baritone` / `altoclef` 表示對應模組在執行時有沒有安裝。`capabilities.tasks: true` 表示模組支援任務 id(§6.1);舊版模組沒有這個欄位,client 要自己從事件判斷工作結束。之後可以重送 `hello`(冪等)。
 
 4. 之後就是「請求 → 回覆」與伺服器主動推送的事件。
 
@@ -213,6 +213,8 @@ adapter 應該從這個檔案讀 `port` 與 `token`(同一台機器上)。
 ## 5. 動作(請求)
 
 所有動作的回覆都是 `{"type":"result","id":..,"ok":true,"data":{..}}`;`data` 見各小節。動作只是**開始**執行,不會等到做完——完成與否看事件(§6)或再 `observe`。
+
+**任務 id**(選填,向下相容):會開始一件「工作」的請求——`baritone`(`goto` / `mine` / `follow` / `explore` / `farm` / `build` / `raw`)、`altoclef`、`craft`、`smelt`——可以多帶 `"task": "<1–64 字元>"`。請求被接受後模組送 `task_started`,工作結束時送 `task_done` 或 `task_failed`(§6.1)。不帶 `task` 的請求行為跟以前完全一樣;舊版模組會忽略這個欄位。`task` 不是字串或長度不對回 `invalid_args`(工作不會開始)。
 
 ### 5.1 `ping`
 
@@ -380,7 +382,41 @@ adapter 應該從這個檔案讀 `port` 與 `token`(同一台機器上)。
 | `reflex` | 一個反射開始用她的身體(§7) | `{"kind","interrupted","health","target"?,"food"?}`;`interrupted` 是被打斷的工作(Baritone 流程名例如 `Mine`、`craft`、`smelt`、按住的按鍵 `hold`),沒打斷東西為 `null`;`target` 是反擊 / 逃離的生物,`food` 是要吃的東西 |
 | `reflex_end` | 反射結束 | `{"kind","ok","interrupted","secs","yielded"?}`;`ok:false` 是沒成功(逾時、被更緊急的反射接手);`yielded:true` 表示讓給了一個請求或 `stop` |
 
-`goal_reached` 對應 `goto` 類目標;`mine` / `follow` / `explore` / `farm` 沒有「到達」的概念,結束時只會有 `baritone_idle`。注意 `goal_reached` / `goal_failed` 來自 Baritone 的 `PathEvent`(`AT_GOAL` / `CALC_FAILED`),**每一段路**都會送:挖礦時每走到一顆礦、`follow` 每次追上、AltoClef 子任務之間都會出現。client 要自己記得目前下的是哪種工作再解讀(adapter 只在 `goto` 時把它當成完成,見 `README.md` §7)。
+`goal_reached` 對應 `goto` 類目標;`mine` / `follow` / `explore` / `farm` 沒有「到達」的概念,結束時只會有 `baritone_idle`。注意 `goal_reached` / `goal_failed` 來自 Baritone 的 `PathEvent`(`AT_GOAL` / `CALC_FAILED`),**每一段路**都會送:挖礦時每走到一顆礦、`follow` 每次追上、AltoClef 子任務之間都會出現。用任務 id(§6.1)就不用自己解讀:模組知道自己下的是哪種工作,直接說結束了沒有。工作有任務 id 時,`goal_reached`、`goal_failed`、`baritone_idle`、`craft_*`、`smelt_*` 的 `data` 也會多一個 `task`。
+
+### 6.1 任務生命週期(`capabilities.tasks`)
+
+一次只有一個任務(她只有一個身體):新的工作請求會取代正在跑的任務(舊的送 `task_failed` / `superseded`)。
+
+| name | 何時 | `data` |
+|---|---|---|
+| `task_started` | 帶 `task` 的工作請求被接受了(在 `result` 之後) | `{"task","kind"}`;`kind` 是 `goto`、`mine`、`follow`、`explore`、`farm`、`build`、`raw`、`altoclef`、`craft`、`smelt` |
+| `task_progress` | 工作中的一步(目前:`mine` / `build` 等走到一個路徑目標) | `{"task","kind","detail"}` |
+| `task_done` | 做完了 | `{"task","kind","detail", ...}`;`craft` / `smelt` 另有 `item`、`crafted`、`requested`、`ready_in_secs`(有的話) |
+| `task_failed` | 做不下去 | `{"task","kind","code","message"}` |
+
+什麼算結束(模組自己判斷,client 不用猜):
+
+| kind | `task_done` | `task_failed` |
+|---|---|---|
+| `goto` | Baritone 抵達**這個**目標(`AT_GOAL`) | `unreachable`(找不到路)、`cancelled`(被停下) |
+| `mine`、`build`、`follow`、`explore`、`farm`、`raw` | Baritone 從忙碌變閒置(`detail` `nothing more in sight` = 看得到的都挖完了);路徑中途的 `AT_GOAL` 只是 `task_progress` | `cancelled`、`interrupted` |
+| `altoclef` | AltoClef **自己**閒置 10 tick(Baritone 在子任務之間的閒置不算);100 tick 內都沒開始忙 = 沒事可做,也算完成 | `cancelled` |
+| `craft`、`smelt` | `craft_finished` / `smelt_finished` | `precondition`(材料用完、背包滿了…,`message` 是原因)、`cancelled` |
+
+所有任務共通的失敗:`superseded`(新的工作請求取代了它)、`cancelled`(`stop`、Baritone `stop`、AltoClef `@stop`)、`interrupted`(反射 §7 打斷了它)、`died`(她死了)。client 斷線時模組不再追蹤(沒有人在等)。
+
+```json
+{"id":"30","type":"baritone","command":"mine","blocks":["iron_ore"],"count":3,"task":"01JTASK"}
+{"type":"result","id":"30","ok":true,"data":{"command":"mine","blocks":["iron_ore"],"count":3,"first":{"x":1,"y":2,"z":3}}}
+{"type":"event","name":"task_started","time":1730000000000,"data":{"task":"01JTASK","kind":"mine"}}
+{"type":"event","name":"goal_reached","time":1730000001000,"data":{"goal":"GoalComposite","task":"01JTASK"}}
+{"type":"event","name":"task_progress","time":1730000001000,"data":{"task":"01JTASK","kind":"mine","detail":"reached a path target"}}
+{"type":"event","name":"baritone_idle","time":1730000009000,"data":{"process":"Mine","goal":null,"cancelled":false,"task":"01JTASK"}}
+{"type":"event","name":"task_done","time":1730000009000,"data":{"task":"01JTASK","kind":"mine","detail":"finished"}}
+```
+
+TS adapter 把這些對應到核心的任務契約(`TaskFailureCode`:`interrupted` → `busy`,其餘同名;見 `README.md`)。
 
 範例:
 

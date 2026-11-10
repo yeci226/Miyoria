@@ -7,9 +7,10 @@ import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { getLogger } from "@miyoria/kernel";
+import { type Gift, GiftMerger } from "./gifts.js";
 import { closeOnAbort, type ServeResult } from "./lipsync.js";
 import { formatAddress, HttpServer } from "./net.js";
-import type { Activity, SpeakingState, StageStatus } from "./protocol.js";
+import type { Activity, CoreMessage, SpeakingState, StageStatus } from "./protocol.js";
 
 const log = getLogger("stage.overlay");
 
@@ -39,6 +40,8 @@ export class OverlayHub {
     activity: null,
   };
   readonly #now: () => number;
+  readonly #gifts = new GiftMerger();
+  #giftTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** `now`: the clock a song's `elapsed_ms` is moved on with for new clients (ms). */
   constructor(now: () => number = Date.now) {
@@ -90,6 +93,34 @@ export class OverlayHub {
     });
   }
 
+  /**
+   * Someone fed her something. Gifts close together are one line (see gifts.ts) that shows for a
+   * few seconds after the latest one; `text: ""` clears it.
+   */
+  gift(gift: Gift): void {
+    const line = this.#gifts.add(gift, this.#now());
+    if (line === null) return;
+    this.#send(JSON.stringify({ type: "gift", text: line }));
+    clearTimeout(this.#giftTimer);
+    const wait = Math.max((this.#gifts.deadline() ?? this.#now()) - this.#now(), 0);
+    // No newer gift reset this timer: the line is due.
+    this.#giftTimer = setTimeout(() => {
+      this.#gifts.expire(this.#now());
+      this.#gifts.endLine();
+      this.#send(JSON.stringify({ type: "gift", text: "" }));
+    }, wait);
+    this.#giftTimer.unref?.();
+  }
+
+  /**
+   * A paid message or dedication, passed on as it is: the overlay queues them. Not kept for new
+   * clients (a card that was due while nobody watched is not worth showing late).
+   */
+  screen(card: Extract<CoreMessage, { type: "screen" }>): void {
+    const { kind, name, text, song } = card;
+    this.#send(JSON.stringify({ type: "screen", kind, name, text, song }));
+  }
+
   speaking(state: SpeakingState): void {
     this.#send(JSON.stringify({ type: "speaking", state }));
   }
@@ -124,6 +155,8 @@ export class OverlayHub {
   initial(): string[] {
     const s = this.#snapshot;
     const out = [s.status, s.emotion, s.subtitle, s.notice].filter((v): v is string => v !== null);
+    const gift = this.#gifts.current(this.#now());
+    if (gift !== null) out.push(JSON.stringify({ type: "gift", text: gift }));
     if (s.activity !== null) {
       const { activity, at } = s.activity;
       const elapsed =

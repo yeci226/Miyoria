@@ -1,5 +1,11 @@
 // Keeps Discord's application commands in step with the `CommandRegistry`.
 //
+// What Discord shows is the registry's `slashSpecs()`: the whole command tree plus the panels
+// (`/miyo`, `/song`, and `i` under a command that has subcommands: `/me i`, `/admin i`). Every
+// sync is a bulk overwrite, so commands that left the registry disappear from Discord on the
+// next sync. A sync never overwrites with an empty set (a registry that has not been filled
+// yet would wipe the commands).
+//
 // Commands live in one scope at a time: globally when `command_guilds` is empty, otherwise in
 // each listed guild. Whatever the other scope still holds (from an earlier run in the other
 // mode) shows up as duplicates in Discord's command list, so the first sync of a run also
@@ -17,7 +23,7 @@ const log = getLogger("discord.sync");
 export const SYNC_DEBOUNCE_MS = 2_000;
 
 /** The registry methods the syncer reads. */
-export type CommandSource = Pick<CommandRegistry, "specs" | "groupInfo" | "version">;
+export type CommandSource = Pick<CommandRegistry, "slashSpecs" | "groupInfo" | "version">;
 
 /** The slice of the REST client the syncer uses (`put` with a body). */
 export interface SyncRest {
@@ -26,7 +32,7 @@ export interface SyncRest {
 
 /** The JSON bodies of the registry's current commands (invalid ones left out). */
 export function currentCommands(registry: CommandSource): SlashCommandJson[] {
-  const tree = buildTree(registry.specs(), (path) => registry.groupInfo(path) ?? null);
+  const tree = buildTree(registry.slashSpecs(), (path) => registry.groupInfo(path) ?? null);
   return validCommands(toCreateCommands(tree));
 }
 
@@ -54,7 +60,9 @@ export async function syncCommands(
   const { signal, cleanup } = options instanceof AbortSignal ? { signal: options } : options;
   const body = currentCommands(registry);
   const count = body.length;
-  if (commandGuilds.length === 0) {
+  if (count === 0) {
+    log.warn("no slash commands to register yet, the current set is left as it is");
+  } else if (commandGuilds.length === 0) {
     try {
       await rest.put(Routes.applicationCommands(applicationId), { body, signal });
       log.info({ count }, "synced global slash commands");
@@ -131,6 +139,39 @@ export async function resetCommands(
     }
   }
   return report;
+}
+
+export interface SyncRunnerOptions {
+  rest: SyncRest;
+  applicationId: string;
+  registry: CommandSource;
+  commandGuilds: readonly string[];
+  /** Guilds the bot is in, read when the first sync clears the scope not in use. */
+  guilds: () => readonly string[];
+  signal?: AbortSignal;
+}
+
+/**
+ * The `sync` of `runSyncLoop`. Modules register commands all the time and a bulk overwrite is
+ * rate limited, so a sync whose slash set is the one sent last is skipped. The first sync of a run always goes out and clears the scope not in use.
+ */
+export function syncRunner(options: SyncRunnerOptions): (first: boolean) => Promise<void> {
+  let sent: string | null = null;
+  return async (first) => {
+    const now = JSON.stringify(currentCommands(options.registry));
+    if (!first && now === sent) return;
+    sent = now;
+    await syncCommands(
+      options.rest,
+      options.applicationId,
+      options.registry,
+      options.commandGuilds,
+      {
+        ...(options.signal ? { signal: options.signal } : {}),
+        cleanup: first ? { guilds: [...options.guilds()] } : null,
+      },
+    );
+  };
 }
 
 export interface SyncLoopOptions {

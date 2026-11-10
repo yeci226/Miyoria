@@ -14,17 +14,23 @@ import {
 import { LlmRouterKey } from "@miyoria/llm";
 import { SettingsStoreKey } from "@miyoria/store";
 import {
+  ACTIVITY_CHANGED_TOPIC,
+  ActivityManagerKey,
+  AFFECT_CHANGED_TOPIC,
   contextKeyString,
   type Envelope,
   isJsonObject,
   type JsonObject,
   Principals,
   parseSongCue,
+  SceneRuleKey,
   SONG_PREPARE_TOPIC,
   SONG_TOPIC,
   SPEECH_PAUSE_TOPIC,
   SPEECH_SYNTH_TOPIC,
   StreamCurtainKey,
+  VOICE_UPCOMING_TOPIC,
+  v2Payload,
 } from "@miyoria/types";
 import { type BoundAddress, formatAddress, HttpServer, isLoopback } from "../net.js";
 import { stageCapabilities } from "./actions.js";
@@ -32,7 +38,7 @@ import { ActivityTracker } from "./activity.js";
 import { registerStreamCommands, unregisterStreamCommands } from "./commands.js";
 import { MAX_MESSAGE } from "./conn.js";
 import { type GoLiveState, SceneDirector } from "./director.js";
-import { EMOTION_TOPIC, Forwarder } from "./forward.js";
+import { EMOTION_TOPIC, Forwarder, GIFT_TOPIC, SCREEN_TOPIC, SUBTITLE_TOPIC } from "./forward.js";
 import { goliveFollow, VOICE_GOLIVE_TOPIC } from "./golive.js";
 import {
   DEFAULT_BIND,
@@ -48,9 +54,18 @@ export const GAME_SESSION_TOPIC = "game.director.session";
 
 const GOLIVE_STATES: readonly GoLiveState[] = ["starting", "live", "stopped", "failed"];
 
-/** Feeds one bus event to the scene director. */
+/**
+ * Feeds one bus event to the scene director. With the ActivityManager her situation comes from
+ * its snapshots (`activity.changed`) and the director ignores the raw voice / Go Live / game /
+ * song events below.
+ */
 function direct(director: SceneDirector, env: Envelope): void {
   const event = env.event;
+  const snapshot = v2Payload(event, ACTIVITY_CHANGED_TOPIC);
+  if (snapshot !== null) {
+    director.onSnapshot(snapshot);
+    return;
+  }
   switch (event.type) {
     case "voice_joined":
     case "voice_participants":
@@ -108,7 +123,7 @@ interface Running {
  * Module `stage.link`: serves the Stage Link WebSocket endpoint (`ws://<bind>/stage-link`),
  * forwards `agent.emotion`, `agent.turn.completed` and `voice.playback` to the Stage node, tells
  * it what she is doing (`activity`, see activity.ts) and provides `StageLinkKey`. Registers the
- * capabilities `stage.scene` and `stage.stream` in the actuator registry, and the `stream`
+ * capabilities `stage.scene`, `stage.stream` and `stage.expression` in the actuator registry, and the `stream`
  * commands (which go through it) when `CommandRegistryKey` is available.
  */
 export class StageLinkModule implements Module {
@@ -185,6 +200,8 @@ export class StageLinkModule implements Module {
       switchRole: (role, why) => switchTo({ role }, why),
       switchScene: (name, why) => switchTo({ name }, why),
     });
+    const manager = ctx.services.get(ActivityManagerKey);
+    if (manager) director.onSnapshot(manager.snapshot());
     // A song's video plays in the sing scene when the director goes there, else in the current one.
     const forwarder = new Forwarder(config.subtitle_text_turns, {
       singScene: () => (config.scenes.director ? roles.resolve("sing") : null),
@@ -199,12 +216,17 @@ export class StageLinkModule implements Module {
     let nodeUp = false;
     const unsubscribe = link.subscribeStatus((status) => {
       if (status) roles.observe(status.scenes);
+      // Her override may be newer than the last `activity.changed` the director saw.
+      const current = ctx.services.get(ActivityManagerKey)?.snapshot();
+      if (current) director.onSnapshot(current);
       director.onStatus(status);
       // A node that (re)connects mid-song picks the video up where the song is, and is told
       // what she is doing.
       if (status && !nodeUp) {
         const resume = forwarder.resumeSongVideo();
         if (resume) link.send(resume);
+        const resting = forwarder.resumeResting();
+        if (resting) link.send(resting);
         const current = activity.resume(ctx.clock.now());
         if (current) link.send(current);
       }
@@ -212,18 +234,26 @@ export class StageLinkModule implements Module {
     });
     ctx.provide(SceneRolesKey, roles);
     ctx.provide(StreamCurtainKey, director);
+    // The ActivityManager's `snapshot().scene` is this rule's answer.
+    ctx.provide(SceneRuleKey, director);
 
     const events = ctx.subscribe([
       EMOTION_TOPIC,
+      AFFECT_CHANGED_TOPIC,
+      SUBTITLE_TOPIC,
+      GIFT_TOPIC,
+      SCREEN_TOPIC,
       SONG_TOPIC,
       SPEECH_PAUSE_TOPIC,
       "agent.turn.started",
       "agent.turn.completed",
       "voice.playback",
       SPEECH_SYNTH_TOPIC,
+      VOICE_UPCOMING_TOPIC,
       SONG_PREPARE_TOPIC,
       VOICE_GOLIVE_TOPIC,
       GAME_SESSION_TOPIC,
+      ACTIVITY_CHANGED_TOPIC,
       "voice.joined",
       "voice.left",
       "voice.participants",
@@ -277,6 +307,8 @@ export class StageLinkModule implements Module {
 
       const followGoLive = (payload: unknown): void => {
         if (!config.golive_obs) return;
+        // With the ActivityManager OBS is a sub-step of its broadcast (through the gate).
+        if (ctx.services.get(ActivityManagerKey)) return;
         const action = goliveFollow(isJsonObject(payload) ? payload.state : undefined);
         if (action === null) return;
         clearTimer();
@@ -296,6 +328,9 @@ export class StageLinkModule implements Module {
           direct(director, env);
           activity.onEvent(env.event, ctx.clock.now());
           if (env.event.type === "custom" && env.event.data.topic === GAME_SESSION_TOPIC) continue;
+          if (env.event.type === "custom" && env.event.data.topic === ACTIVITY_CHANGED_TOPIC) {
+            continue;
+          }
           if (env.event.type === "custom" && env.event.data.topic === VOICE_GOLIVE_TOPIC) {
             followGoLive(env.event.data.payload);
             continue;
@@ -317,9 +352,11 @@ export class StageLinkModule implements Module {
       for await (const _ of interval(ACTIVITY_TICK_MS, signal)) sendActivity();
     });
 
-    const capabilities = stageCapabilities(link, { roles, curtain: director }).map((c) =>
-      actuators.register(c),
-    );
+    const capabilities = stageCapabilities(link, {
+      roles,
+      curtain: director,
+      overrideMs: config.scenes.manual_hold_ms,
+    }).map((c) => actuators.register(c));
     const registry = ctx.services.get(CommandRegistryKey) ?? null;
     try {
       if (registry) registerStreamCommands(registry, link, actuators);

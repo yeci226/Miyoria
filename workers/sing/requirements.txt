@@ -23,3 +23,8 @@ munch==4.0.0
 einops>=0.8.0
 descript-audio-codec==1.0.0
 pyyaml
+# lead / backing split (leadsplit.py, vendored MelBand-RoFormer in melband.py); its checkpoint is not
+# downloaded automatically: put mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt and its .yaml
+# in ../models/lead-split/ (or SING_LEAD_MODEL). Without it the split is off.
+beartype>=0.14
+rotary-embedding-torch>=0.3.5

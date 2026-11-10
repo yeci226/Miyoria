@@ -55,5 +55,5 @@ export function guardNote(guard: FailureGuard | null, now: number): string | nul
   const g = activeGuard(guard, now);
   if (!g) return null;
   const secs = Math.max(1, Math.ceil((g.until - now) / 1000));
-  return `暫時不能用 ${g.actions.join("、")}(還有 ${secs} 秒):上一個動作失敗了(${g.why})。換個方法(例如 obtain、explore、craft 缺的東西)或換個目標,不要重試同一件事。`;
+  return `暫時不能用 ${g.actions.join("、")}(還有 ${secs} 秒):上一個動作失敗了(${g.why})。換個方法(例如 obtain 缺的東西、explore)或換個目標,不要重試同一件事。`;
 }

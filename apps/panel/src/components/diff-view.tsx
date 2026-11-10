@@ -50,18 +50,18 @@ export function DiffView({ before, after, label = "變更" }: { before: string; 
   return (
     <div className="grid gap-2">
       <p className="flex items-center gap-2 font-mono text-xs">
-        <span className="text-success">+{stats.added}</span>
-        <span className="text-[oklch(0.74_0.16_25)]">−{stats.removed}</span>
+        <span className="text-secondary-line">+{stats.added}</span>
+        <span className="text-primary">−{stats.removed}</span>
       </p>
       <div
-        className="max-h-[55dvh] overflow-auto rounded-md border bg-background font-mono text-[12.5px] leading-6"
+        className="max-h-[55dvh] overflow-auto rounded-md border bg-well font-mono text-[12.5px] leading-6"
         role="table"
         aria-label={label}
         tabIndex={0}
       >
         {chunks.map((c, ci) =>
           c.kind === "fold" ? (
-            <div key={`f${ci}`} role="row" className="border-y border-dashed bg-muted/30 px-3 text-muted-foreground">
+            <div key={`f${ci}`} role="row" className="border-y border-dashed bg-hover px-3 text-muted-foreground">
               <span role="cell">⋯ {c.count} 行未變更</span>
             </div>
           ) : (
@@ -71,8 +71,8 @@ export function DiffView({ before, after, label = "變更" }: { before: string; 
                 role="row"
                 className={cn(
                   "grid grid-cols-[2.5rem_2.5rem_1.25rem_1fr] whitespace-pre-wrap",
-                  l.op === "add" && "bg-success/10",
-                  l.op === "del" && "bg-destructive/12",
+                  l.op === "add" && "bg-secondary/20",
+                  l.op === "del" && "bg-primary/12",
                 )}
               >
                 <span role="cell" className="select-none pr-2 text-right text-muted-foreground/70">
@@ -83,7 +83,7 @@ export function DiffView({ before, after, label = "變更" }: { before: string; 
                 </span>
                 <span
                   role="cell"
-                  className={cn("select-none text-center", l.op === "add" ? "text-success" : "text-[oklch(0.74_0.16_25)]")}
+                  className={cn("select-none text-center", l.op === "add" ? "text-secondary-line" : "text-primary")}
                   aria-label={l.op === "add" ? "新增" : l.op === "del" ? "刪除" : undefined}
                 >
                   {l.op === "add" ? "+" : l.op === "del" ? "−" : ""}

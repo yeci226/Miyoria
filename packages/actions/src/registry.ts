@@ -3,6 +3,11 @@
 // decision (audit log + `gate.decision`) and then executes, directly or as an `actuate` action
 // in the scheduler when it comes from a turn.
 //
+// Before the gate, the rules (`DirectivesKey`, docs/design/v3-architecture.md §9): a `deny` stops
+// the request whoever asks, a `require_approval` sends what the gate allowed to the owners, and
+// rules that cannot be read deny. A rule added while a run waits in a lane or in the
+// ActivityManager still stops it: the check runs again right before it starts.
+//
 // Gate order:
 //
 // 1. pause: while paused only `command` and `panel` pass;
@@ -22,11 +27,14 @@ import { AuditLogKey, SettingsStoreKey } from "@miyoria/store";
 import type { ToolRegistry } from "@miyoria/tools";
 import {
   ActionSinkKey,
+  type ActivityRequest,
   type ActuatorExecutor,
   AuthorizerKey,
   accountRefString,
   type Clock,
   customEvent,
+  DirectivesKey,
+  type DirectiveVerdict,
   type Event,
   isAutonomous,
   type JsonValue,
@@ -39,6 +47,7 @@ import {
   sameAccount,
   serviceKey,
   systemClock,
+  type TaskId,
   toTimestamp,
 } from "@miyoria/types";
 import { builtinCapabilities } from "./builtin.js";
@@ -54,7 +63,9 @@ import {
   type GateStage,
 } from "./capability.js";
 import { type ActionsConfig, capabilityMatches, defaultActionsConfig } from "./config.js";
+import { EmergencyStop } from "./emergency.js";
 import { Followups, followupHint } from "./followup.js";
+import { publishNotice, recordOutcome } from "./outcome.js";
 import { PRIVACY_PROFILE, Privacy } from "./privacy.js";
 import { effectiveLimits, RateLimiter, tightened } from "./rate.js";
 import { approvalCard, Escalations, parseReview, reviewMessages } from "./review.js";
@@ -80,14 +91,72 @@ export interface ActuatorRegistryOptions {
   builtins?: boolean;
 }
 
+/**
+ * How `invoke` treats a capability with an `activity` mapping while an `ActivityRouter` is
+ * installed: `wait` (default: commands, the panel, the mind) hands it to the ActivityManager
+ * and waits for the task to end; `detach` (her tools) answers as soon as the manager accepted
+ * it ("開始了,task 7"; the outcome reaches her later as a notice); `direct` executes the
+ * capability here without the manager (the manager's own steps).
+ */
+export type ActivityMode = "wait" | "detach" | "direct";
+
 export interface InvokeOptions {
-  /** Aborts waiting (and a direct run). */
+  /** Aborts waiting (and a direct run). A queued run is cancelled with it. */
   signal?: AbortSignal;
   /**
    * From a turn: queue the run in the capability's lane with this priority (TTL, `cancelTurn`)
    * when it has one and a scheduler is running.
    */
   priority?: Priority;
+  /** See `ActivityMode`. Default `wait`. */
+  activity?: ActivityMode;
+  /** Queue in this lane instead of the capability's own (needs `priority`). */
+  lane?: LaneKey;
+  /** `direct` runs for an ActivityManager task: its id (`ExecContext.task`). */
+  task?: TaskId | null;
+  /**
+   * A step implied by a task the gate already allowed (OBS following Go Live, ending the
+   * broadcast before leaving voice): the gate runs (pause, prohibitions, consent, permission,
+   * budget), but a medium-risk step is not rate limited or counted a second time.
+   */
+  implied?: boolean;
+}
+
+/** How a routed call runs the capability itself (the gate already allowed it). */
+export interface DirectRun {
+  signal: AbortSignal;
+  /** Replaces the parsed arguments (e.g. `game.start` without `stream`). */
+  args?: unknown;
+  /** Queue the run in `lane` with this priority first (e.g. behind her speech). */
+  priority?: Priority;
+  lane?: LaneKey | null;
+  /** The ActivityManager task the run belongs to. */
+  task?: TaskId | null;
+}
+
+/** A gate-approved call handed to the ActivityManager. */
+export interface RoutedCall {
+  capability: Capability;
+  /** The parsed arguments. */
+  args: unknown;
+  /** What the capability's `activity` hook mapped them to. */
+  requests: ActivityRequest[];
+  request: ActionRequest;
+  decision: GateDecision;
+  /** Wait for the tasks to end (`wait`) or answer once accepted (`detach`). */
+  wait: boolean;
+  signal: AbortSignal | undefined;
+  /** Runs the capability itself, bypassing the gate (it passed) and the router. */
+  execute(run: DirectRun): Promise<ActionResult>;
+}
+
+/**
+ * Installed by the `activity` module: takes the calls of capabilities with an `activity`
+ * mapping. Resolves with the tool / command text; rejects (with the underlying error when there
+ * is one) when the transition is refused or, in `wait` mode, fails.
+ */
+export interface ActivityRouter {
+  route(call: RoutedCall): Promise<ActionResult>;
 }
 
 interface Verdict {
@@ -121,8 +190,26 @@ interface Ticket {
   args: unknown;
   request: ActionRequest;
   decision: GateDecision;
+  /** Hand the run to the ActivityManager. */
+  route: Route | null;
+  task: TaskId | null;
+  /** Aborted when the waiting caller gives up (tool timeout, cancelled turn). */
+  cancel: AbortController;
   resolve: (result: ActionResult) => void;
   reject: (error: unknown) => void;
+}
+
+interface Route {
+  requests: ActivityRequest[];
+  wait: boolean;
+  /** The caller's signal (`wait`): aborts the manager's task while it is queued or running. */
+  signal: AbortSignal | undefined;
+}
+
+interface Run {
+  signal: AbortSignal;
+  route: Route | null;
+  task: TaskId | null;
 }
 
 function normalize(result: ActionResult | string): ActionResult {
@@ -170,6 +257,7 @@ export class ActuatorRegistry implements ActuatorExecutor {
   readonly #tickets = new Map<string, Ticket>();
   readonly #status = new Map<string, StatusProvider>();
   #config: ActionsConfig = defaultActionsConfig();
+  #router: ActivityRouter | null = null;
   #paused = false;
   #name = "她";
   #reviewFallbackLogged = false;
@@ -178,6 +266,8 @@ export class ActuatorRegistry implements ActuatorExecutor {
   readonly escalations: Escalations;
   /** Late outcomes of `followup` tools, delivered as follow-up turns. */
   readonly followups: Followups;
+  /** The one button of §16: what `/admin autonomy pause` and `/api/mind/pause` run. */
+  readonly emergency: EmergencyStop;
 
   constructor(options: ActuatorRegistryOptions) {
     this.#services = options.services;
@@ -190,8 +280,16 @@ export class ActuatorRegistry implements ActuatorExecutor {
       (event) => this.#publish(event),
       () => this.#clock.now(),
     );
+    this.emergency = new EmergencyStop({
+      services: options.services,
+      clock: this.#clock,
+      publish: (event) => this.#publish(event),
+      setPaused: (paused) => this.setPaused(paused),
+      invoke: (request, signal) => this.invoke(request, { signal }),
+      stepMs: () => this.#config.emergency_step_ms,
+    });
     if (options.builtins ?? true) {
-      for (const capability of builtinCapabilities()) this.register(capability);
+      for (const capability of builtinCapabilities(options.services)) this.register(capability);
     }
   }
 
@@ -219,6 +317,22 @@ export class ActuatorRegistry implements ActuatorExecutor {
   /** @internal Sets the pause state without persisting it (module start). */
   restorePaused(paused: boolean): void {
     this.#paused = paused;
+  }
+
+  /**
+   * Installs the ActivityManager's router (see `Capability.activity`); returns the function
+   * that removes it again (a no-op once another router replaced it).
+   */
+  setActivityRouter(router: ActivityRouter): () => void {
+    this.#router = router;
+    return () => {
+      if (this.#router === router) this.#router = null;
+    };
+  }
+
+  /** Whether an ActivityManager takes the calls of `activity` capabilities. */
+  get routesActivity(): boolean {
+    return this.#router !== null;
   }
 
   /** Registers (or replaces) a capability and its tool; returns the unregister function. */
@@ -301,10 +415,22 @@ export class ActuatorRegistry implements ActuatorExecutor {
       verdict = deny("args", `invalid arguments: ${where}${issue?.message ?? "invalid"}`);
     } else {
       const invalid = capability.check?.(parsed.data, request.principal) ?? null;
+      const rule = invalid === null ? await this.#rule(capability, parsed.data, request) : null;
       verdict =
         invalid !== null
           ? deny("args", invalid)
-          : await this.#gate(capability, parsed.data, request, options.signal);
+          : rule?.outcome === "deny"
+            ? deny("directive", rule.reason)
+            : await this.#gate(
+                capability,
+                parsed.data,
+                request,
+                options.signal,
+                options.implied === true,
+              );
+      if (rule?.outcome === "approval" && verdict.allowed) {
+        verdict = await this.#escalate(capability, request, rule.reason, options.signal);
+      }
     }
     const decision = this.#decision(request, capability, verdict);
     await this.#record(decision);
@@ -312,41 +438,119 @@ export class ActuatorRegistry implements ActuatorExecutor {
       if (parsed.success && (decision.stage === "review" || decision.stage === "escalation")) {
         await this.#denied(capability, parsed.data, request, decision);
       }
-      return { status: "denied", decision };
+      const denied: ActionOutcome = { status: "denied", decision };
+      // She should see what was refused and why (the Ledger), not only the audit log.
+      if ((options.activity ?? "wait") !== "direct" && capability.risk !== "low") {
+        this.#safely(() => recordOutcome(this.#sink(), capability, request, denied));
+      }
+      return denied;
     }
-    this.#count(capability, parsed.data, request);
+    if (options.implied !== true) this.#count(capability, parsed.data, request);
     const args = parsed.data;
+    const route = this.#routeFor(capability, args, request, options);
+    const task = options.task ?? null;
+    let outcome: ActionOutcome;
     try {
       const lane =
         options.priority !== undefined
-          ? (capability.lane?.(args, request.principal) ?? null)
+          ? options.lane !== undefined
+            ? options.lane
+            : (capability.lane?.(args, request.principal) ?? null)
           : null;
       const result =
         lane !== null && options.priority !== undefined
-          ? await this.#queue(
-              capability,
-              args,
-              request,
-              decision,
-              lane,
-              options.priority,
-              options.signal,
-            )
-          : await this.#execute(
-              capability,
-              args,
-              request,
-              decision,
-              options.signal ?? new AbortController().signal,
-            );
-      return { status: "done", decision, result };
+          ? await this.#queue(capability, args, request, decision, lane, options.priority, {
+              signal: options.signal,
+              route,
+              task,
+            })
+          : await this.#execute(capability, args, request, decision, {
+              signal: options.signal ?? new AbortController().signal,
+              route,
+              task,
+            });
+      outcome = { status: "done", decision, result: this.#postReceipt(request, result) };
     } catch (error) {
       if (options.signal?.aborted) throw error;
       log.warn(
         { capability: capability.name, err: errorMessage(error) },
         "capability failed after the gate allowed it",
       );
-      return { status: "failed", decision, error: errorMessage(error), cause: error };
+      outcome = { status: "failed", decision, error: errorMessage(error), cause: error };
+    }
+    // Routed calls are recorded by the ActivityManager (its tasks), steps of its tasks too.
+    if (route === null && (options.activity ?? "wait") !== "direct" && capability.risk !== "low") {
+      this.#safely(() => recordOutcome(this.#sink(), capability, request, outcome));
+    }
+    return outcome;
+  }
+
+  /** What the rules say of a request. The app always provides them; a test may not. */
+  async #rule(
+    capability: Capability,
+    args: unknown,
+    request: ActionRequest,
+  ): Promise<DirectiveVerdict | null> {
+    const directives = this.#services.get(DirectivesKey);
+    if (!directives) return null;
+    try {
+      return await directives.check({
+        capability: capability.name,
+        args,
+        principal: request.principal,
+        about: request.about ?? null,
+      });
+    } catch (error) {
+      return { outcome: "deny", directive: null, reason: `讀不到規則(${errorMessage(error)})` };
+    }
+  }
+
+  /** A run that waited: a rule made since then stops it (the request itself passed the gate). */
+  async #stillAllowed(
+    capability: Capability,
+    args: unknown,
+    request: ActionRequest,
+  ): Promise<void> {
+    const rule = await this.#rule(capability, args, request);
+    if (rule?.outcome === "deny") throw new ActionDroppedError(rule.reason);
+  }
+
+  /** The ActivityManager route of a call, or `null` to execute it here. */
+  #routeFor(
+    capability: Capability,
+    args: unknown,
+    request: ActionRequest,
+    options: InvokeOptions,
+  ): Route | null {
+    const mode = options.activity ?? "wait";
+    if (mode === "direct" || this.#router === null || !capability.activity) return null;
+    const requests = capability.activity(args, request.principal);
+    if (requests === null || requests.length === 0) return null;
+    return {
+      requests,
+      wait: mode === "wait",
+      signal: mode === "wait" ? options.signal : undefined,
+    };
+  }
+
+  /**
+   * Tells her the outcome of a request nobody waits for any more (a high-risk tool answered
+   * `REVIEW_PENDING`) as a `Notice` in the context she asked from. Never throws. (Every medium
+   * and high-risk outcome is also recorded in the Ledger-ready form by `invoke`.)
+   */
+  notifyLate(capability: Capability, request: ActionRequest, outcome: ActionOutcome): void {
+    this.#safely(() => publishNotice(this.#sink(), capability, request, outcome));
+  }
+
+  #sink() {
+    return { services: this.#services, publish: this.#publish, now: this.#clock.now() };
+  }
+
+  #safely(fn: () => void): void {
+    try {
+      fn();
+    } catch (error) {
+      log.debug({ err: errorMessage(error) }, "cannot report an action outcome");
     }
   }
 
@@ -355,16 +559,47 @@ export class ActuatorRegistry implements ActuatorExecutor {
     args: unknown,
     request: ActionRequest,
     decision: GateDecision,
-    signal: AbortSignal,
+    run: Run,
   ): Promise<ActionResult> {
+    const router = this.#router;
+    if (run.route !== null && router !== null) {
+      return router.route({
+        capability,
+        args,
+        requests: run.route.requests,
+        request,
+        decision,
+        wait: run.route.wait,
+        signal: run.route.signal,
+        execute: (direct) => this.#direct(capability, args, request, decision, direct),
+      });
+    }
     const ctx: ExecContext = {
       principal: request.principal,
       request,
       decision,
       services: this.#services,
-      signal,
+      signal: run.signal,
+      task: run.task,
     };
     return normalize(await capability.execute(args, ctx));
+  }
+
+  /** `RoutedCall.execute`: the capability itself, for the ActivityManager's task. */
+  async #direct(
+    capability: Capability,
+    args: unknown,
+    request: ActionRequest,
+    decision: GateDecision,
+    direct: DirectRun,
+  ): Promise<ActionResult> {
+    const actual = direct.args === undefined ? args : direct.args;
+    await this.#stillAllowed(capability, actual, request);
+    const run = { signal: direct.signal, route: null, task: direct.task ?? null };
+    if (direct.priority !== undefined && direct.lane) {
+      return this.#queue(capability, actual, request, decision, direct.lane, direct.priority, run);
+    }
+    return this.#execute(capability, actual, request, decision, run);
   }
 
   /** The capability's `denied` hook (errors are logged). */
@@ -390,7 +625,12 @@ export class ActuatorRegistry implements ActuatorExecutor {
     }
   }
 
-  /** Submits an `actuate` action and waits for the scheduler to run (or drop) it. */
+  /**
+   * Submits an `actuate` action and waits for the scheduler to run (or drop) it. When the
+   * caller's `signal` aborts first (the tool timed out, the turn was cancelled) the ticket is
+   * cancelled with it: a queued run never starts and a running one sees its signal abort, so
+   * stale work is harmless.
+   */
   async #queue(
     capability: Capability,
     args: unknown,
@@ -398,24 +638,47 @@ export class ActuatorRegistry implements ActuatorExecutor {
     decision: GateDecision,
     lane: LaneKey,
     priority: Priority,
-    signal: AbortSignal | undefined,
+    run: { signal: AbortSignal | undefined; route: Route | null; task: TaskId | null },
   ): Promise<ActionResult> {
+    const signal = run.signal;
     const sink = this.#services.get(ActionSinkKey);
     if (!sink) {
-      return this.#execute(
+      return this.#execute(capability, args, request, decision, {
+        signal: signal ?? new AbortController().signal,
+        route: run.route,
+        task: run.task,
+      });
+    }
+    if (signal?.aborted) throw signal.reason ?? new ActionDroppedError("cancelled");
+    const ticket = newId();
+    const cancel = new AbortController();
+    const done = new Promise<ActionResult>((resolve, reject) => {
+      this.#tickets.set(ticket, {
         capability,
         args,
         request,
         decision,
-        signal ?? new AbortController().signal,
-      );
-    }
-    const ticket = newId();
-    const done = new Promise<ActionResult>((resolve, reject) => {
-      this.#tickets.set(ticket, { capability, args, request, decision, resolve, reject });
+        route: run.route,
+        task: run.task,
+        cancel,
+        resolve,
+        reject,
+      });
     });
     // Nobody may be waiting any more when it settles (the turn was aborted).
     done.catch(() => undefined);
+    const onAbort = () => {
+      const queued = this.#tickets.get(ticket);
+      this.#tickets.delete(ticket);
+      cancel.abort(signal?.reason ?? new ActionDroppedError("cancelled"));
+      if (queued) {
+        log.debug({ capability: capability.name, ticket }, "queued run cancelled by its caller");
+        queued.reject(new ActionDroppedError("cancelled by the caller"));
+      }
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const forget = () => signal?.removeEventListener("abort", onAbort);
+    done.then(forget, forget);
     const action = newAction(
       lane,
       priority,
@@ -460,10 +723,16 @@ export class ActuatorRegistry implements ActuatorExecutor {
   /** `ActuatorExecutor`: the scheduler runs a queued request. */
   async run(ticket: string, signal: AbortSignal): Promise<string> {
     const t = this.#tickets.get(ticket);
-    if (!t) throw new ActionDroppedError(`unknown or settled ticket \`${ticket}\``);
+    // Cancelled by its caller (or settled): the scheduler drops it quietly.
+    if (!t) throw new ActionDroppedError("cancelled");
     this.#tickets.delete(ticket);
     try {
-      const result = await this.#execute(t.capability, t.args, t.request, t.decision, signal);
+      await this.#stillAllowed(t.capability, t.args, t.request);
+      const result = await this.#execute(t.capability, t.args, t.request, t.decision, {
+        signal: AbortSignal.any([signal, t.cancel.signal]),
+        route: t.route,
+        task: t.task,
+      });
       t.resolve(result);
       return result.text;
     } catch (error) {
@@ -550,6 +819,7 @@ export class ActuatorRegistry implements ActuatorExecutor {
     args: unknown,
     request: ActionRequest,
     signal: AbortSignal | undefined,
+    implied = false,
   ): Promise<Verdict> {
     const p = request.principal;
     const cfg = this.#config;
@@ -609,8 +879,11 @@ export class ActuatorRegistry implements ActuatorExecutor {
       }
     }
 
-    // 4. Permission (and the principals that need nothing more).
-    if (p.kind === "user" && capability.permission !== null) {
+    // 4. Permission (and the principals that need nothing more). Someone asking her to DM them is
+    // asking about themselves: the permission guards against sending her at someone else, so it is
+    // not needed then (consent above already lets a person reach themselves).
+    const dmToAsker = capability.consent === "dm" && askedForThemselves;
+    if (p.kind === "user" && capability.permission !== null && !dmToAsker) {
       const authorizer = this.#services.get(AuthorizerKey);
       const requester = p.requester;
       if (
@@ -635,6 +908,9 @@ export class ActuatorRegistry implements ActuatorExecutor {
 
     // 6. Risk tier.
     if (capability.risk === "low") return allow("risk", "low risk");
+    if (implied && capability.risk === "medium") {
+      return allow("rate", "a step of an activity task the gate allowed");
+    }
     let limits = effectiveLimits(
       cfg.limits[capability.name],
       cfg.medium,
@@ -738,6 +1014,25 @@ export class ActuatorRegistry implements ActuatorExecutor {
       log.warn({ err: errorMessage(error) }, "cannot describe the request for the card");
       return null;
     }
+  }
+
+  /**
+   * A result with a receipt, of her turn in a chat or voice context: the card goes up there
+   * (not awaited: the tool answer does not wait for Discord) and she is told it did.
+   */
+  #postReceipt(request: ActionRequest, result: ActionResult): ActionResult {
+    const card = result.receipt;
+    const context = request.principal.context;
+    if (!card || context === null || request.principal.kind === "command") return result;
+    const sink = this.#services.get(ReplySinkKey);
+    if (!sink?.sendCard || sink.platform !== context.platform) return result;
+    sink.sendCard(context, { ...card, ephemeral: false }).catch((error: unknown) => {
+      log.warn({ err: errorMessage(error) }, "could not post a receipt card");
+    });
+    return {
+      ...result,
+      text: `${result.text}(頻道上已經貼出一張收據卡片寫了金額和餘額,大家看得到,你不用再唸數字,照你的個性反應就好)`,
+    };
   }
 
   /** Sends the approval card to every reachable owner and waits for the first answer. */

@@ -1,19 +1,21 @@
 // The owner's per-channel levels as a ceiling on her own talkativeness (docs/design/autonomy.md
 // §21): the mapping from her talkativeness + level to the ambient probability, the level's
-// minimum score, cooldown and share, and reading the old `ambient`.
+// minimum score and share, and reading the old `ambient`. (The level's gap between her own
+// starts is the Arbiter's rule; there is no level cooldown any more.)
 
 import { type ContextKey, type IncomingMessage, newId } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
+  type Activeness,
   AgentConfigSchema,
   type AttentionConfig,
   AttentionConfigSchema,
+  ambientScale,
   assess,
   CEILINGS,
   type Ceiling,
   type ChannelMode,
   ChannelModeSchema,
-  ceilingFactor,
   ceilingFor,
   levelHint,
   parseChannelMode,
@@ -29,7 +31,6 @@ const VOICE: ContextKey = tctx("voice");
 const config = (overrides: Partial<AttentionConfig> = {}): AttentionConfig => ({
   ...AttentionConfigSchema.parse({}),
   llm_check: false,
-  cooldown_ms: 0,
   ...overrides,
 });
 
@@ -59,8 +60,24 @@ function run(
     inputs,
     now: Date.now(),
     voice: null,
-    affinity: null,
-    mood: null,
+  });
+}
+
+/** The ambient multiplier of her talkativeness (`null`: she set none) under `ceiling`. */
+function ceilingFactor(ceiling: Ceiling, talk: number | null, activeness: Activeness): number {
+  return ambientScale({
+    config: config(),
+    mode: ceiling.mode,
+    activeness,
+    talkativeness: talk === null ? null : { level: talk, scope: "*" },
+    ceiling,
+    names: [],
+    interests: [],
+    maxShare: 1,
+    session: sessionWith([]),
+    inputs: [],
+    now: Date.now(),
+    voice: null,
   });
 }
 
@@ -78,9 +95,9 @@ describe("channel levels", () => {
     expect(factor(normal, null)).toBeCloseTo(1);
     expect(factor(lively, null)).toBeCloseTo(4 ** 0.3);
     // Activeness still scales the default, but never past the level's maximum.
-    expect(ceilingFactor(quiet, null, "high")).toBeCloseTo(0.8);
+    expect(ceilingFactor(quiet, null, "high")).toBeCloseTo(0.8, 1);
     expect(ceilingFactor(quiet, null, "high")).toBeLessThanOrEqual(1);
-    expect(ceilingFactor(normal, null, "high")).toBeCloseTo(1.6);
+    expect(ceilingFactor(normal, null, "high")).toBeCloseTo(1.6, 1);
     expect(ceilingFactor(normal, null, "low")).toBeCloseTo(0.5);
     // Her own choice, capped: quiet ×1, normal ×2, lively ×4 at most.
     expect(factor(quiet, 1)).toBeCloseTo(1);
@@ -112,7 +129,7 @@ describe("channel levels", () => {
     expect(ceilingFor("always", TEXT)).toBe(CEILINGS.lively);
   });
 
-  it("quiet joins in only on topics clearly about her, with a long cooldown and a low share", () => {
+  it("quiet joins in only on topics clearly about her, with a low share", () => {
     // A plain question in a small group (0.35) is enough for normal, not for quiet.
     const plain = [tmsg("channel", "a", "你們吃飯了嗎")];
     const s = sessionWith(plain);
@@ -121,15 +138,14 @@ describe("channel levels", () => {
     expect(quiet.gate, quiet.reasons.join("; ")).toEqual({ kind: "ignore" });
     expect(quiet.reasons.some((r) => r.startsWith("score 0.35 < 0.45"))).toBe(true);
 
-    // She spoke 5 minutes ago: quiet waits 10 minutes before joining in again.
+    // She spoke 5 minutes ago: no level cooldown any more, only her lower default talkativeness.
     const q = [tmsg("channel", "a", "你們看過鯨魚嗎?")];
     const later = sessionWith([]);
     later.recordOwn("Her", me, "嗯", newId(), Date.now() - 5 * 60_000);
     later.recordMessage(q[0] as IncomingMessage, false);
-    expect(run("quiet", null, later, q).reasons.some((r) => r.startsWith("level cooldown"))).toBe(
-      true,
+    expect(probability(run("quiet", null, later, q))).toBeCloseTo(
+      probability(run("normal", null, later, q)) / 2,
     );
-    expect(run("normal", null, later, q).gate.kind).toBe("sample");
 
     // A follow-up to what she just said is a conversation, not joining in again.
     const follow = sessionWith([]);

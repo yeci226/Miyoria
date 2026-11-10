@@ -10,11 +10,25 @@
 // * Prompt contributor `memory`, tools `remember` / `recall`, commands
 //   `/me memory show | forget | export`, `/admin memory wipe`, a `FollowupSource` and daily
 //   forgetting.
+//
+// V3 (docs/design/v3-architecture.md §11) adds discipline, not a new system:
+// * Three layers: `PinnedMemory` (persona, rules, open commitments, one line per person present:
+//   always in the prompt, capped, never retrieved), the EventLog as evidence, and derived memory
+//   behind `MemoryRetrieval`.
+// * Every memory says whether she lived it or was told it (`origin`); a person fact is stored
+//   only when a line somebody said backs it (`evidence.ts`); what is happening right now is
+//   refused, the state machine answers that. Confidence fades on read.
+// * `forget` follows the evidence: what is about a person, told by them or derived from their
+//   events goes; the log itself has its own wipe.
 
 export {
+  FORGET_KEEPS,
+  FORGET_REMOVES,
   type MemoryCommandDeps,
   MemoryCommands,
   NODE_WIPE,
+  type OwnMemories,
+  ownMemories,
   PATHS,
   WIPE_SCOPE_LABEL,
   type WipeScope,
@@ -26,6 +40,8 @@ export {
   DedupeConfigSchema,
   type EmbeddingConfig,
   EmbeddingConfigSchema,
+  type EvidenceConfig,
+  EvidenceConfigSchema,
   embeddingConfig,
   type ForgettingConfig,
   ForgettingConfigSchema,
@@ -34,14 +50,21 @@ export {
   type MemoryConfig,
   MemoryConfigSchema,
   memoryConfig,
+  type PinnedConfig,
+  PinnedConfigSchema,
+  type RepeatConfig,
+  RepeatConfigSchema,
   type Weights,
   WeightsSchema,
 } from "./config.js";
 export {
   CONTRIBUTOR_KEY,
   formatLines,
+  lineOf,
   MemoryContributor,
   PROMPT_KINDS,
+  type Readable,
+  readable,
   SECTION_TITLE,
 } from "./contributor.js";
 export { Curator } from "./curate.js";
@@ -55,6 +78,7 @@ export {
 } from "./embed.js";
 export {
   type ConsolidationReport,
+  type ForgetReport,
   MAINTENANCE_KEY,
   type MaintenanceReport,
   MemoryEngine,
@@ -65,13 +89,34 @@ export {
   memoryFilter,
   type NewMemory,
   type Recalled,
+  type Refusal,
   type Searched,
   type Stored,
   storedId,
+  strongerOrigin,
   toFollowup,
   WATERMARK_PREFIX,
   type Watermark,
+  weakerOrigin,
 } from "./engine.js";
+export {
+  type EventReader,
+  type EvidenceLine,
+  isEventRef,
+  LINE_REF_PREFIX,
+  linkLines,
+  mergeRefs,
+  nameWords,
+  supporting,
+} from "./evidence.js";
+export {
+  expired,
+  expiryOf,
+  isPresentState,
+  isStateLifetime,
+  MAX_VALID_HOURS,
+  wordingTtlHours,
+} from "./expiry.js";
 export {
   type ExEpisode,
   type ExFact,
@@ -91,6 +136,10 @@ export {
   MemoryModuleError,
   type MemoryModuleOptions,
 } from "./module.js";
+export { PersonNotes } from "./person-note.js";
+export { PINNED_TITLE, PinnedReader } from "./pinned.js";
+export { RepeatDamper } from "./repeat.js";
+export { MemoryRetriever } from "./retrieval.js";
 export {
   hasScope,
   isPrivate,
@@ -100,10 +149,14 @@ export {
   scopeForNew,
   scopeLabel,
   visibleScopes,
+  visibleToSelf,
 } from "./scope.js";
 export {
+  effectiveConfidence,
+  fadedConfidence,
   finalScore,
   recency,
+  recencyTau,
   relativeDate,
   type Signals,
   signalScore,

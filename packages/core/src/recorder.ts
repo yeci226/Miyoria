@@ -5,11 +5,14 @@ import { defineManifest, errorMessage, type Module, type ModuleContext } from "@
 import { logEntryFromIncoming, type Store } from "@miyoria/store";
 import {
   type AccountRef,
+  HandleDirectoryKey,
   type IncomingMessage,
   newId,
   type ProfileId,
   sameAccount,
+  TURN_OUTCOME_TOPIC,
   type TurnId,
+  v2Payload,
 } from "@miyoria/types";
 
 export class RecorderModule implements Module {
@@ -32,6 +35,7 @@ export class RecorderModule implements Module {
       "voice.utterance",
       "voice.playback",
       "agent.decision",
+      TURN_OUTCOME_TOPIC,
     ]);
     const store = this.#store;
     const profile = this.#profile;
@@ -91,6 +95,17 @@ export class RecorderModule implements Module {
             }
             break;
           }
+          case "custom": {
+            // How a turn ended: "decided to reply but nothing was sent" becomes queryable.
+            const outcome = v2Payload(event, TURN_OUTCOME_TOPIC);
+            if (outcome === null || !store.decisions.appendOutcome) break;
+            try {
+              await store.decisions.appendOutcome(profile, outcome);
+            } catch (error) {
+              log.warn({ err: errorMessage(error) }, "failed to record turn outcome");
+            }
+            break;
+          }
           default:
             break;
         }
@@ -115,7 +130,11 @@ async function record(
   }
   if (isSelf) return;
   try {
-    await store.people.upsertAccount(msg.author.account, msg.author.display_name);
+    const person = await store.people.upsertAccount(msg.author.account, msg.author.display_name);
+    // Her stable name for them is fixed the first time she sees them.
+    ctx.services
+      .get(HandleDirectoryKey)
+      ?.ofAccount(msg.author.account, msg.author.display_name, person);
   } catch (error) {
     ctx.log.warn({ err: errorMessage(error) }, "failed to record person");
   }

@@ -49,6 +49,8 @@ export {
   SandboxCapsSchema,
   type SandboxConfig,
   SandboxConfigSchema,
+  type SandboxFiles,
+  SandboxFilesSchema,
   type SandboxImages,
   SandboxImagesSchema,
   type SandboxLimits,
@@ -56,6 +58,18 @@ export {
   type SandboxSessions,
   SandboxSessionsSchema,
 } from "./config.js";
+export { EXTRACT_PROGRAM } from "./extract.js";
+export {
+  allowedHost,
+  DECLINE_REASONS,
+  type FetchLike,
+  type FileKind,
+  type FileReaderOptions,
+  fileKind,
+  formatFile,
+  parseExtracted,
+  SandboxFileReader,
+} from "./files.js";
 export {
   codeRunCapability,
   codeSessionCapability,

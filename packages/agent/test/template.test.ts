@@ -18,7 +18,12 @@ describe("config templates", () => {
       expect(agent.voice.text_chat).toBe(true);
       expect(agent.history.backfill).toBe(20);
       expect(agent.vision.max_images).toBe(3);
-      expect(LlmConfigSchema.parse(config.section("llm")).image_input).toEqual({});
+      expect(agent.voice.direct_debounce_ms).toBe(400);
+      expect(agent.prompt).toEqual(AgentConfigSchema.parse({}).prompt);
+      const llm = LlmConfigSchema.parse(config.section("llm"));
+      expect(llm.image_input).toEqual({});
+      expect(llm.reasoning.chat_text).toBe("off");
+      expect(llm.reasoning.plan_daily).toBe("high");
     });
   }
 });

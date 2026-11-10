@@ -12,6 +12,19 @@ describe("DiscordConfig", () => {
     expect(() => validateDiscordConfig(blank)).toThrow("`token` is empty");
   });
 
+  test("ambient_text_defaults_to_the_allowlist", () => {
+    const cfg = DiscordConfigSchema.parse({
+      token: "t",
+      ambient_channels: [42, "123456789012345678"],
+    });
+    expect(cfg.ambient_text).toBe("allowlist");
+    expect(cfg.ambient_channels).toEqual(["42", "123456789012345678"]);
+    expect(DiscordConfigSchema.parse({ token: "t" }).ambient_channels).toEqual([]);
+    expect(DiscordConfigSchema.safeParse({ token: "t", ambient_text: "everywhere" }).success).toBe(
+      false,
+    );
+  });
+
   test("command_guilds_accept_numbers_and_strings", () => {
     const cfg = DiscordConfigSchema.parse({
       token: "t",

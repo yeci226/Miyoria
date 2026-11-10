@@ -23,6 +23,9 @@
 //     [idle]
 //     gesture = ["grass"]                    # while she is quiet
 //
+//     [gift_expression]                      # `stage.expression` (gifts) → expression file
+//     heart = "爱心眼.exp3.json"             # defaults: heart, blush, squint, big_bowl
+//
 //     [lipsync]
 //     mode = "inject"
 //     [lipsync.shape.i]                      # offsets per vowel, × opening
@@ -34,6 +37,7 @@ import type { JsonObject } from "@miyoria/types";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import { VOWELS, type Vowel } from "./lipsync.js";
+import { GIFT_EXPRESSIONS, type GiftExpression } from "./protocol.js";
 
 const log = getLogger("stage.avatar");
 
@@ -52,6 +56,14 @@ export function parseAvatarAction(value: string): AvatarAction | null {
     ? { type: "expression", file: v }
     : { type: "hotkey", name: v };
 }
+
+/** The expression files `stage.expression` shows (`[gift_expression]` overrides them). */
+export const DEFAULT_GIFT_EXPRESSIONS: Readonly<Record<GiftExpression, string>> = {
+  heart: "爱心眼.exp3.json",
+  blush: "脸红.exp3.json",
+  squint: "＞＜.exp3.json",
+  big_bowl: "钢盆.exp3.json",
+};
 
 /**
  * How the mouth is driven: `inject` from playback levels (injected as parameters), or `mic`
@@ -133,6 +145,7 @@ const RawSchema = z.object({
   vts_model: z.string().nullish(),
   emotion: z.record(z.string(), EmotionSchema).default({}),
   gesture: z.record(z.string(), GestureSchema).default({}),
+  gift_expression: z.record(z.string(), z.string()).default({}),
   idle: z
     .object({
       gesture: NamesSchema,
@@ -177,6 +190,10 @@ export class AvatarProfile {
   poses = new Map<string, EmotionPose>();
   /** Gesture name → gesture. */
   gestures = new Map<string, Gesture>();
+  /** Gift expression → expression file (see `[gift_expression]`). */
+  giftExpressions = new Map<GiftExpression, string>(
+    Object.entries(DEFAULT_GIFT_EXPRESSIONS) as [GiftExpression, string][],
+  );
   idle: IdleGestures = { gestures: [], everyMs: [60_000, 180_000], afterMs: 15_000 };
   lipsync: LipSyncMode = "inject";
   /** Parameter for mouth opening. Default `MouthOpen`. */
@@ -255,6 +272,17 @@ export class AvatarProfile {
       everyMs: raw.idle.every_ms,
       afterMs: raw.idle.after_ms,
     };
+    for (const [rawName, file] of Object.entries(raw.gift_expression)) {
+      const name = rawName.trim().toLowerCase();
+      const action = parseAvatarAction(file);
+      if (!(GIFT_EXPRESSIONS as readonly string[]).includes(name)) {
+        log.warn({ gift_expression: name }, "avatar.toml: unknown gift expression");
+      } else if (action?.type !== "expression") {
+        log.warn({ gift_expression: name }, "avatar.toml: a gift expression must be an .exp3.json");
+      } else {
+        p.giftExpressions.set(name as GiftExpression, action.file);
+      }
+    }
     const model = nonEmpty(raw.vts_model);
     p.vtsModel = model?.startsWith("<") ? null : model;
     p.lipsync = raw.lipsync.mode;
@@ -316,6 +344,7 @@ export class AvatarProfile {
     p.emotions = new Map(this.emotions);
     p.poses = new Map(this.poses);
     p.gestures = new Map(this.gestures);
+    p.giftExpressions = new Map(this.giftExpressions);
     p.idle = { ...this.idle };
     p.lipsync = this.lipsync;
     p.mouthOpen = this.mouthOpen;

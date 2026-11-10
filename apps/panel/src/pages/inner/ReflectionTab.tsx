@@ -18,7 +18,7 @@ function When({ at }: { at: string | null }) {
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="min-w-0 bg-card px-4 py-3">
+    <div className="min-w-0">
       <dt className="text-[13px] text-muted-foreground">{label}</dt>
       <dd className="mt-0.5 truncate tabular-nums">{children}</dd>
     </div>
@@ -38,14 +38,14 @@ function RunItem({ r }: { r: ReflectionRun }) {
     r.feelings.length > 0 ? `感覺:${r.feelings.join("、")}` : null,
   ].filter((x): x is string => x !== null);
   return (
-    <li className="grid gap-x-6 gap-y-2 px-4 py-4 sm:grid-cols-[8rem_minmax(0,1fr)]">
+    <li className="grid gap-x-6 gap-y-2 py-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px] text-muted-foreground sm:flex-col sm:gap-1">
         <When at={r.at} />
         <StatusBadge tone={r.kind === "daily" ? "brand" : "neutral"}>{r.kind === "daily" ? "每日" : "長對話後"}</StatusBadge>
       </div>
       <div className="grid min-w-0 gap-2">
         {r.error ? (
-          <p className="font-mono text-xs text-destructive">{r.error}</p>
+          <p className="font-mono text-xs text-primary">{r.error}</p>
         ) : (
           <p className="max-w-[70ch] leading-relaxed">{r.summary || "—"}</p>
         )}
@@ -78,13 +78,13 @@ export function ReflectionTab() {
   return (
     <QueryView query={reflection} skeleton={<Card><SkeletonRows count={4} /></Card>}>
       {(v) => (
-        <div className="grid gap-6">
-          <Card className="overflow-hidden">
+        <div className="grid gap-(--stage-gap)">
+          <Card>
             <CardHeader>
               <CardTitle>反思</CardTitle>
               {v.stats.idle_reason && <StatusBadge tone="neutral">{v.stats.idle_reason}</StatusBadge>}
             </CardHeader>
-            <dl className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3" aria-label="反思狀態">
+            <dl className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3" aria-label="反思狀態">
               <Fact label="今天">
                 {v.stats.calls_today} / {v.stats.max_calls_per_day}
               </Fact>
@@ -97,12 +97,12 @@ export function ReflectionTab() {
             </dl>
           </Card>
 
-          <Card className="overflow-hidden">
+          <Card>
             <CardHeader>
               <CardTitle>學到的事</CardTitle>
             </CardHeader>
             {v.lessons.length === 0 ? (
-              <EmptyLine className="py-6">還沒有學到什麼</EmptyLine>
+              <EmptyLine>還沒有學到什麼</EmptyLine>
             ) : (
               <Table aria-label="學到的事">
                 <TableHeader>
@@ -131,12 +131,12 @@ export function ReflectionTab() {
             )}
           </Card>
 
-          <Card className="overflow-hidden">
+          <Card>
             <CardHeader>
               <CardTitle>大家的反應(7 天)</CardTitle>
             </CardHeader>
             {v.feedback.length === 0 ? (
-              <EmptyLine className="py-6">還沒有回饋</EmptyLine>
+              <EmptyLine>還沒有回饋</EmptyLine>
             ) : (
               <Table aria-label="回饋">
                 <TableHeader>
@@ -161,14 +161,14 @@ export function ReflectionTab() {
             )}
           </Card>
 
-          <Card className="overflow-hidden">
+          <Card>
             <CardHeader>
               <CardTitle>反思紀錄</CardTitle>
             </CardHeader>
             {v.runs.length === 0 ? (
-              <EmptyLine className="py-6">她還沒有反思過</EmptyLine>
+              <EmptyLine>她還沒有反思過</EmptyLine>
             ) : (
-              <ol className="divide-y" aria-label="反思紀錄">
+              <ol className="divide-y divide-line-soft" aria-label="反思紀錄">
                 {v.runs.map((r) => (
                   <RunItem key={r.id} r={r} />
                 ))}

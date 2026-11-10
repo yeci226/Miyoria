@@ -6,6 +6,7 @@ import {
   ExtensionManifest,
   gameToolAllowed,
   MANIFEST_FILE,
+  reservedTopic,
   sameSnapshot,
   snapshot,
   watchRoots,
@@ -46,5 +47,22 @@ describe("extension", () => {
     expect(gameToolAllowed("game.minecraft2.act", "minecraft")).toBe(false);
     expect(gameToolAllowed("game.minecraft", "minecraft")).toBe(false);
     expect(gameToolAllowed("game.terraria.act", "minecraft")).toBe(false);
+  });
+
+  it("reserves the v2 topic prefixes and the gate's", () => {
+    for (const topic of [
+      "activity.changed",
+      "activity.failed",
+      "arbiter.ledger",
+      "affect.event",
+      "plan.goal",
+      "agent.notice",
+      "gate.decision",
+      "actions.outcome",
+    ]) {
+      expect(reservedTopic(topic), topic).toBe(true);
+    }
+    expect(reservedTopic("activityx.y")).toBe(false);
+    expect(reservedTopic("custom.ok.x")).toBe(false);
   });
 });

@@ -31,7 +31,7 @@ export function useCanWrite(): boolean {
 
 // --- login redirects ---------------------------------------------------------
 
-/** `?error=` codes the Core's OAuth callback redirects to (`/#/login?error=…`). */
+/** `?error=` codes the Core's OAuth callback redirects to (`/login?error=…`). */
 export const LOGIN_ERRORS: Record<string, string> = {
   disabled: "這個 Core 沒有設定 Discord 登入。",
   cancelled: "已取消 Discord 授權。",
@@ -46,27 +46,38 @@ export function loginErrorMessage(code: string): string {
   return LOGIN_ERRORS[code] ?? "登入失敗,請再試一次。";
 }
 
-/**
- * Reads `#/login?error=<code>` once and replaces it with `#/`, so the router
- * never sees the login path and a reload does not show the error again.
- */
-export function takeLoginError(): string | null {
-  const hash = window.location.hash;
-  if (!hash.startsWith("#/login")) return null;
-  const q = hash.indexOf("?");
-  const code = q === -1 ? null : new URLSearchParams(hash.slice(q + 1)).get("error");
-  try {
-    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}#/`);
-  } catch {
-    window.location.hash = "#/";
-  }
-  return code;
+const isLoginPath = (path: string) => path === "/login" || path.startsWith("/login?") || path.startsWith("/login/");
+
+/** The `?error=` code of a failed Discord login in `path` (`/login?error=<code>`), or `null`. */
+export function loginErrorIn(path: string): string | null {
+  if (!isLoginPath(path)) return null;
+  const q = path.indexOf("?");
+  return q === -1 ? null : new URLSearchParams(path.slice(q + 1)).get("error");
 }
 
-/** Where to come back to after a Discord login: the current page. */
+/** The address asks for the login screen itself (`/login`), not for a failed login's message. */
+export function wantsTokenLogin(path: string): boolean {
+  return isLoginPath(path) && loginErrorIn(path) === null;
+}
+
+/** Where to come back to after a Discord login: the current page (never the login page). */
 export function loginNext(): string {
-  const hash = window.location.hash.startsWith("#/") && !window.location.hash.startsWith("#/login") ? window.location.hash : "#/";
-  return `${window.location.pathname || "/"}${hash}`;
+  const path = `${window.location.pathname || "/"}${window.location.search}`;
+  return isLoginPath(path) ? "/" : path;
+}
+
+/**
+ * Addresses from before clean ones (`/#/card/MYR-…`, `/#/people`) become the same page without
+ * the `#`, so the QR codes on cards people already have keep working.
+ */
+export function cleanHashAddress(): void {
+  const hash = window.location.hash;
+  if (!hash.startsWith("#/")) return;
+  try {
+    window.history.replaceState(window.history.state, "", hash.slice(1));
+  } catch {
+    // Leave the address as it is; the page still opens at `/`.
+  }
 }
 
 /** Cookies only reach the Core when the panel and the API share an origin. */

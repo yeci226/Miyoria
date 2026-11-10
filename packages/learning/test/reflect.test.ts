@@ -5,6 +5,7 @@ import {
   type AgendaInput,
   type CuratedNote,
   customEvent,
+  ephemeralHandlesIn,
   type InsightInput,
   KnowledgeKey,
   LessonsKey,
@@ -167,17 +168,17 @@ describe("daily reflection", () => {
         },
         {
           type: "create",
-          subject: "u1",
+          subject: "Owen",
           kind: "人物卡",
           title: "Owen",
           content: { 喜歡: ["拉麵"] },
-          said_by: "u1",
+          said_by: "Owen",
         },
       ],
-      feelings: [{ person: "u1", note: "今天跟他聊得很開心" }],
+      feelings: [{ person: "Owen", note: "今天跟他聊得很開心" }],
       lessons: [
-        { text: "Owen 講話時不要插嘴", person: "u1", place: null, talk: -0.8, days: 10 },
-        { text: "在 p1 少說一點", person: null, place: "p1", talk: -0.5 },
+        { text: "Owen 講話時不要插嘴", person: "Owen", place: null, talk: -0.8, days: 10 },
+        { text: "在這裡少說一點", person: null, place: "discord:g1:c1", talk: -0.5 },
       ],
       goals: [{ text: "學會 Owen 喜歡的拉麵店名字", why: "想跟他多聊", days: 7 }],
     });
@@ -186,7 +187,8 @@ describe("daily reflection", () => {
     const run = await reflector.reflect("daily", null);
     expect(run?.error).toBeNull();
     const data = provider.requests()[0]?.messages[1]?.content as string;
-    expect(data).toContain("n1 [fact,guild:g1,u1] Owen 喜歡拉麵");
+    expect(data).toContain("n1 [fact,guild:g1,Owen] Owen 喜歡拉麵");
+    expect(data).not.toMatch(/\bu\d\b|\bp\d\b/);
     expect(data).toContain("嫌你 1");
     expect(provider.requests()[0]?.messages[0]?.content).not.toContain("拉麵");
     expect(curator.insights).toEqual([
@@ -200,14 +202,14 @@ describe("daily reflection", () => {
     expect(self.feelings.get("p-owen")).toBe("今天跟他聊得很開心");
     expect(self.agendaItems.map((a) => a.text)).toEqual(["學會 Owen 喜歡的拉麵店名字"]);
     const all = lessons.all();
-    expect(all.map((l) => l.text).sort()).toEqual(["Owen 講話時不要插嘴", "在 p1 少說一點"]);
+    expect(all.map((l) => l.text).sort()).toEqual(["Owen 講話時不要插嘴", "在這裡少說一點"]);
     // Lessons scoped to Owen shift her talkativeness only when he is in the conversation.
     expect(lessons.talkShift(TEXT, ["p-owen"])).toBeLessThan(0);
     // However many "be quieter" lessons pile up, together they only nudge her.
     for (let i = 0; i < 30; i++) {
       lessons.add({
         id: `quiet-${i}`,
-        text: `在 p1 少說話 ${i}`,
+        text: `在這裡少說話 ${i}`,
         person: null,
         scope: null,
         talk: -1,
@@ -373,5 +375,64 @@ describe("feedback signals", () => {
       .feedback(1)
       .find((t) => t.subject === "discord:g1:c1");
     expect(place).toMatchObject({ started: 1, ignored: 1, answered: 0 });
+  });
+});
+
+describe("reflection writes only stable names", () => {
+  it("shows people by handle and places by their full string, the same on every call", async () => {
+    const reply = JSON.stringify({ summary: "嗯" });
+    const a = setup(reply);
+    await a.reflector.reflect("daily", null);
+    const first = a.provider.requests()[0]?.messages[1]?.content as string;
+    expect(first).toContain("人(名字就是稱呼):Owen");
+    expect(first).not.toMatch(/(?<![A-Za-z0-9_])[up][0-9]{1,4}(?![A-Za-z0-9_])/);
+    // Another process, same data: the same names (they are not numbered per call).
+    const b = setup(reply);
+    await b.reflector.reflect("daily", null);
+    expect(b.provider.requests()[0]?.messages[1]?.content).toBe(first);
+  });
+
+  it("rewrites a code from the lesson's own person, refuses what it cannot resolve, keeps style lessons out of talkativeness", async () => {
+    const reply = JSON.stringify({
+      summary: "u3 今天很吵,u1 也是。",
+      feelings: [
+        { person: "u1", note: "還沒對上人" },
+        { person: "Owen", note: "u2 提醒我的事讓我很感謝他" },
+        { person: "Owen", note: "今天聊得很開心" },
+      ],
+      lessons: [
+        { text: "u1 講話時不要插嘴", person: "Owen", place: null, talk: -0.5 },
+        { text: "u9 一直嗆我", person: null, place: null, talk: null },
+        { text: "別一直重複同一個梗", person: "Owen", place: null, talk: -1 },
+        { text: "這裡可以更活潑一點", person: null, place: "discord:g1:c1", talk: 0.6 },
+      ],
+      goals: [
+        { text: "跟 u1 約好一起玩", why: "u1 提議的", days: 3 },
+        { text: "把拉麵店名字記起來", why: "想多聊", days: 3 },
+      ],
+    });
+    const { self, lessons, reflector } = setup(reply);
+    const run = await reflector.reflect("daily", null);
+    expect(run?.error).toBeNull();
+    // The summary kept for the panel has lost its code sentences.
+    expect(ephemeralHandlesIn(run?.summary ?? "")).toEqual([]);
+    // Feelings: the unknown person and the unresolvable sentence are skipped.
+    expect([...self.feelings.values()]).toEqual(["今天聊得很開心"]);
+    // Goals: the code is not written into the agenda.
+    expect(self.agendaItems.map((a) => a.text)).toEqual(["把拉麵店名字記起來"]);
+    // Lessons: "u1" in a lesson about Owen is Owen; "u9" cannot be resolved, so no lesson.
+    const all = lessons.all();
+    expect(all.map((l) => l.text).sort()).toEqual([
+      "Owen 講話時不要插嘴",
+      "別一直重複同一個梗",
+      "這裡可以更活潑一點",
+    ]);
+    for (const l of all) expect(ephemeralHandlesIn(l.text)).toEqual([]);
+    // Only the lessons that are about how much she talks carry a `talk`.
+    const talk = Object.fromEntries(all.map((l) => [l.text, l.talk]));
+    expect(talk["別一直重複同一個梗"]).toBeNull();
+    expect(talk["這裡可以更活潑一點"]).toBe(0.6);
+    // ...and it is scoped to the place she named by its full string.
+    expect(all.find((l) => l.text.includes("活潑"))?.scope).toBe("discord:g1:c1");
   });
 });

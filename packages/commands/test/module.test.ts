@@ -1,4 +1,5 @@
 import {
+  configureLogging,
   defineManifest,
   EventBus,
   type Module,
@@ -9,7 +10,7 @@ import {
 } from "@miyoria/kernel";
 import { type AuditEntry, type AuditLog, AuditLogKey } from "@miyoria/store";
 import { type Authorizer, AuthorizerKey, type ModuleStateKind } from "@miyoria/types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type CardBlock,
   CommandMount,
@@ -57,11 +58,13 @@ class Registers implements Module {
   }
 }
 
-async function boot(): Promise<{ sup: Supervisor; reg: CommandRegistry }> {
+async function boot(
+  config: Record<string, unknown> = {},
+): Promise<{ sup: Supervisor; reg: CommandRegistry }> {
   const services = new ServiceRegistry();
   const sup = new Supervisor({ bus: new EventBus(), services });
   services.provide("app", SupervisorKey, sup);
-  await sup.register(new CommandsModule(), { owners: ["discord:1"] }, true);
+  await sup.register(new CommandsModule(), { owners: ["discord:1"], ...config }, true);
   await sup.register(new Dummy(), null, true);
   await sup.startAll();
   return { sup, reg: services.require(CommandRegistryKey) };
@@ -121,7 +124,8 @@ describe("commands module", () => {
       CommandReply.text("ok"),
     );
     const help = await reg.dispatch(inGuild("help", "5"));
-    expect(replyEphemeral(true, help)).toBe(true);
+    // `/help` answers the channel (a warning or error would still be ephemeral).
+    expect(replyEphemeral(reg.get(["help"])?.ephemeral ?? true, help)).toBe(false);
     expect(help.text).toContain("/voice");
     expect(help.text).not.toContain("/admin");
     const forOwner = await reg.dispatch(inGuild("help", "1"));
@@ -131,6 +135,65 @@ describe("commands module", () => {
     expect(page?.result.type).toBe("update");
     if (page?.result.type === "update") expect(page.result.reply.text).toContain("/voice join");
     await sup.stopAll();
+  });
+
+  it("help_names_the_panels_by_their_interactive_subcommand", async () => {
+    const { sup, reg } = await boot();
+    reg.register(commandSpec("me profile", "看她對你的印象"), () => CommandReply.text("ok"));
+    const member = await reg.dispatch(inGuild("help", "5"));
+    expect(member.text).toContain("/miyo");
+    expect(member.text).toContain("/song");
+    expect(member.text).toContain("/me");
+    const me = await reg.dispatchComponent(click("mi:help:category", "5", { values: ["me"] }));
+    const text = me?.result.type === "update" ? me.result.reply.text : "";
+    // `i` leads the list, and a member does not see `/admin i`.
+    expect(text.indexOf("/me i")).toBeGreaterThan(-1);
+    expect(text.indexOf("/me i")).toBeLessThan(text.indexOf("/me profile"));
+    expect(member.text).not.toContain("/admin");
+    const owner = await reg.dispatchComponent(
+      click("mi:help:category", "1", { values: ["admin"] }),
+    );
+    const adminText = owner?.result.type === "update" ? owner.result.reply.text : "";
+    expect(adminText.indexOf("/admin i")).toBeGreaterThan(-1);
+    expect(adminText.indexOf("/admin i")).toBeLessThan(adminText.indexOf("/admin module"));
+    await sup.stopAll();
+  });
+
+  it("visibility_comes_from_the_config", async () => {
+    expect(CommandsConfigSchema.parse({}).visibility).toEqual({});
+    expect(() => CommandsConfigSchema.parse({ visibility: { "me wallet": "hidden" } })).toThrow();
+    const { sup, reg } = await boot({
+      visibility: { help: "private", "admin module list": "public" },
+    });
+    expect(reg.get(["help"])?.ephemeral).toBe(true);
+    expect(reg.get(["admin", "module", "list"])?.ephemeral).toBe(false);
+    // Untouched commands keep their declaration.
+    expect(reg.get(["admin", "module", "enable"])?.ephemeral).toBe(true);
+    expect(reg.get(["admin", "i"])?.ephemeral).toBe(true);
+    expect(reg.get(["miyo"])?.ephemeral).toBe(false);
+    await sup.stopAll();
+  });
+
+  it("unknown_visibility_paths_are_warned_about_once_the_registry_is_quiet", async () => {
+    const lines: string[] = [];
+    configureLogging({
+      level: "warn",
+      destination: { write: (line: string) => void lines.push(line) },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let sup: Supervisor | undefined;
+    try {
+      ({ sup } = await boot({ visibility: { "me wallett": "private", help: "private" } }));
+      await vi.advanceTimersByTimeAsync(12_000);
+    } finally {
+      vi.useRealTimers();
+      configureLogging({ level: "silent" });
+    }
+    const warned = lines.filter((l) => l.includes("modules.commands.visibility"));
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("me wallett");
+    expect(warned[0]).not.toContain('"help"');
+    await sup?.stopAll();
   });
 
   it("admin_module_commands", async () => {

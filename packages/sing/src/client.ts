@@ -29,6 +29,32 @@ export const SongMetaSchema = z.object({
 export type SongMeta = z.output<typeof SongMetaSchema>;
 export type LyricLine = z.output<typeof LyricLineSchema>;
 
+/**
+ * Where the worker runs a job and why (`workers/sing/gpu.py`): decided before every GPU stage and
+ * again while it runs. `reason` is written for people, and for her.
+ */
+export const GpuStatusSchema = z.object({
+  policy: z.string().catch("auto"),
+  stage: z.string().catch(""),
+  /** `share`, `offload`, `exclusive`, `wait`, `cpu` or `give_up`. */
+  mode: z.string().nullable().catch(null),
+  code: z.string().nullable().catch(null),
+  reason: z.string().nullable().catch(null),
+  free_mb: z.number().nullable().catch(null),
+  total_mb: z.number().nullable().catch(null),
+  need_mb: z.number().nullable().catch(null),
+  step_s: z.number().nullable().catch(null),
+  baseline_s: z.number().nullable().catch(null),
+  spilling: z.boolean().catch(false),
+  spills: z.number().catch(0),
+  waited_s: z.number().catch(0),
+  silenced_s: z.number().catch(0),
+  /** How long her voice would be gone if it went now, reload included. */
+  silence_est_s: z.number().nullable().catch(null),
+  silence_max_s: z.number().nullable().catch(null),
+});
+export type GpuStatus = z.output<typeof GpuStatusSchema>;
+
 export const WorkerJobSchema = z.object({
   id: z.string(),
   state: z.enum(["queued", "running", "done", "failed", "cancelled"]),
@@ -45,13 +71,14 @@ export const WorkerJobSchema = z.object({
   song: SongMetaSchema.nullable().catch(null),
   /**
    * The job has the GPU to itself (the TTS / ASR workers offloaded): `waiting` for our go,
-   * `offloading`, `active`, `reloading`, `done`; `null` when it does not need it (older workers:
-   * always `null`).
+   * `offloading`, `active`, `reloading`, `done`; `shared`: it runs next to them, speech goes on;
+   * `null` when it does not need it (older workers: always `null`).
    */
   exclusive: z
-    .enum(["waiting", "offloading", "active", "reloading", "done"])
+    .enum(["waiting", "offloading", "active", "reloading", "done", "shared"])
     .nullable()
     .catch(null),
+  gpu: GpuStatusSchema.nullable().catch(null),
 });
 export type WorkerJob = z.output<typeof WorkerJobSchema>;
 
@@ -62,8 +89,24 @@ export interface SongQuery {
   path?: string;
   /** Whole-song transposition in semitones (her voice follows). */
   key?: number;
+  /** The song's backing voices (`keep` when left out; each mode is a song of its own in the worker). */
+  backing?: "keep" | "drop" | "convert" | "acapella";
   /** The worker waits for `goExclusive` before it takes the GPU (she says she is off first). */
   exclusive_ack?: boolean;
+}
+
+/**
+ * What only Core knows, for the worker's GPU decisions: who would notice her going quiet, and which
+ * jobs are needed now. Sent on every poll; without it for a while the worker assumes people.
+ */
+export interface GpuContext {
+  in_voice: boolean;
+  /** People in her voice channels who can hear her. */
+  listeners: number;
+  /** Go Live or OBS is on: there are viewers, however many. */
+  live: boolean;
+  /** Jobs of songs that are sung as soon as they are ready. */
+  urgent: string[];
 }
 
 /** The two tracks Core streams: the mix, and the converted vocal her mouth follows. */
@@ -88,6 +131,8 @@ export interface SingWorker {
   cancel(id: string): Promise<void>;
   /** Lets a job that is `exclusive: "waiting"` take the GPU. */
   goExclusive(id: string): Promise<void>;
+  /** Tells the worker who is listening (`POST /gpu/context`). */
+  context(context: GpuContext, signal?: AbortSignal): Promise<void>;
   /** PCM s16le mono at `song.play.sample_rate`. */
   audio(song: string, track: SongTrack, signal?: AbortSignal): Promise<Int16Array>;
   /** `null` when healthy, else why not. */
@@ -161,6 +206,19 @@ export class HttpSingWorker implements SingWorker {
       `/jobs/${encodeURIComponent(id)}/exclusive`,
       { method: "POST" },
       this.#timeoutMs,
+    );
+  }
+
+  async context(context: GpuContext, signal?: AbortSignal): Promise<void> {
+    await this.#call(
+      "/gpu/context",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(context),
+      },
+      this.#timeoutMs,
+      signal,
     );
   }
 

@@ -3,6 +3,7 @@ import {
   type Action,
   initialState,
   MAX_QUEUE_ITEMS,
+  MAX_SCREEN_CARDS,
   type OverlayState,
   parseMessage,
   parseQueueItem,
@@ -12,6 +13,72 @@ import {
 
 const run = (actions: Action[], from: OverlayState = initialState()): OverlayState => actions.reduce(reduce, from);
 const sub = (turn: string, text: string, final = false): Action => ({ type: "subtitle", turn, text, final });
+
+describe("gift line", () => {
+  it("parses the Stage's gift frame; empty text hides it", () => {
+    expect(parseMessage('{"type":"gift","text":"Owen 餵了她一碗白飯"}')).toEqual({ type: "gift", text: "Owen 餵了她一碗白飯" });
+    expect(parseMessage('{"type":"gift","text":""}')).toEqual({ type: "gift", text: null });
+    expect(parseMessage('{"type":"gift"}')).toEqual({ type: "gift", text: null });
+  });
+
+  it("shows, replaces and clears the line, and drops it with the connection", () => {
+    const on = run([{ type: "gift", text: "a" }]);
+    expect(on.gift).toBe("a");
+    expect(reduce(on, { type: "gift", text: "a" })).toBe(on);
+    expect(reduce(on, { type: "gift", text: "b" }).gift).toBe("b");
+    expect(reduce(on, { type: "gift", text: null }).gift).toBeNull();
+    expect(reduce(on, { type: "connection", connected: false }).gift).toBeNull();
+  });
+});
+
+describe("screen cards", () => {
+  const card = (text: string): Action => ({ type: "screen", kind: "message", name: "Owen", text, song: null });
+
+  it("parses messages and dedications, and drops what is not a card", () => {
+    expect(parseMessage('{"type":"screen","kind":"message","name":" Owen ","text":"加油","song":null}')).toEqual({
+      type: "screen", kind: "message", name: "Owen", text: "加油", song: null,
+    });
+    expect(parseMessage('{"type":"screen","kind":"dedication","name":"A","text":"給 B","song":"春日影"}')).toMatchObject({
+      kind: "dedication", song: "春日影",
+    });
+    // A dedication without a song is a message; a message has no song.
+    expect(parseMessage('{"type":"screen","kind":"dedication","name":"A","text":"x","song":""}')).toMatchObject({ kind: "message", song: null });
+    expect(parseMessage('{"type":"screen","kind":"message","name":"A","text":"x","song":"s"}')).toMatchObject({ song: null });
+    for (const bad of [
+      '{"type":"screen","kind":"other","name":"A","text":"x"}',
+      '{"type":"screen","kind":"message","name":"","text":"x"}',
+      '{"type":"screen","kind":"message","name":"A","text":" "}',
+    ]) {
+      expect(parseMessage(bad), bad).toBeNull();
+    }
+  });
+
+  it("queues cards in order, each with its own id, even the same text twice", () => {
+    const s = run([card("a"), card("a"), card("b")]);
+    expect(s.screens.map((c) => [c.id, c.text])).toEqual([[1, "a"], [2, "a"], [3, "b"]]);
+    expect(s.screenSeq).toBe(3);
+  });
+
+  it("moves on when the shown card is done, and ignores a late or wrong ack", () => {
+    const s = run([card("a"), card("b")]);
+    expect(reduce(s, { type: "screen_done", id: 2 })).toBe(s);
+    const next = reduce(s, { type: "screen_done", id: 1 });
+    expect(next.screens.map((c) => c.text)).toEqual(["b"]);
+    expect(reduce(next, { type: "screen_done", id: 1 })).toBe(next);
+    expect(reduce(next, { type: "screen_done", id: 2 }).screens).toEqual([]);
+  });
+
+  it("holds at most the cap: the oldest waiting one goes, never the one on screen", () => {
+    expect(MAX_SCREEN_CARDS).toBe(5);
+    const s = run(["1", "2", "3", "4", "5", "6", "7"].map((t) => card(t)));
+    expect(s.screens).toHaveLength(MAX_SCREEN_CARDS);
+    expect(s.screens.map((c) => c.text)).toEqual(["1", "4", "5", "6", "7"]);
+  });
+
+  it("drops every card with the connection", () => {
+    expect(reduce(run([card("a"), card("b")]), { type: "connection", connected: false }).screens).toEqual([]);
+  });
+});
 
 describe("parseMessage", () => {
   it("parses the Stage's subtitle frame", () => {
@@ -82,7 +149,7 @@ describe("parseMessage", () => {
 describe("reduce", () => {
   it("starts empty and offline", () => {
     expect(initialState()).toEqual({
-      connected: false, speaking: false, subtitleSeq: 0, subtitle: null, emotion: null, status: null, queue: [], notice: null, activity: null,
+      connected: false, speaking: false, subtitleSeq: 0, subtitle: null, emotion: null, status: null, queue: [], notice: null, activity: null, gift: null, screens: [], screenSeq: 0,
     });
   });
 

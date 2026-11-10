@@ -71,9 +71,9 @@ export interface CommandSpec {
   /** Permission node, e.g. `"admin.module.toggle"` (`""` = everyone). See `nodes.ts`. */
   permission: string;
   /**
-   * Visibility of the reply: `true` = only the invoker sees it (queries, settings, admin),
-   * `false` = the channel sees it (result cards meant for everyone). Warnings and errors are
-   * always ephemeral; see `replyEphemeral`.
+   * Visibility of the reply: `true` = only the invoker sees it (private settings, admin),
+   * `false` = the channel sees it (the default). `[modules.commands.visibility]` overrides it.
+   * Warnings and errors are always ephemeral; see `replyEphemeral`.
    */
   ephemeral: boolean;
 }

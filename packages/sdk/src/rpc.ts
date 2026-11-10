@@ -22,7 +22,14 @@ export class RpcError extends Error {
   }
 }
 
-export type RequestHandler = (method: string, params: unknown) => unknown;
+/**
+ * Answers one incoming request. `signal` aborts when the caller stops waiting (it sent
+ * `$/cancelRequest`): stop the work, the answer is not read any more.
+ */
+export type RequestHandler = (method: string, params: unknown, signal: AbortSignal) => unknown;
+
+/** Notification (`{id}`) the host sends when it stops waiting for a request it sent. */
+export const CANCEL_METHOD = "$/cancelRequest";
 export type NotificationHandler = (method: string, params: unknown) => void;
 
 export interface PeerOptions {
@@ -47,6 +54,8 @@ export class RpcPeer {
   readonly #output: Writable;
   readonly #decoder = new FrameDecoder();
   readonly #pending = new Map<number, Pending>();
+  /** Incoming requests being answered, by id (for `$/cancelRequest`). */
+  readonly #running = new Map<number | string, AbortController>();
   readonly #opts: PeerOptions;
   #nextId = 1;
   #closed = false;
@@ -123,6 +132,13 @@ export class RpcPeer {
     const id = msg.id as number | string | null | undefined;
     if (typeof msg.method === "string") {
       if (id === undefined || id === null) {
+        if (msg.method === CANCEL_METHOD) {
+          const target = (msg.params as { id?: unknown } | null)?.id;
+          if (typeof target === "number" || typeof target === "string") {
+            this.#running.get(target)?.abort(new RpcError(ErrorCode.Cancelled, "cancelled by the host"));
+          }
+          return;
+        }
         try {
           this.#opts.onNotification?.(msg.method, msg.params);
         } catch {
@@ -149,10 +165,12 @@ export class RpcPeer {
   }
 
   async #answer(id: number | string, method: string, params: unknown): Promise<void> {
+    const controller = new AbortController();
+    this.#running.set(id, controller);
     try {
       const handler = this.#opts.onRequest;
       if (!handler) throw new RpcError(ErrorCode.MethodNotFound, `unknown method "${method}"`);
-      const result = await handler(method, params);
+      const result = await handler(method, params, controller.signal);
       if (!this.#closed) this.#write({ jsonrpc: "2.0", id, result: result ?? null });
     } catch (error) {
       const err =
@@ -160,6 +178,8 @@ export class RpcPeer {
           ? error
           : new RpcError(ErrorCode.InternalError, error instanceof Error ? error.message : String(error));
       if (!this.#closed) this.#write({ jsonrpc: "2.0", id, error: err.toJSON() });
+    } finally {
+      if (this.#running.get(id) === controller) this.#running.delete(id);
     }
   }
 }

@@ -1,6 +1,6 @@
 // Per-turn context from other modules: every registered `PromptContributor` is asked
 // concurrently, each with a time limit, and the sections of those that answered in time are
-// added to the situation message.
+// handed to the prompt compiler (compiler.ts), which budgets them into the data message.
 
 import { errorMessage, getLogger } from "@miyoria/kernel";
 import type {
@@ -36,8 +36,10 @@ export async function gather(
   request: PromptRequest,
   timeoutMs: number,
   signal: AbortSignal,
+  /** Contributors not to ask: the main line reads what they would say from elsewhere. */
+  skip: readonly string[] = [],
 ): Promise<Gathered> {
-  const contributors = registry.all();
+  const contributors = registry.all().filter((c) => !skip.includes(c.key));
   const out = new Gathered();
   if (contributors.length === 0) return out;
   const results = await Promise.all(contributors.map((c) => ask(c, request, timeoutMs, signal)));

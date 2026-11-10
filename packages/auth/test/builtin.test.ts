@@ -4,6 +4,8 @@ import {
   ADMIN,
   BLOCKED,
   builtinRoles,
+  builtinStatus,
+  LEGACY_BUILTIN_GRANTS,
   MODERATOR,
   OWNER,
   PANEL_ACCESS,
@@ -33,6 +35,56 @@ describe("built-in roles", () => {
       }
       expect(r.builtin).toBe(true);
     }
+  });
+
+  test("web_tools_for_members", () => {
+    const roles = builtinRoles();
+    const get = (n: string) => roles.find((r) => r.name === n) as RoleDefinition;
+    for (const name of [ADMIN, MODERATOR, TRUSTED, USER]) {
+      expect(allows(get(name), "tools.web"), name).toBe(true);
+    }
+    expect(allows(get(RESTRICTED), "tools.web")).toBe(false);
+    expect(allows(get(BLOCKED), "tools.web")).toBe(false);
+    // Searching the web is not a licence for every tool.
+    expect(allows(get(USER), "tools.mcp.fs.write")).toBe(false);
+    expect(allows(get(USER), "tools.sandbox.x")).toBe(false);
+  });
+
+  test("a_stored_role_from_before_tools_web_and_tools_file_is_upgraded", () => {
+    for (const name of [ADMIN, MODERATOR, TRUSTED, USER]) {
+      const current = builtinRoles().find((r) => r.name === name) as RoleDefinition;
+      const legacy = LEGACY_BUILTIN_GRANTS[name] ?? [];
+      expect(legacy.length, name).toBeGreaterThan(0);
+      for (const old of legacy) {
+        expect(old, name).not.toContain("tools.file");
+        expect(builtinStatus({ ...current, grants: [...old] }), name).toBe("upgrade");
+      }
+      // Before the file node (the latest), and before the web node (the one before it).
+      expect(legacy.at(-1), name).toEqual(current.grants.filter((g) => g !== "tools.file"));
+      expect(legacy.at(-2), name).toEqual(
+        current.grants.filter((g) => g !== "tools.web" && g !== "tools.file"),
+      );
+      expect(builtinStatus(current), name).toBe("current");
+    }
+  });
+
+  test("members_may_send_files", () => {
+    const roles = builtinRoles();
+    const get = (n: string) => roles.find((r) => r.name === n) as RoleDefinition;
+    for (const name of [ADMIN, MODERATOR, TRUSTED, USER]) {
+      expect(allows(get(name), "tools.file"), name).toBe(true);
+    }
+    expect(allows(get(RESTRICTED), "tools.file")).toBe(false);
+    expect(allows(get(BLOCKED), "tools.file")).toBe(false);
+  });
+
+  test("a_stored_role_in_another_order_is_still_recognised", () => {
+    // Seen live: an unedited user role from before tools.web, its nodes in a different order.
+    const current = builtinRoles().find((r) => r.name === USER) as RoleDefinition;
+    const old = [...(LEGACY_BUILTIN_GRANTS[USER]?.at(-1) ?? [])].reverse();
+    expect(builtinStatus({ ...current, grants: old })).toBe("upgrade");
+    expect(builtinStatus({ ...current, grants: [...current.grants].reverse() })).toBe("current");
+    expect(builtinStatus({ ...current, grants: [...old, "extra.node"] })).toBe("edited");
   });
 
   test("builtin_nodes", () => {

@@ -38,7 +38,9 @@ initiative = "medium"
 max_share_of_recent = 0.3
 
 [persona]
-# persona/ 底下的段落,依這個順序組成人格 prompt;可以自由增減、改內容
+# persona/ 底下的段落,依這個順序組成人格 prompt(固定的 system 部分);可以自由增減、改內容。
+# identity = 角色核心(短)、style = 說話風格。回覆格式(幾句話、<emo:…>、<silence/>)由程式統一寫一次,
+# 這裡不用再寫。persona/examples/*.md 是範例對話:放在參考資料區(只示範語氣),不是規則
 sections = ["identity", "style"]
 
 # 這個角色用的模型。provider 名稱對應 miyoria.toml 的 [llm.providers.<name>]

@@ -1,7 +1,20 @@
 // Helpers shared by the backends: canonical lookup keys, microsecond timestamps, embeddings.
 
-import type { AccountRef, ContextKey, Timestamp } from "@miyoria/types";
-import type { AuthScope, MemoryKind, MemoryScope, MemorySource } from "./records.js";
+import {
+  type AccountRef,
+  type ContextKey,
+  isMemoryOrigin,
+  type MemoryOrigin,
+  type Timestamp,
+} from "@miyoria/types";
+import type {
+  AuthScope,
+  CoinCap,
+  CoinRule,
+  MemoryKind,
+  MemoryScope,
+  MemorySource,
+} from "./records.js";
 
 /** Every failure of a backend (bad input, constraint violations, broken rows). */
 export class StoreError extends Error {
@@ -84,6 +97,16 @@ export function authScopeKey(scope: AuthScope): string {
 export function memoryKind(kind: string): MemoryKind {
   if ((MEMORY_KINDS as readonly string[]).includes(kind)) return kind as MemoryKind;
   throw new StoreError(`unknown value \`${kind}\``);
+}
+
+/** A stored origin; anything else (a newer build's value) reads as `unknown`. */
+export function memoryOrigin(value: string): MemoryOrigin {
+  return isMemoryOrigin(value) ? value : "unknown";
+}
+
+/** The evidence ids of a stored `source_events` array (anything that is not text is dropped). */
+export function sourceEvents(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
 export function parseJson<T>(text: string, what: string): T {
@@ -226,4 +249,46 @@ export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
 export function queryTokens(tokens: readonly string[]): string[] {
   const set = new Set(tokens.map((t) => t.trim().toLowerCase()).filter((t) => t.length > 0));
   return [...set].sort().slice(0, MAX_QUERY_TOKENS);
+}
+
+// ---- coins ------------------------------------------------------------------------------
+
+/** `accounts` without repeats, with `account` in it. */
+export function walletWith(account: AccountRef, accounts: readonly AccountRef[]): AccountRef[] {
+  const same = (a: AccountRef, b: AccountRef) => a.platform === b.platform && a.id === b.id;
+  const out = accounts.filter((a, i) => accounts.findIndex((b) => same(a, b)) === i);
+  if (!out.some((a) => same(a, account))) out.push(account);
+  return out;
+}
+
+/**
+ * The delta a rule lets through: earnings stop at every cap (`partial`: what still fits), `null`
+ * when nothing does. `used` sums a cap so far.
+ */
+export function allowedDelta(
+  delta: number,
+  rule: CoinRule,
+  used: (cap: CoinCap) => number,
+): number | null {
+  if (delta <= 0) return delta;
+  let out = delta;
+  for (const cap of rule.caps ?? []) {
+    const room = cap.limit - used(cap);
+    if (out <= room) continue;
+    if (!rule.partial || room <= 0) return null;
+    out = room;
+  }
+  return out;
+}
+
+/** `allowedDelta` for a backend whose sums are async. */
+export async function allowedDeltaAsync(
+  delta: number,
+  rule: CoinRule,
+  used: (cap: CoinCap) => Promise<number>,
+): Promise<number | null> {
+  if (delta <= 0) return delta;
+  const sums = new Map<CoinCap, number>();
+  for (const cap of rule.caps ?? []) sums.set(cap, await used(cap));
+  return allowedDelta(delta, rule, (cap) => sums.get(cap) ?? 0);
 }

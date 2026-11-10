@@ -3,35 +3,91 @@
 import { Link } from "@tanstack/react-router";
 import { OctagonPause, Play } from "lucide-react";
 import type { ReactNode } from "react";
-import type { MindView } from "@/api/types";
+import type { EmergencyReport, EmergencyStep, MindView } from "@/api/types";
 import { useMind, useMindMutations, useQueue, useSongs, useStage, useVoice, useWorld } from "@/app/queries";
 import { Dot, type Tone } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/misc";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { notify } from "@/lib/notify";
-import { cn } from "@/lib/utils";
+
+export const HER_NAME = "DeepSeek-chan";
 
 export function mindState(m: MindView): { tone: Tone; label: string } {
-  if (m.paused) return { tone: "warning", label: "已暫停" };
+  if (m.paused) return { tone: "warning", label: "已緊急停止" };
   if (!m.running) return { tone: "neutral", label: "心智迴圈未啟動" };
   if (m.stats?.idle_reason === "budget exhausted") return { tone: "danger", label: "額度用完" };
   if (!m.accepting) return { tone: "neutral", label: "休息中" };
   return { tone: "success", label: "運作中" };
 }
 
+/** What she is doing right now, in a word or two: the sidebar and 總覽's opening line. */
+export function useHerNow(): { tone: Tone; label: string; detail?: string } {
+  const mind = useMind();
+  const world = useWorld();
+  const stage = useStage();
+  const her = world.data?.her;
+  const state = mind.data ? mindState(mind.data) : null;
+  if (mind.data?.paused) return state ?? { tone: "warning", label: "已緊急停止" };
+  if (her?.singing) return { tone: "brand", label: "唱歌中", detail: her.singing };
+  if (her?.game) return { tone: "brand", label: "遊戲中", detail: her.game };
+  if (stage.data?.speaking) return { tone: "brand", label: "說話中" };
+  if (her?.voice) return { tone: "success", label: "在語音", detail: her.voice_name ?? undefined };
+  return state ?? { tone: "neutral", label: "—" };
+}
+
+const STEP_LABELS: Record<EmergencyStep["step"], string> = {
+  pause: "暫停",
+  silence: "閉嘴",
+  song: "唱歌",
+  stream: "直播",
+  voice: "語音",
+  game: "遊戲",
+  resume: "解除",
+};
+
+/** How a press went, for the toast: only what did not work is named. */
+function reportEmergency(view: MindView): void {
+  const failed = view.emergency?.steps.filter((s) => !s.ok) ?? [];
+  if (failed.length > 0) {
+    const steps = failed.map((s) => `${STEP_LABELS[s.step]}(${s.detail})`).join("、");
+    notify.warn(`${view.paused ? "已緊急停止" : "解除時"},但這些沒有成功:${steps}`);
+  } else if (view.paused) {
+    notify.ok("已緊急停止:她閉嘴了,直播、語音和遊戲都關了");
+  } else {
+    notify.ok("已解除緊急停止");
+  }
+}
+
+/** Each step of the last press and how it went. */
+function EmergencySteps({ report }: { report: EmergencyReport }) {
+  return (
+    <ul className="mt-1 space-y-0.5">
+      {report.steps.map((s) => (
+        <li key={s.step} className="flex items-baseline gap-1.5">
+          <Dot tone={s.ok ? "success" : "danger"} className="size-1.5 [&>span]:size-1.5" />
+          <span className="shrink-0 font-medium">{STEP_LABELS[s.step]}</span>
+          <span className="min-w-0 text-foreground/80">{s.detail}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
- * Stops everything she does on her own (the gate's pause: only commands and the panel act), or
- * lets her go again. One click either way; the Core needs `owner.autonomy.approve`.
+ * The one button of §16: she shuts up, the stream ends, she leaves voice and the game stops; or the
+ * stop is lifted. One click either way; the Core needs `owner.autonomy.approve`. The Core answers
+ * step by step, so what did not work is shown and not just "done".
  */
 export function EmergencyStop({ className }: { className?: string }) {
   const mind = useMind();
   const { pause } = useMindMutations();
   const paused = mind.data?.paused ?? false;
+  const report = mind.data?.emergency ?? null;
   const toggle = () =>
     pause.mutate(!paused, {
-      onSuccess: (v) => notify.ok(v.paused ? "已緊急停止:她不會再自己行動" : "已恢復她的自主行動"),
-      onError: (e) => notify.error(e, paused ? "恢復失敗" : "緊急停止失敗"),
+      onSuccess: reportEmergency,
+      onError: (e) => notify.error(e, paused ? "解除失敗" : "緊急停止失敗"),
     });
   if (mind.isError) return null;
   return (
@@ -39,41 +95,41 @@ export function EmergencyStop({ className }: { className?: string }) {
       <TooltipTrigger asChild>
         <Button
           writes
-          size="sm"
-          variant={paused ? "default" : "outline"}
+          variant={paused ? "default" : "stop"}
           busy={pause.isPending}
           disabled={mind.isPending}
           onClick={toggle}
-          className={cn(
-            !paused &&
-              "border-destructive/40 text-[oklch(0.78_0.14_25)] hover:border-destructive/70 hover:bg-destructive/12 hover:text-[oklch(0.84_0.12_25)]",
-            className,
-          )}
+          className={className}
         >
           {paused ? <Play /> : <OctagonPause />}
-          {paused ? "恢復自主" : "緊急停止"}
+          {paused ? "解除停止" : "緊急停止"}
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{paused ? "讓她重新自己決定要做什麼" : "暫停她所有自主行動;指令和面板仍可操作"}</TooltipContent>
+      <TooltipContent>
+        {paused
+          ? "解除後她會再開口,語音、直播和遊戲不會自動回來"
+          : "她立刻閉嘴、不再回話,直播、語音和遊戲都關掉;指令和面板仍可操作"}
+        {paused && report !== null && <EmergencySteps report={report} />}
+      </TooltipContent>
     </Tooltip>
   );
 }
 
 function Cell({ label, tone, pulse, children }: { label: string; tone?: Tone; pulse?: boolean; children: ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1.5 bg-card px-4 py-3">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="flex min-h-5 min-w-0 items-center gap-2 text-sm font-medium">
-        {tone && <Dot tone={tone} pulse={pulse} />}
+    <div className="flex min-w-0 items-center gap-1.5">
+      <dt className="shrink-0 text-foreground/80">{label}</dt>
+      <dd className="flex min-w-0 items-center gap-1.5 font-medium">
+        {tone && <Dot tone={tone} pulse={pulse} className="size-1.5 [&>span]:size-1.5" />}
         <span className="min-w-0 truncate">{children}</span>
       </dd>
     </div>
   );
 }
 
-const Quiet = ({ children }: { children: ReactNode }) => <span className="font-normal text-muted-foreground">{children}</span>;
+const Quiet = ({ children }: { children: ReactNode }) => <span className="font-normal text-foreground/80">{children}</span>;
 
-/** Her live state: mind, voice, stream, scene, song, game, queue. */
+/** Her live state on the picture: mind, voice, stream, scene, song, game, queue. */
 export function NowStrip() {
   const mind = useMind();
   const world = useWorld();
@@ -91,34 +147,33 @@ export function NowStrip() {
   const goLive = w?.her.golive === "live";
   const pending = mind.isPending || world.isPending;
   const ms = mind.data ? mindState(mind.data) : null;
+  const approvals = mind.data?.pending_approvals ?? 0;
+  // The opening line above already says it when she is doing nothing else.
+  const said = useHerNow().label === ms?.label && approvals === 0;
 
   if (pending) {
     return (
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-4 xl:grid-cols-7" aria-busy="true">
-        {Array.from({ length: 7 }, (_, i) => (
-          <div key={i} className="flex flex-col gap-2 bg-card px-4 py-3">
-            <Skeleton className="h-3 w-10" />
-            <Skeleton className="h-4 w-20" />
-          </div>
+      <div className="flex flex-wrap gap-x-5 gap-y-1" aria-busy="true">
+        {Array.from({ length: 6 }, (_, i) => (
+          <Skeleton key={i} className="h-4 w-24" />
         ))}
       </div>
     );
   }
 
   return (
-    <dl
-      aria-label="她現在"
-      className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-4 xl:grid-cols-7 [&>div:last-child]:col-span-2 xl:[&>div:last-child]:col-span-1"
-    >
-      <Cell label="她" tone={ms?.tone ?? "neutral"}>
-        {ms?.label ?? <Quiet>—</Quiet>}
-        {(mind.data?.pending_approvals ?? 0) > 0 && (
-          <Link to="/inner" search={{ tab: "thoughts" }} className="ml-2 text-xs font-normal text-warning underline-offset-4 hover:underline">
-            {mind.data?.pending_approvals} 件待批准
-          </Link>
-        )}
-      </Cell>
-      <Cell label="語音" tone={session ? "success" : "neutral"}>
+    <dl aria-label="她現在" className="flex flex-wrap gap-x-5 gap-y-1 text-[13px]">
+      {!said && (
+        <Cell label="她" tone={ms?.tone ?? "neutral"}>
+          {ms?.label ?? <Quiet>—</Quiet>}
+          {approvals > 0 && (
+            <Link to="/inner" search={{ tab: "thoughts" }} className="ml-2 font-normal text-primary underline-offset-4 hover:underline">
+              {approvals} 件待批准
+            </Link>
+          )}
+        </Cell>
+      )}
+      <Cell label="語音" tone={session ? "brand" : "neutral"}>
         {session ? (
           <>
             {w?.her.voice_name ?? session.label ?? "語音頻道"} <Quiet>· {session.participants.length} 人</Quiet>
@@ -127,7 +182,7 @@ export function NowStrip() {
           <Quiet>不在語音</Quiet>
         )}
       </Cell>
-      <Cell label="直播" tone={goLive || s?.streaming ? "danger" : "neutral"} pulse={goLive || s?.streaming}>
+      <Cell label="直播" tone={goLive || s?.streaming ? "brand" : "neutral"} pulse={goLive || s?.streaming}>
         {goLive && s?.streaming ? "Go Live + OBS" : goLive ? "Go Live" : s?.streaming ? "OBS 推流中" : <Quiet>沒有開台</Quiet>}
       </Cell>
       <Cell label="場景" tone={s?.obs.connected ? undefined : "neutral"}>

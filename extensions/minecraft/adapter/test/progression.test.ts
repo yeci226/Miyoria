@@ -4,7 +4,7 @@
 import { describeActions } from "@miyoria/sdk";
 import { afterEach, describe, expect, it } from "vitest";
 import { errorText, toRequests } from "../src/actions.js";
-import { MinecraftAdapter, taskOf } from "../src/adapter.js";
+import { MinecraftAdapter } from "../src/adapter.js";
 import { BridgeClient } from "../src/bridge.js";
 import { mapEvent } from "../src/events.js";
 import { harvestProblem, pickaxeTier, requiredTier, toolLine } from "../src/harvest.js";
@@ -95,6 +95,7 @@ describe("mine refusals", () => {
       req.type === "observe" ? { ok: true, data: { ...SNAPSHOT, inventory: { oak_log: 2 } } } : { ok: true, data: {} };
     expect(await adapter.act({ name: "mine", args: { block: "diamond_ore" } })).toEqual({
       ok: false,
+      code: "invalid",
       message: "鑽石礦要鐵鎬以上才挖得到東西(你現在沒有鎬),現在挖只會白費時間。先空手打原木、做木鎬。",
     });
     expect(m.requests.map((r) => r.type)).toEqual(["observe"]);
@@ -118,12 +119,6 @@ describe("crafting actions", () => {
     ]);
     expect(() => toRequests({ name: "craft", args: {} })).toThrow("craft 要給 item");
     expect(() => toRequests({ name: "place", args: {} })).toThrow("place 要給 item");
-  });
-
-  it("crafting and the furnace end Baritone's task; place leaves it alone", () => {
-    expect(taskOf(toRequests({ name: "craft", args: { item: "stick" } }))).toBeNull();
-    expect(taskOf(toRequests({ name: "smelt" }))).toBeNull();
-    expect(taskOf(toRequests({ name: "place", args: { item: "furnace" } }))).toBeUndefined();
   });
 });
 
@@ -206,14 +201,15 @@ describe("what she sees", () => {
 });
 
 describe("guide", () => {
-  it("rides along in the act tool's description", () => {
+  it("rides along with the executor's goals", () => {
     const b = new BridgeClient({ endpoint: () => ({ url: "ws://127.0.0.1:1", token: "x" }) });
     const info = new MinecraftAdapter(b).describe();
     for (const step of ["crafting_table", "wooden_pickaxe", "stone_pickaxe", "furnace", "raw_iron", "鐵鎬", "天黑前"]) {
       expect(info.guide, step).toContain(step);
     }
     const description = describeActions(info);
-    expect(description).toContain("- craft:");
+    expect(description).toContain("- obtain:");
+    expect(description).not.toContain("- craft:");
     expect(description.endsWith(info.guide ?? "")).toBe(true);
     expect(describeActions({ ...info, guide: undefined })).not.toContain("生存的進度");
   });

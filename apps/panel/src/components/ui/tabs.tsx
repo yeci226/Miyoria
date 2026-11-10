@@ -6,19 +6,22 @@ function Tabs({ className, ...props }: React.ComponentProps<typeof TabsPrimitive
   return (
     <TabsPrimitive.Root
       data-slot="tabs"
-      className={cn("flex flex-col gap-5", className)}
+      className={cn("flex min-w-0 flex-1 flex-col", className)}
       {...props}
     />
   );
 }
 
-/** Underlined tab row, Vercel-style: the active tab gets a foreground bar. */
+/**
+ * The page's second level: a flush row under the header. It is frame glass, so it sits beside the
+ * content surface and never inside it (a nested backdrop filter sees nothing but its parent).
+ */
 function TabsList({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.List>) {
   return (
     <TabsPrimitive.List
       data-slot="tabs-list"
       className={cn(
-        "-mx-1 flex w-[calc(100%+0.5rem)] items-center gap-1 overflow-x-auto border-b px-1 text-muted-foreground",
+        "glass-dock sticky top-0 z-10 flex shrink-0 items-center gap-0.5 overflow-x-auto border-b px-2 text-muted-foreground sm:px-5 md:top-15",
         className,
       )}
       {...props}
@@ -31,7 +34,7 @@ function TabsTrigger({ className, ...props }: React.ComponentProps<typeof TabsPr
     <TabsPrimitive.Trigger
       data-slot="tabs-trigger"
       className={cn(
-        "relative -mb-px inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-2.5 text-sm font-medium outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:border-foreground data-[state=active]:text-foreground [&_svg]:size-4",
+        "relative inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 text-[13px] outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:shadow-[inset_0_-2px_0_var(--primary)] [&_svg]:size-4",
         className,
       )}
       {...props}
@@ -43,7 +46,7 @@ function TabsContent({ className, ...props }: React.ComponentProps<typeof TabsPr
   return (
     <TabsPrimitive.Content
       data-slot="tabs-content"
-      className={cn("flex-1 outline-none", className)}
+      className={cn("min-w-0 outline-none", className)}
       {...props}
     />
   );

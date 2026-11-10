@@ -1,8 +1,12 @@
-// High-level actions offered to the model and their mapping onto the mod's
-// requests (PROTOCOL.md §5). Actions only *start* work; completion arrives as
-// events (`goal_reached`, `baritone_idle`, ...) or shows in `observe`.
+// The goals offered to the model (the executor's goals, docs/design/v2-architecture.md §3.8)
+// and how one action maps onto the mod's requests (PROTOCOL.md §5). A request only *starts*
+// work; the executor (`adapter.ts`) turns it into a task and reports its end with a code.
+//
+// Getting an item has one entry, `obtain` (strategies `plan`, `altoclef`, `craft`, see
+// `adapter.ts`); the old `get`, `craft` and `smelt` goals are still accepted (`HIDDEN_ACTIONS`)
+// but no longer offered, so the model does not choose between three overlapping paths.
 
-import type { GameAction, GameActionSpec, JsonSchema } from "@miyoria/sdk";
+import type { GameAction, GameActionSpec, JsonSchema, TaskFailureCode } from "@miyoria/sdk";
 import { harvestProblem } from "./harvest.js";
 import { zh } from "./names.js";
 
@@ -26,6 +30,7 @@ export const ACTIONS: GameActionSpec[] = [
       block: str("方塊 id,例如 crafting_table"),
       near: int("走到離座標幾格內就好"),
     }),
+    budget_s: 120,
   },
   {
     name: "mine",
@@ -36,81 +41,114 @@ export const ACTIONS: GameActionSpec[] = [
       block: str("單一方塊 id"),
       count: int("要幾個"),
     }),
+    budget_s: 300,
   },
   {
     name: "follow",
     description: "跟著某個玩家({player})或某種生物({entity})走",
     parameters: obj({ player: str("玩家名稱"), entity: str("生物 id") }),
+    budget_s: 120,
   },
   {
     name: "explore",
     description: "以某點(預設目前位置)為中心探索沒去過的地方",
     parameters: obj({ x: int("x"), z: int("z") }),
+    budget_s: 120,
   },
   {
     name: "farm",
     description: "自動收割並重新種植附近的作物",
     parameters: obj({ range: int("範圍(格),0 = 預設") }),
+    budget_s: 180,
   },
   {
     name: "build",
     description: "用 Baritone 照藍圖蓋建築(baritone/schematics 裡的檔名)",
     parameters: obj({ schematic: str("藍圖檔名"), x: int("x"), y: int("y"), z: int("z") }, ["schematic"]),
+    budget_s: 900,
   },
+  {
+    name: "obtain",
+    description:
+      "取得一個物品(工具、材料、方塊都是),只說目標就好(例如 {item:\"iron_pickaxe\"}):程式依配方和工具等級往回推出步驟(砍樹 → 木材 → 工作台 → 木鎬 → 石頭 → 石鎬 → 熔爐 → 鐵…),一步一步挖、合成、燒、放,邊做邊回報,做完或卡住會說原因;只會挖看得到的方塊。不會的東西有 AltoClef 時交給它",
+    parameters: obj(
+      {
+        item: str("物品 id,例如 oak_planks、crafting_table、iron_pickaxe、torch、furnace"),
+        count: int("數量,預設 1"),
+      },
+      ["item"],
+    ),
+    budget_s: 600,
+  },
+  {
+    name: "place",
+    description: "把背包裡的一個方塊放在腳邊的地上(例如工作台、熔爐)",
+    parameters: obj({ item: str("方塊 id,例如 crafting_table") }, ["item"]),
+    budget_s: 20,
+  },
+  {
+    name: "chat",
+    description: "在遊戲聊天室說一句話",
+    parameters: obj({ message: str("要說的話(256 字以內)") }, ["message"]),
+    budget_s: 10,
+  },
+  { name: "stop", description: "停下所有動作(Baritone、AltoClef、按住的按鍵)", parameters: obj({}), budget_s: 10 },
+  {
+    name: "look",
+    description: "轉頭:{yaw,pitch}(度)或看向座標 {at:{x,y,z}}",
+    parameters: obj({ yaw: { type: "number" }, pitch: { type: "number" }, at: xyz }),
+    budget_s: 10,
+  },
+  {
+    name: "attack",
+    description: "左鍵(攻擊 / 挖準心指到的東西);hold_ticks 按住多久(20 = 1 秒)",
+    parameters: obj({ hold_ticks: int("1–1200") }),
+    budget_s: 75,
+  },
+  {
+    name: "use",
+    description: "右鍵(吃東西、放方塊、開門…);吃東西約 hold_ticks 32",
+    parameters: obj({ hold_ticks: int("1–1200") }),
+    budget_s: 75,
+  },
+  { name: "select", description: "切換快捷列:{slot:0-8} 或 {item}", parameters: obj({ slot: int("0–8"), item: str("物品 id") }), budget_s: 10 },
+  { name: "respawn", description: "死掉時按重生", parameters: obj({}), budget_s: 15 },
+  {
+    name: "launch",
+    description: "開遊戲(用 Prism Launcher;開始玩的時候系統會自己做,不用呼叫)",
+    parameters: obj({}),
+    budget_s: 240,
+  },
+  { name: "quit", description: "關遊戲(結束玩的時候系統會自己做,不用呼叫)", parameters: obj({}), budget_s: 15 },
+];
+
+/**
+ * Goals still accepted but not offered to the model: `get` = `obtain` with strategy `altoclef`;
+ * `craft` / `smelt` = one craft / one furnace load (the `craft` strategy, and the planner's own
+ * steps), kept for old prompts and viewers' wording.
+ */
+export const HIDDEN_ACTIONS: GameActionSpec[] = [
   {
     name: "get",
     description:
       "用 AltoClef 取得物品(自動砍樹、挖礦、合成…),例如 {item:\"iron_pickaxe\"};狀態的 capabilities.altoclef 為 true 才能用,不然用 craft / smelt 自己做",
     parameters: obj({ item: str("物品 id"), count: int("數量,預設 1") }, ["item"]),
-  },
-  {
-    name: "obtain",
-    description:
-      "取得一個物品,只說目標就好(例如 {item:\"iron_pickaxe\"}):程式依配方和工具等級往回推出步驟(砍樹 → 工作台 → 木鎬 → 石頭 → 石鎬 → 熔爐 → 鐵…),用 mine / craft / smelt / place 一步一步做,邊做邊回報;只會挖看得到的方塊",
-    parameters: obj({ item: str("物品 id,例如 iron_pickaxe、torch、furnace"), count: int("數量,預設 1") }, ["item"]),
+    budget_s: 600,
   },
   {
     name: "craft",
     description:
       "合成物品:小配方用背包的 2x2 格,3x3 配方(鎬、劍、熔爐…)要站在工作台旁;例如 {item:\"oak_planks\",count:4}。材料不夠會說缺什麼",
     parameters: obj({ item: str("要做的物品 id"), count: int("要幾個(成品數,預設 1)") }, ["item"]),
+    budget_s: 60,
   },
   {
     name: "smelt",
     description:
       "用旁邊的熔爐燒東西:把 item 和燃料放進去(會自動挑煤炭 / 木材),燒好(每個約 10 秒)要再 smelt 一次拿出來;不給 item = 只拿出燒好的",
     parameters: obj({ item: str("要燒的物品 id,例如 raw_iron"), count: int("幾個(預設全部)"), fuel: str("燃料 id(可省略)") }),
+    budget_s: 60,
   },
-  {
-    name: "place",
-    description: "把背包裡的一個方塊放在腳邊的地上(例如工作台、熔爐)",
-    parameters: obj({ item: str("方塊 id,例如 crafting_table") }, ["item"]),
-  },
-  {
-    name: "chat",
-    description: "在遊戲聊天室說一句話",
-    parameters: obj({ message: str("要說的話(256 字以內)") }, ["message"]),
-  },
-  { name: "stop", description: "停下所有動作(Baritone、AltoClef、按住的按鍵)", parameters: obj({}) },
-  {
-    name: "look",
-    description: "轉頭:{yaw,pitch}(度)或看向座標 {at:{x,y,z}}",
-    parameters: obj({ yaw: { type: "number" }, pitch: { type: "number" }, at: xyz }),
-  },
-  {
-    name: "attack",
-    description: "左鍵(攻擊 / 挖準心指到的東西);hold_ticks 按住多久(20 = 1 秒)",
-    parameters: obj({ hold_ticks: int("1–1200") }),
-  },
-  {
-    name: "use",
-    description: "右鍵(吃東西、放方塊、開門…);吃東西約 hold_ticks 32",
-    parameters: obj({ hold_ticks: int("1–1200") }),
-  },
-  { name: "select", description: "切換快捷列:{slot:0-8} 或 {item}", parameters: obj({ slot: int("0–8"), item: str("物品 id") }) },
-  { name: "respawn", description: "死掉時按重生", parameters: obj({}) },
-  { name: "launch", description: "開遊戲(用 Prism Launcher;開始玩的時候系統會自己做,不用呼叫)", parameters: obj({}) },
-  { name: "quit", description: "關遊戲(結束玩的時候系統會自己做,不用呼叫)", parameters: obj({}) },
 ];
 
 /** One request to send to the mod (`type` plus parameters). */
@@ -324,6 +362,36 @@ function missingList(list: string): string {
   return [...list.matchAll(/([a-z0-9_:]+)(\+?) x(\d+)/g)]
     .map(([, item, similar, n]) => (item === "fuel" ? "燃料(煤炭、木炭、木材或原木)" : `${zh(item)}${similar ? "(或同類)" : ""}×${n}`))
     .join("、");
+}
+
+/** Mod error code (or `not_connected` / `timeout`) → the task failure code it means. */
+export function failureCode(code: string): TaskFailureCode {
+  switch (code) {
+    case "not_visible":
+      return "not_found";
+    case "too_far":
+      return "unreachable";
+    case "missing_items":
+    case "needs_station":
+    case "not_in_game":
+    case "game_paused":
+    case "baritone_unavailable":
+    case "altoclef_unavailable":
+      return "precondition";
+    case "busy":
+    case "reflex_active":
+      return "busy";
+    case "not_connected":
+      return "disconnected";
+    case "timeout":
+      return "timeout";
+    case "invalid_args":
+    case "unknown_type":
+    case "bad_request":
+      return "invalid";
+    default:
+      return "internal";
+  }
 }
 
 /** Mod error code → message for the model. */

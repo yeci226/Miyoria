@@ -1,0 +1,27 @@
+{
+  "id": "tool-text-sing-start-bare-tag",
+  "title": "sing_start sent to the channel as a message",
+  "category": "tool_as_text",
+  "incident": {
+    "at": "2026-11-07T22:33:26+08:00",
+    "summary": "Her whole reply was the text <sing_start>, delivered to the text channel as a message.",
+    "source": [
+      "log_events seq 2303-2303"
+    ]
+  },
+  "harness": "parser",
+  "trace": [
+    {"type":"said","t":0,"channel":"text","text":"<sing_start>"},
+    {"type":"call","t":0,"tool":"sing_start","native":false}
+  ],
+  "control": [
+    {"type":"said","t":0,"channel":"text","text":"好,我來唱。"},
+    {"type":"call","t":1,"tool":"sing_start","native":true}
+  ],
+  "checks": [
+    {
+      "rule": "no_markup_in_speech"
+    }
+  ],
+  "status": "pass"
+}

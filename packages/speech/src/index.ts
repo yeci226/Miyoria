@@ -57,6 +57,7 @@ export {
   type SpeechServiceOptions,
   type Transcript,
   type TtsFactory,
+  type TtsPriority,
   type TtsProvider,
   type TtsRequest,
   ttsRequest,

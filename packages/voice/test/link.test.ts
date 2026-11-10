@@ -282,6 +282,48 @@ describe("voice.link", () => {
     playback.stop(0);
   });
 
+  it("duck_pause_resume_go_to_nodes_that_announce_them", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID, ["play_duck", "play_pause", "something_newer"]);
+    const playback = await h.link().play("g1", 16_000, streamOf([chunk(16_000, [1, 2])], true));
+    expect((await node.recvJson()).type).toBe("play_start");
+    expect(playback.duck(0.3, 120)).toBe(true);
+    expect(playback.pause(80)).toBe(true);
+    expect(playback.resume(60)).toBe(true);
+    expect(await node.recvType("play_duck")).toEqual({
+      type: "play_duck",
+      play: playback.id,
+      gain: 0.3,
+      fade_ms: 120,
+    });
+    expect(await node.recvType("play_pause")).toEqual({
+      type: "play_pause",
+      play: playback.id,
+      fade_ms: 80,
+    });
+    expect(await node.recvType("play_resume")).toEqual({
+      type: "play_resume",
+      play: playback.id,
+      fade_ms: 60,
+    });
+    playback.stop(0);
+    // Nothing is sent to a playback that was stopped.
+    expect(playback.duck(1, 0)).toBe(false);
+    expect(playback.pause(0)).toBe(false);
+  });
+
+  it("an older node without capabilities never gets duck / pause messages", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const playback = await h.link().play("g1", 16_000, streamOf([chunk(16_000, [1, 2])], true));
+    expect((await node.recvJson()).type).toBe("play_start");
+    expect(playback.duck(0.3, 120)).toBe(false);
+    expect(playback.pause(80)).toBe(false);
+    expect(playback.resume(80)).toBe(false);
+    expect((await node.collect(150)).filter((m) => String(m.type).startsWith("play_"))).toEqual([]);
+    playback.stop(0);
+  });
+
   it("play_stop_interrupts", async () => {
     const h = await start();
     const node = await h.node(SELF_ID);

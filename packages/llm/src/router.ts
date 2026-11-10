@@ -1,6 +1,13 @@
 import { errorMessage, getLogger, type MetricsRegistry } from "@miyoria/kernel";
 import type { SettingsStore } from "@miyoria/store";
-import { type Clock, newId, systemClock } from "@miyoria/types";
+import {
+  type Clock,
+  newId,
+  type ReasoningLevel,
+  reasoningEnabled,
+  reasoningFor,
+  systemClock,
+} from "@miyoria/types";
 import { callUsage, LlmCallLog, type LlmCallRecord } from "./calls.js";
 import {
   type BudgetConfig,
@@ -50,8 +57,13 @@ export interface LlmRouterOptions {
   metrics?: MetricsRegistry;
   /** Clock of the first-token latency. Default: the system clock. */
   clock?: Clock;
-  /** `[llm.thinking]`: whether reasoning models think, per purpose (default off). */
+  /**
+   * `[llm.thinking]` (legacy): whether reasoning models think, per purpose. Used for purposes
+   * `[llm.reasoning]` does not list (`true` = `medium`).
+   */
   thinking?: ReadonlyMap<string, boolean>;
+  /** `[llm.reasoning]`: the reasoning level per (reasoning) purpose. */
+  reasoning?: ReadonlyMap<string, ReasoningLevel>;
   /**
    * `[llm.image_input]`: whether a model takes image parts, keyed by `provider:model` or by
    * `provider` (the model entry wins). Unlisted models do.
@@ -80,6 +92,8 @@ interface Call {
   /** Its entry in the call log. */
   record: LlmCallRecord;
   tag: LlmCallTag | undefined;
+  /** Not the model the purpose normally gets: see `RoutedStream.fallback`. */
+  fallback: boolean;
 }
 
 /**
@@ -99,6 +113,15 @@ export class RoutedStream implements AsyncIterable<StreamEvent> {
   /** `provider:model` that is answering. */
   get model(): string {
     return this.#call.key;
+  }
+
+  /**
+   * A fallback model is answering: one earlier in the chain failed, or the budget replaced the
+   * chain (`[llm.budget.fallback]`). What it writes passed none of the checks the first choice
+   * was tried against, so the output review treats it as its own path.
+   */
+  get fallback(): boolean {
+    return this.#call.fallback;
   }
 
   /**
@@ -128,6 +151,7 @@ export class LlmRouter {
   readonly #metrics: LlmMetrics;
   readonly #clock: Clock;
   readonly #thinking: ReadonlyMap<string, boolean>;
+  readonly #reasoning: ReadonlyMap<string, ReasoningLevel>;
   readonly #imageInput: ReadonlyMap<string, boolean>;
   /** Models that refused image parts in this run (`provider:model`); they get text from now on. */
   readonly #refusedImages = new Set<string>();
@@ -145,6 +169,7 @@ export class LlmRouter {
     this.#metrics = llmMetrics(options.metrics);
     this.#clock = options.clock ?? systemClock;
     this.#thinking = options.thinking ?? new Map();
+    this.#reasoning = options.reasoning ?? new Map();
     this.#imageInput = options.imageInput ?? new Map();
     this.#calls = options.calls ?? new LlmCallLog();
   }
@@ -168,9 +193,28 @@ export class LlmRouter {
     return first !== undefined && this.modelTakesImages(first);
   }
 
-  /** `request.thinking`, else `[llm.thinking]` for the purpose; off when neither says. */
-  #thinkingFor(purpose: string, request: ChatRequest): boolean {
-    return request.thinking ?? this.#thinking.get(purpose) ?? false;
+  /**
+   * The reasoning level of a request for `purpose`: `request.reasoning` when set; an explicit
+   * `request.thinking` (older callers: `false` = `off`, `true` = the configured level, at least
+   * `medium`); else for its reasoning purpose (`request.reasoning_purpose`, default `purpose`)
+   * `[llm.reasoning]`, then the legacy `[llm.thinking]` (`true` = `medium`), then the §3.10
+   * defaults; purposes nobody lists do not reason.
+   */
+  reasoningFor(purpose: string, request: ChatRequest): ReasoningLevel {
+    if (request.reasoning != null) return request.reasoning;
+    const key = request.reasoning_purpose ?? purpose;
+    const configured = this.#configuredLevel(key);
+    if (request.thinking === false) return "off";
+    if (request.thinking === true) return configured === "off" ? "medium" : configured;
+    return configured;
+  }
+
+  #configuredLevel(key: string): ReasoningLevel {
+    const set = this.#reasoning.get(key);
+    if (set !== undefined) return set;
+    const legacy = this.#thinking.get(key);
+    if (legacy !== undefined) return legacy ? "medium" : "off";
+    return reasoningFor(key);
   }
 
   /** Overrides purposes, e.g. with the active profile's `[llm.purposes]`. */
@@ -257,14 +301,16 @@ export class LlmRouter {
   async stream(purpose: string, request: ChatRequest, signal?: AbortSignal): Promise<RoutedStream> {
     const requestedAt = this.#clock.now();
     const tag = currentLlmTag();
+    const level = this.reasoningFor(purpose, request);
     const record = this.#calls.open(
       newId(),
       new Date(requestedAt).toISOString(),
       purpose,
       this.#effectivePurpose(purpose),
       request,
-      this.#thinkingFor(purpose, request),
+      reasoningEnabled(level),
       tag,
+      level,
     );
     tag?.onCall?.({ id: record.id, cost_usd: null, status: record.status });
     const fail = (error: unknown): never => {
@@ -282,6 +328,9 @@ export class LlmRouter {
       return fail(error);
     }
     const chain = this.#chainForState(purpose, state);
+    const budgetChain =
+      state !== "ok" &&
+      (this.#cost.fallbackChain(this.#effectivePurpose(purpose))?.length ?? 0) > 0;
     if (chain.length === 0) {
       return fail(
         new LlmError(`no model configured for purpose \`${purpose}\` (and no \`chat\` fallback)`),
@@ -314,7 +363,8 @@ export class LlmRouter {
       let routed: ChatRequest = {
         ...request,
         model: model.model,
-        thinking: this.#thinkingFor(purpose, request),
+        thinking: reasoningEnabled(level),
+        reasoning: level,
       };
       const images = hasImages(routed.messages);
       if (images && !this.modelTakesImages(model)) routed = textOnlyRequest(routed);
@@ -358,7 +408,16 @@ export class LlmRouter {
       }
       // The answering model is not a fallback.
       record.pricing = this.#cost.priceFor(key);
-      const call: Call = { key, purpose, requestedAt, sentAt, firstTokenAt: null, record, tag };
+      const call: Call = {
+        key,
+        purpose,
+        requestedAt,
+        sentAt,
+        firstTokenAt: null,
+        record,
+        tag,
+        fallback: budgetChain || record.fallbacks.length > 0,
+      };
       this.#metrics.calls.inc({ model: key, purpose });
       if (!first.done) this.#observe(call, first.value);
       return new RoutedStream(call, this.#track(call, first, iterator, signal));

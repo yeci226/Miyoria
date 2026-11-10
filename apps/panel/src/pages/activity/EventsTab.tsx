@@ -21,10 +21,10 @@ const GROUP_TONE: Record<string, Tone> = { agent: "brand", voice: "success", sys
 
 export const TEXT_TONE: Record<EventTone, string> = {
   neutral: "text-foreground/90",
-  accent: "text-[oklch(0.82_0.1_267)]",
-  ok: "text-success",
-  warn: "text-warning",
-  danger: "text-[oklch(0.74_0.16_25)]",
+  accent: "text-primary",
+  ok: "text-foreground",
+  warn: "text-primary",
+  danger: "text-primary",
 };
 
 const EventRow = memo(function EventRow({ env, onSelect }: { env: Envelope; onSelect: (env: Envelope) => void }) {
@@ -35,7 +35,7 @@ const EventRow = memo(function EventRow({ env, onSelect }: { env: Envelope; onSe
       <button
         type="button"
         onClick={() => onSelect(env)}
-        className="grid w-full grid-cols-[4.5rem_minmax(0,11rem)_minmax(0,1fr)] items-baseline gap-3 px-4 py-2 text-left text-sm outline-none hover:bg-muted/40 focus-visible:bg-muted/60 max-sm:grid-cols-[4rem_minmax(0,1fr)] max-sm:[&>*:last-child]:col-span-2"
+        className="grid w-full grid-cols-[4.5rem_minmax(0,11rem)_minmax(0,1fr)] items-baseline gap-3 py-(--row-y) text-left text-sm outline-none hover:bg-hover focus-visible:bg-hover max-sm:grid-cols-[4rem_minmax(0,1fr)] max-sm:[&>*:last-child]:col-span-2"
       >
         <time dateTime={env.ts} className="font-mono text-xs text-muted-foreground tabular-nums">
           {fmtTime(env.ts)}
@@ -159,11 +159,11 @@ export function EventsTab() {
           </Button>
         </div>
       </Toolbar>
-      <Card className="overflow-hidden">
+      <Card>
         {visible.length === 0 ? (
           <EmptyLine>{emptyText}</EmptyLine>
         ) : (
-          <ul className="max-h-[calc(100dvh-16rem)] min-h-64 divide-y overflow-y-auto" aria-label="事件列表">
+          <ul className="max-h-[calc(100dvh-16rem)] min-h-64 divide-y divide-line-soft overflow-y-auto" aria-label="事件列表">
             {visible.map((env) => (
               <EventRow key={env.id} env={env} onSelect={setSelected} />
             ))}

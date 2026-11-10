@@ -18,7 +18,7 @@ import { StoreError } from "./common.js";
 import { type ExportColumn, exportValue } from "./profile-data.js";
 import type { RoleDefinition } from "./records.js";
 
-/** Settings profile of node-wide settings (`initiative:state`, `queue:state`, ...). */
+/** Settings profile of node-wide settings (`arbiter:state`, `queue:state`, ...). */
 export const GLOBAL_SETTINGS_PROFILE: ProfileId = "_global";
 
 export type DataCategoryId =
@@ -32,6 +32,8 @@ export type DataCategoryId =
   | "mood"
   | "messages"
   | "decisions"
+  | "event_log"
+  | "directives"
   | "initiative"
   | "people"
   | "channels"
@@ -118,6 +120,8 @@ const MEMORY_COLUMNS = {
   access_count: "num",
   source_context: "json",
   source: "json",
+  origin: "text",
+  source_events: "json",
   due: "ts",
   done: "bool",
   superseded_by: "text",
@@ -184,7 +188,7 @@ export const DATA_CATEGORIES: readonly DataCategory[] = [
       // @miyoria/memory `MAINTENANCE_KEY`
       settings("memory_maintenance", "active", ["memory_maintenance_last"]),
     ],
-    { modules: ["memory", "initiative"] },
+    { modules: ["memory", "arbiter"] },
   ),
   category(
     "relationships",
@@ -200,6 +204,93 @@ export const DATA_CATEGORIES: readonly DataCategory[] = [
         familiarity: "num",
         reason: "text",
       }),
+      // The member page's cards are snapshots of the relationship; they go with it.
+      table("member_cards", "member_cards", "profile", "issued_at", "issued_at, serial", {
+        serial: "text",
+        author_platform: "text",
+        author_id: "text",
+        person_id: "text",
+        issued_at: "ts",
+        snapshot: "json",
+      }),
+      // Coins come from being with her; the wallet goes with the relationship, not with a forget.
+      table("coin_ledger", "coin_ledger", "profile", "ts", "ts, id", {
+        id: "text",
+        author_platform: "text",
+        author_id: "text",
+        delta: "num",
+        reason: "text",
+        ref: "text",
+        idem_key: "text",
+        ts: "ts",
+      }),
+      table("coin_wallets", "coin_wallets", "profile", "updated_at", "author_platform, author_id", {
+        author_platform: "text",
+        author_id: "text",
+        frame: "text",
+        on_board: "bool",
+        off_board: "bool",
+        updated_at: "ts",
+      }),
+      // The fortune slips she wrote for them, kept like their cards.
+      table("fortunes", "fortunes", "profile", "issued_at", "issued_at, id", {
+        id: "text",
+        author_platform: "text",
+        author_id: "text",
+        person_id: "text",
+        day: "num",
+        issued_at: "ts",
+        entry_id: "text",
+        slip: "json",
+      }),
+      // Deals are promises between her and a member, kept like the wallet.
+      table("deals", "deals", "profile", "created_at", "created_at, id", {
+        id: "text",
+        author_platform: "text",
+        author_id: "text",
+        reward_item: "text",
+        reward_count: "num",
+        reward_value: "num",
+        task: "text",
+        prepaid: "bool",
+        escrow_entry: "text",
+        status: "text",
+        created_at: "ts",
+        done_at: "ts",
+        due_at: "ts",
+        closed_at: "ts",
+      }),
+      // Her crowdfunding goals, the pledges to them and the bounties from her purse.
+      table("goals", "goals", "profile", "created_at", "created_at, id", {
+        id: "text",
+        title: "text",
+        promise: "text",
+        target: "num",
+        status: "text",
+        created_at: "ts",
+        deadline: "ts",
+        closed_at: "ts",
+      }),
+      table("goal_pledges", "goal_pledges", "profile", "created_at", "created_at, id", {
+        id: "text",
+        goal_id: "text",
+        author_platform: "text",
+        author_id: "text",
+        amount: "num",
+        created_at: "ts",
+      }),
+      table("bounties", "bounties", "profile", "created_at", "created_at, id", {
+        id: "text",
+        task: "text",
+        reward: "num",
+        hold_entry: "text",
+        status: "text",
+        created_at: "ts",
+        expires_at: "ts",
+        closed_at: "ts",
+        winner_platform: "text",
+        winner_id: "text",
+      }),
     ],
     { modules: ["social", "agent"] },
   ),
@@ -210,12 +301,15 @@ export const DATA_CATEGORIES: readonly DataCategory[] = [
   category(
     "inner",
     // @miyoria/self `STATE_KEY`, `FEELING_PREFIX`; @miyoria/mind's thought journal and its
-    // digests (`THOUGHT_PREFIX`, `DIGEST_PREFIX`)
+    // digests (`THOUGHT_PREFIX`, `DIGEST_PREFIX`), her goals and plan state (`GOAL_PREFIX`,
+    // `GOAL_MIGRATION_KEY` and `PLAN_STATE_KEY` under `mind:plan:`)
     [
       settings("self_state", "active", ["self:state"]),
       settings("self_feelings", "active", [], ["self:feeling:"]),
+      settings("self_cards_migration", "active", ["self:cards:migration"]),
       settings("mind_thoughts", "active", [], ["mind:thought:"]),
       settings("mind_digests", "active", [], ["mind:digest:"]),
+      settings("mind_goals", "active", [], ["mind:goal:", "mind:plan:"]),
     ],
     { modules: ["self", "mind"] },
   ),
@@ -267,8 +361,9 @@ export const DATA_CATEGORIES: readonly DataCategory[] = [
       // @miyoria/memory `WATERMARK_PREFIX`: only ever together with the log.
       settings("memory_watermarks", "active", [], ["memory_watermark:"]),
     ],
-    // Her conversation notes are made from the log: they go with it.
-    { requires: ["conversation"], modules: ["memory", "agent"] },
+    // Her conversation notes are made from the log, and the EventLog repeats what people said:
+    // they go with it.
+    { requires: ["conversation", "event_log"], modules: ["memory", "agent"] },
   ),
   category(
     "decisions",
@@ -278,14 +373,72 @@ export const DATA_CATEGORIES: readonly DataCategory[] = [
         ts: "ts",
         trace: "json",
       }),
+      table("turn_outcomes", "turn_outcomes", "profile", "ts", "ts, id", {
+        id: "text",
+        ts: "ts",
+        outcome: "text",
+        record: "json",
+      }),
     ],
     { confirm: "simple" },
   ),
-  // @miyoria/initiative `STATE_KEY` under `STATE_PROFILE`
-  category("initiative", [settings("initiative", "global", ["initiative:state"])], {
-    modules: ["initiative"],
-    confirm: "simple",
-  }),
+  // The owner's rules. Deleting them lifts every rule at once, so the profile id has to be typed.
+  category(
+    "directives",
+    [
+      table("directives", "directives", "profile", "created_at", "created_at, id", {
+        id: "text",
+        issuer: "json",
+        authority: "text",
+        scope: "json",
+        effect: "text",
+        text: "text",
+        expires: "ts",
+        source_event: "text",
+        created_at: "ts",
+        revoked_at: "ts",
+        revoked_by: "text",
+      }),
+    ],
+    { modules: ["directive"] },
+  ),
+  // The V3 EventLog: what she perceived, decided and said, and the counts of what was compacted.
+  category(
+    "event_log",
+    [
+      table("log_events", "log_events", "profile", "at", "seq", {
+        id: "text",
+        at: "ts",
+        kind: "text",
+        source: "text",
+        cause: "text",
+        context: "json",
+        person: "text",
+        attention_key: "text",
+        salience: "text",
+        body: "json",
+      }),
+      table("log_event_rollups", "log_event_rollups", "profile", "last_at", "day, kind, source", {
+        day: "ts",
+        kind: "text",
+        source: "text",
+        count: "num",
+        first_at: "ts",
+        last_at: "ts",
+      }),
+    ],
+    { modules: ["facts"], confirm: "simple" },
+  ),
+  // @miyoria/arbiter `STATE_KEY` under `STATE_PROFILE` (her ledger: counters, backoff, topics,
+  // greetings), and the old @miyoria/initiative state it replaced
+  category(
+    "initiative",
+    [settings("initiative", "global", ["arbiter:state", "initiative:state"])],
+    {
+      modules: ["arbiter"],
+      confirm: "simple",
+    },
+  ),
   category(
     "people",
     [
@@ -308,6 +461,8 @@ export const DATA_CATEGORIES: readonly DataCategory[] = [
         account_id: "text",
         expires_at: "ts",
       }),
+      // @miyoria/store `HANDLE_PREFIX` under `GLOBAL_SETTINGS_PROFILE`: the stable names of people.
+      settings("handles", "global", [], ["handle:"]),
     ],
     {
       // Relationships, feelings, documents, lessons and feedback are keyed by person.

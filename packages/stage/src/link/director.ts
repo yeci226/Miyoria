@@ -5,21 +5,45 @@
 //   live, nobody talking for `brb_after_ms`, or she left voice → brb (back when it ends)
 //   she sings a song     → sing (its video plays there); the song ends → back to the scene
 //                          before it, unless her situation changed meanwhile (then what fits)
+//   her `stage.scene`    → that scene for as long as she asked (a timed override, not a fight)
 //   the stream is ending → ending (held `ending_ms` before the stream stops, see `close`)
+//
+// Which scene fits is a pure function (`scene-rule.ts`): f(presence, broadcast, activity, her
+// override) plus the few windows only the stage knows. With the ActivityManager the director
+// reads her situation from its snapshot (`onSnapshot`), the one copy everyone else reads too;
+// without it, from the bus events as before (`onGoLive`, `onGame`, `onVoice`, `onSong`).
 //
 // A role without a scene is skipped for the next one that fits (going live without a starting
 // scene goes to chat, or stays on the game scene while she plays).
 //
 // It only reacts to changes (it never "corrects" the scene at boot), coalesces changes within
 // `debounce_ms`, keeps `min_switch_ms` between switches and stays out of the way for
-// `manual_hold_ms` after someone else switched (the owner in OBS, a command, the panel or her own
-// `stage_scene`). Starting, ending and songs are urgent: they skip the waits. Every switch is a
-// `stage.scene` request through the gate (principal `director`), so pausing her autonomy also
-// pauses the director.
+// `manual_hold_ms` after someone else switched in OBS. Starting, ending, songs and her override
+// are urgent: they skip the waits. Every switch is a `stage.scene` request through the gate
+// (principal `director`), so pausing her autonomy also pauses the director. Its switches (and
+// the curtain's) run one at a time under one mutex, and the scene it expects is only written
+// inside it, so its own switch is never mistaken for a manual one.
 
-import { getLogger, sleep } from "@miyoria/kernel";
-import { type Clock, type StreamCurtain, systemClock } from "@miyoria/types";
-import { ROLE_NAME, type SceneRoles, type ScenesConfig } from "./scenes.js";
+import { getLogger, SerialQueue, sleep } from "@miyoria/kernel";
+import {
+  type ActivitySnapshot,
+  type Clock,
+  type SceneRule,
+  type SceneRuleInput,
+  type StreamCurtain,
+  systemClock,
+} from "@miyoria/types";
+import {
+  away,
+  factsOf,
+  NO_FACTS,
+  pickScene,
+  type SceneFacts,
+  type SceneMemory,
+  sceneWants,
+  type Want,
+} from "./scene-rule.js";
+import type { SceneRoles, ScenesConfig } from "./scenes.js";
 
 const log = getLogger("stage.director");
 
@@ -36,58 +60,44 @@ export interface SceneDirectorDeps {
   config: ScenesConfig;
   roles: SceneRoles;
   switchRole: RoleSwitcher;
-  /** Going back to the scene before a song (without it: that scene's role, if it has one). */
+  /** Going back to the scene before a song, her override (without it: that scene's role). */
   switchScene?: SceneSwitcher;
   clock?: Clock;
 }
 
-/** Why a role (or a scene) is wanted (for the log and the audit `why`). */
-interface Want {
-  /** `null`: a scene without a role (going back after a song). */
-  role: string | null;
-  /** A scene of its own instead of the role's. */
-  scene?: string;
-  why: string;
-  /** Skips the debounce, the minimum interval and the manual hold. */
-  urgent: boolean;
-}
-
-export class SceneDirector implements StreamCurtain {
+export class SceneDirector implements StreamCurtain, SceneRule {
   readonly #config: ScenesConfig;
   readonly #roles: SceneRoles;
   readonly #switchRole: RoleSwitcher;
   readonly #switchScene: SceneSwitcher | null;
   readonly #clock: Clock;
 
+  /** Her situation (from the snapshot, or rebuilt from the bus without the manager). */
+  #facts: SceneFacts = { ...NO_FACTS };
+  /** Fed from the ActivityManager's snapshots: the bus inputs below are ignored. */
+  #managed = false;
+
+  // Bus inputs (without the ActivityManager).
   readonly #golive = new Map<string, GoLiveState>();
   #obsStreaming = false;
-  #playing = false;
-  /** The game being played (its id, e.g. `threads`): a role of that name wins over `game`. */
-  #game: string | null = null;
+  readonly #voices = new Set<string>();
+
   /** Bumped when her situation changes (a game, going live or off); see `onSong`. */
   #situation = 0;
-  #singing = false;
   /** When the song started: the scene shown and the situation. */
   #beforeSong: { scene: string | null; situation: number } | null = null;
   /** The sing scene the director switched to for the current song. */
   #singScene: string | null = null;
-  /** After a song: the scene to go back to. */
-  #returnTo: string | null = null;
-  readonly #voices = new Set<string>();
-  /** She was in voice at some point of this live session. */
-  #voiceThisLive = false;
-  #lastActivity: number;
-  #startingUntil = 0;
-  /** The stream ended (or is ending): hold the ending scene until something new happens. */
-  #ended = false;
-  #endingUntil = 0;
+  #memory: SceneMemory;
 
   #scene: string | null = null;
-  /** The scene of the switch in flight, to tell her own switches from manual ones. */
+  /** The scene of the director's switch in flight (only written under `#mutex`). */
   #expect: string | null = null;
   #lastSwitch = Number.NEGATIVE_INFINITY;
   #manualUntil = 0;
 
+  /** Every switch of the director and the curtain, one at a time. */
+  readonly #mutex = new SerialQueue();
   #timer: ReturnType<typeof setTimeout> | null = null;
   #due: number | null = null;
   #urgent = false;
@@ -101,7 +111,13 @@ export class SceneDirector implements StreamCurtain {
     this.#switchRole = deps.switchRole;
     this.#switchScene = deps.switchScene ?? null;
     this.#clock = deps.clock ?? systemClock;
-    this.#lastActivity = this.#now();
+    this.#memory = {
+      ended: false,
+      endingUntil: 0,
+      returnTo: null,
+      lastActivity: this.#now(),
+      voiceThisLive: false,
+    };
   }
 
   #now(): number {
@@ -110,72 +126,53 @@ export class SceneDirector implements StreamCurtain {
 
   /** Streaming in OBS or live on Discord (or about to be). */
   live(): boolean {
-    if (this.#obsStreaming) return true;
-    for (const state of this.#golive.values())
-      if (state === "starting" || state === "live") return true;
-    return false;
-  }
-
-  /**
-   * The roles that fit her situation, most specific first; the first one with a scene wins (so
-   * going live without a starting scene keeps the game scene while she plays).
-   */
-  #wants(): Want[] {
-    const now = this.#now();
-    const live = this.live();
-    const out: Want[] = [];
-    if (this.#ended && (!live || now < this.#endingUntil)) {
-      out.push({ role: "ending", why: "直播結束", urgent: true });
-    }
-    if (!live && this.#config.only_while_live) return out;
-    if (this.#returnTo !== null) {
-      const scene = this.#returnTo;
-      out.push({
-        role: this.#roles.roleOf(scene),
-        scene,
-        why: "唱完歌,回到原本的畫面",
-        urgent: true,
-      });
-    }
-    if (this.#singing) out.push({ role: "sing", why: "唱歌", urgent: true });
-    if (live && now < this.#startingUntil)
-      out.push({ role: "starting", why: "開台", urgent: true });
-    if (this.#away(now)) {
-      out.push({ role: "brb", why: "暫時沒有人在講話或她離開了語音", urgent: false });
-    }
-    if (this.#playing && this.#game !== null && ROLE_NAME.test(this.#game)) {
-      out.push({ role: this.#game, why: `開始${this.#game}`, urgent: false });
-    }
-    if (this.#playing) out.push({ role: "game", why: "開始玩遊戲", urgent: false });
-    out.push({ role: "chat", why: "回到聊天", urgent: false });
-    return out;
+    return this.#facts.live;
   }
 
   /** The role she should be in now and its scene, `null` = leave the scene alone. */
   desired(): (Want & { scene: string }) | null {
-    for (const want of this.#wants()) {
-      const scene = want.scene ?? (want.role === null ? null : this.#roles.resolve(want.role));
-      if (scene !== null) return { ...want, scene };
-    }
-    return null;
+    const wants = sceneWants(
+      this.#facts,
+      this.#memory,
+      this.#config,
+      (scene) => this.#roles.roleOf(scene),
+      this.#now(),
+    );
+    return pickScene(wants, (role) => this.#roles.resolve(role));
   }
 
-  #away(now: number): boolean {
-    if (!this.live() || this.#playing || this.#singing) return false;
-    if (this.#config.brb_on_voice_leave && this.#voiceThisLive && this.#voices.size === 0)
-      return true;
-    const after = this.#config.brb_after_ms;
-    return after > 0 && now - this.#lastActivity >= after;
+  /**
+   * `SceneRule` (`SceneRuleKey`): the scene for an ActivitySnapshot, with the director's own
+   * windows (ending, brb, back after a song). What `ActivitySnapshot.scene` shows.
+   */
+  scene(input: SceneRuleInput, now: number): string | null {
+    const wants = sceneWants(
+      factsOf(input, now),
+      this.#memory,
+      this.#config,
+      (scene) => this.#roles.roleOf(scene),
+      now,
+    );
+    return pickScene(wants, (role) => this.#roles.resolve(role))?.scene ?? null;
   }
 
   // ----- inputs -----
 
-  /** `voice.golive` for `guild`. */
+  /**
+   * The ActivityManager's snapshot (`activity.changed`): her presence, broadcast, activity and
+   * override in one. From the first one on the bus inputs are ignored.
+   */
+  onSnapshot(snapshot: ActivitySnapshot): void {
+    this.#managed = true;
+    this.#apply(factsOf(snapshot, this.#now()));
+  }
+
+  /** `voice.golive` for `guild` (without the ActivityManager). */
   onGoLive(guild: string, state: GoLiveState): void {
-    const was = this.live();
+    if (this.#managed) return;
     if (state === "stopped" || state === "failed") this.#golive.delete(guild);
     else this.#golive.set(guild, state);
-    this.#liveChanged(was);
+    this.#applyBus();
   }
 
   /**
@@ -188,9 +185,10 @@ export class SceneDirector implements StreamCurtain {
       this.#scene = null;
       return;
     }
-    const was = this.live();
-    this.#obsStreaming = status.streaming;
-    this.#liveChanged(was);
+    if (!this.#managed) {
+      this.#obsStreaming = status.streaming;
+      this.#applyBus();
+    }
     const scene = status.scene;
     if (scene === null || scene === this.#scene) {
       if (scene !== null && scene === this.#expect) this.#expect = null;
@@ -200,6 +198,8 @@ export class SceneDirector implements StreamCurtain {
     this.#scene = scene;
     if (scene === this.#expect) {
       this.#expect = null;
+    } else if (scene === this.#facts.override?.scene) {
+      // Her override: wanted, not someone else's switch.
     } else if (!first) {
       // Someone else switched: stay out of the way for a while.
       this.#manualUntil = this.#now() + this.#config.manual_hold_ms;
@@ -209,27 +209,16 @@ export class SceneDirector implements StreamCurtain {
 
   /** A game session started or stopped (`game`: its id, for a scene of its own). */
   onGame(playing: boolean, game: string | null = null): void {
-    const next = playing ? game : null;
-    if (this.#playing === playing && this.#game === next) return;
-    this.#playing = playing;
-    this.#game = next;
-    this.#situation += 1;
-    this.#returnTo = null;
-    this.#ended = false;
-    this.#activity();
-    this.#schedule(false);
+    if (this.#managed) return;
+    this.#apply({ ...this.#facts, playing, game: playing ? game : null });
   }
 
   /** Her voice node joined (`true`) or left (`false`) voice channel `id`. */
   onVoice(id: string, joined: boolean): void {
-    const before = this.#voices.size;
+    if (this.#managed) return;
     if (joined) this.#voices.add(id);
     else this.#voices.delete(id);
-    if (joined && this.live()) this.#voiceThisLive = true;
-    if ((before === 0) !== (this.#voices.size === 0)) {
-      this.#activity();
-      this.#schedule(false);
-    }
+    this.#apply({ ...this.#facts, inVoice: this.#voices.size > 0 });
   }
 
   /**
@@ -239,13 +228,64 @@ export class SceneDirector implements StreamCurtain {
    * whatever fits now). Without a `sing` scene nothing switches.
    */
   onSong(singing: boolean): void {
-    if (this.#singing === singing) return;
-    this.#singing = singing;
-    this.#activity();
+    if (this.#managed) return;
+    this.#apply({ ...this.#facts, singing });
+  }
+
+  /** Someone talked (her speech, an utterance, a finished turn). */
+  onActivity(): void {
+    const wasAway = away(this.#facts, this.#memory, this.#config, this.#now());
+    this.#memory.lastActivity = this.#now();
+    if (wasAway) this.#schedule(false);
+  }
+
+  /** The facts from the bus inputs (without the ActivityManager). */
+  #applyBus(): void {
+    let live = this.#obsStreaming;
+    for (const state of this.#golive.values())
+      if (state === "starting" || state === "live") live = true;
+    this.#apply({
+      ...this.#facts,
+      live,
+      liveSince: live ? (this.#facts.liveSince ?? this.#now()) : null,
+    });
+  }
+
+  /** Moves to `next` and reacts to what changed. */
+  #apply(next: SceneFacts): void {
+    const prev = this.#facts;
+    this.#facts = next;
+    if (prev.live !== next.live) this.#liveChanged(next.live);
+    if (prev.playing !== next.playing || prev.game !== next.game) {
+      this.#situation += 1;
+      this.#memory.returnTo = null;
+      this.#memory.ended = false;
+      this.#memory.lastActivity = this.#now();
+      this.#schedule(false);
+    }
+    if (prev.inVoice !== next.inVoice) {
+      if (next.inVoice && next.live) this.#memory.voiceThisLive = true;
+      this.#memory.lastActivity = this.#now();
+      this.#schedule(false);
+    }
+    if (prev.singing !== next.singing) this.#songChanged(next.singing);
+    if (
+      prev.override?.scene !== next.override?.scene ||
+      prev.override?.until !== next.override?.until
+    ) {
+      // Her switch showed up before the snapshot that explains it: it was not a manual one.
+      if (next.override !== null && next.override.scene === this.#scene) this.#manualUntil = 0;
+      this.#schedule(next.override !== null);
+      if (next.override !== null) this.#wake(Math.max(next.override.until - this.#now(), 0));
+    }
+  }
+
+  #songChanged(singing: boolean): void {
+    this.#memory.lastActivity = this.#now();
     if (singing) {
       this.#beforeSong = { scene: this.#scene, situation: this.#situation };
       this.#singScene = null;
-      this.#returnTo = null;
+      this.#memory.returnTo = null;
       if (this.#roles.resolve("sing") !== null) this.#schedule(true);
       return;
     }
@@ -255,41 +295,26 @@ export class SceneDirector implements StreamCurtain {
     this.#beforeSong = null;
     if (sang === null || this.#scene !== sang) return;
     if (before?.scene && before.scene !== sang && before.situation === this.#situation) {
-      this.#returnTo = before.scene;
+      this.#memory.returnTo = before.scene;
     }
     this.#schedule(true);
   }
 
-  /** Someone talked (her speech, an utterance, a finished turn). */
-  onActivity(): void {
-    const wasAway = this.#away(this.#now());
-    this.#activity();
-    if (wasAway) this.#schedule(false);
-  }
-
-  #activity(): void {
-    this.#lastActivity = this.#now();
-  }
-
-  #liveChanged(was: boolean): void {
-    const live = this.live();
-    if (was === live) return;
+  #liveChanged(live: boolean): void {
     this.#situation += 1;
-    this.#returnTo = null;
+    this.#memory.returnTo = null;
     const now = this.#now();
     if (live) {
       log.info("stream went live");
-      this.#ended = false;
-      this.#startingUntil = now + this.#config.starting_ms;
+      this.#memory.ended = false;
       this.#manualUntil = 0;
-      this.#voiceThisLive = this.#voices.size > 0;
-      this.#activity();
+      this.#memory.voiceThisLive = this.#facts.inVoice;
+      this.#memory.lastActivity = now;
       this.#schedule(true);
     } else {
       log.info("stream ended");
-      if (!this.#ended) this.#endingUntil = now + this.#config.ending_ms;
-      this.#ended = true;
-      this.#startingUntil = 0;
+      if (!this.#memory.ended) this.#memory.endingUntil = now + this.#config.ending_ms;
+      this.#memory.ended = true;
       this.#schedule(true);
     }
   }
@@ -302,23 +327,15 @@ export class SceneDirector implements StreamCurtain {
    * refused. Never throws.
    */
   async close(signal?: AbortSignal): Promise<void> {
-    if (this.#closed || !this.live() || this.#ended) return;
-    this.#ended = true;
-    this.#endingUntil = this.#now() + this.#config.ending_ms;
+    if (this.#closed || !this.live() || this.#memory.ended) return;
+    this.#memory.ended = true;
+    this.#memory.endingUntil = this.#now() + this.#config.ending_ms;
     const scene = this.#roles.resolve("ending");
     if (scene === null || this.#config.ending_ms <= 0) return;
-    let switched = scene === this.#scene;
-    if (!switched) {
-      this.#expect = scene;
-      try {
-        switched = await this.#switchRole("ending", "直播要結束了");
-      } catch (error) {
-        log.warn({ err: String(error) }, "cannot switch to the ending scene");
-        switched = false;
-      }
-      if (!switched) this.#expect = null;
-      else this.#lastSwitch = this.#now();
-    }
+    const switched = await this.#mutex.run(async () => {
+      if (scene === this.#scene) return true;
+      return this.#switch("ending", scene, "直播要結束了", false);
+    });
     if (!switched) return;
     try {
       await sleep(this.#config.ending_ms, signal);
@@ -337,6 +354,7 @@ export class SceneDirector implements StreamCurtain {
   }
 
   #wake(delayMs: number): void {
+    if (this.#closed || !this.#config.director) return;
     const at = this.#now() + Math.max(delayMs, 0);
     if (this.#timer !== null && this.#due !== null && this.#due <= at) return;
     if (this.#timer !== null) clearTimeout(this.#timer);
@@ -362,7 +380,8 @@ export class SceneDirector implements StreamCurtain {
     try {
       do {
         this.#again = false;
-        await this.#step();
+        // Under the same mutex as the curtain: what is wanted is decided right before switching.
+        await this.#mutex.run(() => this.#step());
       } while (this.#again && !this.#closed);
     } finally {
       this.#busy = false;
@@ -375,8 +394,8 @@ export class SceneDirector implements StreamCurtain {
     this.#urgent = false;
     const want = this.desired();
     // Going back after a song is tried once.
-    const back = want !== null && want.scene === this.#returnTo;
-    if (back) this.#returnTo = null;
+    const back = want !== null && want.scene === this.#memory.returnTo;
+    if (back) this.#memory.returnTo = null;
     if (want === null || want.scene === this.#scene) return;
     const { role, scene } = want;
     const now = this.#now();
@@ -390,33 +409,57 @@ export class SceneDirector implements StreamCurtain {
       this.#wake(gap);
       return;
     }
-    this.#expect = scene;
-    this.#lastSwitch = now;
-    let switched = false;
-    try {
-      if (back && this.#switchScene) switched = await this.#switchScene(scene, want.why);
-      else if (role !== null) switched = await this.#switchRole(role, want.why);
-    } catch (error) {
-      log.warn({ err: String(error), role, scene }, "scene switch failed");
-    }
-    if (switched) {
+    // Going back after a song and her override name a scene, not a role.
+    const byName = back || scene === this.#facts.override?.scene;
+    if (await this.#switch(role, scene, want.why, byName)) {
       log.info({ role, scene, why: want.why }, "switched the scene");
-      this.#scene = scene;
-      if (role === "sing" && this.#singing) this.#singScene = scene;
-    } else {
-      this.#expect = null;
+      if (role === "sing" && this.#facts.singing) this.#singScene = scene;
     }
   }
 
-  /** Wakes up for the next time-based change (end of starting, silence → brb). */
+  /** One switch (call under `#mutex`): by scene name when `byName`, else by role. */
+  async #switch(
+    role: string | null,
+    scene: string,
+    why: string,
+    byName: boolean,
+  ): Promise<boolean> {
+    this.#expect = scene;
+    this.#lastSwitch = this.#now();
+    let switched = false;
+    try {
+      if (byName && this.#switchScene) switched = await this.#switchScene(scene, why);
+      else if (role !== null) switched = await this.#switchRole(role, why);
+      else if (this.#switchScene) switched = await this.#switchScene(scene, why);
+    } catch (error) {
+      log.warn({ err: String(error), role, scene }, "scene switch failed");
+    }
+    if (switched) this.#scene = scene;
+    else if (this.#expect === scene) this.#expect = null;
+    return switched;
+  }
+
+  /** Wakes up for the next time-based change (end of starting, silence → brb, override end). */
   #planNext(): void {
-    if (this.#closed || !this.#config.director || !this.live()) return;
+    if (this.#closed || !this.#config.director) return;
     const now = this.#now();
     const times: number[] = [];
-    if (this.#startingUntil > now) times.push(this.#startingUntil);
-    if (this.#ended && this.#endingUntil > now) times.push(this.#endingUntil);
-    const after = this.#config.brb_after_ms;
-    if (after > 0 && !this.#playing && !this.#away(now)) times.push(this.#lastActivity + after);
+    const override = this.#facts.override;
+    if (override !== null && override.until > now) times.push(override.until);
+    if (this.live()) {
+      const startingUntil = (this.#facts.liveSince ?? 0) + this.#config.starting_ms;
+      if (startingUntil > now) times.push(startingUntil);
+      if (this.#memory.ended && this.#memory.endingUntil > now)
+        times.push(this.#memory.endingUntil);
+      const after = this.#config.brb_after_ms;
+      if (
+        after > 0 &&
+        !this.#facts.playing &&
+        !away(this.#facts, this.#memory, this.#config, now)
+      ) {
+        times.push(this.#memory.lastActivity + after);
+      }
+    }
     if (times.length === 0) return;
     this.#wake(Math.min(...times) - now);
   }

@@ -13,6 +13,22 @@ import { z } from "zod";
 
 export type ConfigErrorCode = "read" | "parse" | "missing_env" | "invalid";
 
+/**
+ * The dotted `paths` (`"key"`, `"section.key"`) a raw module section still sets: for keys that
+ * are gone, so an old `miyoria.toml` that has them loads (they are ignored) with a deprecation
+ * warning instead of failing.
+ */
+export function presentKeys(raw: unknown, paths: readonly string[]): string[] {
+  return paths.filter((path) => {
+    let at: unknown = raw;
+    for (const part of path.split(".")) {
+      if (!isJsonObject(at as JsonValue) || !Object.hasOwn(at as JsonObject, part)) return false;
+      at = (at as JsonObject)[part];
+    }
+    return true;
+  });
+}
+
 export class ConfigError extends Error {
   override readonly name = "ConfigError";
 

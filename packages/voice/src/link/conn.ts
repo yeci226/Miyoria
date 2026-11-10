@@ -92,10 +92,13 @@ export class Conn {
   /** Resolves once the connection is closing. */
   readonly closing: Promise<void>;
   #closeFrame: { code: number; reason: string } | null = null;
+  /** Optional protocol features the node announced in its hello. */
+  readonly capabilities: ReadonlySet<string>;
 
-  constructor(id: number, account: AccountRef, ws: WebSocket) {
+  constructor(id: number, account: AccountRef, ws: WebSocket, capabilities: Iterable<string> = []) {
     this.id = id;
     this.account = account;
+    this.capabilities = new Set(capabilities);
     this.#ws = ws;
     this.closing = aborted(this.#closed.signal);
   }

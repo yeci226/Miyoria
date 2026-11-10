@@ -1,10 +1,12 @@
 // @miyoria/api: the Admin API (module `api`), an HTTP + SSE server for the CLI and the admin
 // panel, plus a typed `ApiClient`.
 //
-// Every `/api` route except `GET /api/health` and the login routes requires
-// `Authorization: Bearer <token>` or a panel session cookie; panel files at `/` never do.
-// Session users need `admin.panel.access`, and `admin.panel.write` for anything but `GET`; their
-// changes must also send `X-Miyoria-Request: 1` (CSRF guard). Unknown `/api/*` routes answer
+// Every `/api` route except `GET /api/health`, the login routes, `/api/public/*` and
+// `/api/member/*` requires `Authorization: Bearer <token>` or an admin session cookie; panel files
+// at `/` never do. Admin sessions need `admin.panel.access`, and `admin.panel.write` for anything
+// but `GET`; their changes must also send `X-Miyoria-Request: 1` (CSRF guard). A login without
+// `admin.panel.access` is a member session, which every admin route refuses. Unknown `/api/*`
+// routes answer
 // `404 {"error":"no such endpoint"}`. Errors are `{"error": "..."}`; a missing service (its
 // module is stopped) is `503`. Changes are recorded in the `AuditLog` (actor `"api"` for the
 // token, `discord:<id>` for a session) when there is one.
@@ -12,14 +14,15 @@
 // Routes (shapes in `types.ts`):
 //
 // * `GET /api/health` → `{ status, version }`
-// * `GET /api/auth/methods`, `GET /api/auth/oauth/login?next=/#/…`,
+// * `GET /api/auth/methods`, `GET /api/auth/oauth/login?next=/…`,
 //   `GET /api/auth/oauth/callback` (public), `GET /api/auth/session`, `POST /api/auth/logout`
 // * `GET /api/modules`, `POST /api/modules/{id}/enable|disable|restart`
 // * `GET /api/decisions?limit=50&context=<json ContextKey>` (newest first)
 // * `GET /api/llm/usage`, `GET /api/llm/cost`
 // * `GET /api/persona`, `PUT /api/persona/{key}`, `GET /api/persona/{key}/history`
 // * `GET /api/people?q=&limit=&cursor=`, `GET|PATCH /api/people/{id}`,
-//   `POST /api/people/{id}/adjust`
+//   `POST /api/people/{id}/adjust`, `GET /api/people/{id}/wallet`,
+//   `POST /api/people/{id}/wallet/adjust` (coins by hand, needs `admin.economy.adjust`)
 // * `GET /api/memory?q=&kind=&subject=&before=&include_superseded=&limit=`,
 //   `PATCH|DELETE /api/memory/{id}`
 // * `GET /api/auth/roles`, `GET|PUT|DELETE /api/auth/roles/{name}`,
@@ -44,12 +47,26 @@
 // * `GET /api/mind`, `GET /api/mind/thoughts?limit=50`, `GET /api/mind/approvals`,
 //   `POST /api/mind/approvals/{id}/approve|deny`, `POST /api/mind/pause|resume` (changes need
 //   `owner.autonomy.approve`)
+// * `GET /api/directives?history=1`, `POST /api/directives`, `DELETE /api/directives/{id}` (the
+//   rules; what a request may change follows its account, see `directives.ts`)
 
+// * `GET /api/activity` (presence, broadcast, activity, scene), `GET /api/activity/tasks?limit=20`
+// * `GET /api/arbiter/ledger?context=&limit=`, `GET /api/arbiter/decisions?limit=&context=&verdict=`
+//   (the arbiter's verdicts since the `api` module started)
+// * `GET /api/affect` (emotions, mood, drives, biases), `GET /api/affect/people` (person cards)
+// * `GET /api/mind/goals?closed=false`, `GET /api/mind/plan` (her agenda and today's plan)
+// * `GET /api/prompts?context=&limit=`, `GET /api/prompts/{turn}` (saved prompts per turn),
+//   `GET /api/turns/outcomes?context=&outcome=&limit=` (how turns ended); read-only
 // * `GET /api/knowledge` (her documents), `GET /api/knowledge/conversations` (her conversation
 //   notes), `GET /api/reflection?days=7` (reflections, lessons, feedback),
 //   `GET /api/mind/digests?limit=20`; read-only
 // * `GET /api/events?topics=platform.*,agent.*` (Server-Sent Events of bus envelopes)
+// * `GET /api/public/status|songs` (anyone; see `public.ts`), `GET /api/public/card/{serial}`
+//   (checks a card's code; see `card.ts`)
+// * `GET /api/member/session|me|export|card`, `POST /api/member/forget|songs|card` (a logged-in
+//   person's own data; see `member.ts`, `card.ts`)
 
+export { CARD_POSES, CARDS_PER_DAY } from "./card.js";
 export {
   ApiClient,
   type CallOptions,
@@ -96,6 +113,8 @@ export {
 } from "./oauth.js";
 export { PANEL_DIR_ENV, pickDir } from "./panel.js";
 export { absoluteHistory } from "./people.js";
+export { summarizePrompt } from "./prompts.js";
+export { type PublicConfig, PublicConfigSchema } from "./public.js";
 export { ActiveProfileKey, isQueueNotFound, MCP_MODULE_ID } from "./services.js";
 export {
   COOKIE,
@@ -106,8 +125,11 @@ export {
   STORE_PROFILE as SESSION_STORE_PROFILE,
 } from "./session.js";
 export type { Tokenizer } from "./state.js";
+export { DecisionTrail, TRAIL_CAPACITY, TRAIL_TOPIC } from "./trail.js";
 export type {
   AdjustPersonRequest,
+  ArbiterDecisionsView,
+  ArbiterDecisionView,
   AssignRoleRequest,
   AuthMethods,
   ChannelActivityView,
@@ -116,11 +138,16 @@ export type {
   ChannelLevelView,
   ConversationNoteView,
   CostInfo,
+  DayPlanView,
+  E2eSegmentName,
+  E2eStats,
   ErrorBody,
   ExpressionRequest,
   ExtensionInfo,
   FeelingView,
+  GoalsView,
   HealthInfo,
+  IssuedCard,
   KnowledgeDocView,
   KnowledgeView,
   LatencyStats,
@@ -128,6 +155,15 @@ export type {
   McpServerInfo,
   McpState,
   McpToolInfo,
+  MemberCard,
+  MemberCards,
+  MemberDay,
+  MemberExport,
+  MemberForgetResult,
+  MemberMemory,
+  MemberSession,
+  MemberSong,
+  MemberView,
   MemoryItem,
   MemoryListQuery,
   MemoryRecordView,
@@ -140,6 +176,13 @@ export type {
   PersonaSectionInfo,
   PersonDetail,
   PersonSummary,
+  PromptSummary,
+  PublicDay,
+  PublicSong,
+  PublicSongs,
+  PublicState,
+  PublicStatus,
+  PublicToday,
   QueueAuthor,
   QueueItemInfo,
   QueueState,
@@ -160,10 +203,12 @@ export type {
   StageLinkState,
   StageState,
   StreamRequest,
+  TurnOutcomeKind,
   UpdateMemoryRequest,
   UpdatePersonRequest,
   UpsertRoleRequest,
   UsageInfo,
+  VoiceE2eLatency,
   VoiceLatency,
   VoiceSession,
   VoiceState,

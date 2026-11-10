@@ -12,7 +12,14 @@ import {
   withTimeout,
 } from "@miyoria/kernel";
 import { LlmRouterKey } from "@miyoria/llm";
-import { MessageLogKey, PeopleStoreKey, SettingsStoreKey, StoreKey } from "@miyoria/store";
+import {
+  MessageLogKey,
+  PeopleStoreKey,
+  type SettingsStore,
+  SettingsStoreKey,
+  StoredHandleDirectory,
+  StoreKey,
+} from "@miyoria/store";
 import { ToolRegistryKey } from "@miyoria/tools";
 import {
   type AccountRef,
@@ -21,6 +28,8 @@ import {
   ConversationStatesKey,
   contextKeyString,
   customEvent,
+  type HandleDirectory,
+  HandleDirectoryKey,
   isJsonObject,
   type JsonValue,
   KnowledgeKey,
@@ -52,6 +61,24 @@ export const KNOWLEDGE_CHANGED_TOPIC = "knowledge.changed";
 
 function budgetOf(services: ServiceLookup): BudgetState {
   return services.get(LlmRouterKey)?.budgetState() ?? "ok";
+}
+
+/**
+ * The shared handle table, or (apps that did not provide one) a table of this module's own that
+ * reads and writes the same settings rows.
+ */
+async function handlesOf(
+  services: ServiceLookup,
+  settings: SettingsStore | null,
+  clock: Clock,
+): Promise<HandleDirectory> {
+  const shared = services.get(HandleDirectoryKey);
+  if (shared) return shared;
+  try {
+    return await StoredHandleDirectory.open(settings, clock);
+  } catch {
+    return new StoredHandleDirectory(null, clock);
+  }
 }
 
 function personOf(services: ServiceLookup, account: AccountRef): PersonId | null {
@@ -111,6 +138,7 @@ export class ConversationModule implements Module {
       router: () => s.get(LlmRouterKey),
       knowledge: () => s.get(KnowledgeKey),
       personOf: (account) => personOf(s, account),
+      handles: await handlesOf(s, s.get(SettingsStoreKey) ?? store?.settings ?? null, clock),
       clock,
       publish: (e) => ctx.publish(e),
       log: ctx.log,
@@ -329,6 +357,7 @@ export class ReflectModule implements Module {
       clock,
       feedback,
       lessons,
+      handles: await handlesOf(s, settings, clock),
     });
     await loadWithTimeout(ctx, "feedback", () => feedback.load());
     await loadWithTimeout(ctx, "lessons", () => lessons.load());

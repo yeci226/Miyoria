@@ -1,13 +1,19 @@
-// Cheap rule triggers of her emotions: events whose meaning is explicit (praise, insults, a
-// death in a game, a song finished or cut off, someone she missed coming back, someone she
-// likes talking warmly with others while ignoring her). The rest is read by the batched `fast`
-// LLM pass of the social module (`social.appraisal`) and by her own mind loop.
+// Turns what happens into events for her emotions (the table itself is `events.ts`; the numbers
+// come from the dynamics in `emotions.ts`). Cheap triggers with explicit meaning: praise, a
+// song finished or cut off, someone she cares about coming back or being warm with others
+// while ignoring her, a death in a game, being talked over. What an interaction *meant* is read
+// by Appraise (packages/mind/src/appraise.ts), once. Only without the `mind` module the batched
+// pass of the social module reads it instead (`social.appraisal`, see `#appraisal`); either way
+// it arrives as appraisals (an emotion, a strength, who it is about), never as levels.
 //
 // Every rule appraises against what she cares about: how much she cares about the person
-// (affinity, romance), whether they are her crush, what she wants right now (drives).
+// (affinity, attachment), whether they are her crush, what she wants right now (drives).
 
 import {
   type AccountRef,
+  type AffectEvent,
+  type AffectEventKind,
+  type AppraisalStrength,
   type ContextKey,
   contextKeyString,
   EMOTION_NAMES,
@@ -24,8 +30,11 @@ import {
   SOCIAL_APPRAISAL_TOPIC,
   SOCIAL_EVENT_TOPIC,
   SONG_TOPIC,
+  toTimestamp,
 } from "@miyoria/types";
+import type { AffectService } from "./affect.js";
 import type { SelfConfig } from "./config.js";
+import { strengthOf } from "./events.js";
 import type { SelfService } from "./state.js";
 
 /** Bus topic of emotion nudges from games and extensions (see `feelEffects`). */
@@ -33,76 +42,6 @@ export const FEEL_TOPIC = "self.feel";
 /** Bus topic of the LLM budget (`@miyoria/llm` `BUDGET_TOPIC`). */
 const BUDGET_TOPIC = "llm.budget";
 const MINUTE_MS = 60_000;
-
-type Emo = Partial<Record<EmotionName, number>>;
-
-/** What a social event kind stirs: her emotions, toward the person, romance, drives. */
-interface Reaction {
-  feel: Emo;
-  toward?: Partial<Record<PersonEmotionName, number>>;
-  /** Romance per event (positive: only with people she likes, scaled by how much). */
-  romance?: number;
-  esteem?: number;
-  hunger?: number;
-  cause: string;
-}
-
-const REACTIONS: Readonly<Record<string, Reaction>> = {
-  greeting: { feel: { joy: 0.05 }, romance: 0.005, cause: "跟我打招呼" },
-  thanks: {
-    feel: { joy: 0.15, shy: 0.1, pride: 0.1 },
-    romance: 0.01,
-    esteem: -0.05,
-    cause: "跟我道謝",
-  },
-  praise: {
-    feel: { joy: 0.2, shy: 0.3, pride: 0.25 },
-    romance: 0.03,
-    esteem: -0.15,
-    cause: "誇我",
-  },
-  gift: {
-    feel: { joy: 0.3, gratitude: 0.3 },
-    toward: { gratitude: 0.5 },
-    romance: 0.04,
-    hunger: -0.3,
-    cause: "送我東西",
-  },
-  friendly: { feel: { joy: 0.1 }, romance: 0.015, cause: "對我很好" },
-  apology: { feel: { anger: -0.15 }, toward: { resentment: -0.3 }, cause: "跟我道歉" },
-  warm: { feel: { joy: 0.15 }, romance: 0.03, cause: "對我很溫柔" },
-  cold: {
-    feel: { sorrow: 0.15 },
-    toward: { resentment: 0.1 },
-    romance: -0.02,
-    cause: "對我很冷淡",
-  },
-  rude: {
-    feel: { anger: 0.3 },
-    toward: { resentment: 0.25 },
-    romance: -0.03,
-    cause: "對我很沒禮貌",
-  },
-  insult: {
-    feel: { anger: 0.5, sorrow: 0.15 },
-    toward: { resentment: 0.45 },
-    romance: -0.08,
-    esteem: 0.1,
-    cause: "罵我",
-  },
-  harassment: {
-    feel: { anger: 0.6, fear: 0.3, disgust: 0.4 },
-    toward: { resentment: 0.6 },
-    romance: -0.25,
-    cause: "威脅、騷擾我",
-  },
-  flirt_too_far: {
-    feel: { disgust: 0.5, anger: 0.3 },
-    toward: { resentment: 0.3 },
-    romance: -0.1,
-    cause: "對我講噁心的話",
-  },
-};
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 const num = (v: JsonValue | undefined, fallback = 0) =>
@@ -124,8 +63,16 @@ function isPersonEmotionName(s: string): s is PersonEmotionName {
   return (PERSON_EMOTION_NAMES as readonly string[]).includes(s);
 }
 
+/** A reading of how strongly something was felt (0..1) as one of the shared steps. */
+function strengthOfReading(v: number): AppraisalStrength {
+  if (v >= 0.6) return "strong";
+  if (v >= 0.3) return "medium";
+  return "weak";
+}
+
 export interface RuleDeps {
   self: SelfService;
+  affect: AffectService;
   config: SelfConfig;
   /** Person of an account (the social module's cache), if known. */
   personOf: (account: AccountRef) => PersonId | null;
@@ -149,6 +96,18 @@ export class EmotionRules {
   #budget = "ok";
 
   constructor(private readonly d: RuleDeps) {}
+
+  /** A rule event as the bus would carry it. */
+  #event(
+    kind: AffectEventKind,
+    person: PersonId | null,
+    detail: string,
+    key: string,
+    now: number,
+    context: ContextKey | null = null,
+  ): AffectEvent {
+    return { kind, person, handle: null, context, detail, key, at: toTimestamp(now) };
+  }
 
   /** Applies whatever `event` means to her; returns whether anything was felt. */
   handle(event: Event, now: number): boolean {
@@ -178,6 +137,15 @@ export class EmotionRules {
         this.#line(person, u.speaker.display_name, together, false, true, now);
         return true;
       }
+      case "voice_playback": {
+        // Her speech cut off (someone talked over her): a weak frustration, habituated.
+        if (event.data.state !== "interrupted") return false;
+        const key = `playback|${contextKeyString(event.data.context)}`;
+        this.d.affect.applyEvent(
+          this.#event("interrupted", null, "說話被打斷", key, now, event.data.context),
+        );
+        return true;
+      }
       case "custom":
         return this.#custom(event.data.topic, event.data.payload, now);
       default:
@@ -192,7 +160,10 @@ export class EmotionRules {
     if (topic === SALIENT_TOPIC) return this.#salient(payload);
     if (topic === SONG_TOPIC) return this.#songCue(payload, now);
     if (topic === BUDGET_TOPIC) return this.#budgetState(payload);
-    if (topic.startsWith("game.")) return this.#game(topic, payload);
+    if (topic === "activity.done" || topic === "activity.failed") {
+      return this.#task(topic === "activity.done", payload, now);
+    }
+    if (topic.startsWith("game.")) return this.#game(topic, payload, now);
     return false;
   }
 
@@ -212,7 +183,7 @@ export class EmotionRules {
   ): void {
     const self = this.d.self;
     const crush = self.crushPerson() === person;
-    this.#back(person, name, toHer);
+    this.#back(person, name, toHer, now);
     if (toHer) {
       this.#toHer.set(person, now);
       this.#toOthers.delete(person);
@@ -221,7 +192,7 @@ export class EmotionRules {
         self.adjust({ longing: -0.02 }, "event");
       } else if (crush) {
         self.adjust({ longing: -this.d.config.satisfy.crush_message_longing }, "event");
-        self.feel("shy", 0.12, `${short(name)}跟我說話`, person);
+        this.d.affect.applySocial("crush_spoke", person, 1, `${short(name)}跟我說話`);
       }
       return;
     }
@@ -237,20 +208,29 @@ export class EmotionRules {
     const last = this.#jealous.get(person) ?? Number.NEGATIVE_INFINITY;
     if (lines.length < Math.max(e.jealousy_lines, 1) || talkedToHer || now - last < window) return;
     this.#jealous.set(person, now);
-    const amount = 0.2 * care + (crush ? 0.2 : 0);
-    self.feelToward(person, "jealousy", amount, `${short(name)}一直跟別人聊,都不理我`);
+    this.d.affect.applyEvent(
+      this.#event(
+        "cared_close_with_other",
+        person,
+        `${short(name)}一直跟別人聊,都不理我`,
+        `lines|${person}`,
+        now,
+      ),
+    );
     if (crush) self.adjust({ longing: 0.1 }, "event");
   }
 
-  /** Someone she missed is back: the relief shows as joy (and some shyness for her crush). */
-  #back(person: PersonId, name: string | null, together: boolean): void {
-    const self = this.d.self;
-    const missed = self.seen(person, name, together);
+  /**
+   * Someone she had been missing is back (they said something): the relief shows as joy,
+   * scaled by how much she missed them.
+   */
+  #back(person: PersonId, name: string | null, together: boolean, now: number): void {
+    const missed = this.d.self.seen(person, name, together);
     if (missed < this.d.config.emotions.notice) return;
-    self.feel("joy", missed * 0.6, `${short(name)}回來了`, person);
-    self.feel("surprise", 0.15, `${short(name)}回來了`, person);
-    if (self.crushPerson() === person)
-      self.feel("shy", missed * 0.5, `${short(name)}回來了`, person);
+    this.d.affect.applyEvent(
+      this.#event("cared_arrived", person, `${short(name)}回來了`, `back|${person}`, now),
+      { missed },
+    );
   }
 
   #salient(payload: JsonValue): boolean {
@@ -267,7 +247,21 @@ export class EmotionRules {
       isJsonObject(ctx) &&
       ctx.channel === voice.channel &&
       ctx.scope === voice.scope;
-    this.#back(person, str(payload.display_name), together);
+    const now = this.d.self.clock.now();
+    const self = this.d.self;
+    const name = str(payload.display_name);
+    const missed = self.seen(person, name, together);
+    if (self.care(person) <= 0 && missed <= 0) return true;
+    this.d.affect.applyEvent(
+      this.#event(
+        "cared_arrived",
+        person,
+        `${short(name)}${kind === "joined_voice" ? "進語音了" : "上線了"}`,
+        `${kind}|${person}`,
+        now,
+      ),
+      { missed },
+    );
     return true;
   }
 
@@ -278,57 +272,58 @@ export class EmotionRules {
     const kind = str(payload.kind);
     // Her own hints (mind) are already her feelings.
     if (person === null || kind === null || payload.source === "mind") return false;
-    const r = REACTIONS[kind];
-    if (!r) return false;
-    const self = this.d.self;
-    const name = str(payload.name);
+    const who = short(str(payload.name));
     const scale = clamp(Math.abs(num(payload.scale, 1)), 0, 1) || 1;
-    const who = short(name);
-    const crush = self.crushPerson() === person;
-    for (const [emotion, amount] of Object.entries(r.feel) as [EmotionName, number][]) {
-      self.feel(emotion, amount * scale, `${who}${r.cause}`, person);
-    }
-    for (const [emotion, amount] of Object.entries(r.toward ?? {}) as [
-      PersonEmotionName,
-      number,
-    ][]) {
-      self.feelToward(person, emotion, amount * scale, `${who}${r.cause}`);
-    }
-    if (kind === "praise" || kind === "thanks") {
+    if (kind === "praise") {
+      this.d.affect.applyEvent(
+        this.#event("praised", person, `${who}誇我`, `praise|${person}`, now),
+      );
       const song = this.#song;
       const sinceSong = song ? now - song.at : Number.POSITIVE_INFINITY;
       if (this.#singing || sinceSong <= this.d.config.emotions.song_praise_mins * MINUTE_MS) {
-        self.feel("pride", 0.35, `${who}誇我的歌`, person);
-        self.adjust({ esteem: -0.15 }, "event");
+        this.d.affect.applyEvent(
+          this.#event("song_applauded", person, `${who}誇我的歌`, `song_praise|${person}`, now),
+        );
       }
-      // Praise from her crush makes her flustered.
-      if (crush) self.feel("shy", 0.2, `${who}${r.cause}`, person);
+      return true;
     }
-    const romance = (r.romance ?? 0) * scale;
-    if (romance > 0) {
-      const liking = self.liking(person);
-      if (liking > 0) self.romance(person, romance * liking);
-    } else if (romance < 0) {
-      self.romance(person, romance);
-    }
-    const drives: { esteem?: number; hunger?: number } = {};
-    if (r.esteem !== undefined) drives.esteem = r.esteem * scale;
-    if (r.hunger !== undefined) drives.hunger = r.hunger * scale;
-    if (Object.keys(drives).length > 0) self.adjust(drives, "event");
-    return true;
+    // A gift of food the giver already fed her says how much it took away (the economy's).
+    const fed = payload.hunger;
+    const extra =
+      typeof fed === "number" && Number.isFinite(fed) ? { hunger: clamp(fed, 0, 1) } : {};
+    const cause = `${who}${REASONS[kind] ?? ""}`;
+    return this.d.affect.applySocial(kind, person, scale, cause, extra) !== null;
   }
 
-  /** `social.appraisal`: the `fast` model's reading of a conversation. */
+  /**
+   * `social.appraisal`: the `fast` model's reading of a conversation, which only happens when the
+   * `mind` module does not run (it would be a second Appraise otherwise). It arrives as appraisals
+   * (an emotion and how strongly, never a level) and is read like any other.
+   */
   #appraisal(payload: JsonValue, now: number): boolean {
     if (!isJsonObject(payload)) return false;
-    const self = this.d.self;
-    const max = this.d.config.emotions.max_event_nudge;
+    const affect = this.d.affect;
     let any = false;
     if (isJsonObject(payload.her)) {
-      for (const [name, v] of Object.entries(payload.her)) {
-        if (!isEmotionName(name) || typeof v !== "number" || !(v > 0)) continue;
-        // The reading is a hint: half of it, bounded.
-        self.feel(name, clamp(v * 0.5, 0, max), "剛剛的對話");
+      const readings = Object.entries(payload.her)
+        .filter(
+          (e): e is [EmotionName, number] =>
+            isEmotionName(e[0]) && typeof e[1] === "number" && e[1] > 0,
+        )
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3);
+      if (readings.length > 0) {
+        affect.appraise({
+          source: "appraise",
+          events: readings.map(([emotion, v]) => ({
+            emotion,
+            strength: strengthOfReading(v),
+            toward: null,
+            cause: "剛剛的對話",
+          })),
+          context: null,
+          at: toTimestamp(now),
+        });
         any = true;
       }
     }
@@ -339,45 +334,48 @@ export class EmotionRules {
       if (person === null) continue;
       any = true;
       const who = short(str(raw.name));
-      const crush = self.crushPerson() === person;
       const romance = clamp(num(raw.romance), -1, 1);
-      if (romance > 0) {
-        const liking = self.liking(person);
-        if (liking > 0) {
-          self.romance(person, 0.05 * romance * liking);
-          // Being flirted with by someone she likes: flustered.
-          self.feel("shy", 0.3 * romance * liking, `${who}對我好溫柔`, person);
-        }
-      } else if (romance < 0) {
-        self.romance(person, 0.03 * romance);
+      // Being flirted with by someone she likes: flustered (attachment is Reflect's to move).
+      if (romance > 0.15 && this.d.self.care(person) > 0) {
+        affect.appraiseFor(person, {
+          emotion: "shy",
+          strength: strengthOfReading(romance),
+          cause: `${who}對我好溫柔`,
+        });
       }
       const others = clamp(num(raw.others), 0, 1);
       const toward = clamp(num(raw.toward_her), -1, 1);
-      const care = self.care(person);
+      const care = this.d.self.care(person);
       if (others >= 0.4 && toward <= 0.1 && care > 0) {
         const last = this.#jealous.get(person) ?? Number.NEGATIVE_INFINITY;
         if (now - last >= this.d.config.emotions.jealousy_window_mins * MINUTE_MS) {
           this.#jealous.set(person, now);
-          const amount = others * (0.25 * care + (crush ? 0.25 : 0));
-          self.feelToward(person, "jealousy", amount, `${who}對別人那麼好,卻不理我`);
-          if (crush) self.adjust({ longing: 0.1 }, "event");
+          affect.applyEvent(
+            this.#event(
+              "cared_close_with_other",
+              person,
+              `${who}對別人那麼好,卻不理我`,
+              `appraisal|${person}`,
+              now,
+            ),
+          );
+          if (this.d.self.crushPerson() === person) this.d.self.adjust({ longing: 0.1 }, "event");
         }
       }
       if (raw.promise === "kept") {
-        self.feelToward(person, "gratitude", 0.3, `${who}說到做到`);
-        self.feel("joy", 0.15, `${who}說到做到`, person);
+        affect.applySocial("promise_kept", person, 1, `${who}說到做到`);
       } else if (raw.promise === "broken") {
-        self.feelToward(person, "resentment", 0.3, `${who}食言了`);
-        self.feel("sorrow", crush ? 0.35 : 0.2, `${who}食言了`, person);
+        affect.applySocial("promise_broken", person, 1, `${who}食言了`);
       }
     }
     return any;
   }
 
   /**
-   * `self.feel`: `{"emotion": "pride", "amount": 0.3, "cause": "…", "person": "…"}`, or
-   * `{"emotions": {"joy": 0.2, ...}, "cause": "…"}`, or toward someone with `"toward"`
-   * (`missing` / `jealousy` / `gratitude` / `resentment`) and `"person"`.
+   * `self.feel` from games and extensions: `{"emotion": "pride", "amount": 0.3, "cause": "…",
+   * "person": "…"}`, or `{"emotions": {"joy": 0.2, ...}, "cause": "…"}`, or toward someone with
+   * `"toward"` (`missing` / `jealousy` / `gratitude` / `resentment`) and `"person"`. The amount
+   * only picks a step (weak / medium / strong): the dynamics decide the number.
    */
   #feelEvent(payload: JsonValue): boolean {
     if (!isJsonObject(payload)) return false;
@@ -396,8 +394,16 @@ export class EmotionRules {
     if (one !== null) all[one] = amount;
     let any = false;
     for (const [name, v] of Object.entries(all)) {
-      if (!isEmotionName(name) || typeof v !== "number") continue;
-      self.feel(name, clamp(v, -max, max), cause, person);
+      if (!isEmotionName(name) || typeof v !== "number" || v === 0) continue;
+      if (v < 0) {
+        self.feel(name, clamp(v, -max, max), cause, person);
+      } else {
+        this.d.affect.appraiseFor(person, {
+          emotion: name,
+          strength: strengthOf(clamp(v, 0, max)),
+          cause: cause || "遊戲裡的事",
+        });
+      }
       any = true;
     }
     return any;
@@ -408,7 +414,6 @@ export class EmotionRules {
   #songCue(payload: JsonValue, now: number): boolean {
     const cue = parseSongCue(payload);
     if (!cue) return false;
-    const self = this.d.self;
     if (cue.state === "started") {
       this.#singing = true;
       return false;
@@ -417,36 +422,47 @@ export class EmotionRules {
     this.#singing = false;
     if (cue.outcome === "finished") {
       this.#song = { at: now, finished: true };
-      self.feel("pride", 0.3, "唱完一整首歌");
-      self.feel("joy", 0.2, "唱完一整首歌");
-      self.adjust({ esteem: -0.25, attention: -0.1 }, "event");
+      this.d.affect.applyEvent(
+        this.#event("song_finished", null, "唱完一整首歌", `song|${cue.song}`, now),
+      );
       return true;
     }
     if (cue.outcome === "interrupted") {
       // Cut off (skipped or stopped): she does not know it was not about her singing.
       this.#song = { at: now, finished: false };
-      self.feel("sorrow", 0.3, "歌被切掉了");
-      self.feel("frustration", 0.35, "歌被切掉了");
-      self.adjust({ esteem: 0.1 }, "event");
+      this.d.affect.applySocial("song_cut", null, 1, "歌被切掉了");
       return true;
     }
     return false;
   }
 
-  #game(topic: string, payload: JsonValue): boolean {
+  /** A task of hers (going live, a game goal) ended. */
+  #task(done: boolean, payload: JsonValue, now: number): boolean {
+    if (!isJsonObject(payload)) return false;
+    const task = str(payload.task) ?? "";
+    this.d.affect.applyEvent(
+      this.#event(
+        done ? "task_succeeded" : "task_failed",
+        null,
+        done ? "事情做成了" : "事情沒做成",
+        `task|${done ? "ok" : "fail"}|${task}`,
+        now,
+      ),
+    );
+    return true;
+  }
+
+  #game(topic: string, payload: JsonValue, now: number): boolean {
     const obj = isJsonObject(payload) ? payload : null;
     const kind = str(obj?.type) ?? topic.slice(topic.lastIndexOf(".") + 1);
-    const self = this.d.self;
     if (kind === "death") {
-      self.feel("frustration", 0.5, "遊戲裡死掉了");
-      self.feel("anger", 0.3, "遊戲裡死掉了");
-      self.adjust({ esteem: 0.1 }, "event");
+      this.d.affect.applyEvent(this.#event("game_lost", null, "遊戲裡死掉了", "game|death", now));
       return true;
     }
     if (kind === "advancement") {
-      self.feel("pride", 0.4, "遊戲裡達成成就");
-      self.feel("joy", 0.3, "遊戲裡達成成就");
-      self.adjust({ esteem: -0.2 }, "event");
+      this.d.affect.applyEvent(
+        this.#event("game_won", null, "遊戲裡達成成就", "game|advancement", now),
+      );
       return true;
     }
     return false;
@@ -459,8 +475,23 @@ export class EmotionRules {
     const was = this.#budget;
     this.#budget = state;
     if (state === "ok" || (was === "exhausted" && state === "degraded")) return false;
-    this.d.self.adjust({ hunger: 0.25 }, "event");
-    this.d.self.feel("frustration", 0.2, "白飯被限量了");
+    this.d.affect.applySocial("budget_rationed", null, 1, "白飯被限量了");
     return true;
   }
 }
+
+/** What each social kind is about, appended to the person's name for the cause. */
+const REASONS: Readonly<Record<string, string>> = {
+  greeting: "跟我打招呼",
+  thanks: "跟我道謝",
+  gift: "送我東西",
+  friendly: "對我很好",
+  apology: "跟我道歉",
+  warm: "對我很溫柔",
+  cold: "對我很冷淡",
+  rude: "對我很沒禮貌",
+  insult: "罵我",
+  harassment: "威脅、騷擾我",
+  flirt_too_far: "對我講噁心的話",
+  broken_promise: "答應給我零食卻沒給",
+};

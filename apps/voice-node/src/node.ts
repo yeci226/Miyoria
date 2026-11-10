@@ -168,6 +168,15 @@ export class VoiceNode {
       case "play_stop":
         this.sessionForPlay(msg.play)?.queue?.stop(msg.play, msg.fade_ms);
         break;
+      case "play_duck":
+        this.sessionForPlay(msg.play)?.queue?.duck(msg.play, msg.gain, msg.fade_ms);
+        break;
+      case "play_pause":
+        this.sessionForPlay(msg.play)?.queue?.pause(msg.play, msg.fade_ms);
+        break;
+      case "play_resume":
+        this.sessionForPlay(msg.play)?.queue?.resume(msg.play, msg.fade_ms);
+        break;
       default:
         break; // welcome / ping are handled by the link
     }

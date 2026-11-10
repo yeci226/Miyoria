@@ -5,19 +5,22 @@ import {
   ADDRESSED,
   AMBIENT,
   buildMessages,
-  checkMessages,
   cleanReply,
-  DATA_PREAMBLE,
   FOCUS_HEAD,
+  FRESHNESS_RULE,
   GUARD_RULES,
   type HistoryEntry,
   INITIATIVE,
   INITIATIVE_HINT,
   INITIATIVE_SILENCE,
+  mainRules,
   markCurrent,
+  RULES,
   renderSections,
-  situationData,
+  rulesPrompt,
+  SELF_HEAD,
   situationPrompt,
+  speaksReminder,
   splitMessage,
   VOICE_ADDRESSED,
   VOICE_INITIATIVE,
@@ -28,6 +31,17 @@ const utc = (y: number, mo: number, d: number, h: number, mi: number) =>
   new Date(Date.UTC(y, mo - 1, d, h, mi, 0));
 
 describe("prompt", () => {
+  it("repeats the spoken-language rule last in a bilingual voice turn, not in text", () => {
+    const voice: ContextKey = { platform: "discord", scope: "g", channel: "v", kind: "voice" };
+    const text: ContextKey = { platform: "discord", scope: "g", channel: "c", kind: "channel" };
+    const at = utc(2026, 11, 1, 14, 3);
+    const of = (context: ContextKey, speaksIn: string | null) =>
+      situationPrompt({ context, direct: false, initiative: null, notes: [], speaksIn }, at, 0);
+    expect(of(voice, "Japanese")).toContain(speaksReminder("Japanese"));
+    expect(of(voice, null)).not.toContain("<voice>");
+    expect(of(text, "Japanese")).not.toContain("<voice>");
+  });
+
   it("builds_role_mapped_merged_history", () => {
     const history = [
       entry("Owen", "早安", false),
@@ -44,7 +58,7 @@ describe("prompt", () => {
     expect(msgs[4]).toEqual(systemMessage("SITUATION"));
   });
 
-  it("situation_mentions_place_people_and_rules", () => {
+  it("situation_mentions_place_and_addressing_rules_are_fixed", () => {
     const ctx: ContextKey = {
       platform: "discord",
       scope: "g",
@@ -59,36 +73,29 @@ describe("prompt", () => {
     expect(s).toContain("2026-11-01 14:03(星期日)");
     expect(s).toContain("discord 的頻道 general");
     expect(s).toContain(AMBIENT);
-    expect(s).toContain("<silence/>");
-    expect(s).toContain(GUARD_RULES);
-    // The people present are data, not part of the system message.
-    expect(s).not.toContain("Owen");
-    const data = situationData({
-      voice: false,
-      present: ["Owen", "阿明"],
-      people: [],
-      initiative: null,
-      sections: null,
-    });
-    expect(data).toContain("⟦資料 來源=platform 標題=在場的人⟧\nOwen、阿明\n⟦/資料⟧");
+    // The rules are part of the fixed (cached) system prefix, said once.
+    expect(s).not.toContain(GUARD_RULES);
+    expect(s).not.toContain(SELF_HEAD);
+    const rules = rulesPrompt(false);
+    expect(rules).toBe(RULES);
+    expect(rules).toContain(GUARD_RULES);
+    for (const rule of ["<silence/>", "<emo:名稱>", "一到三句"]) {
+      expect(rules.split(rule).length - 1, rule).toBe(1);
+    }
   });
 
-  it("marks_spoken_and_interrupted_lines", () => {
-    const history: HistoryEntry[] = [
-      { ...entry("Owen", "妳在嗎", false), spoken: true },
-      { ...entry("DS", "在啊,幹嘛", true), spoken: true, interrupted: true },
-      entry("阿明", "打字的", false),
-    ];
-    const msgs = buildMessages("P", "S", history);
-    expect(msgs[1]).toEqual(userMessage("Owen(語音): 妳在嗎"));
-    expect(msgs[2]).toEqual(assistantMessage("在啊,幹嘛(被打斷)"));
-    expect(msgs[3]).toEqual(userMessage("阿明: 打字的"));
-    const check = checkMessages("DS", history);
-    expect(check[1]?.content).toContain("DS(她自己): 在啊,幹嘛(被打斷)");
-    expect(check[1]?.content).toContain("Owen(語音): 妳在嗎");
+  it("every rules block says newer things are looked up, never denied", () => {
+    expect(FRESHNESS_RULE).toContain("web_search");
+    expect(rulesPrompt(false)).toContain(FRESHNESS_RULE);
+    expect(rulesPrompt(true)).toContain(FRESHNESS_RULE);
+    for (const voice of [false, true]) {
+      const text = mainRules(voice, null);
+      expect(text, String(voice)).toContain("web_search");
+      expect(text, String(voice)).toContain("別說不存在");
+    }
   });
 
-  it("voice_situation_has_speech_rules", () => {
+  it("voice_rules_have_speech_rules_and_the_spoken_line_first", () => {
     const ctx: ContextKey = { platform: "discord", scope: "g", channel: "lounge", kind: "voice" };
     const s = situationPrompt(
       { context: ctx, direct: true, initiative: null, notes: [] },
@@ -96,30 +103,26 @@ describe("prompt", () => {
       0,
     );
     expect(s).toContain("語音頻道 lounge");
-    expect(
-      situationData({
-        voice: true,
-        present: ["Owen", "阿明"],
-        people: [],
-        initiative: null,
-        sections: null,
-      }),
-    ).toContain("標題=語音頻道裡的人⟧\nOwen、阿明");
-    expect(s).toContain("一到兩句");
-    expect(s).toContain("emoji");
-    expect(s).toContain("<emo:名稱>");
     expect(s).toContain(VOICE_ADDRESSED);
     expect(s).not.toContain(ADDRESSED);
+    const rules = rulesPrompt(true);
+    expect(rules).toContain("一到兩句");
+    expect(rules).toContain("emoji");
+    expect(rules).toContain("<emo:名稱>");
+    expect(rules).not.toContain("<voice>");
+    const bilingual = rulesPrompt(true, "Japanese");
+    expect(bilingual).toContain("每一句先寫 <voice>…</voice>");
+    expect(bilingual).toContain("<voice>えっ、本当に?</voice>欸,真的嗎?");
   });
 
-  it("initiative_situation_and_notes", () => {
+  it("her_own_state_is_trusted_system_text", () => {
     const ctx: ContextKey = {
       platform: "discord",
       scope: "g",
       channel: "general",
       kind: "channel",
     };
-    const notes = ["你現在的狀態:心情不錯"];
+    const notes = ["你現在的狀態:心情不錯", "你打算做的事:\n- 問 Owen 報告"];
     const now = utc(2026, 11, 1, 9, 0);
     const hint = "問 Owen 考試考得怎樣";
     let s = situationPrompt({ context: ctx, direct: false, initiative: hint, notes }, now, 0);
@@ -127,19 +130,9 @@ describe("prompt", () => {
     expect(s).toContain(INITIATIVE_HINT);
     expect(s).toContain(INITIATIVE_SILENCE);
     expect(s).not.toContain(AMBIENT);
-    expect(s).toContain("\n- 你現在的狀態:心情不錯\n");
-    // The hint (it may quote game chat) and the attitude lines are data.
+    expect(s).toContain(`${SELF_HEAD}\n- 你現在的狀態:心情不錯\n- 你打算做的事:\n- 問 Owen 報告`);
+    // The hint (it may quote game chat) is data.
     expect(s).not.toContain(hint);
-    const data = situationData({
-      voice: false,
-      present: [],
-      people: ["你對 Owen 的態度:親近"],
-      initiative: { reason: "followup", hint },
-      sections: null,
-    }) as string;
-    expect(data.startsWith(DATA_PREAMBLE)).toBe(true);
-    expect(data).toContain("⟦資料 來源=social 標題=你對在場的人的態度⟧\n- 你對 Owen 的態度:親近");
-    expect(data).toContain(`⟦資料 來源=initiative∶followup 標題=你想聊的事⟧\n${hint}\n⟦/資料⟧`);
 
     s = situationPrompt(
       { context: { ...ctx, kind: "voice" }, direct: false, initiative: "", notes: [] },
@@ -150,19 +143,30 @@ describe("prompt", () => {
     expect(s).not.toContain(INITIATIVE_HINT);
   });
 
-  it("repeats_the_message_she_answers_after_the_data", () => {
+  it("repeats_the_focus_naming_who_asked", () => {
     const old = { ...entry("貓", "永遠不會忘記的人會很痛苦", false), id: "1" };
     const now = { ...entry("Sakana", "@Miyoria 要怎麼攻略你?", false), id: "2" };
-    const history = markCurrent([old, now], [{ id: { id: "2" } } as never]);
+    const more = { ...entry("Sakana", "認真的", false), id: "3" };
+    const verbs = new Map([
+      ["2", "問你"],
+      ["3", "接著說"],
+    ]);
+    const ids = [{ id: { id: "2" } }, { id: { id: "3" } }] as never;
+    const history = markCurrent([old, now, more], ids, verbs);
     const msgs = buildMessages("P", "S", history, "DATA");
     expect(msgs.map((m) => m.role)).toEqual(["system", "user", "user", "system"]);
     const last = msgs[2]?.content as string;
     expect(last.startsWith("DATA\n\n")).toBe(true);
-    expect(last.endsWith(`${FOCUS_HEAD}\nSakana: @Miyoria 要怎麼攻略你?`)).toBe(true);
+    expect(
+      last.endsWith(`${FOCUS_HEAD}\nSakana 問你:@Miyoria 要怎麼攻略你?\nSakana 接著說:認真的`),
+    ).toBe(true);
     expect(last).not.toContain("永遠不會忘記");
     // Without data the repeated message is its own block; without a current message, nothing.
     expect(buildMessages("P", "S", history).at(-2)?.content).toContain(FOCUS_HEAD);
     expect(buildMessages("P", "S", [old, now], "DATA")[2]).toEqual(userMessage("DATA"));
+    // Example dialogues are data right after the persona (cacheable, not rules).
+    const withExamples = buildMessages("P", "S", history, null, {}, [], "EX");
+    expect(withExamples.slice(0, 2)).toEqual([systemMessage("P"), userMessage("EX")]);
   });
 
   it("puts_derived_content_in_a_user_data_message", () => {
@@ -201,7 +205,7 @@ describe("prompt", () => {
     order,
   });
 
-  it("sections_are_ordered_and_capped", () => {
+  it("sections_are_ordered_and_share_the_cap", () => {
     const sections = [
       section("b", 10, "第二"),
       section("a", 0, "第一"),
@@ -213,15 +217,14 @@ describe("prompt", () => {
     expect(renderSections(sections, 4000)).toBe(
       [block("a", "第一"), block("b", "第二"), block("c", "第三")].join("\n\n"),
     );
-    // Room for the first block only.
-    const first = block("a", "第一");
-    expect(renderSections(sections, [...first].length + 3)).toBe(first);
     expect(renderSections([], 100)).toBeNull();
 
-    const long = [section("a", 0, "短"), section("b", 1, "長".repeat(100))];
-    const out = renderSections(long, 80) as string;
-    expect([...out].length).toBeLessThanOrEqual(80);
-    expect(out.startsWith(`${block("a", "短")}\n\n⟦資料 來源=b 標題=標題b⟧\n長`)).toBe(true);
+    // Over the cap every section gives up its share: the last one is not simply dropped.
+    const long = [section("a", 0, "短".repeat(60)), section("b", 1, "長".repeat(120))];
+    const out = renderSections(long, 200) as string;
+    expect([...out].length).toBeLessThanOrEqual(200);
+    expect(out).toContain("⟦資料 來源=a 標題=標題a⟧\n短");
+    expect(out).toContain("⟦資料 來源=b 標題=標題b⟧\n長");
     expect(out.endsWith("…\n⟦/資料⟧")).toBe(true);
   });
 

@@ -1,4 +1,4 @@
-"""The real song pipeline: yt-dlp / library → Demucs → Seed-VC (singing, F0) → mix.
+"""The real song pipeline: yt-dlp / library → Demucs → lead / backing split → Seed-VC (singing, F0) → mix.
 
 Everything heavy is imported lazily so the server (and its mock mode) starts without torch. Models
 are loaded per stage and freed right after (``SING_KEEP_MODELS=1`` keeps them): the GPU is shared
@@ -16,16 +16,83 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
 from songs import PLAY_RATE, Source, Store, safe_id, short_hash
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import device_memory  # noqa: E402
+
 log = logging.getLogger("miyoria.sing.engine")
 
-SR = 44_100  # Demucs htdemucs and the Seed-VC singing model both run at 44.1 kHz
+SR = 44_100  # the separators (Mel-Band RoFormer, Demucs) and the Seed-VC singing model run at 44.1 kHz
 Progress = Callable[[float], None]
+
+# The vocal separator: Kim's Mel-Band RoFormer (KimberleyJSN/melbandroformer, MIT), the same
+# architecture as the lead split (leadsplit.py runs it), cleaner vocals than Demucs htdemucs.
+VOCAL_CKPT = "MelBandRoformer.ckpt"
+MELBAND = "melband"
+
+
+def vocal_model_path(env: dict[str, str] | None = None) -> Path:
+    e = env if env is not None else os.environ
+    return Path(e.get("SING_VOCAL_MODEL") or Path(__file__).resolve().parent.parent / "models" / "vocal-split" / VOCAL_CKPT)
+
+
+VOICE_CHAINS = ("rvc", "ying+rvc", "ying", "seedvc+rvc", "seedvc")
+YING_CKPT = Path("ckpt") / "YingMusic-SVC-full.pt"
+YING_CONFIG = Path("configs") / "YingMusic-SVC.yml"
+
+
+def ying_dir(env: dict[str, str] | None = None) -> Path:
+    e = env if env is not None else os.environ
+    return Path(e.get("SING_YING_DIR") or Path(__file__).resolve().parent.parent / "models" / "yingmusic-svc")
+
+
+def ying_available(env: dict[str, str] | None = None) -> bool:
+    root = ying_dir(env)
+    return (root / "modules").is_dir() and (root / YING_CKPT).is_file() and (root / YING_CONFIG).is_file()
+
+
+def voice_chain(env: dict[str, str] | None = None) -> str:
+    """How her voice is made: SING_VOICE (``rvc`` default: her own RVC model sings the lead;
+    ``ying+rvc``, ``ying``, ``seedvc+rvc``, ``seedvc``: YingMusic / Seed-VC first). A part whose files
+    are missing is left out (no RVC model: YingMusic alone; no YingMusic: Seed-VC)."""
+    import rvcpass
+
+    e = env if env is not None else os.environ
+    want = (e.get("SING_VOICE") or "rvc").strip().lower()
+    if want not in VOICE_CHAINS:
+        log.warning("SING_VOICE=%r is none of %s; using rvc", want, "|".join(VOICE_CHAINS))
+        want = "rvc"
+    if want == "rvc":
+        if rvcpass.available(e):
+            return "rvc"
+        log.warning("RVC model or Applio not found (%s); converting with YingMusic", rvcpass.model_path(e))
+        want = "ying"
+    base, _, rvc = want.partition("+")
+    if base == "ying" and not ying_available(e):
+        log.warning("YingMusic-SVC not found at %s; converting with Seed-VC", ying_dir(e))
+        base = "seedvc"
+    if rvc and not rvcpass.available(e):
+        log.warning("RVC model or Applio not found (%s); no RVC pass", rvcpass.model_path(e))
+        rvc = ""
+    return f"{base}+{rvc}" if rvc else base
+
+
+def default_separator(env: dict[str, str] | None = None) -> str:
+    """SING_SEPARATOR_MODEL, else the RoFormer when its checkpoint and config are there, else htdemucs."""
+    import leadsplit
+
+    e = env if env is not None else os.environ
+    if e.get("SING_SEPARATOR_MODEL"):
+        return e["SING_SEPARATOR_MODEL"]
+    ckpt = vocal_model_path(e)
+    return MELBAND if ckpt.is_file() and leadsplit.config_path(ckpt) is not None else "htdemucs"
 
 
 class JobError(Exception):
@@ -34,6 +101,26 @@ class JobError(Exception):
 
 class Cancelled(Exception):
     pass
+
+
+class Suspended(Exception):
+    """Raised from the step gate: the stage lets go of the GPU now (gpu.py) and runs again later.
+    ``code`` says why."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+@dataclass
+class ConvertWork:
+    """What a conversion got done, so a suspended one goes on from the last finished chunk. ``steps``
+    replaces SING_DIFFUSION_STEPS from the next chunk on."""
+
+    done: int = 0
+    chunks: list[Any] = field(default_factory=list)
+    prev: Any = None
+    steps: int | None = None
 
 
 def env_int(name: str, default: int) -> int:
@@ -56,6 +143,7 @@ DEFAULT_URL_HOSTS = (
     "music.youtube.com",
     "soundcloud.com",
     "bilibili.com",
+    "b23.tv",
     "nicovideo.jp",
 )
 
@@ -77,9 +165,29 @@ def allowed_url(url: str) -> bool:
 # ── audio helpers (numpy) ────────────────────────────────────────────────────
 
 
+def lyrics_extra(info: dict[str, Any], raw_title: str) -> dict[str, Any]:
+    """What the lyrics lookup wants of a yt-dlp info dict: the title, the music metadata, the description."""
+    ex: dict[str, Any] = {"raw_title": raw_title}
+    for key, name in (("track", "track"), ("alt_title", "alt_title")):
+        if info.get(key):
+            ex[name] = str(info[key])
+    meta_artist = info.get("artist") or info.get("creator")
+    if meta_artist:
+        ex["meta_artist"] = str(meta_artist).split(",")[0].strip()
+    if info.get("description"):
+        ex["description"] = str(info["description"])[:1500]
+    if info.get("tags"):
+        ex["tags"] = [str(t) for t in info["tags"]][:15]
+    return ex
+
+
 def ydl_options(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """yt-dlp options for resolving and downloading, ``extra`` on top."""
+    # Its cache lives with the songs (SING_YTDLP_CACHE): when it cannot write to its default
+    # ~/.cache/yt-dlp, Python's tempfile retries forever on Windows and the lookup never returns.
+    cache = os.environ.get("SING_YTDLP_CACHE")
     return {
+        **({"cachedir": cache} if cache else {}),
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
@@ -216,6 +324,20 @@ def is_oom(e: BaseException) -> bool:
     return "out of memory" in str(e).lower()
 
 
+@contextmanager
+def leave_cores_free():
+    """A separation that moved to the CPU to spare her voice uses half the cores: the speech workers
+    need some too, and a CPU that is full would stutter her just the same."""
+    import torch
+
+    before = torch.get_num_threads()
+    torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
+    try:
+        yield
+    finally:
+        torch.set_num_threads(before)
+
+
 # ── backend ──────────────────────────────────────────────────────────────────
 
 
@@ -223,12 +345,15 @@ class RealBackend:
     name = "seed-vc"
 
     def __init__(self, store: Store) -> None:
-        # No torch here: with SING_GPU_CHILD the main process builds this one too, for downloads
-        # and the mix, and must not touch CUDA. The device is found when a GPU step first runs.
+        import torch
+
         self.store = store
-        self._device: str | None = os.environ.get("SING_DEVICE") or None
-        self.separator = os.environ.get("SING_SEPARATOR_MODEL", "htdemucs")
-        self._separate_device: str | None = os.environ.get("SING_SEPARATE_DEVICE") or None
+        self.device = os.environ.get("SING_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
+        self._cuda = str(self.device).startswith("cuda") and torch.cuda.is_available()
+        self.separator = default_separator()
+        self.vocal_model = vocal_model_path()
+        self.vocal_overlap = env_int("SING_VOCAL_OVERLAP", 2)
+        self.separate_device = os.environ.get("SING_SEPARATE_DEVICE", self.device)
         self.steps = env_int("SING_DIFFUSION_STEPS", 30)
         self.cfg_rate = env_float("SING_CFG_RATE", 0.7)
         self.keep = os.environ.get("SING_KEEP_MODELS", "0") == "1"
@@ -237,28 +362,29 @@ class RealBackend:
         self.seedvc_dir = Path(os.environ.get("SING_SEEDVC_DIR", here.parent / "models" / "seed-vc"))
         self.ref_paths = ref_paths(os.environ.get("SING_REF") or str(here.parent / "voices" / "deepseek-chan" / "ref.wav"))
         self.f0_clean = os.environ.get("SING_F0_CLEAN", "1") != "0"
+        self.lead_device = os.environ.get("SING_LEAD_DEVICE", self.separate_device)
+        # 2 (each sample read twice): the karaoke model scores the same at 2 as at 8 on MVSep's
+        # leaderboard (10.77 / 10.79 dB) and runs twice as fast as at 4.
+        self.lead_overlap = env_int("SING_LEAD_OVERLAP", 2)
         if not (self.seedvc_dir / "modules").exists():
             raise RuntimeError(f"Seed-VC not found at {self.seedvc_dir} (set SING_SEEDVC_DIR)")
         if not self.ref_paths:
             raise RuntimeError("reference voice not found (set SING_REF to a file, a list or a folder)")
-        self.model_name = f"seed-vc-f0-44k+{self.separator}"
+        self.voice = voice_chain()
+        self.ying_dir = ying_dir()
+        self.rvc = self.voice == "rvc" or self.voice.endswith("+rvc")
+        self.rvc_error: str | None = None
+        self.model_name = f"{self.voice}+{self.separator}"
+        import leadsplit
+
+        self.lead_tag = leadsplit.tag()  # which karaoke model makes the lead stems, and from what
         self._vc: Any = None
-        self._demucs: Any = None
+        self._demucs: Any = None  # the vocal separator, whichever it is
+        self._lead: Any = None
+        self.gate: Callable[[], None] | None = None  # sharing the GPU: runs before every step
         self._ref: Any = None
         self._ref_f0: float | None = None
         self.transposer = "rubberband" if ffmpeg_has_filter("rubberband") else "librosa"
-
-    @property
-    def device(self) -> str:
-        if self._device is None:
-            import torch
-
-            self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        return self._device
-
-    @property
-    def separate_device(self) -> str:
-        return self._separate_device or self.device
 
     # ── resolve / fetch ──────────────────────────────────────────────────
 
@@ -287,8 +413,18 @@ class RealBackend:
             duration_s=float(info["duration"]) if info.get("duration") else None,
             url=info.get("webpage_url") or info.get("original_url"),
             uploader=info.get("uploader") or info.get("channel"),
-            extra={"raw_title": raw_title},
+            extra=lyrics_extra(info, raw_title),
         )
+
+    def fetch_hints(self, url: str) -> dict[str, Any]:
+        """The lyrics lookup's view of a link (yt-dlp metadata only, nothing downloaded), for old songs."""
+        from lyrics import hints_of
+
+        with self._ydl() as ydl:
+            info = ydl.extract_info(url, download=False)
+        if info and info.get("entries"):
+            info = next((e for e in info["entries"] if e), None)
+        return hints_of(self._source_of(info, "youtube")) if info else {}
 
     def resolve_search(self, query: str) -> Source:
         with self._ydl() as ydl:
@@ -409,25 +545,36 @@ class RealBackend:
         else:
             ffmpeg_to_wav(p, sdir / "source.wav", max_s=self.max_s)
 
-    # ── separation (Demucs) ──────────────────────────────────────────────
+    # ── separation (Mel-Band RoFormer, or a Demucs model) ────────────────
 
-    def separate(self, source_wav: Path, vocals_out: Path, inst_out: Path, progress: Progress) -> None:
+    def separate(self, source_wav: Path, vocals_out: Path, inst_out: Path, progress: Progress,
+                 device: str | None = None) -> None:
+        """``device``: where gpu.py placed this run, instead of SING_SEPARATE_DEVICE."""
+        on = device or self.separate_device
         try:
-            self._separate_on(self.separate_device, source_wav, vocals_out, inst_out)
+            if device == "cpu":
+                with leave_cores_free():
+                    self._separate_on("cpu", source_wav, vocals_out, inst_out, progress)
+            else:
+                self._separate_on(on, source_wav, vocals_out, inst_out, progress)
         except Exception as e:
-            if not is_oom(e) or self.separate_device == "cpu":
+            if not is_oom(e) or on == "cpu":
                 raise
             log.warning("separation ran out of VRAM; retrying on the CPU")
             self._demucs = None
             free_cuda()
-            self._separate_on("cpu", source_wav, vocals_out, inst_out)
+            self._separate_on("cpu", source_wav, vocals_out, inst_out, progress)
         finally:
             if not self.keep:
                 self._demucs = None
             free_cuda()
         progress(1.0)
 
-    def _separate_on(self, device: str, source_wav: Path, vocals_out: Path, inst_out: Path) -> None:
+    def _separate_on(self, device: str, source_wav: Path, vocals_out: Path, inst_out: Path,
+                     progress: Progress | None = None) -> None:
+        if self.separator == MELBAND:
+            self._separate_melband(device, source_wav, vocals_out, inst_out, progress)
+            return
         import torch
         from demucs.apply import apply_model
         from demucs.pretrained import get_model
@@ -436,6 +583,7 @@ class RealBackend:
             self._demucs = get_model(self.separator)
             self._demucs.eval()
         model = self._demucs
+        self._gate_separator(model)
         x, sr = read_audio(source_wav)
         if sr != model.samplerate:
             raise JobError(f"source is {sr} Hz, the separator wants {model.samplerate}")
@@ -454,15 +602,187 @@ class RealBackend:
         write_wav(vocals_out, vocals.T.numpy(), sr)
         write_wav(inst_out, inst.T.numpy(), sr)
 
+    def _separate_melband(self, device: str, source_wav: Path, vocals_out: Path, inst_out: Path,
+                          progress: Progress | None) -> None:
+        """The vocals with Kim's Mel-Band RoFormer (the lead split's runner, another checkpoint); the
+        instrumental is what is left (``source - vocals``), so the two add up to the song."""
+        import leadsplit
+
+        if self._demucs is not None and getattr(self._demucs, "device", None) != device:
+            self._demucs = None
+        if self._demucs is None:
+            self._demucs = leadsplit.LeadSplitter(self.vocal_model, device)
+        splitter = self._demucs
+        splitter.gate = self.gate
+        x, sr = read_audio(source_wav)
+        if x.shape[1] == 1:
+            x = x.repeat(2, axis=1)
+        if sr != splitter.sr:
+            raise JobError(f"source is {sr} Hz, the separator wants {splitter.sr}")
+        vocals = splitter.lead(x, sr, progress, overlap=min(self.vocal_overlap, 2) if device == "cpu" else self.vocal_overlap)
+        n = min(len(vocals), len(x))
+        write_wav(vocals_out, vocals[:n], sr)
+        write_wav(inst_out, x[:n] - vocals[:n], sr)
+
+    # ── lead / backing split (karaoke RoFormer, leadsplit.py) ────────────
+
+    def lead_available(self) -> bool:
+        """Whether the split runs: SING_LEAD_SPLIT is not 0 and the checkpoint is where it is looked for."""
+        import leadsplit
+
+        return leadsplit.available()
+
+    def split_lead(self, vocals_wav: Path, lead_out: Path, backing_out: Path, progress: Progress,
+                   device: str | None = None, source_wav: Path | None = None,
+                   rest_out: Path | None = None) -> None:
+        """The lead voice into ``lead_out``; when the separated vocals are there, the rest of them
+        into ``backing_out`` (``vocals - lead``); when the song is, everything but the lead into
+        ``rest_out`` (``song - lead``: instrumental and backing voices in one). The model reads the
+        whole song (``source_wav``) when leadsplit says so and it is there, else the vocals.
+        ``device``: where gpu.py placed this run."""
+        on = device or self.lead_device
+        args = (vocals_wav, lead_out, backing_out, progress, source_wav, rest_out)
+        try:
+            if device == "cpu":
+                with leave_cores_free():
+                    self._split_on("cpu", *args)
+            else:
+                self._split_on(on, *args)
+        except Exception as e:
+            if not is_oom(e) or on == "cpu":
+                raise
+            log.warning("lead split ran out of VRAM; retrying on the CPU")
+            self._lead = None
+            free_cuda()
+            self._split_on("cpu", *args)
+        finally:
+            if not self.keep:
+                self._lead = None
+            free_cuda()
+        progress(1.0)
+
+    def _split_on(self, device: str, vocals_wav: Path, lead_out: Path, backing_out: Path, progress: Progress,
+                  source_wav: Path | None = None, rest_out: Path | None = None) -> None:
+        import leadsplit
+
+        if self._lead is not None and self._lead.device != device:
+            self._lead = None
+        if self._lead is None:
+            self._lead = leadsplit.LeadSplitter(leadsplit.model_path(), device)
+        splitter = self._lead
+        splitter.gate = self.gate
+        vocals = read_audio(vocals_wav) if Path(vocals_wav).exists() else None
+        song = read_audio(source_wav) if source_wav is not None and Path(source_wav).exists() else None
+        src = song if leadsplit.reads_mix() and song is not None else vocals
+        if src is None:
+            raise RuntimeError("nothing to split: neither the song nor its vocals are there")
+        x, sr = src
+        lead = splitter.lead(x, sr, progress, overlap=min(self.lead_overlap, 2) if device == "cpu" else self.lead_overlap)
+        write_wav(lead_out, lead, sr)
+        _write_differences(lead, sr, vocals, backing_out, song, rest_out)
+
+    def complete_stems(self, sdir: Path) -> None:
+        """A cached lead: the backing (vocals - lead) and the rest (song - lead) it is missing,
+        by subtraction, from whichever of the vocals and the song are there."""
+        backing, rest = sdir / "backing.wav", sdir / "rest.wav"
+        vocals, song = sdir / "vocals.wav", sdir / "source.wav"
+        want_backing = vocals.exists() and not backing.exists()
+        want_rest = song.exists() and not rest.exists()
+        if not (want_backing or want_rest):
+            return
+        lead, sr = read_audio(sdir / "lead.wav")
+        _write_differences(lead, sr, read_audio(vocals) if want_backing else None, backing,
+                           read_audio(song) if want_rest else None, rest)
+
+    def lead_reads_mix(self) -> bool:
+        import leadsplit
+
+        return leadsplit.reads_mix()
+
+    def _gate_separator(self, model: Any) -> None:
+        """Before every segment the separator looks at `self.gate` (a bag of models has several)."""
+        if getattr(model, "_miyoria_gated", False):
+            return
+
+        def before(_module: Any, _args: Any) -> None:
+            if self.gate is not None:
+                self.gate()
+
+        for m in getattr(model, "models", [model]):
+            m.register_forward_pre_hook(before)
+        model._miyoria_gated = True
+
+    # ── the card, as gpu.py sees it ──────────────────────────────────────
+
+    def uses_cuda(self) -> bool:
+        return self._cuda
+
+    def gpu_name(self) -> str:
+        now = device_memory.read()
+        return now.name if now is not None else "cuda"
+
+    def vram(self, peek: bool = False) -> tuple[int, int] | None:
+        """(free, total) MB of the whole device, other applications included (device_memory.py).
+        Without NVML, ``mem_get_info`` is right on Linux and blind on Windows, where not knowing is
+        the better answer. ``peek``: `None` instead of starting CUDA in a worker not using it yet."""
+        now = device_memory.read()
+        if now is not None:
+            return now.free_mb, now.total_mb
+        import torch
+
+        if sys.platform == "win32" or (peek and not torch.cuda.is_initialized()):
+            return None
+        free, total = torch.cuda.mem_get_info()
+        return round(free / 2**20), round(total / 2**20)
+
+    def own_vram_mb(self) -> int:
+        """What this process holds, cache included: part of what is not free, but ours to use."""
+        import torch
+
+        return round(torch.cuda.memory_reserved() / 2**20) if torch.cuda.is_initialized() else 0
+
+    def sync(self) -> None:
+        """Before a step is timed: the work of the last one really ended."""
+        import torch
+
+        if torch.cuda.is_initialized():
+            torch.cuda.synchronize()
+
+    def trim(self) -> None:
+        free_cuda()
+
+    def peak_reset(self) -> None:
+        import torch
+
+        if torch.cuda.is_initialized():
+            torch.cuda.reset_peak_memory_stats()
+
+    def peak_read(self) -> tuple[int, int]:
+        """(reserved, allocated) MB since ``peak_reset``. Reserved is what the card really gave up;
+        allocated is the smaller number the song's ``peak_vram_mb`` has always shown."""
+        import torch
+
+        if not torch.cuda.is_initialized():
+            return 0, 0
+        return round(torch.cuda.max_memory_reserved() / 2**20), round(torch.cuda.max_memory_allocated() / 2**20)
+
     # ── conversion (Seed-VC singing model) ───────────────────────────────
 
     def _load_vc(self) -> Any:
         if self._vc is None:
-            if str(self.seedvc_dir) not in sys.path:
-                sys.path.insert(0, str(self.seedvc_dir))
+            # Both repositories ship a top-level `modules` package: only the chosen one goes on the
+            # path (the chain is fixed for the life of the process).
+            ying = self.voice.startswith("ying")
+            code = self.ying_dir if ying else self.seedvc_dir
+            if str(code) not in sys.path:
+                sys.path.insert(0, str(code))
             from seedvc_runtime import SeedVcSinger
 
-            self._vc = SeedVcSinger(self.seedvc_dir, self.device)
+            if ying:
+                self._vc = SeedVcSinger(self.ying_dir, self.device, ckpt=self.ying_dir / YING_CKPT,
+                                        config=self.ying_dir / YING_CONFIG, cache=self.seedvc_dir / "checkpoints")
+            else:
+                self._vc = SeedVcSinger(self.seedvc_dir, self.device)
         return self._vc
 
     def median_f0(self, mono, sr: int) -> float | None:
@@ -489,23 +809,88 @@ class RealBackend:
         return self._ref_f0
 
     def convert(self, vocals_wav: Path, out_wav: Path, shift: int, progress: Progress,
-                cancelled: Callable[[], bool]) -> None:
+                cancelled: Callable[[], bool], work: ConvertWork | None = None) -> None:
+        self.rvc_error = None
+        if getattr(self, "voice", "") == "rvc":
+            self._convert_rvc(vocals_wav, out_wav, shift, progress, cancelled)
+            return
         try:
             vc = self._load_vc()
+            vc.step_gate = self.gate
             x, sr = read_audio(vocals_wav)
             ref, rsr = self.reference()
             y = vc.convert(x.mean(axis=1), sr, ref, rsr, shift, self.steps, self.cfg_rate,
-                           progress, cancelled, clean=self.f0_clean)
+                           progress, cancelled, clean=self.f0_clean, work=work)
             y = vocal_gate(x.mean(axis=1), y)
-            write_wav(out_wav, y, SR)
         finally:
+            # The model is in a reference cycle (its step hook), so only the collector in `unload`
+            # frees it, and only if nothing here still points at it: on 11-07 an idle worker held
+            # 1.9 GB this way, because an idle process never runs the collector again.
+            vc = None
             if not self.keep:
                 self.unload()
+        if getattr(self, "rvc", False):
+            if cancelled():
+                raise Cancelled()
+            try:
+                y = self._rvc_pass(x.mean(axis=1), y, out_wav.parent)
+            except Exception as e:  # the converted vocal stands on its own
+                self.rvc_error = str(e)
+                log.warning("RVC pass failed, keeping the converted vocal: %s", e)
+        write_wav(out_wav, y, SR)
+
+    def _convert_rvc(self, vocals_wav: Path, out_wav: Path, shift: int, progress: Progress,
+                     cancelled: Callable[[], bool]) -> None:
+        """SING_VOICE=rvc: her RVC model sings the lead itself, moved by ``shift`` (one subprocess,
+        so no progress in between and no letting go of the GPU halfway; it takes well under a minute)."""
+        import librosa
+
+        if cancelled():
+            raise Cancelled()
+        x, sr = read_audio(vocals_wav)
+        src = x.mean(axis=1)
+        if sr != SR:
+            src = librosa.resample(src, orig_sr=sr, target_sr=SR)
+        try:
+            y = self._rvc_pass(src, src, out_wav.parent, pitch=shift)
+        except Exception as e:
+            self.rvc_error = str(e)
+            raise JobError(f"RVC conversion failed: {e}") from e
+        progress(1.0)
+        write_wav(out_wav, y, SR)
+
+    def _rvc_pass(self, source_mono, converted, workdir: Path, pitch: int = 0):
+        """Her RVC model re-sings ``converted`` (rvcpass.py), moved by ``pitch``; back at SR, the
+        source's length, gated like the conversion."""
+        import librosa
+        import numpy as np
+        import rvcpass
+
+        tmp_in, tmp_out = workdir / "rvc_in.wav", workdir / "rvc_out.wav"
+        try:
+            write_wav(tmp_in, converted, SR)
+            rvcpass.run(tmp_in, tmp_out, pitch=pitch)
+            y, rsr = read_audio(tmp_out)
+            y = y.mean(axis=1)
+            if rsr != SR:
+                y = librosa.resample(y, orig_sr=rsr, target_sr=SR)
+            n = len(converted)
+            y = np.pad(y, (0, max(0, n - len(y))))[:n].astype(np.float32)
+            return vocal_gate(source_mono, y)
+        finally:
+            tmp_in.unlink(missing_ok=True)
+            tmp_out.unlink(missing_ok=True)
 
     def unload(self) -> None:
         self._vc = None
         self._demucs = None
+        self._lead = None
         free_cuda()
+
+    def idle(self) -> None:
+        """Between jobs: after a failure the traceback kept the models alive through ``unload``."""
+        if not self.keep:
+            self.unload()
 
     # ── key change of the instrumental ───────────────────────────────────
 
@@ -524,48 +909,6 @@ class RealBackend:
 
         return np.stack([librosa.effects.pitch_shift(x[:, c], sr=sr, n_steps=semitones) for c in range(x.shape[1])],
                         axis=1)
-
-
-class GpuSteps:
-    """``RealBackend``'s GPU stages with paths in: what the GPU child (gpu_child.py) runs."""
-
-    def __init__(self, b: RealBackend) -> None:
-        self.b = b
-
-    def device(self) -> str:
-        return self.b.device
-
-    def peak_vram_mb(self) -> int | None:
-        torch = sys.modules.get("torch")
-        if torch is not None and torch.cuda.is_available():
-            return round(torch.cuda.max_memory_allocated() / 2**20)
-        return None
-
-    def separate(self, source_wav: Path, vocals_out: Path, inst_out: Path, progress: Progress) -> None:
-        self.b.separate(source_wav, vocals_out, inst_out, progress)
-
-    def f0_stats(self, path: Path) -> tuple[float, float] | None:
-        x, sr = read_audio(path)
-        return self.b.f0_stats(x.mean(axis=1), sr)
-
-    def ref_f0(self) -> float | None:
-        return self.b.ref_f0()
-
-    def convert(self, vocals_wav: Path, out_wav: Path, shift: int, progress: Progress,
-                cancelled: Callable[[], bool]) -> None:
-        self.b.convert(vocals_wav, out_wav, shift, progress, cancelled)
-
-
-def make_real_backend() -> RealBackend:
-    """A ``RealBackend`` on the worker's song store (``SING_DATA_DIR`` / ``SING_LIBRARY_DIR``)."""
-    root = Path(os.environ.get("SING_DATA_DIR", Path(__file__).resolve().parent.parent.parent / "data" / "songs"))
-    lib = os.environ.get("SING_LIBRARY_DIR")
-    return RealBackend(Store(root, Path(lib) if lib else None))
-
-
-def make_gpu_steps() -> GpuSteps:
-    """The GPU child's factory (``engine:make_gpu_steps``)."""
-    return GpuSteps(make_real_backend())
 
 
 REF_MAX_S = 25.0  # what the conversion uses of the reference at most
@@ -639,11 +982,16 @@ def rubberband_shift(x, sr: int, semitones: int):
 
 
 def mix_song(vocals_src: Path, vocals_conv: Path, inst_wav: Path, key: int, out_dir: Path, backend: RealBackend,
-             target_lufs: float) -> dict[str, Any]:
+             target_lufs: float, backing_wav: Path | None = None, backing_conv: Path | None = None,
+             backing_src: Path | None = None, instrumental: bool = True) -> dict[str, Any]:
     """Writes mix.wav / vocals.wav / instrumental.wav / play_*.pcm; returns loudness info.
 
-    The converted vocal gets the separated vocal's loudness back (Seed-VC output level varies),
-    the sum is normalised to ``target_lufs`` and kept under -1 dBFS peak.
+    The converted vocal gets the separated vocal's loudness back (the converters' output level
+    varies), the sum is normalised to ``target_lufs`` and kept under -1 dBFS peak. After a lead /
+    backing split ``vocals_src`` is the lead, and the backing voices are either
+    ``backing_wav`` as recorded: they join the instrumental (at their own level, moved by the key
+    with it), which is then what instrumental.wav holds; or ``backing_conv``, converted like the
+    lead: it joins her vocal at ``backing_src``'s level. ``instrumental`` False: her voice alone.
     """
     import numpy as np
 
@@ -652,6 +1000,14 @@ def mix_song(vocals_src: Path, vocals_conv: Path, inst_wav: Path, key: int, out_
     inst, isr = read_audio(inst_wav)
     if isr != sr:
         raise JobError("stems have different sample rates")
+    if not instrumental:
+        inst = np.zeros_like(inst)
+    if backing_wav is not None:
+        b, bsr = read_audio(backing_wav)
+        if bsr != sr:
+            raise JobError("stems have different sample rates")
+        k = min(len(inst), len(b))
+        inst = inst[:k] + b[:k]
     inst = backend.transpose(inst, sr, key)
     v = v.mean(axis=1)
     n = min(len(v), len(inst))
@@ -666,6 +1022,12 @@ def mix_song(vocals_src: Path, vocals_conv: Path, inst_wav: Path, key: int, out_
 
     g = min(4.0, max(0.25, voiced_rms(v_src) / max(voiced_rms(v), 1e-6)))
     v = v * g
+    if backing_conv is not None and backing_src is not None:
+        bc, _ = read_audio(backing_conv)
+        bs, _ = read_audio(backing_src)
+        bc, bs = bc.mean(axis=1)[:n], bs.mean(axis=1)[:n]
+        gb = min(4.0, max(0.25, voiced_rms(bs) / max(voiced_rms(bc), 1e-6)))
+        v[:len(bc)] += bc * gb
     mix = inst + v[:, None]
     lufs = loudness(mix, sr)
     gain = 10 ** ((target_lufs - lufs) / 20) if lufs is not None else 0.25 / max(float(np.sqrt((mix ** 2).mean())), 1e-6)
@@ -684,6 +1046,22 @@ def mix_song(vocals_src: Path, vocals_conv: Path, inst_wav: Path, key: int, out_
         "samples": samples,
         "duration_s": round(samples / PLAY_RATE, 2),
     }
+
+
+def _write_differences(lead, sr: int, vocals: tuple[Any, int] | None, backing_out: Path,
+                       song: tuple[Any, int] | None, rest_out: Path | None) -> None:
+    """``vocals - lead`` into ``backing_out`` and ``song - lead`` into ``rest_out``, for whichever
+    is given (stereo, cut to the shorter)."""
+    for pair, out in ((vocals, backing_out), (song, rest_out)):
+        if pair is None or out is None:
+            continue
+        x, xsr = pair
+        if xsr != sr:
+            raise RuntimeError(f"{out.name}: the stems are at {xsr} Hz, the lead at {sr}")
+        if x.shape[1] == 1:
+            x = x.repeat(2, axis=1)
+        n = min(len(lead), len(x))
+        write_wav(out, x[:n] - lead[:n], sr)
 
 
 def copy_if_missing(src: Path, dst: Path) -> None:

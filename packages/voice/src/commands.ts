@@ -56,14 +56,11 @@ const R = {
 export function joinAnnouncement(policy: ConsentPolicy): string {
   switch (policy) {
     case "opt-out":
-      return (
-        "她會聽這個語音頻道裡的對話。不想被收音的話，請使用 `/voice consent off` " +
-        "或下方的按鈕。"
-      );
+      return "她會聽這個語音頻道裡的對話。不想被收音的話，請使用 `/me` " + "或下方的按鈕。";
     case "opt-in":
       return (
-        "她只會聽已同意的人說話。要讓她聽到你，請使用 `/voice consent on` 或下方的按鈕" +
-        "（可隨時用 `/voice consent off` 取消）。"
+        "她只會聽已同意的人說話。要讓她聽到你，請使用 `/me` 或下方的按鈕" +
+        "（可隨時在 `/me` 取消）。"
       );
   }
 }
@@ -314,7 +311,6 @@ export function registerCommands(
   registry.register(
     commandSpec("voice golive status", "查看 Go Live 的狀態", {
       permission: "voice.golive.view",
-      ephemeral: true,
     }),
     goliveStatus,
     {

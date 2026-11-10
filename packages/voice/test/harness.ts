@@ -90,9 +90,9 @@ export class Harness {
   }
 
   /** Connects and authenticates as `account`. */
-  async node(account: string): Promise<Node> {
+  async node(account: string, capabilities?: string[]): Promise<Node> {
     const node = await this.connect();
-    node.hello(TOKEN, account);
+    node.hello(TOKEN, account, capabilities);
     const welcome = await node.recvJson();
     if (welcome.type !== "welcome" || typeof welcome.session !== "string" || !welcome.session) {
       throw new Error(`expected welcome, got ${JSON.stringify(welcome)}`);
@@ -175,14 +175,28 @@ export class Node {
     this.ws.send(JSON.stringify(value));
   }
 
-  hello(token: string, account: string): void {
+  hello(token: string, account: string, capabilities?: string[]): void {
     this.sendJson({
       type: "hello",
       version: 1,
       token,
       node: "test-node",
       self_account: { platform: "discord", id: account },
+      ...(capabilities ? { capabilities } : {}),
     });
+  }
+
+  /** Every JSON message that arrives within `ms` (audio frames are skipped). */
+  async collect(ms: number): Promise<Array<Record<string, JsonValue>>> {
+    const out: Array<Record<string, JsonValue>> = [];
+    const until = Date.now() + ms;
+    for (;;) {
+      const left = until - Date.now();
+      if (left <= 0) return out;
+      const msg = await this.tryRecv(left);
+      if (msg === null) return out;
+      if (msg.kind === "text") out.push(JSON.parse(msg.text) as Record<string, JsonValue>);
+    }
   }
 
   /** Sends captured audio of `stream` in 20 ms frames. */

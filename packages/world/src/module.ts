@@ -10,6 +10,8 @@ import {
 import { SettingsStoreKey } from "@miyoria/store";
 import {
   type AccountRef,
+  ActivityManagerKey,
+  type ActivitySnapshot,
   type Clock,
   customEvent,
   type Event,
@@ -65,10 +67,12 @@ export class WorldView implements WorldState {
     private readonly signals: () => Signals,
     private readonly clock: Clock,
     private readonly game: () => string | null,
+    /** The ActivityManager's snapshot, when it runs (her own situation comes from it). */
+    private readonly activity: () => ActivitySnapshot | null = () => null,
   ) {}
 
   snapshot(): WorldSnapshot {
-    return this.engine.snapshot(this.clock.now(), this.signals(), this.game());
+    return this.engine.snapshot(this.clock.now(), this.signals(), this.game(), this.activity());
   }
 
   person(account: AccountRef): PersonPresence | null {
@@ -139,7 +143,13 @@ export class WorldModule implements Module {
         return null;
       }
     };
-    const view = new WorldView(engine, signals, clock, game);
+    const view = new WorldView(
+      engine,
+      signals,
+      clock,
+      game,
+      () => ctx.services.get(ActivityManagerKey)?.snapshot() ?? null,
+    );
     ctx.provide(WorldStateKey, view);
     ctx.provide(PresencePrivacyKey, {
       get loaded() {

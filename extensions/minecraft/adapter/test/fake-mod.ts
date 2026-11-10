@@ -12,7 +12,7 @@ export class FakeMod {
   readonly requests: Array<Record<string, unknown>> = [];
   readonly sockets = new Set<WebSocket>();
   token = "secret-token-1234";
-  capabilities = { baritone: true, altoclef: true, screenshot: true };
+  capabilities: Record<string, boolean> = { baritone: true, altoclef: true, screenshot: true };
   hellos = 0;
   respond: Responder = () => ({ ok: true, data: {} });
 

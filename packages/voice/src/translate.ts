@@ -44,21 +44,24 @@ export class SpeechTranslator {
     private readonly log: Logger,
   ) {}
 
-  prepare(text: string): void {
+  prepare(text: string, session?: string): void {
     if (text.trim() === "" || this.#pending.has(text)) return;
     // Already in the target language (she slipped into it): said as it is.
-    this.#keep(text, isIn(this.language, text) === true ? Promise.resolve(text) : this.#run(text));
+    this.#keep(
+      text,
+      isIn(this.language, text) === true ? Promise.resolve(text) : this.#run(text, session),
+    );
   }
 
   /**
    * The reply already said `text` in the target language: no translation call for it. A line
    * that is not in that language after all (she wrote it in Chinese) is ignored.
    */
-  provide(text: string, translation: string): void {
+  provide(text: string, translation: string, session?: string): void {
     if (text.trim() === "" || translation.trim() === "") return;
     if (isIn(this.language, translation) === false) {
       this.log.debug({ text, translation }, "spoken line is not in the target language");
-      this.prepare(text);
+      this.prepare(text, session);
       return;
     }
     this.#pending.delete(text);
@@ -73,9 +76,9 @@ export class SpeechTranslator {
     this.#pending.set(text, translation);
   }
 
-  async translate(text: string, signal?: AbortSignal): Promise<string> {
-    this.prepare(text);
-    const pending = this.#pending.get(text) ?? this.#run(text);
+  async translate(text: string, signal?: AbortSignal, session?: string): Promise<string> {
+    this.prepare(text, session);
+    const pending = this.#pending.get(text) ?? this.#run(text, session);
     this.#pending.delete(text);
     if (!signal) return pending;
     signal.throwIfAborted();
@@ -87,7 +90,11 @@ export class SpeechTranslator {
     ]);
   }
 
-  async #run(text: string): Promise<string> {
+  /**
+   * `session`: the conversation's id. OpenCode often answers 429 for sessions it has not seen
+   * much of (like the provider's fallback), and the voice channel's session is well used.
+   */
+  async #run(text: string, session?: string): Promise<string> {
     try {
       const response = await withLlmTag({ module: "voice", label: "translate" }, () =>
         this.router.complete(this.purpose, {
@@ -95,6 +102,7 @@ export class SpeechTranslator {
           temperature: 0.3,
           max_tokens: 400,
           thinking: false,
+          ...(session !== undefined ? { session } : {}),
         }),
       );
       const out = response.text.trim();

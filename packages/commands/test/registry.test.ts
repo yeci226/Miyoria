@@ -254,8 +254,9 @@ describe("command registry", () => {
     reg.setGroupDescription("admin module", "管理模組");
     expect(reg.groupDescription(["admin", "module"])).toBe("管理模組");
     expect(reg.groupDescription("admin module")).toBe("管理模組");
-    expect(reg.groupDescription("admin")).toBe("管理：模組、權限、她認識的人與記憶");
-    expect(reg.groupInfo("admin")?.member_permission).toBe("manage_guild");
+    expect(reg.groupDescription("admin")).toBe("管理：模組、角色權限、她認識的人與資料");
+    // No Manage Server gate: nodes decide what a member may do in `/admin`.
+    expect(reg.groupInfo("admin")?.member_permission).toBeNull();
     expect(reg.groupDescription("nothing")).toBeUndefined();
   });
 

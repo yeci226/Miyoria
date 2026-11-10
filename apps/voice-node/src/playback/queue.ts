@@ -155,6 +155,26 @@ export class PlaybackQueue {
     e.failsafe.unref?.();
   }
 
+  /** Ducking: sets the volume of a play (0..1) with a ramp. Unknown plays are ignored. */
+  duck(play: number, gain: number, fadeMs: number): void {
+    const e = this.find(play);
+    if (e && !e.stopRequested) e.source.setGain(gain, fadeMs);
+  }
+
+  /**
+   * Holds a play (fading out first). A paused play that never resumes ends by itself, see
+   * {@link SourceOptions.maxPauseMs}.
+   */
+  pause(play: number, fadeMs: number): void {
+    const e = this.find(play);
+    if (e && !e.stopRequested) e.source.pause(fadeMs);
+  }
+
+  resume(play: number, fadeMs: number): void {
+    const e = this.find(play);
+    if (e && !e.stopRequested) e.source.resume(fadeMs);
+  }
+
   /** Drops everything (leaving the channel, connection lost). Active + queued all report `interrupted` (or `failed` with `error`). */
   clear(error?: string): void {
     const all = this.entries.slice();

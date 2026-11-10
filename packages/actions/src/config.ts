@@ -34,10 +34,12 @@ export type TierLimit = z.output<typeof TierLimitSchema>;
  */
 export const ActionsConfigSchema = z.object({
   /**
-   * Start paused (`/admin autonomy resume` lifts it; the runtime choice is remembered). While
-   * paused only commands and the panel may act.
+   * Start with the emergency stop on (`/admin autonomy resume` lifts it; the runtime choice is
+   * remembered). While it is on she does not reply or speak, and only commands and the panel act.
    */
   paused: z.boolean().default(false),
+  /** How long one step of the emergency stop may take before the next one runs. */
+  emergency_step_ms: z.number().int().positive().default(20_000),
   /** Capabilities nobody may use (`"voice.join"`, `"stream.*"`, `"*"`). */
   forbidden: z.array(z.string()).default([]),
   /** Allow her and chat requests to act in another guild than the one they came from. */

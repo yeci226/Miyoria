@@ -65,6 +65,29 @@ export function visibleScopes(
   return scopes;
 }
 
+/**
+ * Whether a memory about someone may be shown to that person alone, on a page of their own, where
+ * there is no channel to scope by. Anything said in a private place belongs to whoever was there:
+ * another account's DM, and a channel outside any guild, stay hidden even when about this person.
+ */
+export function visibleToSelf(
+  scope: MemoryScope,
+  account: AccountRef,
+  person: PersonId | null,
+): boolean {
+  switch (scope.type) {
+    case "global":
+    case "guild":
+      return true;
+    case "channel":
+      return !isPrivate(scope.context);
+    case "dm":
+      return sameAccount(scope.account, account);
+    case "person":
+      return person !== null && scope.person === person;
+  }
+}
+
 /** `visibleScopes` for a prompt request (participants and speakers). */
 export function requestScopes(request: PromptRequest): MemoryScope[] {
   const accounts = [...request.participants.map((p) => p.account), ...request.speakers];

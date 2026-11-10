@@ -6,10 +6,8 @@ import {
   type Event,
   type JsonValue,
   type Mood,
-  MoodSignalsKey,
   PromptContributors,
   PromptContributorsKey,
-  type PromptRequest,
   SelfStateKey,
   toTimestamp,
   type WorldSnapshot,
@@ -18,7 +16,7 @@ import {
 } from "@miyoria/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { selfConfig } from "../src/config.js";
-import { eventDelta, SelfModule, type SelfPrompt, STATE_KEY } from "../src/index.js";
+import { eventDelta, SelfModule, STATE_KEY } from "../src/index.js";
 
 const T0 = Date.parse("2026-11-02T12:00:00.000Z");
 const ctx = { platform: "discord", scope: "g1", channel: "c1", kind: "channel" } as const;
@@ -69,35 +67,25 @@ async function boot(store = new MemorySettingsStore(), clock = new ManualClock()
   const sup = new Supervisor();
   cleanup.push(() => sup.stopAll());
   const contributors = new PromptContributors();
-  const mood: Mood = { valence: 0.1, arousal: 0.4, energy: 0.8 };
+  const baseline: Mood = { valence: 0.1, arousal: 0.4, energy: 0.8 };
   const world = new FakeWorld();
   sup.services.provide("app", SettingsStoreKey, store);
   sup.services.provide("app", PromptContributorsKey, contributors);
-  sup.services.provide("app", MoodSignalsKey, { mood: () => mood });
   sup.services.provide("app", WorldStateKey, world);
-  await sup.register(new SelfModule("p", { clock }), null, true);
+  await sup.register(new SelfModule("p", { clock, baseline }), null, true);
   await sup.startAll();
   const self = sup.services.require(SelfStateKey);
   return { sup, store, clock, contributors, self, world };
 }
 
-const request = (participants: PromptRequest["participants"] = []): PromptRequest => ({
-  profile: "p",
-  turn: "t",
-  context: ctx,
-  participants,
-  speakers: [],
-  query: "",
-  recent: [],
-  voice: false,
-  now: toTimestamp(T0),
-});
-
 describe("self module", () => {
   it("serves the snapshot with her mood and persists policy and agenda changes", async () => {
     const h = await boot();
     const snap = h.self.snapshot();
-    expect(snap.mood).toEqual({ valence: 0.1, arousal: 0.4, energy: 0.8 });
+    // The mood is derived (baseline, the hour, her emotions and drives), not stored.
+    expect(snap.mood?.valence).toBeCloseTo(0.1, 2);
+    expect(snap.mood?.arousal).toBeCloseTo(0.4, 2);
+    expect(snap.mood?.energy).toBeCloseTo(0.8, 2);
     expect(snap.drives.social).toBeCloseTo(0.3);
     h.self.setTalkativeness("discord:g1:c1", { level: 0.8, forMs: 60_000, why: "熱鬧" });
     const item = h.self.addAgenda({ text: "等 Owen 上線" });
@@ -130,7 +118,9 @@ describe("self module", () => {
     expect(second.self.feelings().map((f) => f.person)).toEqual(["person-1"]);
     // Empty text deletes.
     expect(await second.self.setFeeling("person-1", " ", "panel")).toBeNull();
-    expect(await store.get("p", "self:feeling:person-1")).toBeNull();
+    // The person's card stays (only the feeling text goes).
+    expect(await store.get("p", "self:feeling:person-1")).toMatchObject({ text: "" });
+    expect(second.self.feeling("person-1")).toBeNull();
   });
 
   it("is satisfied by what happens on the bus", async () => {
@@ -203,53 +193,18 @@ describe("eventDelta", () => {
   });
 });
 
-describe("self prompt", () => {
-  it("describes strong drives, the policy here, due agenda and feelings of who is present", async () => {
+describe("prompt", () => {
+  it("contributes no prompt sections: the agent renders her state from the services", async () => {
     const h = await boot();
-    const prompt = h.contributors.all().find((c) => c.key === "self") as SelfPrompt;
-    expect(prompt.key).toBe("self");
-    // Nothing notable yet.
-    expect(await prompt.contribute(request())).toEqual([]);
-
-    h.self.adjust({ social: 0.6, boredom: 0.6 }, "test");
-    h.self.setTalkativeness("discord:g1", {
-      level: 0.8,
-      until: "2026-11-02T13:30:00Z",
-      why: "大家在玩遊戲很熱鬧",
-    });
-    h.self.addAgenda({ text: "等 Owen 上線問他報告結果" });
-    h.self.addAgenda({ text: "明天再說", due: "2026-11-03T00:00:00Z" });
-    // On hold (its action failed): not pushed in conversations.
-    const held = h.self.addAgenda({ text: "過來陪我玩麥塊" });
-    h.self.blockAgenda(held.id, { capability: "game.start", reason: "Minecraft 還沒開" });
-    await h.self.setFeeling("person-1", "他昨天沒理我,有點不爽", "self");
-    const [section] = await prompt.contribute(
-      request([
-        { account: { platform: "discord", id: "1" }, display_name: "Owen", person: "person-1" },
-        { account: { platform: "discord", id: "2" }, display_name: "Bob", person: null },
-      ]),
-    );
-    expect(section).toMatchObject({ key: "self", title: "你的內在", order: 35 });
-    expect(section?.body.split("\n")).toEqual([
-      "你現在很無聊、很想跟人聊天。",
-      "你給自己定的方針:在這裡想多聊一點(大家在玩遊戲很熱鬧),到 21:30。",
-      "你打算做的事:",
-      "- 等 Owen 上線問他報告結果",
-      "你對在場的人的感覺:",
-      "- Owen:他昨天沒理我,有點不爽",
-      "(這是你自己的狀態,自然地影響語氣就好,不用說出來。)",
-    ]);
+    expect(h.contributors.all()).toEqual([]);
   });
 
-  it("can be turned off", async () => {
+  it("still loads an old `prompt = false`", async () => {
     const sup = new Supervisor();
     cleanup.push(() => sup.stopAll());
-    const contributors = new PromptContributors();
-    sup.services.provide("app", PromptContributorsKey, contributors);
     await sup.register(new SelfModule("p"), { prompt: false }, true);
     await sup.startAll();
-    expect(contributors.all()).toEqual([]);
-    // Works without a store, mood or world.
-    expect(sup.services.require(SelfStateKey).snapshot().mood).toBeNull();
+    // Works without a store or world (the mood is derived, so it is always there).
+    expect(sup.services.require(SelfStateKey).snapshot().mood).not.toBeNull();
   });
 });

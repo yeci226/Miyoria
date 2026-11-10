@@ -3,14 +3,24 @@ import {
   errorMessage,
   type Module,
   type ModuleContext,
+  presentKeys,
   type ServiceLookup,
   withTimeout,
 } from "@miyoria/kernel";
 import { completeJson, LlmRouterKey, systemMessage, userMessage, withLlmTag } from "@miyoria/llm";
 import { SettingsStoreKey } from "@miyoria/store";
 import {
+  ACTIVITY_CHANGED_TOPIC,
+  ACTIVITY_DONE_TOPIC,
+  ACTIVITY_FAILED_TOPIC,
+  AFFECT_CHANGED_TOPIC,
   type Clock,
+  customEvent,
+  DIRECTIVE_CHANGED_TOPIC,
   dataBlock,
+  GOAL_TOPIC,
+  GoalAgendaKey,
+  type JsonValue,
   MindKey,
   newId,
   type ProfileId,
@@ -19,7 +29,8 @@ import {
   type ThoughtDigest,
 } from "@miyoria/types";
 import { z } from "zod";
-import { type MindConfig, MindConfigSchema } from "./config.js";
+import { DEPRECATED_MIND_KEYS, type MindConfig, MindConfigSchema } from "./config.js";
+import { GoalBook } from "./goals.js";
 import { type Condense, intentCounts, Journal, ruleDigest } from "./journal.js";
 import { MindLoop } from "./mind.js";
 
@@ -28,7 +39,10 @@ const STORE_TIMEOUT_MS = 5_000;
 export interface MindModuleOptions {
   /** Her display name. */
   name?: string;
-  /** Her persona prompt; looked up on every thought (the agent's live persona when it runs). */
+  /**
+   * Her persona (`PersonaHandle.corePrompt()`, the agent's live one when it runs); looked up on
+   * every call, and only its 3–5 sentence character core is used.
+   */
   persona?: (services: ServiceLookup) => string;
   /** Replaces the time source (default: the module context's clock). */
   clock?: Clock;
@@ -37,39 +51,44 @@ export interface MindModuleOptions {
 /** Bus topics the mind follows. */
 export const MIND_TOPICS = [
   "platform.ready",
+  "platform.message.created",
   SALIENT_TOPIC,
   "agent.turn.completed",
   "agent.decision",
   "gate.decision",
   "voice.joined",
-  "voice.left",
   "voice.participants",
   "voice.utterance",
-  "voice.playback",
   "llm.budget",
-  // Game adapters publish while the game runs: a failed game action may work now.
-  "game.*",
+  // What she is doing (the one owner of it): a game coming up, an activity ending.
+  ACTIVITY_CHANGED_TOPIC,
+  ACTIVITY_DONE_TOPIC,
+  ACTIVITY_FAILED_TOPIC,
+  AFFECT_CHANGED_TOPIC,
+  DIRECTIVE_CHANGED_TOPIC,
 ];
 
 /**
- * Module `mind`: her inner monologue. Wakes on `world.salient`, an adaptive heartbeat, the end
- * of her turns, a voice channel going quiet and suggestions (`MindKey.suggest`, e.g. from
- * initiative); asks the `mind` purpose what she thinks, applies it to her inner state
- * (`SelfStateKey`; affinity only as hints through social's daily caps) and hands her intents to
- * the agent (`IntentSinkKey`), where the gate decides. Keeps her thought journal (settings
- * `mind:thought:<id>`) and publishes `mind.thought`. Paused with autonomy.
+ * Module `mind`: her Deliberate calls. Appraise after an interaction segment ends (into
+ * `AffectStateKey`); Plan on goal triggers, activity ends, salient changes, her mood dropping,
+ * suggestions (`MindKey.suggest`) and an adaptive heartbeat, producing goal changes and
+ * impulses for the Arbiter (`ArbiterKey`; until it runs, intents for the agent's
+ * `IntentSinkKey`). Provides her goals (`GoalAgendaKey`, settings `mind:goal:<id>`, topic
+ * `plan.goal`) and `MindKey`; keeps her thought journal (settings `mind:thought:<id>`) and
+ * publishes `mind.thought`. Paused with autonomy.
  */
 export class MindModule implements Module {
   static readonly ID = "mind";
   readonly manifest = defineManifest(MindModule.ID, "Mind", {
-    description: "Her inner monologue: thoughts, feelings, policy, agenda and intents",
+    description: "Her Deliberate calls: Appraise, Plan, her goals and the impulses she acts on",
     requires: ["llm"],
-    optional: ["self", "world", "agent", "actions", "social", "memory"],
+    optional: ["self", "world", "agent", "actions", "social", "memory", "activity", "arbiter"],
     configSchema: MindConfigSchema,
   });
   readonly #profile: ProfileId;
   readonly #options: MindModuleOptions;
   #journal: Journal | null = null;
+  #goals: GoalBook | null = null;
 
   constructor(profile: ProfileId, options: MindModuleOptions = {}) {
     this.#profile = profile;
@@ -78,6 +97,13 @@ export class MindModule implements Module {
 
   async start(ctx: ModuleContext): Promise<void> {
     const config = ctx.config(MindConfigSchema);
+    const gone = presentKeys(ctx.rawConfig, DEPRECATED_MIND_KEYS);
+    if (gone.length > 0) {
+      ctx.log.warn(
+        { keys: gone },
+        "[modules.mind] keys are deprecated and ignored: quiet hours are [modules.arbiter], a quiet voice channel is [modules.world] voice_quiet_secs",
+      );
+    }
     const store = ctx.services.get(SettingsStoreKey) ?? null;
     const journal = new Journal(
       store,
@@ -102,6 +128,28 @@ export class MindModule implements Module {
       }
     }
     this.#journal = journal;
+    const goals = new GoalBook({
+      store,
+      profile: this.#profile,
+      clock: this.#options.clock ?? ctx.clock,
+      maxDays: config.goal_max_days,
+      defaultDays: config.goal_default_days,
+      publish: (goal) =>
+        ctx.publish(customEvent(GOAL_TOPIC, JSON.parse(JSON.stringify(goal)) as JsonValue)),
+    });
+    if (store) {
+      try {
+        const loaded = await withTimeout(
+          goals.load().then(() => true),
+          STORE_TIMEOUT_MS,
+        );
+        if (loaded === undefined) ctx.log.warn("loading her goals timed out");
+      } catch (error) {
+        ctx.log.warn({ err: errorMessage(error) }, "cannot load her goals");
+      }
+    }
+    this.#goals = goals;
+    ctx.provide(GoalAgendaKey, goals);
     const persona = this.#options.persona;
     const loop = new MindLoop({
       config,
@@ -113,6 +161,8 @@ export class MindModule implements Module {
       publish: (e) => ctx.publish(e),
       log: ctx.log,
       journal,
+      goals,
+      store,
     });
     ctx.provide(MindKey, loop);
     const sub = ctx.subscribe(MIND_TOPICS);
@@ -130,7 +180,9 @@ export class MindModule implements Module {
 
   async stop(): Promise<void> {
     await this.#journal?.settle();
+    await this.#goals?.flush();
     this.#journal = null;
+    this.#goals = null;
   }
 }
 

@@ -32,6 +32,7 @@ def asr(monkeypatch):
     monkeypatch.setitem(sys.modules, "asr_server_under_test", server)
     spec.loader.exec_module(server)
     server.make_backend = StubBackend
+    server.device_memory = None  # the real card has nothing to do with these stubs
     server.decode_wav = lambda data: ([0.0] * 4800, 300)  # no soundfile in the test venv
     with TestClient(server.app) as client:
         yield client, server
@@ -94,3 +95,20 @@ def test_an_offload_does_not_wait_behind_queued_requests(asr):
         t.join(10)
     assert took < 1.5  # one running transcription at most, not all six
     assert results.count(503) >= 4
+
+
+def test_busy_counts_clips_being_transcribed(asr):
+    client, server = asr
+    seen = []
+    backend = server.state.backend
+    transcribe = backend.transcribe
+
+    def spying(x, language, prompt):
+        seen.append(server.state.busy)
+        return transcribe(x, language, prompt)
+
+    backend.transcribe = spying
+    assert client.get("/busy").json() == {"busy": 0}
+    assert post(client).status_code == 200
+    assert seen == [1]
+    assert client.get("/busy").json() == {"busy": 0}

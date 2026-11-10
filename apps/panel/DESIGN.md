@@ -1,18 +1,21 @@
-# Miyoria panel — design system
+# Miyoria panel: design system
 
-Operate-mode admin UI in the owner's chosen register: Vercel-dashboard minimal, dark only,
-Geist, shadcn/ui (new-york, neutral). The owner glances at it beside Discord, OBS and a
-terminal on a streaming desk at night. Brand lives in one precise detail — the DeepSeek-blue
-accent on focus, selection, "her", her chart series and the crescent mark — never in decoration.
+Operate-mode admin UI, dark only, in the direction the owner approved on 2026-11-07
+(`docs/design/v3-architecture.md` §17): a restrained operating tool of see-through dark glass over
+a real picture, layered by surface weight. The owner glances at it beside Discord, OBS and a
+terminal on a streaming desk at night. Reference points are the AIRI site and Vercel Geist.
 
-"Vercel style" is the palette only. The panel is detailed on purpose: every page leads with
-state, then trends drawn as charts, then the controls that change them, and anything that has
-detail (an LLM call, a thought) opens in full with nothing left out.
+The panel stays detailed on purpose: every page leads with state, then trends drawn as charts,
+then the controls that change them, and anything that has detail (an LLM call, a thought) opens in
+full with nothing left out.
 
-Tokens: `src/index.css` (`:root` variables + Tailwind v4 `@theme inline`). Primitives:
-`src/components/ui/*` (shadcn, Radix per component). App components: `src/components/*`.
-Charts: `src/components/charts/*` (hand-drawn SVG, no chart library). Chart blocks over the
-Core's telemetry: `src/components/trends.tsx`.
+Tokens: `src/index.css` (`:root` variables + Tailwind v4 `@theme inline`). Appearance store:
+`src/app/appearance.ts`. Primitives: `src/components/ui/*` (shadcn, Radix per component). App
+components: `src/components/*`. Charts: `src/components/charts/*` (hand-drawn SVG, no chart
+library). Chart blocks over the Core's telemetry: `src/components/trends.tsx`.
+
+The same app is also the public site (`src/pages/public/`), for people without panel access. See
+"Public site" below; everything here applies to it unless that section says otherwise.
 
 ## Rules the owner set
 
@@ -21,105 +24,204 @@ Core's telemetry: `src/components/trends.tsx`.
 - No "原因:" / "來源:" prefixes; a column header says what the cell is.
 - Every control does something the Core can do; nothing planned, nothing dead. Live controls
   go through the Core's actuator gate as the panel (principal `panel`), never around it.
+- Never invented data. A feature waiting on backend work stays out of the panel.
+- Rejected, not to return: oversized headings, big-number tiles, soft-shadow rounded cards,
+  floating panels, glow, gradient text, more than two accents, a kicker above a heading.
 
-## Color (OKLCH, neutral, no tint)
+## Surfaces
 
-| Role | Token | Value |
+Depth comes from how heavy a surface is, back to front. There are no floating panels in the
+page: the frame and the content are flush with the window and with each other.
+
+| Layer | Class | Default | Holds |
+|---|---|---|---|
+| Picture | `.backdrop` | `brightness(.66)`, blur 0 | The chosen background, fixed behind everything. Only 總覽 leaves an opening onto it |
+| Content | `.glass-sheet` | `rgba(9,10,16,.105)`, `blur(7px) saturate(1.5) brightness(.68)` | The page itself (`Page`) |
+| Frame | `.glass-dock` | `rgba(9,9,15,.31)`, `blur(14px) saturate(1.4) brightness(.78)` | Sidebar, header, tab row, right rail |
+| Band | `.glass-well` | `rgba(4,5,10,.29)` | Darker strips inside the content: scene switch, fields, segmented controls |
+| Overlay | `.glass-float` | `rgba(15,15,21,.84)`, `blur(20px)`, 1 px line, `0 12px 32px` shadow | Popover, Dialog, Sheet, Select, DropdownMenu, Tooltip, toast |
+
+Two surfaces with `backdrop-filter` must be siblings, never nested: a nested one only sees its
+parent. That is why the tab row and the right rail sit beside `Page`, not inside it.
+
+Blocks are separated by spacing and a heading, rows by a hairline. Nothing is boxed into equal
+cells. A `Card` is only a named section now: no border, no fill, no radius.
+Inside an overlay, lists and code blocks keep a hairline outline, because the overlay has no block
+titles to hold them apart.
+
+Text on the content surface carries `0 1px 2px` shadow and a lighter `--muted-foreground`
+(`#dedce4`), because the picture shows through. At the defaults primary text is about 5:1 at the
+brightest part of a picture and secondary text about 4:1. Raising see-through lowers this, so the
+controls exist and the owner decides. Solid controls drop the text shadow.
+
+The login screen is the one card in the panel, two columns (shadcn `login-04`): the form on overlay
+glass and a clear pane that lifts the picture behind it, so it follows the chosen background. Under
+`md` the pane goes and the form stands alone.
+
+## Appearance
+
+Header icon button, a `.glass-float` popover. Everything is applied as variables on `<html>` before
+the first paint and kept per browser: settings in `localStorage` (`miyoria.panel.look`, every field
+clamped on read), the owner's picture in IndexedDB (`miyoria-panel`). Never a light theme.
+
+| Setting | Range, default | Does |
 |---|---|---|
-| Page | `--background` | 0.135 (≈ #0a0a0a) |
-| Sidebar | `--sidebar` | 0.115, `--sidebar-border` white 8% |
-| Card | `--card` | 0.16 |
-| Popover / dialog / sheet | `--popover` | 0.175 |
-| Hover / selected | `--accent` 0.225, `--muted` 0.20 |
-| Lines | `--border` white 9%, `--input` white 13% |
-| Text | `--foreground` 0.96, `--muted-foreground` 0.71 (≥ 7:1 on page) |
-| Primary button | `--primary` near-white with dark text (Vercel) |
-| Brand | `--brand` / `--ring` DeepSeek blue (h 267): focus ring, switch on, "她", selected scene, chart series 1 |
-| State | `--success` (h 155), `--warning` (h 78), `--destructive` (h 25) — state only |
+| 背景亮度 | 30 to 100, 66 | `--bg-brightness` |
+| 背景模糊 | 0 to 24 px, 0 | `--bg-blur` |
+| 玻璃模式 | on | Off makes every surface an opaque dark colour and drops `backdrop-filter`, for clarity or to save GPU |
+| 元件模糊 | 0 to 24 px, 7 | `--blur`; the frame takes twice this. 0 saves GPU while TTS runs |
+| 元件深色遮罩 | 0 to 100, 35 | One dial for content, frame and band, the mock's formula with `t = 1 - mask / 100` |
+| 配色 | 櫻花 | Paired themes (below). The two accents are never chosen separately: most free pairs break the charts |
+| 密度 | 標準 | 緊湊 tightens rows, sections and the sidebar through `--row-y`, `--stage-gap`, `--nav-h` |
+| 背景 | 預設圖 | A gallery of thumbnails: 預設圖, 純色, 漸層, a picture the viewer adds |
 
-Badges are tinted: `bg-<state>/10`, `border-<state>/25`, text in the state hue. No gradients,
-no glow, no glass except the sticky header's and the chart tooltip's backdrop blur.
+The default background is the owner's picture, `public/background.local.jpg`. It is game art, so it
+is ignored by git and never ships; where the file is missing the 暮色 gradient shows instead. The
+login card's right half shows `public/login.local.jpg` the same way, at 82% over the frosted
+backdrop, beside a lighter glass (`--login`) than the floating surfaces.
+
+## Color
+
+Two accents, everything else neutral. Coloured controls are always solid.
+
+| Role | Token | 櫻花 value | Used for |
+|---|---|---|---|
+| Base | `--background` | `#0b0d12` | Behind the picture |
+| Text | `--foreground` | `#f1f0f4` | |
+| Secondary text | `--muted-foreground` | `#b3b1bc`, lighter per surface | |
+| Primary | `--primary` | `#f29dc4`, ink `#1f1218` | The page's main action, selected scene, live and speaking dots, sliders, focus, the selected nav icon, anything that needs attention |
+| Secondary | `--secondary` | `#7355e8`, ink white | Block-level actions, segmented controls |
+| Secondary line | `--secondary-line` | Mixed from secondary, `#a78bfa`-like | Meters, single-series charts |
+| Neutral | `--control`, `--control-hover`, `--hover` | White 10%, 17%, 7% | Row actions, the current nav item, every other control |
+| Lines | `--border`, `--line-strong` | White 11%, 20% | Hairlines |
+| Exception | `--stop` | `#d6373f` | The emergency stop. Nothing else is red |
+
+| Theme | Primary | Secondary | Chart 1 | Chart 2 |
+|---|---|---|---|---|
+| 櫻花 | `#f29dc4` | `#7355e8` | `#d9609a` | `#8a68ee` |
+| 夕陽 | `#f5a68c` | `#4a6ad8` | `#d9744f` | `#5a7fe0` |
+| 薄荷 | `#8fe0c8` | `#4a6ad8` | `#2f9e84` | `#5a7fe0` |
+| 海潮 | `#f5a68c` | `#0c7f7a` | `#d9744f` | `#169e97` |
+
+State has no colours of its own. `Tone` stays semantic and each tone has a shape as well as a
+colour, and always a label:
+
+| Tone | Dot | Badge |
+|---|---|---|
+| `neutral` | Dim | Neutral tag |
+| `success` | Light neutral | Neutral tag, bright text |
+| `brand` | Solid primary | Neutral tag, primary text |
+| `warning` | Hollow primary ring | Primary outline |
+| `danger` | Solid primary | Solid primary |
+
+Live is `brand`, never red. Errors read in the primary colour, with their words. Diffs mark added
+lines with the secondary line and removed lines with the primary, and keep `+` and `−`.
 
 ### Chart colors
 
-Series take `--chart-1..5` in this fixed order, never cycled: her blue (= brand), orange
-`#d95926`, aqua `#199e70`, yellow `#c98500`, magenta `#d55181`. Validated with the dataviz
-validator on the card surface: adjacent pairs pass CVD (worst ΔE 8.4) and normal vision
-(worst 19.3); the first three pass for all pairs, so scatter-like charts stop at three.
-`--chart-quiet` (gray 0.42) is "nothing came of it" / "other". Gridlines `--chart-grid`
-(white 6%), baselines and crosshairs `--chart-axis` (white 16%). Status colors appear in a
-chart only when the value is a state (module states, intent outcomes), always with a label.
+Single series use `--chart-line` (the secondary line). Categories take `--chart-1..5` in this fixed
+order, never cycled: the theme's chart 1, chart 2, a light neutral `#c9c8d1`, then a deeper step of
+chart 1 and of chart 2. `--chart-quiet` (white 22%) is "nothing came of it" / "other". Gridlines
+`--chart-grid`, baselines and crosshairs `--chart-axis`. `--chart-surface` is the ring around a
+hovered point.
+
+Validated with the dataviz validator for all four themes on the glass (`#14151f`): adjacent pairs
+pass CVD (worst ΔE 10.1) and normal vision (worst 18.7), and the first three hold for all pairs, so
+scatter-like charts stop at three. The neutral is lighter than the mock's `#8b8994` because that
+gray failed CVD against chart 1 (ΔE 2.8 for deutan). On the brightest part of a picture
+(`#3a3b47`) chart 2 can fall just under 3:1, which the legend and the hidden table cover.
 
 ## Type
 
 Geist Variable (`@fontsource-variable/geist`) with a CJK fallback stack: PingFang TC,
 Microsoft JhengHei UI, Noto Sans TC. Geist Mono only for ids, topics, JSON, tokens, model
-names, latencies, axis ticks and diffs. Scale: 11 (ticks) / 12 / 13 / **14 body** / 16 (section
-heading) / 24 (page title and chart headline values, semibold, tracking-tight). Columns of
-numbers use `tabular-nums`; standalone headline values keep proportional figures.
+names, latencies, axis ticks and diffs. Scale: 11 (ticks) / 12 / 13 / **14 body** / 15 (block
+title, semibold) / 24 (總覽's opening line and chart headline values, semibold). Inside blocks and
+in the right rail titles are 13. Figures are tabular across the panel.
 
 ## Layout
 
-- Shell: shadcn `Sidebar` (15 rem, collapses to 3.25 rem icons, `⌘/Ctrl+B`; off-canvas
-  sheet below `md`). Ten items: 總覽 · 動態 · 直播 · 角色 · 內心 · LLM · 系統 · 權限 · 資料 · 設定. A pulsing red
-  dot on 直播 while she is live, a count on 內心 while approvals wait. Footer: one status dot
-  for Core + event stream (tooltip: version, stream state, host), the Discord user (or "Admin
-  token") and logout.
-- Sticky 48 px header: sidebar trigger, a "自主行動已暫停" pill while her autonomy is stopped,
-  and the ⌘K search button (no title echo).
-- Page: `max-w-6xl`, 32 px padding (16 px on phones), 24 px between blocks. Header row =
-  title + actions (緊急停止 lives here on 總覽 and 直播). Sub-areas are underlined `Tabs` bound
-  to `?tab=`. A section heading (16 px semibold) sits on its own row with the range toggle.
-- Cards: 1 px border, radius 8 px, header row 48 px with title left, actions right
-  (`CardAction`). Tables sit flush in cards; first/last cell 16 px padding.
-- Now strip (總覽): seven cells in one bordered strip with 1 px gaps — 她 · 語音 · 直播 · 場景 ·
-  唱歌 · 遊戲 · 佇列, label 12 px muted, value 14 px medium with a state dot.
-- Chart blocks (`ChartBlock`): title 13 px muted, headline value 24 px semibold with its unit
-  and one muted aside, legend, then the plot. Two per row from `lg`, one below.
-- Small multiples (`Facets`): one 56 px line per measure in a 1 px-gap grid (5 columns on
-  `xl`, 3 on `sm`, 2 on phones), one shared crosshair, the hovered value in each header.
-- 直播: a two-column control deck — 畫面 (OBS stream, scenes as a radio grid, expressions as
-  chips), 歌單, 請求佇列, 場景用途 on the left; 語音 (join / leave / Go Live), 讓她說, 遊戲,
-  聊天等級 (with a per-channel mute) on the right.
+Navigation is four levels, each visible at once:
 
-- LLM (`/llm`): 概況 (a six-cell KPI strip — calls, cost, tokens, cache hit, error rate,
-  first-token p50/p95 — cost and tokens per hour, tables per purpose, model with its price,
-  and module, the latency distribution, finish reasons and error kinds, the costliest and
-  slowest calls), 呼叫 (the call inspector: filters in one row — search, purpose, model,
-  module, status, time, "only calls that had trouble" — a dense table, load more), 價格與用量
-  (the `[llm.pricing]` table, models seen without a price in red, spend, telemetry trends).
-- Detail sheets (`sm:max-w-3xl`): an LLM call (facts, time and usage cells, the cost line by
-  line at the price charged, fallbacks and retries, the model's reasoning, the response, every
-  message with role, length and copy; long texts fold) and a thought (why, what she thought,
-  the reasoning, every change, each intent's lifecycle as a timeline with gate decisions and
-  what she said, what she saw, her LLM calls). The sheet is in the URL (`?call=`,
-  `?thought=`), so a call links to its thought and a thought to its calls.
+| Level | Where |
+|---|---|
+| Group | Sidebar labels: 現場 (總覽, 直播, 動態), 她 (內心, 角色), 運作 (LLM, 系統), 管理 (權限, 資料, 設定) |
+| Page | Sidebar items; the header shows `分類 / 頁面` |
+| Tab | The underlined row under the header, from `nav.ts` |
+| Block | Block title 15, inner title 13, rail title 13 |
+
+- Sidebar: 13 rem, flush to the left edge, collapses to 3.25 rem icons (`⌘/Ctrl+B`). Top down: the
+  mark, her name and current state, search (`Ctrl K`), the groups, then connection and account. The
+  selected item is a neutral fill with the icon in the primary colour. A primary dot on 直播 while
+  she is live, a count on 內心 while approvals wait.
+- Below `md` the sidebar becomes a row across the top: the mark and a horizontally scrolling list
+  of pages. Groups, her state and the search box fold away; search stays as an icon in the header.
+- Header: 60 px, flush. Sidebar toggle, `分類 / 頁面`, the page's own tags and actions (a portal
+  from `PageHeader`), "自主行動已暫停" while her autonomy is stopped, then the appearance button and
+  緊急停止, which is in the header on every page. On 總覽 it has no surface until the page scrolls.
+- 總覽 alone opens on the picture: her state in one 24 px line and the now strip over a soft
+  scrim. Every other page starts at the content directly.
+- Page: `Page` is the content surface, 28 px padding (16 px on phones), `--stage-gap` (32 px)
+  between blocks. `Page rail={...}` adds the right rail (19.5 rem, under the content below 1180 px).
+  A rail holds things to act on, and only pages with real content for it have one: 總覽 (needs
+  attention, voice, say, spend, modules), 直播 (voice, say, game, channel levels), the public site
+  for someone logged in (點歌, 你的資料). Rail blocks are split by hairlines.
+- Rows: hairlines, `--row-y` vertical padding, no horizontal inset, so rows align with block titles.
+- Chart blocks (`ChartBlock`): title 13 muted, headline value 24 semibold with its unit and one
+  muted aside, legend, then the plot. Two per row from `lg`, one below.
+- Small multiples (`Facets`): one 56 px line per measure with spacing between (5 columns on `xl`,
+  3 on `sm`, 2 on phones), one shared crosshair, the hovered value in each header.
+- Strips of facts (now strip, LLM figures, voice latency): label over value, spaced, no cell walls.
+- 直播: the scene switch is a `.glass-well` band, the selected scene solid primary.
+- LLM (`/llm`): 概況, 呼叫 (the call inspector), 價格與用量. Detail sheets (`sm:max-w-3xl`) for an
+  LLM call and a thought live in the URL (`?call=`, `?thought=`), so one links to the other.
+
+## Public site
+
+What `/` shows to anyone who is not an admin. `App.tsx` picks it after `GET /api/auth/session`
+answers 401 and `GET /api/public/status` answers; the admin shell, its router and its event stream
+are never mounted, so nothing there can call an admin route. Without a public side on the Core
+(`[modules.api.public] enabled = false`, or an older Core) the login screen shows as before. The
+token form stays at `#/login`, with no link to it from the page.
+
+| Who | Sees |
+|---|---|
+| Anyone | 現在, 今天, 歌單, and a Discord login button |
+| Logged in | Also 她眼中的你, 一起的回憶, 你點的歌, and a rail with 點歌 and 你的資料 |
+| Someone she does not know, or a blocked person | The same page, "她還不認識你", no 點歌. The two cannot be told apart |
+
+- Frame: a `.glass-dock` header like the shell's: the mark, her name, her state, then login or the
+  person and 登出. No sidebar, no navigation.
+- Content: `Page` straight away. There is no opening on the picture; that stays 總覽's.
+- 現在, 今天 and the bands of 她眼中的你 are strips of facts, label over value, at 14. Never tiles.
+- Words, not numbers, for anything she feels: 好感, 信任 and 熟悉 arrive as bands from the Core.
+- No ranking of people, anywhere.
+- 請她忘記我 confirms with what goes and what stays, in the words `/me memory forget` uses.
 
 ## Charts
 
 `TimeChart` (lines, optional 10% area wash, crosshair + one tooltip listing every series,
 arrow keys move it), `ColumnChart` (stacked columns ≤ 24 px with a 4 px rounded data end, 2 px
-surface gaps between segments, hovered column stays, others dim to 45%), `Facets`,
-`SegmentBar` (one 100% bar with counts in the legend), `BarList` (horizontal bars, largest
-first). Every chart has a legend from two series up, never colors text, and carries a
-visually hidden table of its values. Time axes tick on round local times. Ranges: 1 小時 /
-6 小時 / 24 小時 (`Segmented`), remembered per browser. Telemetry comes from
-`GET /api/telemetry` (one sample a minute, a day in memory); a Core without it shows one line
-at the chart's height instead.
+gaps between segments, hovered column stays, others dim to 45%), `Facets`, `SegmentBar` (one 100%
+bar with counts in the legend), `BarList` (horizontal bars, largest first). Every chart has a
+legend from two series up, never colors text, and carries a visually hidden table of its values.
+Time axes tick on round local times. Ranges: 1 小時 / 6 小時 / 24 小時 (`Segmented`), remembered
+per browser. Telemetry comes from `GET /api/telemetry` (one sample a minute, a day in memory); a
+Core without it shows one line at the chart's height instead.
 
 ## Components
 
-Button (default / outline / secondary / ghost / destructive / link; sizes sm, default, icon,
-icon-sm; `busy` spinner; `writes` disables with the read-only hint), Badge (outline, secondary,
-success, warning, destructive, brand), StatusBadge / StateBadge / Dot, Meter / Bipolar,
-`Segmented` (radio group of short options), Card, Tabs, Table + `DataTable` (TanStack Table;
-global filter, sortable headers via `enableSorting`), `RowActions` (⋯ DropdownMenu at row
-end), Select, Switch, Checkbox, Slider, Input / Textarea, Field (label + control + error),
-Dialog (forms, persona edit → diff → save), AlertDialog via `ConfirmDialog` (stays open on
-failure), Sheet (details: event, decision, person, MCP tools), Command palette (pages,
-people, modules), Popover + Command combobox (person picker), Tooltip, Sonner toasts (success
-/ error with the Core's message), Skeleton rows, `DiffView`, `JsonView`, `Facts`,
-`EmergencyStop`, `NowStrip`. Icons: lucide 16 px.
+Button (default = primary / secondary / outline = neutral / ghost / link / stop; sizes sm, default,
+icon, icon-sm; `busy` spinner; `writes` disables with the read-only hint). `stop` is the emergency
+stop's alone. Badge (outline, secondary, success, warning, destructive, brand), StatusBadge /
+StateBadge / Dot, Meter / Bipolar, `Segmented` (radio group of short options), Card (a named
+section), Tabs, Table + `DataTable` (TanStack Table; global filter, sortable headers via
+`enableSorting`), `RowActions` (⋯ DropdownMenu at row end), Select, Switch, Checkbox, Slider,
+Input / Textarea, Field (label + control + error), Dialog (forms, persona edit → diff → save),
+AlertDialog via `ConfirmDialog` (stays open on failure), Sheet (details: event, decision, person,
+MCP tools), Command palette (pages, people, modules), Popover + Command combobox (person picker),
+Tooltip, Sonner toasts (success / error with the Core's message), Skeleton rows, `DiffView`,
+`JsonView`, `Facts`, `EmergencyStop`, `NowStrip`, `AppearancePopover`. Icons: lucide 16 px.
 
 ## States
 
@@ -133,6 +235,6 @@ mute a channel), and so does 緊急停止.
 
 ## Motion
 
-150–200 ms fades and zooms on overlays (tw-animate-css), sheet slide 300 ms, 120 ms column
-dimming on hover. Pulsing dots only for live / transitioning states. `prefers-reduced-motion`
-collapses all durations.
+150 to 200 ms fades and zooms on overlays (tw-animate-css), sheet slide 300 ms, 120 ms column
+dimming on hover, 160 ms for the header gaining its surface. Pulsing dots only for live /
+transitioning states. `prefers-reduced-motion` collapses all durations.

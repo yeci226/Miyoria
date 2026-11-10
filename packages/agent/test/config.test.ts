@@ -1,13 +1,14 @@
 import type { ContextKey } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
+import { MainLineConfigSchema } from "../src/config.js";
 import {
   AgentConfigSchema,
   activenessFor,
   defaultAgentConfig,
+  deprecatedAgentKeys,
   modeFor,
   parseActiveness,
   parseChannelMode,
-  scaleByActiveness,
 } from "../src/index.js";
 
 const ctx: ContextKey = { platform: "discord", scope: "g1", channel: "c1", kind: "channel" };
@@ -51,11 +52,28 @@ describe("config", () => {
     cfg.activeness["discord:g1"] = "high";
     expect(activenessFor(cfg, ctx, "low")).toBe("high");
 
-    expect(scaleByActiveness("low", 0.6)).toBeCloseTo(0.3, 6);
-    expect(scaleByActiveness("medium", 0.6)).toBeCloseTo(0.6, 6);
-    expect(scaleByActiveness("high", 0.8)).toBeCloseTo(1.0, 6);
     expect(parseActiveness("HIGH")).toBe("high");
     expect(() => parseActiveness("loud")).toThrow("unknown activeness `loud`");
+  });
+
+  it("old attention cooldowns and multipliers still load, flagged as deprecated", () => {
+    const raw = {
+      attention: { cooldown_ms: 5000, min_cooldown_ms: 2000, talk_floor: 0.2 },
+      voice: { ambient_factor: 0.5, cooldown_ms: 20_000, interrupt_scale: 0.35, debounce_ms: 600 },
+    };
+    const parsed = AgentConfigSchema.parse(raw);
+    expect(parsed.attention.talk_floor).toBe(0.2);
+    expect(parsed.voice.debounce_ms).toBe(600);
+    expect("cooldown_ms" in parsed.attention).toBe(false);
+    expect(deprecatedAgentKeys(raw)).toEqual([
+      "attention.cooldown_ms",
+      "attention.min_cooldown_ms",
+      "voice.ambient_factor",
+      "voice.cooldown_ms",
+      "voice.interrupt_scale",
+    ]);
+    expect(deprecatedAgentKeys({ attention: { talk_floor: 0.1 } })).toEqual([]);
+    expect(deprecatedAgentKeys(null)).toEqual([]);
   });
 
   it("parses_modes", () => {
@@ -80,10 +98,11 @@ describe("config", () => {
 
   it("defaults", () => {
     expect(defaultAgentConfig()).toEqual({
-      debounce_ms: 1500,
+      debounce_ms: 800,
       typing_extend_ms: 2500,
       max_debounce_ms: 4000,
-      history_after_fold: 10,
+      history_after_fold: 25,
+      mainline: MainLineConfigSchema.parse({}),
       history_limit: 50,
       prompt_history: 30,
       max_prompt_chars: 16_000,
@@ -97,7 +116,7 @@ describe("config", () => {
       respond_to_bots: false,
       reply_ttl_ms: 120_000,
       max_message_chars: 1900,
-      reply_reference: false,
+      reply_reference: true,
       typing_refresh_ms: 8000,
       tools_enabled: true,
       max_tool_steps: 3,
@@ -111,8 +130,6 @@ describe("config", () => {
       max_context_chars: 4000,
       budget_notice_interval_ms: 3_600_000,
       attention: {
-        cooldown_ms: 5000,
-        min_cooldown_ms: 2000,
         recent_window: 20,
         max_share_of_recent: null,
         keywords: [],
@@ -122,25 +139,33 @@ describe("config", () => {
         llm_check: true,
         llm_check_timeout_ms: 8000,
         llm_yes_probability: 0.9,
+        talk_floor: 0.15,
       },
       voice: {
         debounce_ms: 700,
+        direct_debounce_ms: 400,
+        turn_debounce_ms: 100,
         max_debounce_ms: 2500,
         default_mode: "normal",
-        ambient_factor: 0.5,
-        cooldown_ms: 20_000,
-        min_cooldown_ms: 5000,
         max_share_of_recent: 0.2,
         question_window_ms: 8000,
-        interrupt_scale: 0.35,
         gray_low: 0.15,
         llm_check: false,
         speak_ttl_ms: 30_000,
+        voice_first: true,
         text_chat: true,
         text_aside: true,
         text_echo: false,
+        keep_in_voice: true,
       },
-      history: { backfill: 20, reply_chain: 3, timeout_ms: 3000 },
+      history: {
+        backfill: 20,
+        reply_chain: 3,
+        reply_context_before: 5,
+        reply_context_after: 3,
+        timeout_ms: 3000,
+      },
+      files: { enabled: true, max_files: 2 },
       vision: {
         enabled: true,
         max_images: 3,
@@ -151,6 +176,24 @@ describe("config", () => {
         download_timeout_ms: 5000,
         allowed_hosts: ["cdn.discordapp.com", "media.discordapp.net"],
         cache_entries: 32,
+      },
+      prompt: {
+        budgets: {
+          conversation: 900,
+          memory: 1000,
+          knowledge: 700,
+          lessons: 500,
+          world: 500,
+          game: 700,
+          sing: 400,
+          people: 800,
+          examples: 2500,
+        },
+        default_budget: 600,
+        self_chars: 1600,
+        save_every: 1,
+        saved: 50,
+        saved_message_chars: 800,
       },
     });
     expect(() => AgentConfigSchema.parse({ channels: { c: "loud" } })).toThrow();

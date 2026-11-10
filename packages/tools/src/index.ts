@@ -30,12 +30,19 @@ export interface ToolContext {
    * the game director. Capability tools pass it to the gate.
    */
   principal: Principal;
+  /**
+   * Everyone the turn speaks for, when more than one person's messages are in it. `account` is
+   * only the one she answers: a tool whose result depends on who asked takes the weakest of them.
+   */
+  askers?: readonly AccountRef[];
   /** The message that triggered the turn (the latest one). */
   message: MessageRef;
   /** Priority for actions the tool submits (same as her reply). */
   priority: Priority;
   /** Aborted when the turn is cancelled. */
   signal: AbortSignal;
+  /** Takes what a capability answered besides its text (`{task}`: it only got accepted). */
+  report?: (data: JsonValue) => void;
 }
 
 export interface Tool {
@@ -43,13 +50,6 @@ export interface Tool {
   readonly spec: ToolSpec;
   /** Permission node the triggering user needs, if any. */
   readonly permission?: string | null;
-  /**
-   * Its result is text from strangers (a web page). Once it has run, the rest of the turn is
-   * offered only other `outside` tools, so nothing in that text can make her act.
-   */
-  readonly outside?: boolean;
-  /** Keeps this much of the result instead of the turn's `max_tool_result_chars`. */
-  readonly maxResultChars?: number;
   /**
    * Runs the tool. The returned text (or the error message) goes back to the model, so keep it
    * short.

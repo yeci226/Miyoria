@@ -1,0 +1,33 @@
+{
+  "name": "@miyoria/eval",
+  "version": "0.1.0",
+  "description": "Evaluation set built from real incidents: fixtures, rule-based checks, pass^k scorecard",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "@miyoria/source": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "eval": "tsx --conditions=@miyoria/source src/cli.ts",
+    "extract": "node scripts/extract-incidents.mjs"
+  },
+  "dependencies": {
+    "@miyoria/agent": "workspace:*",
+    "@miyoria/directive": "workspace:*",
+    "@miyoria/game": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

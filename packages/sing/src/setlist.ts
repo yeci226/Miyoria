@@ -18,11 +18,28 @@ export type SongNo = number;
 
 export type SongState = "preparing" | "ready" | "playing" | "done" | "failed" | "cancelled";
 
+/**
+ * What becomes of the song's own backing voices (harmonies, chorus): kept as recorded (default),
+ * dropped, converted to her voice like the lead, or a cappella (her lead alone, no instrumental).
+ */
+export const BACKING_MODES = ["keep", "drop", "convert", "acapella"] as const;
+export type BackingMode = (typeof BACKING_MODES)[number];
+
+/** How each mode is said to people (list labels, command choices). */
+export const BACKING_LABELS: Record<BackingMode, string> = {
+  keep: "原曲伴唱",
+  drop: "不要伴唱",
+  convert: "伴唱也轉",
+  acapella: "清唱",
+};
+
 export interface SongEntry {
   no: SongNo;
   /** What was asked for (a name, maybe with the artist, or a link). Untrusted. */
   query: string;
   key: number;
+  /** What becomes of the song's own backing voices (`keep` unless asked). */
+  backing: BackingMode;
   requester: AccountRef | null;
   requester_name: string;
   /** Where it was asked for. */
@@ -46,13 +63,24 @@ export interface SongEntry {
   /** How often her mind was told it is ready. */
   reminders: number;
   last_reminder_ms: number | null;
+  /** Ledger row of the ticket that let this song past the per-person limit; refunded once. */
+  ticket_entry: string | null;
+  /** The paid dedication's words (already screened), or `null`. */
+  dedication: string | null;
+  /** Ledger row of the dedication; refunded once when the song is not sung. */
+  dedication_entry: string | null;
 }
 
 export type NewSong = Pick<
   SongEntry,
   "query" | "key" | "requester" | "requester_name" | "context"
 > &
-  Partial<Pick<SongEntry, "forced" | "queue_item">>;
+  Partial<
+    Pick<
+      SongEntry,
+      "backing" | "forced" | "queue_item" | "ticket_entry" | "dedication" | "dedication_entry"
+    >
+  >;
 
 export class SetListError extends Error {
   override readonly name = "SetListError";
@@ -87,11 +115,18 @@ function songName(e: SongEntry): string {
   return title !== "" && asked.toLowerCase().includes(title.toLowerCase()) ? title : asked;
 }
 
+/** ` 獻詞:「…」` for a paid dedication, else nothing (the words are short and screened). */
+export function dedicationNote(e: SongEntry): string {
+  return e.dedication ? `;獻詞:「${safeName(e.dedication, 60)}」` : "";
+}
+
 /** One line naming a song for her or for a card: `「title」- artist`, escaped and short. */
 export function songLabel(e: SongEntry): string {
   const title = songName(e);
   const artist = e.song?.artist?.trim();
-  return `「${safeName(title, 60)}」${artist ? ` - ${safeName(artist, 40)}` : ""}`;
+  const mode =
+    e.backing === "keep" || e.backing === undefined ? "" : `(${BACKING_LABELS[e.backing]})`;
+  return `「${safeName(title, 60)}」${artist ? ` - ${safeName(artist, 40)}` : ""}${mode}`;
 }
 
 const AccountSchema = z.object({ platform: z.string(), id: z.string() });
@@ -107,6 +142,7 @@ const StoredEntrySchema = z.object({
   no: z.number().int().positive(),
   query: z.string().min(1),
   key: z.number().int().catch(0),
+  backing: z.enum(BACKING_MODES).catch("keep"),
   requester: AccountSchema.nullable().catch(null),
   requester_name: z.string().catch("觀眾"),
   context: ContextSchema.nullable().catch(null),
@@ -122,6 +158,9 @@ const StoredEntrySchema = z.object({
   ready_at: z.string().nullable().catch(null),
   reminders: z.number().int().nonnegative().catch(0),
   last_reminder_ms: z.number().nullable().catch(null),
+  ticket_entry: z.string().nullable().catch(null),
+  dedication: z.string().nullable().catch(null),
+  dedication_entry: z.string().nullable().catch(null),
 });
 
 const StoredSetListSchema = z.object({
@@ -198,10 +237,23 @@ export class SetList {
     return this.#entries.find((e) => e.state === "playing") ?? null;
   }
 
-  /** The same song (by query and key, or by the worker's song id) already open. */
-  findOpen(query: string, key: number): SongEntry | null {
+  /** The same song (by query, key and backing mode) already open. */
+  findOpen(query: string, key: number, backing: BackingMode = "keep"): SongEntry | null {
     const q = query.trim().toLowerCase();
-    return this.open().find((e) => e.key === key && e.query.trim().toLowerCase() === q) ?? null;
+    return (
+      this.open().find(
+        (e) => e.key === key && e.backing === backing && e.query.trim().toLowerCase() === q,
+      ) ?? null
+    );
+  }
+
+  /** Whether `who` already has as many open songs as one person may (a ticket adds one more). */
+  atUserLimit(who: AccountRef): boolean {
+    return this.#byUser(who) >= this.limits.max_pending_per_user;
+  }
+
+  #byUser(who: AccountRef): number {
+    return this.open().filter((e) => e.requester !== null && sameAccount(e.requester, who)).length;
   }
 
   /** The song `name` names (what was asked for, or its title): a ready one, else the newest. */
@@ -222,8 +274,8 @@ export class SetList {
     const requester = song.requester;
     if (
       requester !== null &&
-      open.filter((e) => e.requester !== null && sameAccount(e.requester, requester)).length >=
-        this.limits.max_pending_per_user
+      this.#byUser(requester) >=
+        this.limits.max_pending_per_user + (song.ticket_entry != null ? 1 : 0)
     ) {
       throw new SetListError(
         `already ${this.limits.max_pending_per_user} songs requested by this person`,
@@ -233,6 +285,7 @@ export class SetList {
       no: this.#next++,
       query: song.query,
       key: song.key,
+      backing: song.backing ?? "keep",
       requester,
       requester_name: song.requester_name,
       context: song.context,
@@ -248,9 +301,36 @@ export class SetList {
       ready_at: null,
       reminders: 0,
       last_reminder_ms: null,
+      ticket_entry: song.ticket_entry ?? null,
+      dedication: song.dedication ?? null,
+      dedication_entry: song.dedication_entry ?? null,
     };
     this.#entries.push(entry);
     return entry;
+  }
+
+  /**
+   * Moves `e` so it stands `position`th (1 is next, clamped) among the songs still to sing
+   * (preparing or ready, the playing one not counted); returns where it ended up.
+   */
+  move(e: SongEntry, position: number): number {
+    const others = this.#entries.filter(
+      (x) => x !== e && (x.state === "preparing" || x.state === "ready"),
+    );
+    const at = Math.min(Math.max(Math.trunc(position), 1), others.length + 1);
+    const from = this.#entries.indexOf(e);
+    if (from < 0) return at;
+    this.#entries.splice(from, 1);
+    const after = others[at - 1];
+    // Before the song it now stands in front of, else behind the last one waiting.
+    const to =
+      after !== undefined
+        ? this.#entries.indexOf(after)
+        : others.length > 0
+          ? this.#entries.indexOf(others[others.length - 1] as SongEntry) + 1
+          : this.#entries.length;
+    this.#entries.splice(to, 0, e);
+    return at;
   }
 
   /** Moves `e` to a final state and trims the history. */

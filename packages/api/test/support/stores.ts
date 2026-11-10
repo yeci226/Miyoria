@@ -9,6 +9,8 @@ import {
   type DecisionLog,
   type DecisionRecord,
   type IdentityStore,
+  type MemberCardRecord,
+  type MemberCardStore,
   type MemoryFilter,
   type MemoryHit,
   type MemoryQuery,
@@ -32,6 +34,7 @@ import {
   type AccountRef,
   type ContextKey,
   contextKeyEquals,
+  type JsonObject,
   newId,
   type PersonId,
   type PlatformId,
@@ -144,6 +147,9 @@ export class MemoryRecords implements MemoryRecordStore {
       .map(clone);
   }
   async touch(): Promise<void> {}
+  async expireFollowups(): Promise<number> {
+    return 0;
+  }
   async dueFollowups(): Promise<MemoryRecord[]> {
     return [];
   }
@@ -339,6 +345,53 @@ export class MemoryAuthStore implements AuthStore {
   }
 }
 
+export class MemoryMemberCards implements MemberCardStore {
+  #cards: MemberCardRecord[] = [];
+  #mine(profile: ProfileId, accounts: readonly AccountRef[]): MemberCardRecord[] {
+    return this.#cards.filter(
+      (c) => c.profile === profile && accounts.some((a) => sameAccount(a, c.account)),
+    );
+  }
+  async issue(card: MemberCardRecord): Promise<void> {
+    if (this.#cards.some((c) => c.serial === card.serial)) {
+      throw new Error(`member card \`${card.serial}\` already exists`);
+    }
+    this.#cards.push(clone(card));
+  }
+  async bySerial(profile: ProfileId, serial: string): Promise<MemberCardRecord | null> {
+    const found = this.#cards.find((c) => c.profile === profile && c.serial === serial);
+    return found ? clone(found) : null;
+  }
+  async amend(profile: ProfileId, serial: string, snapshot: JsonObject): Promise<boolean> {
+    const found = this.#cards.find((c) => c.profile === profile && c.serial === serial);
+    if (!found) return false;
+    found.snapshot = clone(snapshot);
+    return true;
+  }
+  async listFor(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    limit: number,
+  ): Promise<MemberCardRecord[]> {
+    return this.#mine(profile, accounts).reverse().slice(0, limit).map(clone);
+  }
+  async countSince(
+    profile: ProfileId,
+    accounts: readonly AccountRef[],
+    since: Timestamp,
+  ): Promise<number> {
+    return this.#mine(profile, accounts).filter((c) => ms(c.issued_at) >= ms(since)).length;
+  }
+  async countFor(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    return this.#mine(profile, accounts).length;
+  }
+  async deleteFor(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number> {
+    const gone = new Set(this.#mine(profile, accounts));
+    this.#cards = this.#cards.filter((c) => !gone.has(c));
+    return gone.size;
+  }
+}
+
 /** Every area the tests use, like Rust's `Store::memory()`. */
 export class TestStore {
   readonly decisions = new MemoryDecisionLog();
@@ -350,4 +403,5 @@ export class TestStore {
   readonly relationships = new MemoryRelationships();
   readonly auth = new MemoryAuthStore();
   readonly settings = new MemorySettingsStore();
+  readonly cards = new MemoryMemberCards();
 }

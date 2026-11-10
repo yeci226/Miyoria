@@ -12,6 +12,7 @@ import {
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  fadedConfidence,
   MemoryContributor,
   memoryConfig,
   memoryFilter,
@@ -147,9 +148,11 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
     const user2 = llm.requests()[1]?.messages[1]?.content ?? "";
     expect(user2).toContain("期末考");
     expect(user2).not.toContain("不吃辣");
-    // Same JSON again: everything is reinforced, nothing duplicated.
+    // Same JSON again: what the new lines still back is reinforced, nothing is duplicated, and
+    // the facts and notes none of the new lines say are refused as unevidenced.
     expect(third.inserted, JSON.stringify(third)).toBe(0);
-    expect(third.reinforced).toBe(6);
+    expect(third.reinforced).toBe(2);
+    expect(third.refusedEvidence).toBe(4);
     expect(await e.all()).toHaveLength(records.length);
   });
 
@@ -190,6 +193,7 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
     const amy = await e.person(amyAcct, "Amy");
     const dm = dmCtx("d-owen");
     await e.log(dm, owenAcct, "Owen", "跟你說個秘密,我暗戀 Amy", t0(-5 * MINUTE), false);
+    await e.log(dm, owenAcct, "Owen", "我的本名是劉歐文", t0(-4 * MINUTE), false);
     const report = await e.engine.consolidate(dm, t0());
     expect(report.inserted).toBe(5);
     const dmScope: MemoryScope = { type: "dm", account: owenAcct };
@@ -206,7 +210,7 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
       expect(got, JSON.stringify(ctx)).toEqual([]);
     }
     // Followups from the DM point back to the DM.
-    const due = await e.engine.due(profile(), t0(DAY));
+    const due = await e.engine.due(profile(), t0(90 * MINUTE));
     expect(due[0]?.context).toEqual(dm);
 
     // In the DM itself she remembers everything.
@@ -245,9 +249,13 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
     expect(sections[0]?.body).toContain("暗戀");
   });
 
-  it("malformed_output_is_skipped", async () => {
+  it("malformed_output_is_retried_then_carried_once_then_skipped", async () => {
+    const bad = "抱歉,我無法完成這個請求。";
     const llm = new MockProvider("sum")
-      .reply("抱歉,我無法完成這個請求。")
+      .reply(bad)
+      .reply(bad) // pass 1 and its retry: carried over
+      .reply(bad)
+      .reply(bad) // pass 2 and its retry: dropped
       .reply(
         `{"facts": [42, {"subject_name": "Owen"}, {"subject_name": "Owen", "statement": "Owen 養了一隻貓", "importance": 0.6}], "episode": 5}`,
       );
@@ -258,14 +266,66 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
     let report = await e.engine.consolidate(ctx, t0());
     expect(report.malformed).toBe(true);
     expect(await e.all()).toEqual([]);
-    // The lines were skipped (watermark advanced): no retry loop.
+    expect(llm.requests()).toHaveLength(2);
+    // Carried over: the watermark stayed, so the same line is offered again with the next batch.
+    expect(await e.engine.watermark(ctx)).toBeNull();
+
+    await e.log(ctx, acct("2"), "Owen", "你好嗎", t0(-8 * MINUTE), false);
+    report = await e.engine.consolidate(ctx, t0());
+    expect([report.lines, report.malformed]).toEqual([2, true]);
+    const carriedPrompt = llm.requests()[2]?.messages[1]?.content ?? "";
+    expect(carriedPrompt).toContain("嗨");
+    expect(carriedPrompt).toContain("你好嗎");
+    // Failed again: skipped now, so a bad batch cannot grow forever.
+    expect(await e.engine.watermark(ctx)).not.toBeNull();
     expect((await e.engine.consolidate(ctx, t0())).lines).toBe(0);
 
     await e.log(ctx, acct("2"), "Owen", "我家有貓", t0(), false);
     report = await e.engine.consolidate(ctx, t0());
     expect(report.malformed).toBe(false);
     expect([report.inserted, report.skipped], JSON.stringify(report)).toEqual([1, 3]);
-    expect(llm.requests()).toHaveLength(2);
+    expect(llm.requests()).toHaveLength(5);
+  });
+
+  it("bad_first_reply_is_repaired_by_one_corrective_retry", async () => {
+    const llm = new MockProvider("sum").reply("我整理好了,但不知道怎麼寫").reply(GUILD_JSON);
+    const [e, ctx] = await guildSetup(backend, llm);
+    const report = await e.engine.consolidate(ctx, t0());
+    expect(report.malformed).toBe(false);
+    expect(report.inserted).toBe(6);
+    const reqs = llm.requests();
+    expect(reqs).toHaveLength(2);
+    const retry = reqs[1];
+    expect(retry?.json_mode).toBe(true);
+    expect(retry?.messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "user"]);
+    expect(retry?.messages[3]?.content).toContain("JSON");
+    expect(await e.engine.watermark(ctx)).not.toBeNull();
+  });
+
+  it("truncated_reply_is_retried_with_a_bigger_budget", async () => {
+    const llm = new MockProvider("sum")
+      .events([
+        { type: "text_delta", text: `{"facts": [{"subject_name": "Owen", "stat` },
+        { type: "done", finish_reason: "length", usage: null },
+      ])
+      .reply(GUILD_JSON);
+    const [e, ctx] = await guildSetup(backend, llm);
+    const report = await e.engine.consolidate(ctx, t0());
+    expect(report.malformed).toBe(false);
+    const reqs = llm.requests();
+    expect(reqs[1]?.max_tokens).toBe(8000);
+  });
+
+  it("parseable_fenced_reply_needs_no_retry", async () => {
+    const fenced = `好的:
+\`\`\`json
+${GUILD_JSON.replace(/\}$/, ",}")}
+\`\`\``;
+    const llm = new MockProvider("sum").reply(fenced);
+    const [e, ctx] = await guildSetup(backend, llm);
+    const report = await e.engine.consolidate(ctx, t0());
+    expect(report.malformed).toBe(false);
+    expect(llm.requests()).toHaveLength(1);
   });
 
   it("llm_failure_keeps_lines_for_retry", async () => {
@@ -309,6 +369,8 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
         importance: 0.7,
         confidence: 0.6,
         source_context: null,
+        origin: "told",
+        source_events: ["01TESTEVIDENCE0000000000"],
         due: null,
       },
       t0(DAY),
@@ -329,6 +391,8 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
         importance: 0.5,
         confidence: 0.8,
         source_context: null,
+        origin: "told",
+        source_events: ["01TESTEVIDENCE0000000000"],
         due: null,
       },
       t0(2 * DAY),
@@ -349,7 +413,7 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
     expect(await e.all()).toHaveLength(4);
   });
 
-  it("maintenance_prunes_and_decays", async () => {
+  it("maintenance_prunes_and_forgets_what_faded", async () => {
     const e = await env(backend);
     const owen = await e.person(acct("2"), "Owen");
     const now = t0();
@@ -371,22 +435,25 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
 
     const report = await e.engine.maintain(now);
     expect(report.pruned).toBe(1);
-    expect(report.decayed).toBe(1);
+    expect(report.decayed, "still fading, not rewritten").toBe(1);
     expect(report.forgotten).toBe(1);
     expect(await e.rec(trivial)).toBeNull();
     expect(await e.rec(important)).not.toBeNull();
     expect(await e.rec(faint.id)).toBeNull();
-    const decayed = await e.rec(stale);
-    const c = decayed?.confidence ?? 0;
-    expect(c < 0.8 && c > 0.7, String(c)).toBe(true);
-    expect(Math.abs(((await e.rec(fresh))?.confidence ?? 0) - 0.8)).toBeLessThan(1e-6);
+
+    // Decay happens on read: the stored value is what was last written ...
+    expect((await e.rec(stale))?.confidence).toBeCloseTo(0.8, 6);
+    // ... and the confidence she trusts it with fades 2% a day after 30 idle days.
+    const config = memoryConfig();
+    const kept = (await e.rec(stale)) as MemoryRecord;
+    expect(fadedConfidence(config, kept, now)).toBeCloseTo(0.8 * 0.98 ** 30, 4);
+    expect(fadedConfidence(config, kept, t0(10 * DAY))).toBeCloseTo(0.8 * 0.98 ** 40, 4);
+    expect(fadedConfidence(config, (await e.rec(fresh)) as MemoryRecord, now)).toBeCloseTo(0.8, 6);
     expect(await e.engine.lastMaintenanceRun()).toBe(now);
 
-    // Ten days later the decay compounds over the elapsed days.
-    await e.engine.maintain(t0(10 * DAY));
-    const later = await e.rec(stale);
-    const expected = c * 0.98 ** 10;
-    expect(Math.abs((later?.confidence ?? 0) - expected)).toBeLessThan(1e-3);
+    // Past the point where it fades below the threshold, maintenance deletes it.
+    await e.engine.maintain(t0(120 * DAY));
+    expect(await e.rec(stale)).toBeNull();
     const listed = await e.store.memories.list(profile(), memoryFilter(10, { kind: "episode" }));
     expect(listed).toHaveLength(1);
   });

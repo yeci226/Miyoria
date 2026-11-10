@@ -5,6 +5,7 @@
 
 import { resolve } from "node:path";
 import { bundledProfilesDir, exampleConfig, exampleEnv } from "../assets.js";
+import { type MachinePreset, machineStep, pasteTokens } from "../machine-step.js";
 import type { Prompter } from "../prompt.js";
 import * as settings from "../settings.js";
 import { Workspace, type WorkspaceOptions } from "../workspace.js";
@@ -17,6 +18,13 @@ export interface InitOptions {
   bundledProfiles?: string | null;
   /** The real environment (tests). */
   processEnv?: ReadonlyMap<string, string>;
+  /**
+   * Ask which services this computer runs (`[machine]`). Absent: the question is skipped and the
+   * config keeps whatever it has (old configs have no `[machine]` and behave as before).
+   */
+  machine?: MachinePreset & { ask: boolean };
+  /** Runs `install` for this computer's services; offered after the files are written (interactive only). */
+  offerInstall?: () => Promise<void>;
   /** Command prefix shown in the next steps (default `miyoria`, or `npx miyoria` under npx). */
   command?: string;
 }
@@ -73,11 +81,31 @@ export async function run(
   const scaffold = ws.planScaffold();
   if (scaffold.length > 0) p.note(`會複製內建角色:${scaffold.join("、")}`);
 
-  const generated = await flow(p, ws);
+  let generated: string[];
+  let hasCore = true;
+  let picked = false;
+  const machine = options.machine;
+  if (machine && (machine.ask || machine.roles !== undefined)) {
+    p.section("這台電腦");
+    const chosen = await machineStep(p, ws, machine);
+    picked = true;
+    hasCore = chosen.services.includes("core");
+    if (hasCore) generated = await flow(p, ws);
+    else {
+      // No core here: no LLM, Discord or database to set up, only the links to core.
+      p.section("連到 core");
+      generated = [];
+      await pasteTokens(p, ws, chosen.services);
+      if (chosen.services.includes("stage")) {
+        p.section("Stage");
+        for (const field of settings.STAGE.slice(2)) await settings.ask(p, ws, field);
+      }
+    }
+  } else generated = await flow(p, ws);
   if (generated.length > 0) p.note(`會產生新的 token:${generated.join("、")}`);
   const changes = await commit(p, options.yes ?? false, ws);
   if (changes) await afterWrite(p, options.yes ?? false, ws, changes);
-  if (changes !== null || ws.tomlExists) {
+  if (hasCore && (changes !== null || ws.tomlExists)) {
     const key = settings.current(ws, settings.llmApiKeyField(ws)).value;
     if (key === "") {
       p.warn(
@@ -86,16 +114,31 @@ export async function run(
     }
   }
 
+  if (picked && options.offerInstall && (changes !== null || ws.tomlExists)) {
+    if (await p.confirm("現在檢查這台電腦缺什麼,並安裝(會先列出清單和大小再問一次)?", true)) {
+      await options.offerInstall();
+    }
+  }
+
   const cmd = options.command ?? commandPrefix();
   const width = `${cmd} config`.length + 2;
   const line = (c: string, what: string) => `  ${`${cmd} ${c}`.padEnd(width)} ${what}`;
   p.outro(
-    [
-      "下一步:",
-      line("doctor", "檢查連線"),
-      line("chat", "在終端機跟她聊天"),
-      line("core", "啟動 Discord bot"),
-      line("config", "之後要改單一項目用這個"),
-    ].join("\n"),
+    (picked
+      ? [
+          "下一步:",
+          line("install", "安裝這台電腦需要的東西(套件、venv、建置)"),
+          line("doctor", "檢查缺什麼"),
+          line("start", "在各自的分頁啟動這台電腦的服務"),
+          line("config", "之後要改單一項目用這個"),
+        ]
+      : [
+          "下一步:",
+          line("doctor", "檢查連線"),
+          line("chat", "在終端機跟她聊天"),
+          line("core", "啟動 Discord bot"),
+          line("config", "之後要改單一項目用這個"),
+        ]
+    ).join("\n"),
   );
 }

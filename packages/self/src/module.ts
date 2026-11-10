@@ -4,20 +4,33 @@ import {
   interval,
   type Module,
   type ModuleContext,
+  presentKeys,
   SerialQueue,
   withTimeout,
 } from "@miyoria/kernel";
-import { type SettingsStore, SettingsStoreKey } from "@miyoria/store";
 import {
+  PeopleStoreKey,
+  RelationshipStoreKey,
+  type SettingsStore,
+  SettingsStoreKey,
+} from "@miyoria/store";
+import {
+  AFFECT_EVENT_KINDS,
+  AFFECT_EVENT_TOPIC,
+  type AffectEvent,
+  AffectStateKey,
   type Clock,
+  circadianEnergy,
+  customEvent,
   DRIVE_NAMES,
   type Drives,
   type Event,
+  HandleDirectoryKey,
   isJsonObject,
+  type JsonValue,
+  type Mood,
   MoodSignalsKey,
   type ProfileId,
-  type PromptContributors,
-  PromptContributorsKey,
   SALIENT_TOPIC,
   SelfStateKey,
   SOCIAL_APPRAISAL_TOPIC,
@@ -26,11 +39,12 @@ import {
   SocialSignalsKey,
   WorldStateKey,
 } from "@miyoria/types";
-import { type SelfConfig, SelfConfigSchema } from "./config.js";
+import { AffectService } from "./affect.js";
+import { DEPRECATED_SELF_KEYS, type SelfConfig, SelfConfigSchema } from "./config.js";
 import { type TemperamentInput, temperament } from "./emotions.js";
 import { type Circumstances, IDLE, SelfEngine } from "./engine.js";
 import { FeelingsBook } from "./feelings.js";
-import { EmotionPrompt, SelfPrompt } from "./prompt.js";
+import { migrateCards } from "./migrate.js";
 import { EmotionRules, FEEL_TOPIC } from "./rules.js";
 import { SelfService } from "./state.js";
 
@@ -46,7 +60,12 @@ export interface SelfModuleOptions {
   clock?: Clock;
   /** The profile's `[temperament]` (display rules, how fast each emotion rises and fades). */
   temperament?: TemperamentInput;
+  /** The profile's resting mood (`manifest.mood`): the mood is derived from it. */
+  baseline?: Mood;
 }
+
+/** The resting mood when the profile gives none. */
+const DEFAULT_BASELINE: Mood = { valence: 0, arousal: 0.5, energy: 0.7 };
 
 /** The satisfaction an event causes (negative deltas), if any. */
 export function eventDelta(
@@ -108,23 +127,42 @@ export function eventDelta(
   }
 }
 
+/** An `affect.event` payload that is a well-formed rule event, or `null`. */
+export function parseAffectEvent(payload: JsonValue): AffectEvent | null {
+  if (!isJsonObject(payload)) return null;
+  const kind = payload.kind;
+  if (typeof kind !== "string" || !(AFFECT_EVENT_KINDS as readonly string[]).includes(kind)) {
+    return null;
+  }
+  const str = (v: JsonValue | undefined) => (typeof v === "string" && v !== "" ? v : null);
+  return {
+    kind: kind as AffectEvent["kind"],
+    person: str(payload.person),
+    handle: str(payload.handle),
+    context: null,
+    detail: typeof payload.detail === "string" ? payload.detail : "",
+    key: typeof payload.key === "string" && payload.key !== "" ? payload.key : kind,
+    at: typeof payload.at === "string" ? payload.at : new Date(0).toISOString(),
+  };
+}
+
 interface Running {
-  contributors: PromptContributors | undefined;
   save: () => Promise<void>;
 }
 
 /**
- * Module `self`: her emotions, drives, boredom, self-set policy, agenda and feelings about
- * people. Provides `SelfStateKey` and the `self` and `emotion` prompt sections. Uses
- * `SettingsStoreKey` to persist, `MoodSignalsKey` (rest follows tiredness; the mood is part of
- * snapshots), `WorldStateKey` (playing / live / who is in her voice channel) and
- * `SocialSignalsKey` (who someone is, how much she likes them) when present.
+ * Module `self`, her Affect module (docs/design/v3-architecture.md §12): her emotions, drives,
+ * boredom, the mood derived from them, self-set policy, agenda and feelings about people. Provides
+ * `AffectStateKey`, `SelfStateKey`, `MoodSignalsKey` and the `self` and `emotion` prompt sections.
+ * Uses `SettingsStoreKey` to persist, `WorldStateKey` (playing / live / who is in her voice
+ * channel) and `SocialSignalsKey` (who someone is, how much she likes them) when present. It
+ * starts before the `mood` module, which then stays idle.
  */
 export class SelfModule implements Module {
   static readonly ID = "self";
   readonly manifest = defineManifest(SelfModule.ID, "Self", {
     description: "Her inner state: drives, boredom, her own policy, agenda and feelings",
-    optional: ["mood", "world"],
+    optional: ["world"],
     configSchema: SelfConfigSchema,
   });
   readonly #profile: ProfileId;
@@ -138,6 +176,13 @@ export class SelfModule implements Module {
 
   async start(ctx: ModuleContext): Promise<void> {
     const config = ctx.config(SelfConfigSchema);
+    const gone = presentKeys(ctx.rawConfig, DEPRECATED_SELF_KEYS);
+    if (gone.length > 0) {
+      ctx.log.warn(
+        { keys: gone },
+        "[modules.self] keys are deprecated and ignored: the agent renders her state in its prompt itself",
+      );
+    }
     const clock = this.#options.clock ?? ctx.clock;
     const profile = this.#profile;
     const temper = temperament(this.#options.temperament);
@@ -165,17 +210,55 @@ export class SelfModule implements Module {
         ctx.log.warn({ err: errorMessage(error) }, "cannot load her inner state");
       }
     }
+    const baseline = this.#options.baseline ?? DEFAULT_BASELINE;
+    const directory = () => ctx.services.get(HandleDirectoryKey);
+
+    // One person card per person: fill them in from the older places (once, idempotent).
+    if (store) {
+      try {
+        const names = new Map<string, string>();
+        const people = ctx.services.get(PeopleStoreKey);
+        if (people) for (const p of await people.all()) names.set(p.id, p.display_name);
+        const report = await withTimeout(
+          migrateCards({
+            store,
+            profile,
+            feelings,
+            hearts: engine.hearts,
+            relationships: ctx.services.get(RelationshipStoreKey) ?? null,
+            handleOf: (person) => directory()?.ofPerson(person) ?? null,
+            names,
+            persist: async () => {
+              if (persist) await persist.set(profile, STATE_KEY, engine.toJson());
+            },
+            now: clock.now(),
+          }),
+          STORE_TIMEOUT_MS,
+        );
+        if (report !== undefined && report.migrated > 0) {
+          ctx.log.info(report, "person cards filled in from the older records");
+        }
+      } catch (error) {
+        ctx.log.warn({ err: errorMessage(error) }, "cannot migrate person cards");
+      }
+    }
 
     const social = () => ctx.services.get(SocialSignalsKey);
     const circumstances = (): Circumstances => {
-      const mood = ctx.services.get(MoodSignalsKey)?.mood() ?? null;
       const world = ctx.services.get(WorldStateKey)?.snapshot() ?? null;
       const her = world?.her ?? null;
-      if (!mood && !her) return IDLE;
+      // Tiredness follows the hour (the mood is derived from the drives, not the other way).
+      const energy = circadianEnergy(
+        baseline.energy,
+        clock.now(),
+        config.utc_offset_minutes,
+        config.mood.night_dip,
+      );
+      if (!her) return { ...IDLE, energy };
       // Her crush is with her when they are in her voice channel (the engine's own crush:
       // asking the service would advance it again).
       const crush = engine.hearts.crush(clock.now())?.person ?? null;
-      const voice = her?.voice ?? null;
+      const voice = her.voice ?? null;
       const members =
         voice === null
           ? []
@@ -187,11 +270,28 @@ export class SelfModule implements Module {
         crush !== null &&
         members.some((m) => !m.is_self && signals?.attitude(m.account)?.person === crush);
       return {
-        energy: mood?.energy ?? null,
-        playing: her?.game !== null && her?.game !== undefined,
-        streaming: her ? her.streaming || her.golive === "live" : false,
+        energy,
+        playing: her.game !== null && her.game !== undefined,
+        streaming: her.streaming || her.golive === "live",
         crushTogether,
       };
+    };
+    /** Who she is with (for what she shows): the people in her voice channel. */
+    const audience = () => {
+      const world = ctx.services.get(WorldStateKey)?.snapshot() ?? null;
+      const voice = world?.her.voice ?? null;
+      if (!world || voice === null) return undefined;
+      const members = (
+        world.voice_channels.find((v) => v.channel === voice.channel && v.guild === voice.scope)
+          ?.members ?? []
+      ).filter((m) => !m.is_self);
+      if (members.length === 0) return undefined;
+      let care = 0;
+      for (const m of members) {
+        const person = social()?.attitude(m.account)?.person;
+        if (person !== undefined) care = Math.max(care, service.care(person));
+      }
+      return { care, people: members.length };
     };
     const saves = new SerialQueue();
     let dirty = false;
@@ -205,13 +305,14 @@ export class SelfModule implements Module {
         ctx.log.warn({ err: errorMessage(error) }, "cannot persist her inner state");
       }
     };
-    const service = new SelfService({
+    const service: SelfService = new SelfService({
       engine,
       feelings,
       clock,
       config,
       circumstances,
-      mood: () => ctx.services.get(MoodSignalsKey)?.mood() ?? null,
+      mood: () => affect.mood(),
+      audience,
       attitudeOf: (person) => social()?.attitudeOf?.(person) ?? null,
       changed: (reason) => {
         dirty = true;
@@ -220,17 +321,22 @@ export class SelfModule implements Module {
         if (reason !== "event") void saves.run(save).catch(() => undefined);
       },
     });
+    const affect: AffectService = new AffectService({
+      self: service,
+      baseline,
+      handleOf: (person) => directory()?.ofPerson(person) ?? null,
+      personOfHandle: (handle) => directory()?.resolve(handle)?.person ?? null,
+      publish: (topic, payload) => ctx.publish(customEvent(topic, payload)),
+    });
     ctx.provide(SelfStateKey, service);
-    const contributors = ctx.services.get(PromptContributorsKey);
-    if (config.prompt) {
-      contributors?.register(new SelfPrompt(service, config.utc_offset_minutes));
-      contributors?.register(new EmotionPrompt(service, config.emotions.prompt_max));
-    }
-    this.#running = { contributors, save: () => saves.run(save) };
+    ctx.provide(AffectStateKey, affect);
+    ctx.provide(MoodSignalsKey, affect);
+    this.#running = { save: () => saves.run(save) };
 
     const selfIds = new Set<string>();
     const rules = new EmotionRules({
       self: service,
+      affect,
       config,
       personOf: (account) => social()?.attitude(account)?.person ?? null,
       isSelf: (id) => selfIds.has(id),
@@ -249,6 +355,10 @@ export class SelfModule implements Module {
       SONG_TOPIC,
       "llm.budget",
       "game.*",
+      "voice.playback",
+      "activity.done",
+      "activity.failed",
+      AFFECT_EVENT_TOPIC,
     ]);
     ctx.spawn("events", async () => {
       for await (const env of sub) {
@@ -258,7 +368,15 @@ export class SelfModule implements Module {
           continue;
         }
         try {
-          if (rules.handle(event, clock.now())) dirty = true;
+          if (event.type === "custom" && event.data.topic === AFFECT_EVENT_TOPIC) {
+            // Rule events other modules publish (the Arbiter's `topic_ignored` and the like).
+            const ev = parseAffectEvent(event.data.payload);
+            if (ev) {
+              affect.applyEvent(ev);
+              dirty = true;
+            }
+          } else if (rules.handle(event, clock.now())) dirty = true;
+          affect.publishIfChanged();
         } catch (error) {
           ctx.log.warn(
             {
@@ -281,6 +399,8 @@ export class SelfModule implements Module {
         service.sample();
         dirty = true;
         await saves.run(save);
+        affect.publishIfChanged();
+        await affect.syncSnapshots().catch(() => 0);
       }
     });
   }
@@ -289,8 +409,6 @@ export class SelfModule implements Module {
     const running = this.#running;
     this.#running = null;
     if (!running) return;
-    running.contributors?.unregister(SelfPrompt.KEY);
-    running.contributors?.unregister(EmotionPrompt.KEY);
     await running.save();
   }
 }

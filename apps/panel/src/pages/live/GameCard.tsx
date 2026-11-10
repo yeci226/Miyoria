@@ -88,7 +88,7 @@ export function GameCard() {
               <Input id={`${id}-game`} value={game} maxLength={40} onChange={(e) => setGame(e.target.value)} disabled={!canWrite} className="h-8 font-mono text-[13px]" aria-label="遊戲 id" />
               <Input value={goal} maxLength={200} onChange={(e) => setGoal(e.target.value)} placeholder="第一個目標(可省略)" disabled={!canWrite} className="h-8" aria-label="第一個目標" />
             </div>
-            <Button writes type="submit" size="sm" busy={gameStart.isPending} disabled={!inVoice} className="justify-self-start">
+            <Button writes type="submit" size="sm" variant="secondary" busy={gameStart.isPending} disabled={!inVoice} className="justify-self-start">
               <Gamepad2 />
               開始玩
             </Button>
@@ -99,7 +99,6 @@ export function GameCard() {
         open={confirmStop}
         title="停止遊戲?"
         confirmLabel="停止"
-        destructive
         busy={gameStop.isPending}
         onClose={() => setConfirmStop(false)}
         onConfirm={() =>

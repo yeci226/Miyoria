@@ -1,7 +1,8 @@
 // Prompt contributor `memory`: the section 「你記得的事」.
 
-import type { MemoryKind } from "@miyoria/store";
+import type { MemoryKind, MemoryRecord } from "@miyoria/store";
 import {
+  type MemoryOrigin,
   type PromptContributor,
   type PromptRequest,
   type PromptSection,
@@ -52,18 +53,43 @@ export class MemoryContributor implements PromptContributor {
   }
 }
 
+/** What a line of memory needs to be read back (a record or a retrieved memory). */
+export interface Readable {
+  content: string;
+  origin: MemoryOrigin;
+  said_by: string | null;
+  created_at: Timestamp;
+}
+
 /**
- * Bullet lines with relative dates, e.g. `- Owen 喜歡拉麵(三天前)`. Notes someone told her
- * (`source`) read `- 「Owen」說過:下週三要考試(三天前)`: what they said, not a fact.
+ * One bullet with a relative date, by where it comes from: what she lived reads plainly
+ * (`- Owen 喜歡拉麵(三天前)`); what she was told reads as what was said, not as a fact
+ * (`- 「Owen」說過:下週三要考試(三天前)`); a memory of unknown provenance says so
+ * (`- 外送 App 要改版(三天前,來源不明)`).
  */
+export function lineOf(memory: Readable, now: Timestamp): string {
+  const content = memory.content.replaceAll("\n", " ").trim();
+  const when = relativeDate(memory.created_at, now);
+  if (memory.origin === "told") {
+    return memory.said_by !== null
+      ? `- 「${safeName(memory.said_by)}」說過:${content}(${when})`
+      : `- 聽說:${content}(${when})`;
+  }
+  if (memory.origin === "unknown") return `- ${content}(${when},來源不明)`;
+  return `- ${content}(${when})`;
+}
+
+/** The record as a `Readable`. */
+export function readable(record: MemoryRecord): Readable {
+  return {
+    content: record.content,
+    origin: record.origin ?? (record.source !== null ? "told" : "unknown"),
+    said_by: record.source?.name ?? null,
+    created_at: record.created_at,
+  };
+}
+
+/** Bullet lines of recalled records (`lineOf`). */
 export function formatLines(recalled: readonly Recalled[], now: Timestamp): string {
-  return recalled
-    .map((r) => {
-      const content = r.record.content.replaceAll("\n", " ").trim();
-      const when = relativeDate(r.record.created_at, now);
-      const source = r.record.source;
-      if (source !== null) return `- 「${safeName(source.name)}」說過:${content}(${when})`;
-      return `- ${content}(${when})`;
-    })
-    .join("\n");
+  return recalled.map((r) => lineOf(readable(r.record), now)).join("\n");
 }

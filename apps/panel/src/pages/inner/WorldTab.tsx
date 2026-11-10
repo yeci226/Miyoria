@@ -10,13 +10,13 @@ import { activityText, PRESENCE_LABEL, PRESENCE_TONE } from "./labels";
 
 function PeopleCard({ world }: { world: WorldView }) {
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>在線的人</CardTitle>
         {world.people.length > 0 && <span className="text-sm text-muted-foreground tabular-nums">{world.people.length}</span>}
       </CardHeader>
       {world.people.length === 0 ? (
-        <EmptyLine className="py-8">沒有人在線</EmptyLine>
+        <EmptyLine>沒有人在線</EmptyLine>
       ) : (
         <Table aria-label="在線的人">
           <TableHeader>
@@ -61,23 +61,23 @@ function PeopleCard({ world }: { world: WorldView }) {
 
 function VoiceChannelsCard({ world }: { world: WorldView }) {
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>語音頻道</CardTitle>
       </CardHeader>
       {world.voice_channels.length === 0 ? (
-        <EmptyLine className="py-8">沒有人在語音頻道</EmptyLine>
+        <EmptyLine>沒有人在語音頻道</EmptyLine>
       ) : (
-        <div className="divide-y">
+        <div className="divide-y divide-line-soft">
           {world.voice_channels.map((c) => (
             <section key={`${c.guild}:${c.channel}`} aria-label={c.name ?? c.channel}>
-              <div className="flex items-center gap-2 border-b px-4 py-2.5">
+              <div className="flex items-center gap-2 border-b border-line-soft py-(--row-y)">
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{c.name ?? c.channel}</span>
                 <span className="text-[13px] text-muted-foreground tabular-nums">{c.members.length} 人</span>
               </div>
-              <ul className="divide-y">
+              <ul className="divide-y divide-line-soft">
                 {c.members.map((m) => (
-                  <li key={accountString(m.account)} className="flex items-center gap-2.5 px-4 py-2">
+                  <li key={accountString(m.account)} className="flex items-center gap-2.5 py-(--row-y)">
                     <span className="min-w-0 flex-1 truncate text-sm">{m.display_name}</span>
                     {m.is_self && <Badge variant="brand">她</Badge>}
                     {m.streaming && <MonitorUp aria-label="分享螢幕" className="size-3.5 text-muted-foreground" />}
@@ -97,12 +97,12 @@ function VoiceChannelsCard({ world }: { world: WorldView }) {
 
 function ChannelsCard({ world }: { world: WorldView }) {
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>文字頻道</CardTitle>
       </CardHeader>
       {world.channels.length === 0 ? (
-        <EmptyLine className="py-8">最近沒有人聊天</EmptyLine>
+        <EmptyLine>最近沒有人聊天</EmptyLine>
       ) : (
         <Table aria-label="文字頻道">
           <TableHeader>
@@ -150,8 +150,8 @@ function ChannelsCard({ world }: { world: WorldView }) {
 
 export function WorldTab({ world }: { world: WorldView }) {
   return (
-    <div className="grid gap-6">
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+    <div className="grid gap-(--stage-gap)">
+      <div className="grid items-start gap-(--stage-gap) lg:grid-cols-[minmax(0,1fr)_22rem]">
         <PeopleCard world={world} />
         <VoiceChannelsCard world={world} />
       </div>

@@ -6,8 +6,12 @@ import * as configCmd from "./commands/config.js";
 import * as discordCmd from "./commands/discord.js";
 import * as doctor from "./commands/doctor.js";
 import * as init from "./commands/init.js";
+import * as install from "./commands/install.js";
 import * as nodeCmd from "./commands/node.js";
 import * as remote from "./commands/remote.js";
+import * as start from "./commands/start.js";
+import * as up from "./commands/up.js";
+import * as update from "./commands/update.js";
 import { captureProcessEnv } from "./process-env.js";
 import {
   ClackPrompter,
@@ -111,7 +115,20 @@ export const COMMANDS: CommandSpec = {
   subcommands: [
     {
       name: "init",
-      help: "設定精靈:LLM、Discord、資料庫、面板登入;可重複執行,Enter 保留現值",
+      help: "設定精靈:這台電腦跑哪些服務、LLM、Discord、資料庫、面板登入;可重複執行,Enter 保留現值",
+      options: [
+        {
+          name: "roles",
+          value: "LIST",
+          help: "這台電腦跑什麼:all、broadcast、core、inference(可逗號分隔),或服務名稱(asr,tts,...);省略 = 互動選擇",
+        },
+        { name: "core-host", value: "HOST", help: "跑 core 那台電腦的區網位址(預設 127.0.0.1)" },
+        {
+          name: "inference-host",
+          value: "HOST",
+          help: "跑 asr / tts / sing 那台電腦的區網位址(預設 127.0.0.1)",
+        },
+      ],
       run: async (ctx) => {
         let p: Prompter;
         if (isInteractive()) p = interactivePrompter();
@@ -121,7 +138,28 @@ export const COMMANDS: CommandSpec = {
             "在腳本裡請用 `miyoria init --yes`(全部採用預設值),或 `miyoria config set <key> <value>`",
           );
         }
-        await init.run(ctx.config, p, { yes: ctx.yes });
+        const roles = str(ctx, "roles");
+        const coreHost = str(ctx, "core-host");
+        const inferenceHost = str(ctx, "inference-host");
+        await init.run(ctx.config, p, {
+          yes: ctx.yes,
+          ...(isInteractive()
+            ? {
+                offerInstall: () =>
+                  install.run(
+                    ctx.config,
+                    { targets: [] },
+                    install.defaultInstallDeps(async (m) => interactivePrompter().confirm(m, true)),
+                  ),
+              }
+            : {}),
+          machine: {
+            ask: isInteractive(),
+            ...(roles !== undefined ? { roles } : {}),
+            ...(coreHost !== undefined ? { coreHost } : {}),
+            ...(inferenceHost !== undefined ? { inferenceHost } : {}),
+          },
+        });
       },
     },
     {
@@ -187,8 +225,132 @@ export const COMMANDS: CommandSpec = {
     },
     {
       name: "doctor",
-      help: "檢查設定檔、角色、LLM、Discord 和資料庫連線",
-      run: (ctx) => doctor.run(ctx.config),
+      help: "檢查設定檔、角色、LLM、Discord 和資料庫連線;--deep 加查埠、建置、JDK、worker 設定和顯存",
+      options: [
+        {
+          name: "deep",
+          help: "加查部署:Windows 保留埠、dist / mod jar 是否過期、JDK 21、worker 設定一致、顯存、暫存檔、服務健康",
+        },
+        { name: "deep-only", help: "只做 --deep 的部署檢查(不連 LLM、Discord、資料庫)" },
+      ],
+      run: (ctx) =>
+        doctor.run(ctx.config, { deep: flag(ctx, "deep"), stackOnly: flag(ctx, "deep-only") }),
+    },
+    {
+      name: "install",
+      help: "安裝這台電腦需要的東西:node 套件和建置、每個 worker 的 venv 與 pip,最後列出還要手動下載的",
+      args: [
+        {
+          name: "target",
+          help: "角色(broadcast、core、inference)、all 或服務名稱;省略 = [machine] 設定的",
+          optional: true,
+          variadic: true,
+        },
+      ],
+      options: [{ name: "dry-run", help: "只列出會做的事" }],
+      run: (ctx) =>
+        install.run(
+          ctx.config,
+          { targets: ctx.args, dryRun: flag(ctx, "dry-run") },
+          install.defaultInstallDeps(async (message) => {
+            if (ctx.yes) return true;
+            if (!isInteractive()) return false;
+            return interactivePrompter().confirm(message, true);
+          }),
+        ),
+    },
+    {
+      name: "start",
+      help: "每個服務開一個 Windows Terminal 分頁(可看可關);已在執行的不會重複啟動,不會自動重啟",
+      args: [
+        {
+          name: "target",
+          help: "角色(broadcast、core、inference)、all 或服務名稱;省略 = [machine] 設定的",
+          optional: true,
+          variadic: true,
+        },
+      ],
+      options: [
+        { name: "dry-run", help: "只列出會啟動什麼、哪些會略過,不啟動" },
+        { name: "no-wait", help: "開完分頁就繼續下一個,不等健康檢查" },
+        { name: "no-check", help: "略過啟動前的套件、venv、設定檢查" },
+        {
+          name: "timeout",
+          value: "SECS",
+          help: "每個服務等健康檢查的秒數(預設 [stack] start_timeout_secs)",
+        },
+      ],
+      run: (ctx) => {
+        const timeout = str(ctx, "timeout");
+        const timeoutSecs = timeout === undefined ? undefined : Number.parseInt(timeout, 10);
+        if (timeoutSecs !== undefined && !(timeoutSecs > 0))
+          throw new Error("--timeout 要是正整數(秒)");
+        return start.run(ctx.config, {
+          targets: ctx.args,
+          dryRun: flag(ctx, "dry-run"),
+          noWait: flag(ctx, "no-wait"),
+          noCheck: flag(ctx, "no-check"),
+          ...(timeoutSecs !== undefined ? { timeoutSecs } : {}),
+        });
+      },
+    },
+    {
+      name: "up",
+      help: "依序啟動整組服務(worker、core、voice node、stage)並檢查健康;Ctrl+C 停止這次啟動的服務",
+      options: [
+        { name: "only", value: "LIST", help: "只啟動這些服務(逗號分隔,例如 asr,core)" },
+        { name: "skip", value: "LIST", help: "不啟動這些服務" },
+        {
+          name: "timeout",
+          value: "SECS",
+          help: "每個服務等健康檢查的秒數(預設用 [stack] start_timeout_secs)",
+        },
+        { name: "dry-run", help: "只列出啟動順序和指令,不啟動" },
+        { name: "no-check", help: "略過啟動前的 worker 設定和建置檢查" },
+      ],
+      run: (ctx) => {
+        const list = (name: string) =>
+          str(ctx, name)
+            ?.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const timeout = str(ctx, "timeout");
+        const timeoutSecs = timeout === undefined ? undefined : Number.parseInt(timeout, 10);
+        if (timeoutSecs !== undefined && !(timeoutSecs > 0))
+          throw new Error("--timeout 要是正整數(秒)");
+        return up.run(ctx.config, {
+          only: list("only"),
+          skip: list("skip"),
+          timeoutSecs,
+          dryRun: flag(ctx, "dry-run"),
+          noCheck: flag(ctx, "no-check"),
+        });
+      },
+    },
+    {
+      name: "update",
+      help: "git pull、安裝相依套件,只重建有變的:SDK、擴充 dist、面板、overlay、Minecraft mod jar",
+      options: [
+        { name: "no-pull", help: "不執行 git pull" },
+        { name: "force", help: "不論有沒有變都全部重建" },
+        { name: "skip-mod", help: "不建置也不安裝 Minecraft mod" },
+        { name: "dry-run", help: "只列出會做的事" },
+      ],
+      run: (ctx) =>
+        update.run(
+          ctx.config,
+          {
+            noPull: flag(ctx, "no-pull"),
+            force: flag(ctx, "force"),
+            skipMod: flag(ctx, "skip-mod"),
+            dryRun: flag(ctx, "dry-run"),
+          },
+          update.defaultUpdateDeps(async (message) => {
+            if (ctx.yes) return true;
+            if (!isInteractive()) return false;
+            return interactivePrompter().confirm(message, false);
+          }),
+        ),
     },
     {
       name: "core",

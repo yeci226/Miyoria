@@ -167,6 +167,20 @@ Phase 0–8 先用 Rust 寫成原型(留在 git 歷史裡),之後整個改寫成
 - [ ] Twitch / YouTube 瀏覽器來源(`WatchSource`);未驗證的風險是瀏覽器抓音訊,以及 Playwright Chromium 不含 H.264
 - [ ] 掉包重傳(NACK)、H.264 以外的編碼
 - [ ] 串流聲音偏小(平均約 -50 dB)的來源(接收端還是開播端)尚未確認
+## v2 架構重整
+
+設計與 review 見 [design/v2-architecture.md](design/v2-architecture.md),實作紀錄見 [design/v2-implementation.md](design/v2-implementation.md)。
+
+- [x] 階段 0–1:對話管線(回合擁有權、選擇性 barge-in、延遲、prompt 編譯器、推理分級、人設重寫)
+- [x] 階段 2:Arbiter(Impulse、唯一底線、Ledger;取代 initiative)
+- [x] 階段 3:ActivityManager(presence / broadcast / activity 狀態機、task id、notice)
+- [x] 階段 4:情緒與關係(遞減、互斥、一人一卡)
+- [x] 階段 5:計畫與日程(Appraise / Plan / Reflect、Goal agenda、日計畫)
+- [x] 階段 6:遊戲任務契約(task id + 原因碼)
+- [x] 回放測試(`packages/replay`)、面板的活動 / 帳本 / 情緒 / 目標 / prompt 檢視
+- [ ] 實測並對照 §4 的驗收指標(語音 p50 < 2.5 s、文字 p50 < 3 s、被叫開口率 > 70%、主動被擋率 < 20%)
+- [ ] Minecraft 換方法(另外討論)
+- [ ] 決定中日雙語語音是否保留;speculative 生成;Silero VAD
 
 ## 後續可以考慮
 

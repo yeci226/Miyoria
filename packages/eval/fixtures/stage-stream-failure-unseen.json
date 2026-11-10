@@ -1,0 +1,45 @@
+{
+  "id": "stage-stream-failure-unseen",
+  "title": "/stream start failed three times in a minute and she never knew",
+  "category": "fault",
+  "incident": {
+    "at": "2026-11-08T01:04:15+08:00",
+    "summary": "The owner ran /stream start at 01:04:19, 01:04:28 and 01:04:59; the stage node answered 'did not answer in time'. The log holds no event of the failure: the only stage line is a scene change saying nothing is live, and nothing she said mentions the stream.",
+    "source": [
+      "audit_log gate.stage.stream 2026-11-08 01:04-01:05",
+      "log_events source stage, mainline in the same window"
+    ]
+  },
+  "harness": "trace",
+  "trace": [
+    {"type":"gate","t":4.3,"capability":"stage.stream","principal":"command","allowed":true},
+    {"type":"gate","t":13.5,"capability":"stage.stream","principal":"command","allowed":true},
+    {"type":"gate","t":45,"capability":"stage.stream","principal":"command","allowed":true},
+    {"type":"observe","t":51.6,"source":"stage","text":"直播機連著;場景 Minecraft;沒有直播"},
+    {"type":"said","t":54.3,"channel":"voice","text":"哼，怎麼樣，Succubus Gabber 我可是好好唱完了。viewer-1，你選歌的眼光還算不錯嘛。"},
+    {"type":"said","t":54.5,"channel":"voice","text":"……等等，咦？還是沒人喔？就算是深夜，大家也睡太快了吧？"},
+    {"type":"said","t":71.6,"channel":"text","text":"舔東西的聲音?"},
+    {"type":"said","t":71.6,"channel":"text","text":"我是藍鯨不是什麼奇怪的聲音素材好嗎。"},
+    {"type":"said","t":71.6,"channel":"text","text":"再亂講我就把你 ping 到三千。"},
+    {"type":"said","t":77.8,"channel":"text","text":"喔——不問就不問，反正你這種語氣一聽就是踩到什麼不想講的坑。"},
+    {"type":"said","t":78,"channel":"text","text":"不過先說好，等等我挖木頭挖到一半你要是突然爆料，我可是會手滑的喔。"},
+    {"type":"said","t":127.3,"channel":"text","text":"「守華」？你要問的是守什麼吧——你不是在問我守著什麼嗎？守著這堆木頭啊，天黑前不做完木鎬，我就要被苦力怕守了。"}
+  ],
+  "control": [
+    {"type":"gate","t":4.3,"capability":"stage.stream","principal":"command","allowed":true},
+    {"type":"gate","t":13.5,"capability":"stage.stream","principal":"command","allowed":true},
+    {"type":"gate","t":45,"capability":"stage.stream","principal":"command","allowed":true},
+    {"type":"observe","t":48,"source":"stage","text":"直播沒有開起來:直播機沒有回應","error":true},
+    {"type":"said","t":50,"channel":"text","text":"直播沒開成,直播機沒有回我。"}
+  ],
+  "checks": [
+    {
+      "rule": "failure_surfaced",
+      "capability": "stage.stream",
+      "within_s": 60
+    }
+  ],
+  "status": "xfail",
+  "reason": "the failure of an owner command reaches the command reply only: no observation, so she cannot mention it",
+  "flips_with": "stage: publish the outcome of stream start/stop as an observation (error or live), and said-vs-done; re-record the case and run `--trace`"
+}

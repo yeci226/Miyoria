@@ -2,8 +2,8 @@
 // confirmations and module pauses, the backup-before-reset rule and the factory reset.
 
 import { ACTIVENESS_PREFIX, AgentHandleKey, MODE_PREFIX } from "@miyoria/agent";
+import * as arbiter from "@miyoria/arbiter";
 import { AuthService, AuthServiceKey } from "@miyoria/auth";
-import * as initiative from "@miyoria/initiative";
 import {
   defineManifest,
   type Module,
@@ -264,8 +264,14 @@ describe("data routes", () => {
     r = await h.call("POST", "/api/data/wipe", { categories: ["messages"], confirm: ` ${P} ` });
     expect(r.status).toBe(200);
     const result = r.body as DataWipeResult;
-    expect(result.deleted).toEqual(["conversation", "messages"]);
-    expect(result.counts).toEqual({ message_log: 1, memory_watermarks: 1, conversation_states: 0 });
+    expect(result.deleted).toEqual(["conversation", "messages", "event_log"]);
+    expect(result.counts).toEqual({
+      message_log: 1,
+      memory_watermarks: 1,
+      conversation_states: 0,
+      log_events: 0,
+      log_event_rollups: 0,
+    });
     expect((await h.store.settings.list(P, WATERMARK_PREFIX)).size).toBe(0);
     expect(countOf(await inventoryOf(h), "memories")).toBe(1);
     const audit = await h.store.audit.recent(10, "api");
@@ -351,7 +357,7 @@ describe("data categories", () => {
     expect(has("active", MOOD_KEY)).toBe(true);
     expect(has("active", TOOL_KEY_PREFIX)).toBe(true);
     for (const [profile, name] of [
-      [initiative.STATE_PROFILE, initiative.STATE_KEY],
+      [arbiter.STATE_PROFILE, arbiter.STATE_KEY],
       [queue.STATE_PROFILE, queue.STATE_KEY],
       [CONSENT_PROFILE, consentKey({ platform: "x", id: "y" }).replace(/x:y$/, "")],
       [PRIVACY_PROFILE, PRIVACY_PREFIX],

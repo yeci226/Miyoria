@@ -45,8 +45,16 @@ export interface HistoryEntry {
   interrupted: boolean;
   /** The turn her speech belongs to. */
   turn: TurnId | null;
+  /** The input defence flagged it, with this note: it is shown as data, beside the note. */
+  flagged?: string | null;
   /** One of the messages the current turn answers (set on a copy while building the prompt). */
   current?: boolean;
+  /** With `current`: how the focus block introduces it (`問你`, `回你`, `接著說`, `說`). */
+  focusVerb?: string;
+  /** A quoted parent whose time is not known (`ts` is the reply's), so no "how long ago". */
+  undated?: boolean;
+  /** On a quoted direct parent: the lines around it in its channel, shown with it. */
+  around?: { before: HistoryEntry[]; after: HistoryEntry[] };
 }
 
 /** Someone else seen in a context (Rust `session::Participant`). */
@@ -93,6 +101,12 @@ export class Session {
   /** Records a transcribed voice utterance of someone else. */
   recordUtterance(msg: IncomingMessage): void {
     this.#record(msg, false, true);
+  }
+
+  /** The input defence flagged message `id`. */
+  flag(id: string, note: string): void {
+    const entry = this.#history.findLast((e) => e.id === id);
+    if (entry) entry.flagged = note;
   }
 
   #record(msg: IncomingMessage, isSelf: boolean, spoken: boolean): void {
@@ -220,6 +234,37 @@ export class Session {
     this.noteSelfSpoke(ts);
   }
 
+  /**
+   * Of a sentence of `turn` only `heard` reached anyone: her history keeps that much of it (a
+   * sentence nobody heard is taken out altogether, and an entry left empty with it).
+   */
+  keepHeard(turn: TurnId | null, text: string, heard: string): void {
+    if (turn === null) return;
+    const found = this.#history.findLast((e) => e.isSelf && e.spoken && e.turn === turn);
+    const said = text.trim();
+    if (!found || said === "") return;
+    const at = found.text.lastIndexOf(said);
+    if (at < 0) return;
+    found.text = `${found.text.slice(0, at)}${heard}${found.text.slice(at + said.length)}`;
+    if (found.text.trim() === "") this.#history.splice(this.#history.indexOf(found), 1);
+  }
+
+  /**
+   * Her speech of `turn` was recorded with its spoken line (`spoken`, a line sent to TTS before
+   * its written sentence existed): the written sentence replaces it. Returns whether it was
+   * found.
+   */
+  replaceSpoken(turn: TurnId, spoken: string, written: string): boolean {
+    const from = spoken.trim();
+    if (from === "") return false;
+    const found = this.#history.findLast(
+      (e) => e.isSelf && e.spoken && e.turn === turn && e.text.includes(from),
+    );
+    if (!found) return false;
+    found.text = found.text.replace(from, written.trim());
+    return true;
+  }
+
   /** She was talking at `ts` (start or end of her speech). */
   noteSelfSpoke(ts: number): void {
     this.#lastSelfAt = this.#lastSelfAt === null ? ts : Math.max(this.#lastSelfAt, ts);
@@ -245,6 +290,20 @@ export class Session {
   /** The last `n` entries, oldest first. */
   recent(n: number): HistoryEntry[] {
     return this.#history.slice(Math.max(this.#history.length - n, 0));
+  }
+
+  /** Up to `before` lines before entry `id` and `after` lines after it (none if unknown). */
+  around(
+    id: string,
+    before: number,
+    after: number,
+  ): { before: HistoryEntry[]; after: HistoryEntry[] } {
+    const i = this.#history.findIndex((e) => e.id === id);
+    if (i < 0) return { before: [], after: [] };
+    return {
+      before: this.#history.slice(Math.max(i - before, 0), i),
+      after: this.#history.slice(i + 1, i + 1 + after),
+    };
   }
 
   /** Epoch ms of her last words, if any. */

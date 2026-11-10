@@ -3,6 +3,7 @@ import { sleep } from "@miyoria/kernel";
 import type { JsonValue } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
+  CANCEL_METHOD,
   encodeFrame,
   FrameDecoder,
   InitializeResultSchema,
@@ -136,6 +137,28 @@ describe("rpc", () => {
     expect(JSON.parse((reply[0] as Buffer).toString()).error.code).toBe(-32700);
     controller.abort();
     await expect(served).resolves.toBeUndefined();
+  });
+
+  it("tells the other side when a request is aborted or times out", async () => {
+    const out = new PassThrough();
+    const peer = new Peer(out);
+    const frames = (): JsonValue[] => {
+      const chunk = out.read() as Buffer | null;
+      return chunk === null
+        ? []
+        : new FrameDecoder().push(chunk).map((b) => JSON.parse(b.toString()) as JsonValue);
+    };
+    const controller = new AbortController();
+    const aborted = peer.request("tools.call", { name: "x" }, 5000, controller.signal);
+    controller.abort(new Error("turn cancelled"));
+    await expect(aborted).rejects.toThrow("turn cancelled");
+    const sent = frames();
+    expect(sent).toEqual([
+      { jsonrpc: "2.0", id: 1, method: "tools.call", params: { name: "x" } },
+      { jsonrpc: "2.0", method: CANCEL_METHOD, params: { id: 1 } },
+    ]);
+    await expect(peer.request("tools.call", {}, 20)).rejects.toMatchObject({ code: TIMEOUT });
+    expect(frames().at(-1)).toEqual({ jsonrpc: "2.0", method: CANCEL_METHOD, params: { id: 2 } });
   });
 
   it("rpc_error_wire_shape", () => {

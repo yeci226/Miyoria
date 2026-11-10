@@ -16,6 +16,8 @@ export const CATEGORY_LABEL: Record<DataCategoryId, string> = {
   people: "人物與帳號連結",
   channels: "頻道設定",
   voice_consent: "語音同意",
+  event_log: "事件日誌",
+  directives: "主人規則",
   privacy: "隱私設定",
   queue: "點播佇列",
   roles: "角色與權限",

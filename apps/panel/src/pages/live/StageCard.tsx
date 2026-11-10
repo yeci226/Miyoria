@@ -18,7 +18,7 @@ function LinkBadge({ name, link }: { name: string; link: StageLink }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span tabIndex={0} className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+        <span tabIndex={0} className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
           {badge}
         </span>
       </TooltipTrigger>
@@ -60,7 +60,7 @@ function OverlayRow({ url }: { url: string }) {
         </Button>
       </div>
       <iframe
-        className="aspect-video w-full rounded-md border bg-[repeating-conic-gradient(oklch(0.2_0_0)_0_25%,oklch(0.17_0_0)_0_50%)] bg-[length:16px_16px]"
+        className="aspect-video w-full rounded-md border bg-[repeating-conic-gradient(rgba(255,255,255,0.06)_0_25%,transparent_0_50%)] bg-[length:16px_16px]"
         src={url}
         title="Overlay 預覽"
         sandbox="allow-scripts allow-same-origin"
@@ -82,13 +82,13 @@ function StageBody({ s }: { s: StageState }) {
       <Part label="OBS 推流" id="stage-stream">
         <div className="flex flex-wrap items-center gap-3">
           <span className={cn("flex items-center gap-2 text-sm font-medium", !s.streaming && "text-muted-foreground")}>
-            <Dot tone={s.streaming ? "danger" : "neutral"} pulse={s.streaming} />
+            <Dot tone={s.streaming ? "brand" : "neutral"} pulse={s.streaming} />
             {s.streaming ? "推流中" : "沒有推流"}
           </span>
           <Button
             writes
             size="sm"
-            variant={s.streaming ? "outline" : "default"}
+            variant="secondary"
             disabled={!s.obs.connected}
             title={!s.obs.connected ? (s.obs.error ?? "OBS 未連線") : undefined}
             onClick={() => setConfirmStream(s.streaming ? "stop" : "start")}
@@ -104,7 +104,7 @@ function StageBody({ s }: { s: StageState }) {
         {s.scenes.length === 0 ? (
           <p className="pt-1.5 text-sm text-muted-foreground">{s.obs.connected ? "OBS 沒有回報場景" : "OBS 未連線"}</p>
         ) : (
-          <div role="radiogroup" aria-labelledby="stage-scenes" className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div role="radiogroup" aria-labelledby="stage-scenes" className="glass-well grid grid-cols-2 gap-0.5 rounded-lg p-0.5 sm:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))]">
             {s.scenes.map((name) => {
               const on = s.scene === name;
               const busy = m.scene.isPending && m.scene.variables === name;
@@ -124,14 +124,13 @@ function StageBody({ s }: { s: StageState }) {
                     })
                   }
                   className={cn(
-                    "group flex h-10 min-w-0 items-center gap-2 rounded-md border px-3 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed",
+                    "group flex h-10 min-w-0 items-center gap-2 rounded-md px-3 text-left text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed",
                     on
-                      ? "border-brand/50 bg-brand/10 font-medium text-foreground"
-                      : "bg-background/40 text-muted-foreground hover:border-foreground/20 hover:bg-accent hover:text-foreground disabled:hover:border-border disabled:hover:bg-background/40 disabled:hover:text-muted-foreground",
+                      ? "bg-primary text-primary-foreground [text-shadow:none]"
+                      : "hover:bg-hover disabled:hover:bg-transparent",
                     busy && "animate-pulse",
                   )}
                 >
-                  <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", on ? "bg-brand" : "bg-muted-foreground/30")} />
                   <span className="truncate">{name}</span>
                 </button>
               );
@@ -154,7 +153,7 @@ function StageBody({ s }: { s: StageState }) {
                 disabled={!s.vts.connected || m.expression.isPending}
                 busy={m.expression.isPending && m.expression.variables === name}
                 aria-pressed={s.expression === name}
-                className={cn("h-7 rounded-full px-3 text-[13px] font-normal", s.expression === name && "border-brand/50 text-foreground")}
+                className={cn("font-normal", s.expression === name && "bg-secondary text-secondary-foreground hover:bg-secondary-hover")}
                 onClick={() => m.expression.mutate(name, { onError: (e) => notify.error(e, "觸發表情失敗") })}
               >
                 {name}
@@ -174,7 +173,6 @@ function StageBody({ s }: { s: StageState }) {
         open={confirmStream !== null}
         title={confirmStream === "start" ? "開始 OBS 推流?" : "結束 OBS 推流?"}
         confirmLabel={confirmStream === "start" ? "開始推流" : "結束推流"}
-        destructive={confirmStream === "stop"}
         busy={m.stream.isPending}
         onClose={() => setConfirmStream(null)}
         onConfirm={() =>

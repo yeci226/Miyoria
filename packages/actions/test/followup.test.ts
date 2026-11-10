@@ -1,5 +1,11 @@
 import type { ToolContext } from "@miyoria/tools";
-import { type Event, Principals } from "@miyoria/types";
+import {
+  ARBITER_IMPULSE_TOPIC,
+  type Event,
+  impulseReason,
+  Principals,
+  v2Payload,
+} from "@miyoria/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -20,8 +26,21 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** The follow-up impulses published (in the old `agent_initiative` shape). */
 const initiatives = (events: readonly Event[]) =>
-  events.flatMap((e) => (e.type === "agent_initiative" ? [e.data] : []));
+  events.flatMap((e) => {
+    const impulse = v2Payload(e, ARBITER_IMPULSE_TOPIC);
+    if (!impulse) return [];
+    expect(impulse.source).toBe("followup");
+    return [
+      {
+        context: impulse.target.context,
+        reason: impulseReason(impulse),
+        hint: impulse.hint ?? "",
+        about: impulse.about,
+      },
+    ];
+  });
 
 function context(): ToolContext {
   return {

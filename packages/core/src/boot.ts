@@ -4,6 +4,7 @@
 // file stays testable with fake modules and an in-memory store.
 
 import { ActionsModule, ActuatorRegistry, ActuatorRegistryKey } from "@miyoria/actions";
+import { DirectiveModule, DirectiveService } from "@miyoria/directive";
 import {
   type Config,
   EventBus,
@@ -15,11 +16,18 @@ import {
   SupervisorKey,
 } from "@miyoria/kernel";
 import type { Profile } from "@miyoria/profile";
+import { ReplayRecorderModule } from "@miyoria/replay";
 import {
   AuditLogKey,
   AuthStoreKey,
+  BountyStoreKey,
+  CoinLedgerStoreKey,
+  DealStoreKey,
   DecisionLogKey,
+  FortuneStoreKey,
+  GoalStoreKey,
   IdentityStoreKey,
+  MemberCardStoreKey,
   MemoryRecordStoreKey,
   MessageLogKey,
   ModuleStateStoreKey,
@@ -29,13 +37,18 @@ import {
   RelationshipStoreKey,
   SettingsStoreKey,
   type Store,
+  StoredHandleDirectory,
   StoreKey,
 } from "@miyoria/store";
 import { ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
 import {
   ActuatorExecutorKey,
+  customEvent,
+  DirectivesKey,
+  HandleDirectoryKey,
   type JsonValue,
   KERNEL_MODULE,
+  PipelineKey,
   PlatformHistories,
   PlatformHistoriesKey,
   PlatformSinks,
@@ -44,16 +57,18 @@ import {
   ProfileIdKey,
   PromptContributors,
   PromptContributorsKey,
+  SYSTEM_SHUTDOWN_TOPIC,
 } from "@miyoria/types";
 import { CliPlatform, type CliPlatformOptions } from "./cli-platform.js";
 import { moduleEnabled, NEEDS_TOKEN } from "./module-ids.js";
 import { RecorderModule } from "./recorder.js";
-import { databaseUrl, loadProfile, resolveDatabaseUrl } from "./settings.js";
+import { databaseUrl, loadProfile, pipeline, resolveDatabaseUrl } from "./settings.js";
 
 const log = getLogger("core.boot");
 
 /** Source of the gate's `gate.decision` events. */
 const ACTIONS_MODULE = ActionsModule.ID;
+const DIRECTIVE_MODULE = DirectiveModule.ID;
 
 /** What the module factories get. */
 export interface ModuleDeps {
@@ -90,6 +105,15 @@ export interface ModuleCatalog {
    * `ActiveProfileKey`), provided right before the modules are built.
    */
   provideServices?(services: ServiceRegistry, deps: ModuleDeps): void;
+  /**
+   * One-time repairs of stored data that belong to module packages (idempotent), run after the
+   * store is open and before any module starts.
+   */
+  migrateStoredData?(
+    store: Store,
+    profile: ProfileId,
+    handles: StoredHandleDirectory | null,
+  ): Promise<void>;
 }
 
 export interface CoreOptions {
@@ -150,6 +174,8 @@ export class Core {
 
   /** Stops every module and closes the store. */
   async stop(): Promise<void> {
+    // What modules say from here on is the core going down, not something that happened.
+    this.bus.publish(KERNEL_MODULE, customEvent(SYSTEM_SHUTDOWN_TOPIC, {}));
     await this.supervisor.stopAll();
     this.#persist.abort();
     await this.#persistTask;
@@ -181,6 +207,7 @@ export async function buildCoreWith(
   }
 
   const k = KERNEL_MODULE;
+  services.provide(k, PipelineKey, { pipeline: pipeline(config) });
   services.provide(k, PlatformSinksKey, new PlatformSinks());
   services.provide(k, PlatformHistoriesKey, new PlatformHistories());
   services.provide(k, SupervisorKey, supervisor);
@@ -189,6 +216,12 @@ export async function buildCoreWith(
   services.provide(k, DecisionLogKey, store.decisions);
   services.provide(k, PersonaOverrideStoreKey, store.personaOverrides);
   services.provide(k, MessageLogKey, store.messages);
+  services.provide(k, MemberCardStoreKey, store.cards);
+  services.provide(k, CoinLedgerStoreKey, store.coins);
+  services.provide(k, DealStoreKey, store.deals);
+  services.provide(k, FortuneStoreKey, store.fortunes);
+  services.provide(k, GoalStoreKey, store.goals);
+  services.provide(k, BountyStoreKey, store.bounties);
   services.provide(k, PeopleStoreKey, store.people);
   services.provide(k, MemoryRecordStoreKey, store.memories);
   services.provide(k, RelationshipStoreKey, store.relationships);
@@ -197,6 +230,15 @@ export async function buildCoreWith(
   services.provide(k, AuditLogKey, store.audit);
   services.provide(k, ModuleStateStoreKey, store.moduleState);
   services.provide(k, ProfileDataStoreKey, store.profileData);
+  // Her stable names for people (`Owen`, `Owen#2`): never per-call codes (`u1`).
+  let handles: StoredHandleDirectory | null = null;
+  try {
+    handles = await StoredHandleDirectory.open(store.settings);
+    handles.syncPeople(await store.people.all());
+    services.provide(k, HandleDirectoryKey, handles);
+  } catch (error) {
+    log.warn({ err: errorMessage(error) }, "cannot load the handle table; names stay per module");
+  }
   // Registries other modules add to, independent of any one module's lifetime.
   const tools = new ToolRegistry();
   services.provide(k, ToolRegistryKey, tools);
@@ -217,6 +259,24 @@ export async function buildCoreWith(
   const profileDisplayName = profile.displayName;
   const profileId = profile.id;
   services.provide(k, ProfileIdKey, profileId);
+  // Lessons, recaps and agenda text written with per-call codes before handles were stable are
+  // repaired before any module caches them (idempotent; resolves what the record itself says,
+  // drops the rest).
+  try {
+    await catalog.migrateStoredData?.(store, profileId, handles);
+  } catch (error) {
+    log.warn({ err: errorMessage(error) }, "cannot repair per-call codes in stored text");
+  }
+
+  // The rules hold from before the first module starts, and with the `directive` module off.
+  const directives = new DirectiveService({
+    services,
+    store: store.directives,
+    profile: profileId,
+    publish: (event) => bus.publish(DIRECTIVE_MODULE, event),
+  });
+  await directives.refresh();
+  services.provide(k, DirectivesKey, directives);
 
   const deps: ModuleDeps = { config, profile, profileId, store, baseDir };
   catalog.provideServices?.(services, deps);
@@ -224,6 +284,8 @@ export async function buildCoreWith(
   const modules: Module[] = [
     ...(await catalog.coreModules(deps)),
     new RecorderModule(store, profileId),
+    // Opt-in (`[modules.replay] record = true`): what she perceives, for `pnpm replay`.
+    new ReplayRecorderModule({ baseDir }),
   ];
   if (options.discord ?? true) modules.push(catalog.discord(deps));
   if (options.api ?? true) modules.push(catalog.api(deps));

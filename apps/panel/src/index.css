@@ -6,59 +6,116 @@
 /* Dark only: the panel lives next to OBS and Discord on a streaming desk at night. */
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Depth, back to front: the picture, the content sheet, the heavier frame (sidebar, header, tabs,
+ * rail), a darker band inside the content. Two accents and neutrals; red is only the emergency
+ * stop. src/app/appearance.ts writes the look variables and the theme colours on <html>.
+ */
 :root {
   color-scheme: dark;
-  --radius: 0.5rem;
+  --radius: 0.375rem;
 
-  /* Neutral ground, Vercel-dark: near-black page, one step up for cards and popovers. */
-  --background: oklch(0.135 0 0);
-  --foreground: oklch(0.96 0 0);
-  --card: oklch(0.16 0 0);
-  --card-foreground: oklch(0.96 0 0);
-  --popover: oklch(0.175 0 0);
-  --popover-foreground: oklch(0.96 0 0);
-  --primary: oklch(0.96 0 0);
-  --primary-foreground: oklch(0.16 0 0);
-  --secondary: oklch(0.22 0 0);
-  --secondary-foreground: oklch(0.96 0 0);
-  --muted: oklch(0.2 0 0);
-  --muted-foreground: oklch(0.71 0 0);
-  --accent: oklch(0.225 0 0);
-  --accent-foreground: oklch(0.96 0 0);
-  --destructive: oklch(0.64 0.2 25);
-  --destructive-foreground: oklch(0.97 0.01 25);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 13%);
-  /* DeepSeek blue: focus, selection and "her". */
-  --ring: oklch(0.62 0.19 267);
-  --brand: oklch(0.66 0.18 267);
-  --brand-foreground: oklch(0.98 0.01 267);
+  /* The look: defaults here, the owner's values from the appearance popover. */
+  --bg-brightness: 0.66;
+  --bg-blur: 0px;
+  --blur: 7px;
+  --sheet-a: 0.105;
+  --sheet-b: 0.68;
+  --dock-a: 0.31;
+  --well-a: 0.29;
 
-  --success: oklch(0.74 0.15 155);
-  --warning: oklch(0.8 0.14 78);
+  --sheet: rgba(9, 10, 16, var(--sheet-a));
+  --sheet-fx: blur(var(--blur)) saturate(1.5) brightness(var(--sheet-b));
+  --dock: rgba(9, 9, 15, var(--dock-a));
+  --dock-fx: blur(calc(var(--blur) * 2)) saturate(1.4) brightness(0.78);
+  --well: rgba(4, 5, 10, var(--well-a));
+  --float: rgba(15, 15, 21, 0.84);
+  --float-fx: blur(20px);
+  --login: rgba(15, 15, 21, 0.5);
+  --login-fx: blur(16px) saturate(1.3);
+
+  /* Density. */
+  --row-y: 0.5625rem;
+  --stage-gap: 2rem;
+  --nav-h: 2rem;
+
+  /* Neutrals. */
+  --background: #0b0d12;
+  --foreground: #f1f0f4;
+  --card: transparent;
+  --card-foreground: var(--foreground);
+  --popover: var(--float);
+  --popover-foreground: var(--foreground);
+  --muted: rgba(255, 255, 255, 0.1);
+  --muted-foreground: #b3b1bc;
+  --accent: rgba(255, 255, 255, 0.1);
+  --accent-foreground: var(--foreground);
+  --control: rgba(255, 255, 255, 0.1);
+  --control-hover: rgba(255, 255, 255, 0.17);
+  --hover: rgba(255, 255, 255, 0.07);
+  --border: rgba(255, 255, 255, 0.11);
+  --line-strong: rgba(255, 255, 255, 0.2);
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --input: rgba(255, 255, 255, 0.11);
+
+  /* The two accents. */
+  --primary: #f29dc4;
+  --primary-foreground: #1f1218;
+  --primary-hover: color-mix(in oklab, var(--primary) 72%, white);
+  --secondary: #7355e8;
+  --secondary-foreground: #fff;
+  --secondary-hover: color-mix(in oklab, var(--secondary) 86%, white);
+  --secondary-line: color-mix(in oklab, var(--secondary) 62%, white);
+  --ring: var(--primary);
+
+  /* The one exception. */
+  --stop: #d6373f;
+  --stop-hover: #e5484d;
 
   /*
-   * Chart series, in this fixed order (validated for CVD on the card surface; the first three
-   * hold for all pairs): her blue, orange, aqua, yellow, magenta. Status colors never stand in
-   * for a series. `--chart-quiet` is the de-emphasis gray ("nothing happened", "other").
+   * Chart series, in this fixed order (validated for CVD on the glass in all four themes; the
+   * first three hold for all pairs). `--chart-line` is any single series, `--chart-quiet` is
+   * "nothing came of it" or "other".
    */
-  --chart-1: oklch(0.66 0.18 267);
-  --chart-2: #d95926;
-  --chart-3: #199e70;
-  --chart-4: #c98500;
-  --chart-5: #d55181;
-  --chart-quiet: oklch(0.42 0 0);
-  --chart-grid: oklch(1 0 0 / 6%);
-  --chart-axis: oklch(1 0 0 / 16%);
+  --chart-1: #d9609a;
+  --chart-2: #8a68ee;
+  --chart-3: #c9c8d1;
+  --chart-4: #b4427f;
+  --chart-5: #6b4ee0;
+  --chart-line: var(--secondary-line);
+  --chart-quiet: rgba(255, 255, 255, 0.22);
+  --chart-faint: rgba(255, 255, 255, 0.1);
+  --chart-grid: rgba(255, 255, 255, 0.07);
+  --chart-axis: rgba(255, 255, 255, 0.18);
+  --chart-surface: #14151f;
 
-  --sidebar: oklch(0.115 0 0);
-  --sidebar-foreground: oklch(0.86 0 0);
-  --sidebar-primary: oklch(0.96 0 0);
-  --sidebar-primary-foreground: oklch(0.16 0 0);
-  --sidebar-accent: oklch(0.2 0 0);
-  --sidebar-accent-foreground: oklch(0.97 0 0);
-  --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.62 0.19 267);
+  --sidebar: var(--dock);
+  --sidebar-foreground: #cfcdd6;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--control-hover);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--primary);
+}
+
+/* Glass mode off: the same layers as opaque dark colours, nothing blurred. */
+:root[data-glass="off"] {
+  --sheet: #12141b;
+  --sheet-fx: none;
+  --dock: #0e1016;
+  --dock-fx: none;
+  --well: #0a0b10;
+  --float: #181a22;
+  --float-fx: none;
+  --login: #181a22;
+  --login-fx: none;
+}
+
+:root[data-density="compact"] {
+  --row-y: 0.3125rem;
+  --stage-gap: 1.25rem;
+  --nav-h: 1.75rem;
 }
 
 @theme inline {
@@ -68,9 +125,9 @@
   --font-mono:
     "Geist Mono Variable", ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, monospace;
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
   --radius-xl: calc(var(--radius) + 4px);
 
   --color-background: var(--background);
@@ -81,21 +138,26 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary-hover: var(--secondary-hover);
+  --color-secondary-line: var(--secondary-line);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
+  --color-control: var(--control);
+  --color-control-hover: var(--control-hover);
+  --color-hover: var(--hover);
+  --color-well: var(--well);
   --color-border: var(--border);
+  --color-line-strong: var(--line-strong);
+  --color-line-soft: var(--line-soft);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-brand: var(--brand);
-  --color-brand-foreground: var(--brand-foreground);
-  --color-success: var(--success);
-  --color-warning: var(--warning);
+  --color-stop: var(--stop);
+  --color-stop-hover: var(--stop-hover);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -116,18 +178,25 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* The base colour sits on <html>: a background on <body> would cover the picture. */
   html {
     -webkit-text-size-adjust: 100%;
-    scrollbar-color: oklch(1 0 0 / 16%) transparent;
+    background: var(--background);
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
   }
   body {
-    @apply bg-background text-foreground font-sans antialiased;
+    @apply text-foreground font-sans antialiased;
+    font-size: 14px;
+    line-height: 1.5;
     font-feature-settings: "ss01";
+    font-variant-numeric: tabular-nums;
     text-rendering: optimizeLegibility;
+    caret-color: var(--primary);
   }
   ::selection {
-    background: oklch(0.62 0.19 267 / 40%);
-    color: var(--foreground);
+    background: var(--primary);
+    color: var(--primary-foreground);
+    text-shadow: none;
   }
   :focus-visible {
     outline-color: var(--ring);
@@ -137,7 +206,7 @@
     height: 10px;
   }
   ::-webkit-scrollbar-thumb {
-    background: oklch(1 0 0 / 14%);
+    background: rgba(255, 255, 255, 0.2);
     border: 3px solid transparent;
     border-radius: 999px;
     background-clip: padding-box;
@@ -157,6 +226,108 @@
   }
 }
 
+@layer components {
+  /* The picture. It overhangs the window by its blur so the soft edge stays out of view. */
+  .backdrop {
+    position: fixed;
+    inset: calc(var(--bg-blur) * -2);
+    z-index: -1;
+    pointer-events: none;
+    background-position: center;
+    background-size: cover;
+    background-repeat: no-repeat;
+    filter: brightness(var(--bg-brightness)) saturate(1.08) blur(var(--bg-blur));
+    transition: opacity 240ms ease-out;
+  }
+
+  /* The content: the most see-through, so its text is lighter and carries a shadow. */
+  .glass-sheet {
+    --muted-foreground: #dedce4;
+    background: var(--sheet);
+    -webkit-backdrop-filter: var(--sheet-fx);
+    backdrop-filter: var(--sheet-fx);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  }
+
+  /* The frame: heavier glass, flush to the window. */
+  .glass-dock {
+    --muted-foreground: #cfcdd6;
+    background: var(--dock);
+    -webkit-backdrop-filter: var(--dock-fx);
+    backdrop-filter: var(--dock-fx);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  }
+
+  .glass-well {
+    background: var(--well);
+  }
+
+  /* Anything over the page: popover, dialog, sheet, menus, tooltips, toasts. */
+  .glass-float {
+    border: 1px solid var(--line-strong);
+    background: var(--float);
+    -webkit-backdrop-filter: var(--float-fx);
+    backdrop-filter: var(--float-fx);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    text-shadow: none;
+  }
+
+  /* Login: glass beside a clear pane onto the picture, siblings so each filters the backdrop. */
+  .login-card {
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
+
+  .login-form {
+    background: var(--login);
+    -webkit-backdrop-filter: var(--login-fx);
+    backdrop-filter: var(--login-fx);
+  }
+
+  /*
+   * Frosts the backdrop and takes back some of its dimming, then lays the owner's login picture
+   * over it, a little see-through. `public/login.local.jpg` is game art kept out of git; without it the backdrop shows.
+   */
+  .login-window {
+    position: relative;
+    -webkit-backdrop-filter: blur(16px) brightness(1.2);
+    backdrop-filter: blur(16px) brightness(1.2);
+  }
+
+  .login-window::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: url("/login.local.jpg") 64% 30% / cover no-repeat;
+    opacity: 0.82;
+  }
+
+  /* The header on 總覽 has no surface until the page slides under it. */
+  [data-slot="app-header"]:not([data-stuck]) {
+    border-color: transparent;
+    background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* The opening on the picture, 總覽 only. */
+  .opening::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(180deg, rgba(8, 9, 15, 0.55), rgba(8, 9, 15, 0) 38%),
+      linear-gradient(0deg, rgba(8, 9, 15, 0.5), rgba(8, 9, 15, 0) 52%);
+  }
+
+  /* Titles step down in the rail. */
+  [data-slot="rail"] [data-slot="card-title"] {
+    font-size: 13px;
+    letter-spacing: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -165,4 +336,250 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Feeding her: the price floats up from the balance, the pressed button gives a little. */
+@keyframes wallet-spent {
+  from {
+    opacity: 1;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes wallet-press {
+  40% {
+    transform: scale(0.95);
+  }
+}
+
+.wallet-spent {
+  animation: wallet-spent 1.2s ease-out forwards;
+}
+
+.wallet-press {
+  animation: wallet-press 0.3s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The price just stays beside the balance until it is taken away. */
+  .wallet-spent {
+    animation: none;
+  }
+}
+
+/* The digital card (HoloCard.tsx): it tilts toward the pointer and catches light. The variables are
+   written each frame: --rx/--ry the turn, --mx/--my and --px/--py where the pointer is, --hyp how far
+   from the middle (0 to 1), --on how lit it is, --s its size. Radii are the SVG's 26 of 630 x 880. */
+/* Behind the digital card: the picture pushed back under dark frosted glass, so the card and its
+   light read clearly. Opaque when glass mode is off. */
+.card-veil {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: rgba(5, 6, 11, 0.62);
+  backdrop-filter: blur(22px) saturate(1.2) brightness(0.8);
+}
+
+:root[data-glass="off"] .card-veil {
+  background: #08090e;
+  backdrop-filter: none;
+}
+
+.holo-stage {
+  perspective: 1100px;
+}
+
+.holo-card {
+  --card-radius: 4.127% / 2.955%;
+  position: relative;
+  border-radius: var(--card-radius);
+  transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) scale(var(--s, 1));
+  transform-style: preserve-3d;
+  will-change: transform;
+  touch-action: none;
+  box-shadow:
+    0 calc(10px + var(--on, 0) * 14px) calc(28px + var(--on, 0) * 24px) rgba(0, 0, 0, 0.5),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.holo-card > svg {
+  display: block;
+  box-shadow: none;
+}
+
+.holo-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--card-radius);
+  pointer-events: none;
+}
+
+/* Light on the surface: bright where the pointer is, falling off to a shade at the far corner. */
+.holo-glare {
+  background: radial-gradient(
+    farthest-corner circle at var(--mx, 50%) var(--my, 50%),
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.14) 28%,
+    rgba(0, 0, 0, 0.32) 95%
+  );
+  mix-blend-mode: overlay;
+  opacity: calc(var(--on, 0) * 0.8);
+}
+
+/* Foil, done the way printed cards balance it: the rainbow is printed on the background, not on her.
+   Her picture has a transparent background, so it is its own mask (`--art`, placed as the SVG places
+   it: 660 of 630 wide, centred, from the top) and the foil takes only where she is not. The rainbow
+   slides as the card turns, is strongest around the pointer and fades out before the words. */
+.holo-foil,
+.holo-glitter {
+  mask-image:
+    radial-gradient(
+      farthest-corner circle at var(--mx, 50%) var(--my, 50%),
+      #000 0%,
+      rgba(0, 0, 0, 0.45) 25%,
+      rgba(0, 0, 0, 0.06) 60%
+    ),
+    linear-gradient(to bottom, #000 0%, #000 55%, transparent 76%),
+    var(--art, none),
+    linear-gradient(#000 0 0);
+  mask-size:
+    100% 100%,
+    100% 100%,
+    104.762% 100%,
+    100% 100%;
+  mask-position:
+    0 0,
+    0 0,
+    50% 0,
+    0 0;
+  mask-repeat: no-repeat;
+  mask-composite: intersect, intersect, exclude, add;
+}
+
+.holo-foil {
+  /* Mostly a silvery sheen; the colour is pale and only shows where the light falls. */
+  background-image: repeating-linear-gradient(
+    115deg,
+    hsl(330 70% 82%) 0%,
+    hsl(45 70% 80%) 3%,
+    hsl(150 55% 80%) 6%,
+    hsl(195 70% 82%) 9%,
+    hsl(265 65% 84%) 12%,
+    hsl(330 70% 82%) 15%
+  );
+  background-size: 300% 300%;
+  background-position: calc(var(--px, 50) * 1%) calc(var(--py, 50) * 1%);
+  mix-blend-mode: soft-light;
+  opacity: calc(0.1 + var(--on, 0) * (0.12 + var(--hyp, 0) * 0.22));
+}
+
+/* On her, only a faint sheen of the same rainbow, so she stays as drawn. */
+.holo-sheen {
+  background-image: repeating-linear-gradient(
+    115deg,
+    hsl(330 100% 75%) 0%,
+    hsl(45 100% 70%) 5%,
+    hsl(150 90% 68%) 10%,
+    hsl(200 100% 72%) 15%,
+    hsl(265 100% 76%) 20%,
+    hsl(330 100% 75%) 25%
+  );
+  background-size: 300% 300%;
+  background-position: calc(var(--px, 50) * 1%) calc(var(--py, 50) * 1%);
+  mix-blend-mode: soft-light;
+  opacity: calc(var(--on, 0) * (0.06 + var(--hyp, 0) * 0.12));
+  mask-image:
+    var(--art, none),
+    linear-gradient(to bottom, #000 0%, #000 60%, transparent 76%);
+  mask-size:
+    104.762% 100%,
+    100% 100%;
+  mask-position:
+    50% 0,
+    0 0;
+  mask-repeat: no-repeat;
+  mask-composite: intersect;
+}
+
+/* Glitter on the background that flashes as the card turns: one scatter twice, sliding against itself. */
+.holo-glitter {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cpath d='M51.8 21.3L52.3 23.7L54.7 24.1L52.3 24.6L51.8 27.0L51.3 24.6L48.9 24.1L51.3 23.7Z' fill='white' opacity='0.52'/%3E%3Ccircle cx='131.4' cy='15.1' r='0.84' fill='white' opacity='0.53'/%3E%3Ccircle cx='81.2' cy='6.0' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='38.5' cy='88.2' r='0.42' fill='white' opacity='0.91'/%3E%3Cpath d='M19.8 32.8L20.3 35.2L22.7 35.7L20.3 36.2L19.8 38.6L19.3 36.2L16.9 35.7L19.3 35.2Z' fill='white' opacity='0.79'/%3E%3Ccircle cx='9.9' cy='93.7' r='0.42' fill='white' opacity='0.99'/%3E%3Ccircle cx='7.5' cy='137.4' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='86.5' cy='91.3' r='0.84' fill='white' opacity='0.91'/%3E%3Cpath d='M28.9 90.2L29.4 92.6L31.8 93.1L29.4 93.5L28.9 95.9L28.4 93.5L26.0 93.1L28.4 92.6Z' fill='white' opacity='0.59'/%3E%3Ccircle cx='15.6' cy='113.9' r='0.84' fill='white' opacity='0.53'/%3E%3Ccircle cx='33.0' cy='108.9' r='0.70' fill='white' opacity='0.89'/%3E%3Ccircle cx='74.5' cy='147.8' r='0.70' fill='white' opacity='0.65'/%3E%3Ccircle cx='127.1' cy='111.8' r='0.56' fill='white' opacity='0.54'/%3E%3Ccircle cx='48.0' cy='79.2' r='0.70' fill='white' opacity='0.86'/%3E%3Ccircle cx='46.1' cy='156.8' r='0.42' fill='white' opacity='0.76'/%3E%3Ccircle cx='26.4' cy='54.7' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='153.9' cy='12.4' r='0.84' fill='white' opacity='0.79'/%3E%3Cpath d='M140.1 47.3L140.6 49.7L143.0 50.2L140.6 50.7L140.1 53.1L139.6 50.7L137.2 50.2L139.6 49.7Z' fill='white' opacity='0.68'/%3E%3Ccircle cx='79.5' cy='127.5' r='0.42' fill='white' opacity='0.92'/%3E%3Cpath d='M151.1 73.0L151.6 75.4L154.0 75.9L151.6 76.3L151.1 78.7L150.7 76.3L148.3 75.9L150.7 75.4Z' fill='white' opacity='0.53'/%3E%3Ccircle cx='117.0' cy='49.5' r='0.84' fill='white' opacity='1.00'/%3E%3Ccircle cx='131.5' cy='45.5' r='0.70' fill='white' opacity='0.94'/%3E%3Ccircle cx='55.5' cy='150.5' r='0.70' fill='white' opacity='0.58'/%3E%3Cpath d='M18.7 5.1L19.5 8.7L23.1 9.4L19.5 10.2L18.7 13.8L18.0 10.2L14.4 9.4L18.0 8.7Z' fill='white' opacity='0.64'/%3E%3Cpath d='M118.1 59.3L118.9 62.9L122.5 63.7L118.9 64.4L118.1 68.0L117.4 64.4L113.8 63.7L117.4 62.9Z' fill='white' opacity='0.75'/%3E%3Ccircle cx='26.6' cy='64.3' r='0.70' fill='white' opacity='0.94'/%3E%3Ccircle cx='131.1' cy='138.2' r='0.70' fill='white' opacity='0.85'/%3E%3Ccircle cx='157.8' cy='109.2' r='0.70' fill='white' opacity='0.98'/%3E%3Ccircle cx='24.1' cy='28.2' r='0.56' fill='white' opacity='0.83'/%3E%3Ccircle cx='1.9' cy='133.0' r='0.56' fill='white' opacity='0.63'/%3E%3Ccircle cx='0.7' cy='67.0' r='0.70' fill='white' opacity='0.80'/%3E%3Cpath d='M51.0 15.8L51.7 19.4L55.3 20.1L51.7 20.8L51.0 24.4L50.3 20.8L46.7 20.1L50.3 19.4Z' fill='white' opacity='0.76'/%3E%3Ccircle cx='98.8' cy='108.2' r='0.42' fill='white' opacity='0.73'/%3E%3Cpath d='M139.4 149.4L139.8 151.8L142.2 152.3L139.8 152.8L139.4 155.2L138.9 152.8L136.5 152.3L138.9 151.8Z' fill='white' opacity='0.90'/%3E%3Ccircle cx='62.8' cy='63.8' r='0.42' fill='white' opacity='0.74'/%3E%3Ccircle cx='64.1' cy='30.5' r='0.56' fill='white' opacity='0.72'/%3E%3Ccircle cx='17.6' cy='96.1' r='0.42' fill='white' opacity='0.50'/%3E%3Ccircle cx='24.2' cy='16.2' r='0.70' fill='white' opacity='0.81'/%3E%3Ccircle cx='11.3' cy='33.3' r='0.70' fill='white' opacity='0.57'/%3E%3Ccircle cx='40.4' cy='55.6' r='0.70' fill='white' opacity='0.74'/%3E%3Ccircle cx='18.5' cy='78.1' r='0.70' fill='white' opacity='0.74'/%3E%3Cpath d='M49.9 20.2L50.4 22.6L52.8 23.1L50.4 23.5L49.9 25.9L49.4 23.5L47.0 23.1L49.4 22.6Z' fill='white' opacity='0.67'/%3E%3Ccircle cx='42.4' cy='132.6' r='0.56' fill='white' opacity='0.76'/%3E%3Ccircle cx='32.8' cy='152.3' r='0.70' fill='white' opacity='0.57'/%3E%3Ccircle cx='86.9' cy='4.3' r='0.84' fill='white' opacity='0.65'/%3E%3Cpath d='M102.9 10.2L103.6 13.8L107.2 14.6L103.6 15.3L102.9 18.9L102.1 15.3L98.5 14.6L102.1 13.8Z' fill='white' opacity='0.63'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cpath d='M51.8 21.3L52.3 23.7L54.7 24.1L52.3 24.6L51.8 27.0L51.3 24.6L48.9 24.1L51.3 23.7Z' fill='white' opacity='0.52'/%3E%3Ccircle cx='131.4' cy='15.1' r='0.84' fill='white' opacity='0.53'/%3E%3Ccircle cx='81.2' cy='6.0' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='38.5' cy='88.2' r='0.42' fill='white' opacity='0.91'/%3E%3Cpath d='M19.8 32.8L20.3 35.2L22.7 35.7L20.3 36.2L19.8 38.6L19.3 36.2L16.9 35.7L19.3 35.2Z' fill='white' opacity='0.79'/%3E%3Ccircle cx='9.9' cy='93.7' r='0.42' fill='white' opacity='0.99'/%3E%3Ccircle cx='7.5' cy='137.4' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='86.5' cy='91.3' r='0.84' fill='white' opacity='0.91'/%3E%3Cpath d='M28.9 90.2L29.4 92.6L31.8 93.1L29.4 93.5L28.9 95.9L28.4 93.5L26.0 93.1L28.4 92.6Z' fill='white' opacity='0.59'/%3E%3Ccircle cx='15.6' cy='113.9' r='0.84' fill='white' opacity='0.53'/%3E%3Ccircle cx='33.0' cy='108.9' r='0.70' fill='white' opacity='0.89'/%3E%3Ccircle cx='74.5' cy='147.8' r='0.70' fill='white' opacity='0.65'/%3E%3Ccircle cx='127.1' cy='111.8' r='0.56' fill='white' opacity='0.54'/%3E%3Ccircle cx='48.0' cy='79.2' r='0.70' fill='white' opacity='0.86'/%3E%3Ccircle cx='46.1' cy='156.8' r='0.42' fill='white' opacity='0.76'/%3E%3Ccircle cx='26.4' cy='54.7' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='153.9' cy='12.4' r='0.84' fill='white' opacity='0.79'/%3E%3Cpath d='M140.1 47.3L140.6 49.7L143.0 50.2L140.6 50.7L140.1 53.1L139.6 50.7L137.2 50.2L139.6 49.7Z' fill='white' opacity='0.68'/%3E%3Ccircle cx='79.5' cy='127.5' r='0.42' fill='white' opacity='0.92'/%3E%3Cpath d='M151.1 73.0L151.6 75.4L154.0 75.9L151.6 76.3L151.1 78.7L150.7 76.3L148.3 75.9L150.7 75.4Z' fill='white' opacity='0.53'/%3E%3Ccircle cx='117.0' cy='49.5' r='0.84' fill='white' opacity='1.00'/%3E%3Ccircle cx='131.5' cy='45.5' r='0.70' fill='white' opacity='0.94'/%3E%3Ccircle cx='55.5' cy='150.5' r='0.70' fill='white' opacity='0.58'/%3E%3Cpath d='M18.7 5.1L19.5 8.7L23.1 9.4L19.5 10.2L18.7 13.8L18.0 10.2L14.4 9.4L18.0 8.7Z' fill='white' opacity='0.64'/%3E%3Cpath d='M118.1 59.3L118.9 62.9L122.5 63.7L118.9 64.4L118.1 68.0L117.4 64.4L113.8 63.7L117.4 62.9Z' fill='white' opacity='0.75'/%3E%3Ccircle cx='26.6' cy='64.3' r='0.70' fill='white' opacity='0.94'/%3E%3Ccircle cx='131.1' cy='138.2' r='0.70' fill='white' opacity='0.85'/%3E%3Ccircle cx='157.8' cy='109.2' r='0.70' fill='white' opacity='0.98'/%3E%3Ccircle cx='24.1' cy='28.2' r='0.56' fill='white' opacity='0.83'/%3E%3Ccircle cx='1.9' cy='133.0' r='0.56' fill='white' opacity='0.63'/%3E%3Ccircle cx='0.7' cy='67.0' r='0.70' fill='white' opacity='0.80'/%3E%3Cpath d='M51.0 15.8L51.7 19.4L55.3 20.1L51.7 20.8L51.0 24.4L50.3 20.8L46.7 20.1L50.3 19.4Z' fill='white' opacity='0.76'/%3E%3Ccircle cx='98.8' cy='108.2' r='0.42' fill='white' opacity='0.73'/%3E%3Cpath d='M139.4 149.4L139.8 151.8L142.2 152.3L139.8 152.8L139.4 155.2L138.9 152.8L136.5 152.3L138.9 151.8Z' fill='white' opacity='0.90'/%3E%3Ccircle cx='62.8' cy='63.8' r='0.42' fill='white' opacity='0.74'/%3E%3Ccircle cx='64.1' cy='30.5' r='0.56' fill='white' opacity='0.72'/%3E%3Ccircle cx='17.6' cy='96.1' r='0.42' fill='white' opacity='0.50'/%3E%3Ccircle cx='24.2' cy='16.2' r='0.70' fill='white' opacity='0.81'/%3E%3Ccircle cx='11.3' cy='33.3' r='0.70' fill='white' opacity='0.57'/%3E%3Ccircle cx='40.4' cy='55.6' r='0.70' fill='white' opacity='0.74'/%3E%3Ccircle cx='18.5' cy='78.1' r='0.70' fill='white' opacity='0.74'/%3E%3Cpath d='M49.9 20.2L50.4 22.6L52.8 23.1L50.4 23.5L49.9 25.9L49.4 23.5L47.0 23.1L49.4 22.6Z' fill='white' opacity='0.67'/%3E%3Ccircle cx='42.4' cy='132.6' r='0.56' fill='white' opacity='0.76'/%3E%3Ccircle cx='32.8' cy='152.3' r='0.70' fill='white' opacity='0.57'/%3E%3Ccircle cx='86.9' cy='4.3' r='0.84' fill='white' opacity='0.65'/%3E%3Cpath d='M102.9 10.2L103.6 13.8L107.2 14.6L103.6 15.3L102.9 18.9L102.1 15.3L98.5 14.6L102.1 13.8Z' fill='white' opacity='0.63'/%3E%3C/svg%3E");
+  background-size: 24% auto, 34% auto;
+  background-position:
+    calc(var(--px, 50) * 0.35%) calc(var(--py, 50) * 0.35%),
+    calc(60% - var(--px, 50) * 0.25%) calc(40% - var(--py, 50) * 0.3%);
+  mix-blend-mode: plus-lighter;
+  opacity: calc(var(--on, 0) * (0.2 + var(--hyp, 0) * 0.6));
+}
+
+/* A bought frame's band (18 of 630, so the same share of the width on every side). */
+.holo-band {
+  padding: 2.857%;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+/* Gold: one bright sheen runs along the metal with the pointer. */
+.holo-band-gold {
+  background:
+    linear-gradient(
+      115deg,
+      transparent calc(var(--mx, 50%) - 30%),
+      rgba(255, 244, 196, 0.15) calc(var(--mx, 50%) - 12%),
+      rgba(255, 252, 230, 0.95) var(--mx, 50%),
+      rgba(255, 244, 196, 0.15) calc(var(--mx, 50%) + 12%),
+      transparent calc(var(--mx, 50%) + 30%)
+    ),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cpath d='M51.8 21.3L52.3 23.7L54.7 24.1L52.3 24.6L51.8 27.0L51.3 24.6L48.9 24.1L51.3 23.7Z' fill='white' opacity='0.52'/%3E%3Ccircle cx='131.4' cy='15.1' r='0.84' fill='white' opacity='0.53'/%3E%3Ccircle cx='81.2' cy='6.0' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='38.5' cy='88.2' r='0.42' fill='white' opacity='0.91'/%3E%3Cpath d='M19.8 32.8L20.3 35.2L22.7 35.7L20.3 36.2L19.8 38.6L19.3 36.2L16.9 35.7L19.3 35.2Z' fill='white' opacity='0.79'/%3E%3Ccircle cx='9.9' cy='93.7' r='0.42' fill='white' opacity='0.99'/%3E%3Ccircle cx='7.5' cy='137.4' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='86.5' cy='91.3' r='0.84' fill='white' opacity='0.91'/%3E%3Cpath d='M28.9 90.2L29.4 92.6L31.8 93.1L29.4 93.5L28.9 95.9L28.4 93.5L26.0 93.1L28.4 92.6Z' fill='white' opacity='0.59'/%3E%3Ccircle cx='15.6' cy='113.9' r='0.84' fill='white' opacity='0.53'/%3E%3Ccircle cx='33.0' cy='108.9' r='0.70' fill='white' opacity='0.89'/%3E%3Ccircle cx='74.5' cy='147.8' r='0.70' fill='white' opacity='0.65'/%3E%3Ccircle cx='127.1' cy='111.8' r='0.56' fill='white' opacity='0.54'/%3E%3Ccircle cx='48.0' cy='79.2' r='0.70' fill='white' opacity='0.86'/%3E%3Ccircle cx='46.1' cy='156.8' r='0.42' fill='white' opacity='0.76'/%3E%3Ccircle cx='26.4' cy='54.7' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='153.9' cy='12.4' r='0.84' fill='white' opacity='0.79'/%3E%3Cpath d='M140.1 47.3L140.6 49.7L143.0 50.2L140.6 50.7L140.1 53.1L139.6 50.7L137.2 50.2L139.6 49.7Z' fill='white' opacity='0.68'/%3E%3Ccircle cx='79.5' cy='127.5' r='0.42' fill='white' opacity='0.92'/%3E%3Cpath d='M151.1 73.0L151.6 75.4L154.0 75.9L151.6 76.3L151.1 78.7L150.7 76.3L148.3 75.9L150.7 75.4Z' fill='white' opacity='0.53'/%3E%3Ccircle cx='117.0' cy='49.5' r='0.84' fill='white' opacity='1.00'/%3E%3Ccircle cx='131.5' cy='45.5' r='0.70' fill='white' opacity='0.94'/%3E%3Ccircle cx='55.5' cy='150.5' r='0.70' fill='white' opacity='0.58'/%3E%3Cpath d='M18.7 5.1L19.5 8.7L23.1 9.4L19.5 10.2L18.7 13.8L18.0 10.2L14.4 9.4L18.0 8.7Z' fill='white' opacity='0.64'/%3E%3Cpath d='M118.1 59.3L118.9 62.9L122.5 63.7L118.9 64.4L118.1 68.0L117.4 64.4L113.8 63.7L117.4 62.9Z' fill='white' opacity='0.75'/%3E%3Ccircle cx='26.6' cy='64.3' r='0.70' fill='white' opacity='0.94'/%3E%3Ccircle cx='131.1' cy='138.2' r='0.70' fill='white' opacity='0.85'/%3E%3Ccircle cx='157.8' cy='109.2' r='0.70' fill='white' opacity='0.98'/%3E%3Ccircle cx='24.1' cy='28.2' r='0.56' fill='white' opacity='0.83'/%3E%3Ccircle cx='1.9' cy='133.0' r='0.56' fill='white' opacity='0.63'/%3E%3Ccircle cx='0.7' cy='67.0' r='0.70' fill='white' opacity='0.80'/%3E%3Cpath d='M51.0 15.8L51.7 19.4L55.3 20.1L51.7 20.8L51.0 24.4L50.3 20.8L46.7 20.1L50.3 19.4Z' fill='white' opacity='0.76'/%3E%3Ccircle cx='98.8' cy='108.2' r='0.42' fill='white' opacity='0.73'/%3E%3Cpath d='M139.4 149.4L139.8 151.8L142.2 152.3L139.8 152.8L139.4 155.2L138.9 152.8L136.5 152.3L138.9 151.8Z' fill='white' opacity='0.90'/%3E%3Ccircle cx='62.8' cy='63.8' r='0.42' fill='white' opacity='0.74'/%3E%3Ccircle cx='64.1' cy='30.5' r='0.56' fill='white' opacity='0.72'/%3E%3Ccircle cx='17.6' cy='96.1' r='0.42' fill='white' opacity='0.50'/%3E%3Ccircle cx='24.2' cy='16.2' r='0.70' fill='white' opacity='0.81'/%3E%3Ccircle cx='11.3' cy='33.3' r='0.70' fill='white' opacity='0.57'/%3E%3Ccircle cx='40.4' cy='55.6' r='0.70' fill='white' opacity='0.74'/%3E%3Ccircle cx='18.5' cy='78.1' r='0.70' fill='white' opacity='0.74'/%3E%3Cpath d='M49.9 20.2L50.4 22.6L52.8 23.1L50.4 23.5L49.9 25.9L49.4 23.5L47.0 23.1L49.4 22.6Z' fill='white' opacity='0.67'/%3E%3Ccircle cx='42.4' cy='132.6' r='0.56' fill='white' opacity='0.76'/%3E%3Ccircle cx='32.8' cy='152.3' r='0.70' fill='white' opacity='0.57'/%3E%3Ccircle cx='86.9' cy='4.3' r='0.84' fill='white' opacity='0.65'/%3E%3Cpath d='M102.9 10.2L103.6 13.8L107.2 14.6L103.6 15.3L102.9 18.9L102.1 15.3L98.5 14.6L102.1 13.8Z' fill='white' opacity='0.63'/%3E%3C/svg%3E");
+  background-size: 100% 100%, 18% auto;
+  background-position: 0 0, calc(var(--px, 50) * 0.4%) calc(var(--py, 50) * 0.4%);
+  mix-blend-mode: overlay;
+  opacity: calc(0.35 + var(--on, 0) * 0.65);
+}
+
+/* Abyss: light through moving water, two ripples of caustics drifting against each other. */
+.holo-band-abyss {
+  background:
+    repeating-radial-gradient(
+      circle at calc(var(--px, 50) * 1%) calc(var(--py, 50) * 0.6%),
+      rgba(160, 250, 255, 0) 0 9px,
+      rgba(160, 250, 255, 0.55) 11px,
+      rgba(160, 250, 255, 0) 14px 22px
+    ),
+    repeating-radial-gradient(
+      circle at calc(100% - var(--px, 50) * 1%) calc(30% + var(--py, 50) * 0.5%),
+      rgba(120, 220, 255, 0) 0 13px,
+      rgba(120, 220, 255, 0.4) 15px,
+      rgba(120, 220, 255, 0) 18px 30px
+    );
+  mix-blend-mode: screen;
+  opacity: calc(0.3 + var(--on, 0) * 0.6);
+}
+
+/* Sakura: a pink-white shimmer crossing the band and its glitter flashing. */
+.holo-band-sakura {
+  background:
+    linear-gradient(
+      125deg,
+      transparent calc(var(--mx, 50%) - 35%),
+      rgba(255, 210, 230, 0.6) calc(var(--mx, 50%) - 8%),
+      rgba(255, 255, 255, 0.9) var(--mx, 50%),
+      rgba(255, 210, 230, 0.6) calc(var(--mx, 50%) + 8%),
+      transparent calc(var(--mx, 50%) + 35%)
+    ),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cpath d='M51.8 21.3L52.3 23.7L54.7 24.1L52.3 24.6L51.8 27.0L51.3 24.6L48.9 24.1L51.3 23.7Z' fill='white' opacity='0.52'/%3E%3Ccircle cx='131.4' cy='15.1' r='0.84' fill='white' opacity='0.53'/%3E%3Ccircle cx='81.2' cy='6.0' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='38.5' cy='88.2' r='0.42' fill='white' opacity='0.91'/%3E%3Cpath d='M19.8 32.8L20.3 35.2L22.7 35.7L20.3 36.2L19.8 38.6L19.3 36.2L16.9 35.7L19.3 35.2Z' fill='white' opacity='0.79'/%3E%3Ccircle cx='9.9' cy='93.7' r='0.42' fill='white' opacity='0.99'/%3E%3Ccircle cx='7.5' cy='137.4' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='86.5' cy='91.3' r='0.84' fill='white' opacity='0.91'/%3E%3Cpath d='M28.9 90.2L29.4 92.6L31.8 93.1L29.4 93.5L28.9 95.9L28.4 93.5L26.0 93.1L28.4 92.6Z' fill='white' opacity='0.59'/%3E%3Ccircle cx='15.6' cy='113.9' r='0.84' fill='white' opacity='0.53'/%3E%3Ccircle cx='33.0' cy='108.9' r='0.70' fill='white' opacity='0.89'/%3E%3Ccircle cx='74.5' cy='147.8' r='0.70' fill='white' opacity='0.65'/%3E%3Ccircle cx='127.1' cy='111.8' r='0.56' fill='white' opacity='0.54'/%3E%3Ccircle cx='48.0' cy='79.2' r='0.70' fill='white' opacity='0.86'/%3E%3Ccircle cx='46.1' cy='156.8' r='0.42' fill='white' opacity='0.76'/%3E%3Ccircle cx='26.4' cy='54.7' r='0.70' fill='white' opacity='0.71'/%3E%3Ccircle cx='153.9' cy='12.4' r='0.84' fill='white' opacity='0.79'/%3E%3Cpath d='M140.1 47.3L140.6 49.7L143.0 50.2L140.6 50.7L140.1 53.1L139.6 50.7L137.2 50.2L139.6 49.7Z' fill='white' opacity='0.68'/%3E%3Ccircle cx='79.5' cy='127.5' r='0.42' fill='white' opacity='0.92'/%3E%3Cpath d='M151.1 73.0L151.6 75.4L154.0 75.9L151.6 76.3L151.1 78.7L150.7 76.3L148.3 75.9L150.7 75.4Z' fill='white' opacity='0.53'/%3E%3Ccircle cx='117.0' cy='49.5' r='0.84' fill='white' opacity='1.00'/%3E%3Ccircle cx='131.5' cy='45.5' r='0.70' fill='white' opacity='0.94'/%3E%3Ccircle cx='55.5' cy='150.5' r='0.70' fill='white' opacity='0.58'/%3E%3Cpath d='M18.7 5.1L19.5 8.7L23.1 9.4L19.5 10.2L18.7 13.8L18.0 10.2L14.4 9.4L18.0 8.7Z' fill='white' opacity='0.64'/%3E%3Cpath d='M118.1 59.3L118.9 62.9L122.5 63.7L118.9 64.4L118.1 68.0L117.4 64.4L113.8 63.7L117.4 62.9Z' fill='white' opacity='0.75'/%3E%3Ccircle cx='26.6' cy='64.3' r='0.70' fill='white' opacity='0.94'/%3E%3Ccircle cx='131.1' cy='138.2' r='0.70' fill='white' opacity='0.85'/%3E%3Ccircle cx='157.8' cy='109.2' r='0.70' fill='white' opacity='0.98'/%3E%3Ccircle cx='24.1' cy='28.2' r='0.56' fill='white' opacity='0.83'/%3E%3Ccircle cx='1.9' cy='133.0' r='0.56' fill='white' opacity='0.63'/%3E%3Ccircle cx='0.7' cy='67.0' r='0.70' fill='white' opacity='0.80'/%3E%3Cpath d='M51.0 15.8L51.7 19.4L55.3 20.1L51.7 20.8L51.0 24.4L50.3 20.8L46.7 20.1L50.3 19.4Z' fill='white' opacity='0.76'/%3E%3Ccircle cx='98.8' cy='108.2' r='0.42' fill='white' opacity='0.73'/%3E%3Cpath d='M139.4 149.4L139.8 151.8L142.2 152.3L139.8 152.8L139.4 155.2L138.9 152.8L136.5 152.3L138.9 151.8Z' fill='white' opacity='0.90'/%3E%3Ccircle cx='62.8' cy='63.8' r='0.42' fill='white' opacity='0.74'/%3E%3Ccircle cx='64.1' cy='30.5' r='0.56' fill='white' opacity='0.72'/%3E%3Ccircle cx='17.6' cy='96.1' r='0.42' fill='white' opacity='0.50'/%3E%3Ccircle cx='24.2' cy='16.2' r='0.70' fill='white' opacity='0.81'/%3E%3Ccircle cx='11.3' cy='33.3' r='0.70' fill='white' opacity='0.57'/%3E%3Ccircle cx='40.4' cy='55.6' r='0.70' fill='white' opacity='0.74'/%3E%3Ccircle cx='18.5' cy='78.1' r='0.70' fill='white' opacity='0.74'/%3E%3Cpath d='M49.9 20.2L50.4 22.6L52.8 23.1L50.4 23.5L49.9 25.9L49.4 23.5L47.0 23.1L49.4 22.6Z' fill='white' opacity='0.67'/%3E%3Ccircle cx='42.4' cy='132.6' r='0.56' fill='white' opacity='0.76'/%3E%3Ccircle cx='32.8' cy='152.3' r='0.70' fill='white' opacity='0.57'/%3E%3Ccircle cx='86.9' cy='4.3' r='0.84' fill='white' opacity='0.65'/%3E%3Cpath d='M102.9 10.2L103.6 13.8L107.2 14.6L103.6 15.3L102.9 18.9L102.1 15.3L98.5 14.6L102.1 13.8Z' fill='white' opacity='0.63'/%3E%3C/svg%3E");
+  background-size: 100% 100%, 16% auto;
+  background-position: 0 0, calc(var(--px, 50) * 0.5%) calc(var(--py, 50) * 0.5%);
+  mix-blend-mode: soft-light;
+  opacity: calc(0.4 + var(--on, 0) * 0.6);
 }

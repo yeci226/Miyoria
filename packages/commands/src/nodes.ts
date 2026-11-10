@@ -8,9 +8,9 @@
 // |---|---|---|
 // | owner | 100 | `*` |
 // | admin | 80 | moderator plus `admin.*`, `module.*`, `memory.*`, `stream.*` |
-// | moderator | 60 | trusted plus `voice.*`, `queue.*`, `game.*`, `stream.scene`, setting changes, ... |
+// | moderator | 60 | trusted plus `voice.*`, `queue.*`, `game.*`, `stream.scene`, setting changes, time-limited rules, ... |
 // | trusted | 40 | user plus `chat.*`, `tools.*`, `queue.priority`, `game.suggest`, `stream.clip` |
-// | user | 20 | restricted plus joining voice, queue requests and votes, views of settings, ... |
+// | user | 20 | restricted plus joining voice, queue requests and votes, `tools.web`, `tools.file`, views of settings, ... |
 // | restricted | 10 | `help`, `me.*`, `memory.self.*`, `voice.consent` |
 // | blocked | 0 | nothing |
 
@@ -53,6 +53,16 @@ export function isAdminNode(node: string): boolean {
 /** Self-service privacy controls; kept even for `restricted`. */
 const PRIVACY: readonly string[] = ["help", "help.*", "me.*", "memory.self.*", "voice.consent"];
 
+/** `web_search` / `web_read`: members may ask her to look things up (trusted and above have `tools.*`). */
+export const WEB_TOOL = "tools.web";
+
+/**
+ * Members may send her files to read (text, code, PDF, Office documents). Reading happens in the
+ * code sandbox and what a file says is data, never instructions; `[modules.sandbox.files]` limits
+ * how many a person may send. Revoke it from a role (or a person) to make her ignore their files.
+ */
+export const FILE_READ = "tools.file";
+
 const EVERYDAY: readonly string[] = [
   "chat.talk",
   "link.*",
@@ -70,6 +80,8 @@ const EVERYDAY: readonly string[] = [
   "queue.song.play",
   "game.status",
   "stream.status",
+  WEB_TOOL,
+  FILE_READ,
 ];
 
 /** Trusted people may ask her to run code in the sandbox (she can still decline). */
@@ -84,7 +96,11 @@ const TRUSTED_EXTRA: readonly string[] = [
   SANDBOX_CODE_RUN,
 ];
 
+/** Moderators may make rules for a limited time (§9); the owner's stay the owner's. */
+export const DIRECTIVE_MODERATE = "admin.directive.*";
+
 const MODERATOR_EXTRA: readonly string[] = [
+  DIRECTIVE_MODERATE,
   "voice.*",
   "queue.*",
   "game.*",

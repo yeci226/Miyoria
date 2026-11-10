@@ -15,17 +15,17 @@ export function SettingsPage() {
   const user = session?.session.method === "discord" ? session.session.user : null;
   const health = useHealth();
   return (
-    <Page className="max-w-2xl">
+    <Page>
       <PageHeader
         title="設定"
         actions={
-          <Button variant="outline" onClick={session?.logout ?? signOut}>
+          <Button variant="outline" size="sm" onClick={session?.logout ?? signOut}>
             <LogOut />
             登出
           </Button>
         }
       />
-      <Card>
+      <Card className="max-w-2xl">
         <CardHeader>
           <CardTitle>連線</CardTitle>
         </CardHeader>

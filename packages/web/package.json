@@ -1,7 +1,7 @@
 {
   "name": "@miyoria/web",
   "version": "0.1.0",
-  "description": "She searches the web and reads pages through DeepSeek's Search and Fetch API",
+  "description": "Web search (DuckDuckGo) and a page reader for her, behind an SSRF guard; results are untrusted data",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -22,8 +22,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@miyoria/actions": "workspace:*",
     "@miyoria/kernel": "workspace:*",
-    "@miyoria/tools": "workspace:*",
     "@miyoria/types": "workspace:*",
     "zod": "^4.6.7"
   },

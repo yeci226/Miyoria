@@ -50,6 +50,17 @@ export const DiscordConfigSchema = z.object({
    * connection; set `false` to run without them.
    */
   presence_intents: z.boolean().default(true),
+  /**
+   * Which guild messages she gets to read (docs/design/v3-architecture.md §19 item 4):
+   *
+   * - `allowlist` (default): a guild message reaches her only when it mentions her, replies to
+   *   her, or is in a channel listed in `ambient_channels`. DMs always do.
+   * - `tiers`: every message reaches her and the per-channel level (`/miyo` -> chat level)
+   *   decides how much she joins in. This was the behaviour before the gate existed.
+   */
+  ambient_text: z.enum(["allowlist", "tiers"]).default("allowlist"),
+  /** Channels (or the channels threads belong to) where she may follow ambient chat. */
+  ambient_channels: z.array(Snowflake).default([]),
 });
 
 export type DiscordConfig = z.output<typeof DiscordConfigSchema>;

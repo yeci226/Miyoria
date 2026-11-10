@@ -9,7 +9,7 @@ export function JsonView({ value, label }: { value: unknown; label: string }) {
     <div className="relative">
       <pre
         aria-label={label}
-        className="max-h-[50dvh] overflow-auto rounded-md border bg-background p-3 font-mono text-[12.5px] leading-relaxed text-foreground/90"
+        className="max-h-[50dvh] overflow-auto rounded-md bg-well p-3 font-mono text-[12.5px] leading-relaxed text-foreground/90"
       >
         {text}
       </pre>

@@ -4,12 +4,11 @@ import { PersonaHandleKey } from "@miyoria/agent";
 import { errorMessage, getLogger, type ModuleStatus, SupervisorKey } from "@miyoria/kernel";
 import { LlmRouterKey, MIYORIA_VERSION } from "@miyoria/llm";
 import { DecisionLogKey, PersonaOverrideStoreKey } from "@miyoria/store";
-import type { ContextKey, JsonValue, ModuleId } from "@miyoria/types";
+import type { JsonValue, ModuleId } from "@miyoria/types";
 import { z } from "zod";
 import { ApiError } from "./errors.js";
-import { readJson, readQuery, usizeParam } from "./extract.js";
+import { contextParam, readJson, readQuery, usizeParam } from "./extract.js";
 import { json, param, type Route } from "./route.js";
-import { ContextKeySchema } from "./schemas.js";
 import { type ApiContext, type ApiState, actorOf } from "./state.js";
 import type { HealthInfo, PersonaSectionInfo, SetPersonaResponse, UsageInfo } from "./types.js";
 
@@ -102,23 +101,7 @@ const DecisionsQuerySchema = z.object({
 
 async function decisions(state: ApiState, c: ApiContext): Promise<Response> {
   const q = readQuery(c, DecisionsQuerySchema);
-  let context: ContextKey | null = null;
-  const raw = q.context?.trim() ?? "";
-  if (raw !== "") {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (error) {
-      throw ApiError.badRequest(`\`context\` must be a JSON context key: ${errorMessage(error)}`);
-    }
-    const key = ContextKeySchema.safeParse(parsed);
-    if (!key.success) {
-      throw ApiError.badRequest(
-        `\`context\` must be a JSON context key: ${key.error.issues[0]?.message ?? "invalid"}`,
-      );
-    }
-    context = key.data;
-  }
+  const context = contextParam(q.context);
   const limit = Math.min(q.limit ?? DEFAULT_DECISIONS, MAX_DECISIONS);
   const decisionLog = state.service(DecisionLogKey, "decision log");
   const profile = state.profile();

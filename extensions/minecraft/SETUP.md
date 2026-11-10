@@ -83,12 +83,12 @@ dirs = ["extensions"]   # 預設值;Miyoria 要在 repo 根目錄啟動,才找�
 
 [extensions."miyoria.minecraft"]
 # 遊戲目錄(含 config\ 的那層)。用單引號,Windows 的反斜線才不用跳脫。
-minecraft_dir = 'C:\Users\owenl\AppData\Roaming\PrismLauncher\instances\Miyoria-1.21.1\.minecraft'
+minecraft_dir = 'C:\Users\<你>\AppData\Roaming\PrismLauncher\instances\Miyoria-1.21.1\.minecraft'
 # minecraft_dir = 'C:\Games\Miyoria-1.21.1'   # 官方啟動器的例子
 # allow_commands = false   # true 才讓她送 / 開頭的遊戲指令
 # damage_important = 4     # 一次受傷幾點以上算大事(會馬上實況)
 # 她要玩的時候自己用 Prism Launcher 開遊戲(預設開著;實例 id 從 minecraft_dir 推)
-# prism_path = 'C:\Users\owenl\AppData\Local\Programs\PrismLauncher\prismlauncher.exe'   # 預設自動找
+# prism_path = 'C:\Users\<你>\AppData\Local\Programs\PrismLauncher\prismlauncher.exe'   # 預設自動找
 # prism_instance = "Miyoria-1.21.1"
 # launch_world = "latest"      # 直接進入最近玩的存檔;"" = 停在主選單;或存檔資料夾名
 # launch_timeout_secs = 180

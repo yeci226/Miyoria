@@ -28,10 +28,13 @@ import {
 import { ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
 import {
   type ContextKey,
+  EventLogKey,
   FollowupSourceKey,
   type IncomingMessage,
   type JsonValue,
+  MemoryRetrievalKey,
   type PersonId,
+  PinnedMemoryKey,
   PromptContributors,
   PromptContributorsKey,
   toTimestamp,
@@ -139,6 +142,8 @@ async function add(
       confidence: 0.8,
       source_context: null,
       source: null,
+      origin: "experienced",
+      source_events: kind === "fact" ? ["01TESTEVIDENCE0000000000"] : [],
       due: null,
     },
     toTimestamp(Date.now()),
@@ -188,6 +193,26 @@ describe("module", () => {
       expect(Date.now() < deadline, "not re-registered").toBe(true);
       await pause(50);
     }
+  });
+
+  it("provides the V3 readers and picks up the EventLog when it appears", async () => {
+    const h = await harness(new MockProvider("sum").reply("{}"), {});
+    expect(h.sup.services.get(PinnedMemoryKey)).toBeDefined();
+    expect(h.sup.services.get(MemoryRetrievalKey)).toBeDefined();
+    // No EventLog in this harness yet.
+    const e = engine(h);
+    expect(e.events).toBeNull();
+    e.attach({
+      get: ((key: unknown) =>
+        key === EventLogKey
+          ? { query: async () => [], get: async () => null }
+          : undefined) as never,
+      has: () => false,
+      require: (() => {
+        throw new Error("none");
+      }) as never,
+    });
+    expect(e.events).not.toBeNull();
   });
 
   it("memory_commands_show_forget_export", async () => {

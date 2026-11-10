@@ -8,6 +8,7 @@ import {
   type ServiceLookup,
   type Supervisor,
   SupervisorKey,
+  sleep,
 } from "@miyoria/kernel";
 import { type AccountRef, AuthorizerKey, type ModuleId } from "@miyoria/types";
 import { z } from "zod";
@@ -21,8 +22,9 @@ import {
   intParam,
 } from "./components.js";
 import { registerHelp } from "./help.js";
+import { registerPanels } from "./panels.js";
 import { Permissions, parseAccount } from "./perms.js";
-import { CommandRegistry, CommandRegistryKey } from "./registry.js";
+import { CommandRegistry, CommandRegistryKey, type Visibility } from "./registry.js";
 import {
   type CardBlock,
   type CommandReply,
@@ -43,6 +45,12 @@ export { CommandRegistryKey } from "./registry.js";
  * ```toml
  * [modules.commands]
  * owners = ["discord:123456789012345678"]
+ *
+ * # Who sees the replies of a command: "public" (the channel) or "private" (only the invoker).
+ * # Key: a command path or a group prefix; the longest match wins over the declaration.
+ * # Warnings and errors are always private.
+ * [modules.commands.visibility]
+ * "me wallet" = "private"
  * ```
  */
 export const CommandsConfigSchema = z.object({
@@ -51,6 +59,21 @@ export const CommandsConfigSchema = z.object({
    * `[modules.auth] owners` is still read for compatibility.
    */
   owners: z.array(z.string()).default([]),
+  /**
+   * Link to the privacy policy, shown on `/me i` (privacy and memory pages). Without one the
+   * panel says that none has been provided. Must be an `https://` URL.
+   */
+  privacy_policy_url: z
+    .string()
+    .refine((url) => /^https:\/\/\S+$/u.test(url), "must be an https:// URL")
+    .nullable()
+    .default(null),
+  /**
+   * Visibility overrides: command path (`"me wallet"`) or group prefix (`"me"`) to `"public"` /
+   * `"private"`. Without an entry the command's own declaration applies. Warnings and errors
+   * stay private either way.
+   */
+  visibility: z.record(z.string().min(1), z.enum(["public", "private"])).default({}),
 });
 
 export type CommandsConfig = z.output<typeof CommandsConfigSchema>;
@@ -62,7 +85,8 @@ export interface CommandsModuleOptions {
 
 /**
  * Module `commands`: provides the `CommandRegistry` service and registers the built-in
- * commands (`help`, `admin module ...`).
+ * commands (`help`, `admin module ...`) and the four panel commands (`/miyo`, `/song`,
+ * `/me i`, `/admin i`; see `panels.ts`).
  *
  * The registry outlives restarts of this module, so commands other modules registered once at
  * their start stay registered. It also provides its `Permissions` as a fallback `Authorizer`
@@ -98,7 +122,12 @@ export class CommandsModule implements Module {
       registry.permissions().setOwners(owners);
       registry.withServices(ctx.services);
     }
-    registerBuiltins(registry, ctx);
+    registry.setVisibility(config.visibility as Record<string, Visibility>);
+    registerBuiltins(registry, ctx, { policyUrl: config.privacy_policy_url });
+    if (Object.keys(config.visibility).length > 0) {
+      const shown = registry;
+      ctx.spawn("visibility-check", (signal) => warnUnknownVisibility(ctx, shown, signal));
+    }
     ctx.provide(CommandRegistryKey, registry);
     const perms = registry.permissions();
     provideFallback(ctx, perms);
@@ -109,6 +138,33 @@ export class CommandsModule implements Module {
     });
   }
 }
+
+/**
+ * Other modules register their commands while the app boots, so the keys of the visibility
+ * table are checked once the registry has been quiet for a while.
+ */
+async function warnUnknownVisibility(
+  ctx: ModuleContext,
+  registry: CommandRegistry,
+  signal: AbortSignal,
+): Promise<void> {
+  let seen = -1;
+  for (let round = 0; round < 12 && seen !== registry.version(); round++) {
+    seen = registry.version();
+    try {
+      await sleep(VISIBILITY_QUIET_MS, signal);
+    } catch {
+      return; // the module stopped
+    }
+  }
+  const unknown = registry.unknownVisibility();
+  if (unknown.length > 0) {
+    ctx.log.warn({ keys: unknown }, "[modules.commands.visibility] names no command, ignored");
+  }
+}
+
+/** The registry counts as settled after this long without a registration. */
+const VISIBILITY_QUIET_MS = 5_000;
 
 function uniqueOwners(owners: readonly string[]): AccountRef[] {
   const out = new Map<string, AccountRef>();
@@ -157,7 +213,7 @@ const R = {
 const NO_PAGE = "-";
 
 /**
- * Registers `help` and `admin module list | enable | disable | restart`.
+ * Registers `help`, `admin module list | enable | disable | restart` and the panels.
  *
  * The admin commands look up the `SupervisorKey` service when they run, so the app may provide
  * it after this module started.
@@ -165,8 +221,10 @@ const NO_PAGE = "-";
 export function registerBuiltins(
   registry: CommandRegistry,
   ctx: { readonly services: ServiceLookup },
+  options: { policyUrl?: string | null } = {},
 ): void {
   registerHelp(registry);
+  registerPanels(registry, { services: ctx.services, policyUrl: options.policyUrl ?? null });
   const sup = () => ctx.services.get(SupervisorKey);
   const suggest = (inv: Invocation, value: string) => moduleChoices(sup(), inv, value);
 

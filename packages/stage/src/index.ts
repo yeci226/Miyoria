@@ -21,6 +21,7 @@ export {
   type AvatarAction,
   AvatarProfile,
   AvatarProfileError,
+  DEFAULT_GIFT_EXPRESSIONS,
   type EmotionPose,
   type Gesture,
   type IdleGestures,
@@ -36,6 +37,14 @@ export {
 export { type BlinkConfig, BlinkConfigSchema, BlinkScheduler } from "./blink.js";
 export { EmotionController, type VtsCommand } from "./emotion.js";
 export { type GestureConfig, GestureConfigSchema, GestureController } from "./gesture.js";
+export {
+  countedLabel,
+  GIFT_MERGE_MS,
+  GIFT_SHOW_MS,
+  type Gift,
+  GiftMerger,
+  giftLine,
+} from "./gifts.js";
 export {
   type SceneCapabilityTarget,
   sceneTarget,
@@ -63,7 +72,14 @@ export {
   type SceneDirectorDeps,
   type SceneSwitcher,
 } from "./link/director.js";
-export { EMOTION_TOPIC, Forwarder, type ForwarderOptions } from "./link/forward.js";
+export {
+  EMOTION_TOPIC,
+  Forwarder,
+  type ForwarderOptions,
+  GIFT_TOPIC,
+  SCREEN_TOPIC,
+  SUBTITLE_TOPIC,
+} from "./link/forward.js";
 export { type GoLiveFollow, goliveFollow, VOICE_GOLIVE_TOPIC } from "./link/golive.js";
 export {
   DEFAULT_BIND,
@@ -76,6 +92,16 @@ export {
   StageLinkKey,
 } from "./link/link.js";
 export { GAME_SESSION_TOPIC, StageLinkModule } from "./link/module.js";
+export {
+  away,
+  factsOf,
+  NO_FACTS,
+  pickScene,
+  type SceneFacts,
+  type SceneMemory,
+  sceneWants,
+  type Want,
+} from "./link/scene-rule.js";
 export {
   BUILTIN_ROLES,
   type BuiltinRole,
@@ -182,6 +208,9 @@ export {
   defaultStageStatus,
   encodeMessage,
   type GazeTarget,
+  GIFT_EXPRESSION_MAX_S,
+  GIFT_EXPRESSIONS,
+  type GiftExpression,
   type LevelFrame,
   parseCoreMessage,
   parseGazeTarget,

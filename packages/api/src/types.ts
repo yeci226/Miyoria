@@ -2,6 +2,7 @@
 // nullability mirror the serde JSON exactly; `apps/panel/src/api/*types.ts` mirror these.
 
 import type { PendingApproval } from "@miyoria/actions";
+import type { WalletExport } from "@miyoria/economy";
 import type { ModuleStatus } from "@miyoria/kernel";
 
 import type { CostReport, ModelUsage, PeriodReport } from "@miyoria/llm";
@@ -17,11 +18,14 @@ import type {
 } from "@miyoria/store";
 import type {
   AccountRef,
+  ArbiterDecision,
   ChannelActivity,
   ContextKey,
   ConversationState,
+  EmergencyReport,
   FeedbackTally,
   Feeling,
+  Goal,
   KnowledgeDoc,
   Lesson,
   MindStats,
@@ -30,12 +34,14 @@ import type {
   PersonId,
   PlatformId,
   ProfileId,
+  ReasoningLevel,
   ReflectionRun,
   ReflectionStats,
   SelfSnapshot,
   Thought,
   Timestamp,
   TurnId,
+  TurnOutcome,
   VoiceParticipant,
   WorldSnapshot,
 } from "@miyoria/types";
@@ -73,6 +79,217 @@ export interface SessionInfo {
   /** The Discord user; `null` for the bearer token. */
   user: SessionUser | null;
   permissions: SessionPermissions;
+}
+
+/** What she is doing, as the public page says it. `offline`: the modules that know are stopped. */
+export type PublicState = "singing" | "playing" | "live" | "in_voice" | "idle" | "offline";
+
+/** Today's aggregate numbers: nothing in them points at a person. */
+export interface PublicToday {
+  songs_sung: number;
+  hours_live: number;
+  hours_in_voice: number;
+}
+
+/** One local day of `PublicToday`, `date` as `YYYY-MM-DD`. */
+export interface PublicDay extends PublicToday {
+  date: string;
+}
+
+/** `GET /api/public/status`. */
+export interface PublicStatus {
+  state: PublicState;
+  live: boolean;
+  in_voice: boolean;
+  /** The game id while she plays one. */
+  game: string | null;
+  today: PublicToday;
+  /** The last `PUBLIC_DAYS` local days, oldest first, today last. */
+  days: PublicDay[];
+}
+
+/** A song on the public page. `title` is `null` until the worker found it, or if it was screened. */
+export interface PublicSong {
+  title: string | null;
+  artist: string | null;
+  duration_s: number | null;
+}
+
+/** `GET /api/public/songs`. */
+export interface PublicSongs {
+  playing: PublicSong | null;
+  /** Still to come, in order. */
+  upcoming: (PublicSong & { ready: boolean })[];
+  /** What she sang last, newest first. */
+  recent: PublicSong[];
+}
+
+/** `GET /api/member/session`. */
+export interface MemberSession {
+  name: string;
+  avatar_url: string | null;
+}
+
+/** 她眼中的你, in words. All `null` for someone she does not know. */
+export interface MemberCard {
+  call_name: string | null;
+  relationship: string | null;
+  affinity: string | null;
+  trust: string | null;
+  familiarity: string | null;
+  public_feeling: string | null;
+}
+
+export interface MemberMemory {
+  text: string;
+  kind: string;
+  /** `YYYY-MM-DD`. */
+  date: string;
+}
+
+export interface MemberSong {
+  title: string;
+  artist: string | null;
+  state: string;
+  requested_at: string;
+}
+
+/** `GET /api/member/me`. */
+/** How much someone talked to her on one local day: their own lines, counted. */
+export interface MemberDay {
+  date: string;
+  /** Lines written in text channels, threads and DMs. */
+  text: number;
+  /** Lines said in voice. */
+  voice: number;
+}
+
+export interface MemberView {
+  card: MemberCard;
+  memories: MemberMemory[];
+  songs: MemberSong[];
+  /** The last `MEMBER_DAYS` local days, oldest first, today last. */
+  activity: MemberDay[];
+  can_request_song: boolean;
+  /** What forgetting takes and leaves, in the words `/me memory forget` uses. */
+  forget: { removes: string; keeps: string };
+}
+
+/** A field she added to a card herself: its name and what she wrote. */
+export interface CardField {
+  label: string;
+  text: string;
+}
+
+/** A card she gave someone: what she thought of them then, kept so its code can be checked. */
+export interface IssuedCard {
+  /** `MYR-XXXX-XXXX-XXXX`, Crockford base32 (no I L O U), 60 random bits from crypto. */
+  serial: string;
+  /** ISO 8601 UTC. */
+  issued_at: string;
+  /** Their display name when it was issued (from the session record). */
+  name: string;
+  /** Their avatar URL when it was issued, or null. */
+  avatar_url: string | null;
+  /** The nth card this person has been given, from 1. */
+  number: number;
+  call_name: string | null;
+  relationship: string | null;
+  affinity: string | null;
+  trust: string | null;
+  familiarity: string | null;
+  public_feeling: string | null;
+  /** What she wrote for them as she issued it; null on older cards or when she could not. */
+  line: string | null;
+  /** The stamp she put on it, or null. */
+  stamp: string | null;
+  /** Fields she chose to add (at most three); empty on older cards. */
+  fields: CardField[];
+  /** Which picture of her is on it: a key from CARD_POSES (she picks within the band). */
+  pose: string;
+  /** The card frame they had chosen then (`[modules.economy] frames`), null for none. */
+  frame: string | null;
+  /** Bought foil finish (`card_foil`); false on older cards. */
+  foil: boolean;
+  /** When a reroll replaced it, or null: a voided card is shown as 已作廢, never as valid. */
+  voided_at: string | null;
+}
+
+/** One picture of her they may choose for a card. */
+export interface CardPoseChoice {
+  id: string;
+  /** zh label. */
+  label: string;
+}
+
+/** What the card extras cost them now; a price is null when it is off sale or there is no wallet. */
+export interface CardPrices {
+  pose: number | null;
+  foil: number | null;
+  reroll: number | null;
+}
+
+/** `GET /api/member/card`. */
+export interface MemberCards {
+  /** Their newest card that is not voided. */
+  latest: IssuedCard | null;
+  /** Cards issued to them in the current local day (utc offset as public stats use); rerolls and voided cards not counted. */
+  today: number;
+  /** Most cards a person may be issued per local day. */
+  per_day: number;
+  /** Pictures their affinity band allows, for `card_pose`. */
+  poses: CardPoseChoice[];
+  prices: CardPrices;
+  /** Rerolls of today's newest card they may still buy today (0 when none is possible). */
+  rerolls_left: number;
+}
+
+/** `GET /api/member/export` (a file). */
+export interface MemberExport {
+  exported_at: string;
+  card: MemberCard;
+  memories: (MemberMemory & { derived_from_you: boolean })[];
+  /** Memories left out because they hold someone else's name or words, or her own notes. */
+  withheld: number;
+  songs: MemberSong[];
+  /** The cards she gave them, newest first. */
+  cards: IssuedCard[];
+  /** Their coins: the balance and every line of the ledger, newest first. */
+  wallet: WalletExport;
+  /** The fortune slips she wrote for them, newest first. */
+  fortunes: IssuedFortune[];
+}
+
+/** A field on a fortune slip: its name (戀愛, 學業, ...) and what she wrote. */
+export interface FortuneField {
+  label: string;
+  text: string;
+}
+
+/** A fortune slip she wrote for them, one per local day (`GET`/`POST /api/member/fortune`). */
+export interface IssuedFortune {
+  id: string;
+  /** The local day it is for, `YYYY-MM-DD`. */
+  date: string;
+  issued_at: string;
+  rank: "大吉" | "吉" | "中吉" | "小吉" | "末吉" | "凶";
+  /** At most 8 characters. */
+  title: string;
+  /** Four lines of at most 7 characters. */
+  poem: string[];
+  /** At most three. */
+  fields: FortuneField[];
+  /** A personal line, at most 30 characters. */
+  line: string | null;
+}
+
+/** `POST /api/member/forget`. */
+export interface MemberForgetResult {
+  deleted: number;
+  about: number;
+  derived: number;
+  /** Memories whose evidence is gone, so nothing ties them to the person; they stay. */
+  unverified: number;
 }
 
 /** One module as reported by `GET /api/modules` (the supervisor's `ModuleStatus`). */
@@ -151,6 +368,27 @@ export interface UpdatePersonRequest {
   /** `null` clears it. */
   call_name?: string | null;
   blocked?: boolean;
+}
+
+/** `GET /api/people/{id}/wallet`: their coins and newest rows (newest first). */
+export interface PersonWalletView {
+  balance: number;
+  ledger: { ts: string; delta: number; label: string }[];
+}
+
+/** Body of `POST /api/people/{id}/wallet/adjust`; a negative `amount` takes coins. */
+export interface WalletAdjustRequest {
+  amount: number;
+  /** 1 to 100 characters. */
+  note: string;
+  /** One per confirmed submit; the same key twice answers the first. */
+  key: string;
+}
+
+export interface WalletAdjustResult {
+  balance: number;
+  entry_id: string;
+  duplicate: boolean;
 }
 
 /** Body of `POST /api/people/{id}/adjust`. */
@@ -422,10 +660,40 @@ export interface LatencyStats {
   samples: number;
 }
 
+/** p50 / p90 of one end-to-end latency series; `null` percentiles without samples. */
+export interface E2eStats {
+  p50_ms: number | null;
+  p90_ms: number | null;
+  samples: number;
+}
+
+/** The six segments of `speech_end → first_audio_played`, in the order a listener hears them. */
+export type E2eSegmentName =
+  | "endpoint"
+  | "asr"
+  | "llm_first"
+  | "tts_queue"
+  | "tts_first"
+  | "playback";
+
+/**
+ * End-to-end voice latency over the recent window: replies to human speech only. `total` and the
+ * segments count complete measurements (a segment that was not measured is left out of its own
+ * stats); incomplete ones (cancelled, barged in on, failed) are only counted, by reason.
+ */
+export interface VoiceE2eLatency {
+  total: E2eStats;
+  segments: Record<E2eSegmentName, E2eStats>;
+  complete: number;
+  incomplete: number;
+  incomplete_by_reason: Record<string, number>;
+}
+
 export interface VoiceLatency {
   asr: LatencyStats;
   llm_first_token: LatencyStats;
   tts_first_audio: LatencyStats;
+  e2e: VoiceE2eLatency;
 }
 
 /** One voice channel she is in. */
@@ -497,7 +765,7 @@ export interface ChannelLevelsView {
 
 /** `GET /api/mind` (and the answer of `POST /api/mind/pause|resume`). */
 export interface MindView {
-  /** Her autonomy is paused (only commands and the panel act; her mind does not think). */
+  /** The emergency stop is on: she does not reply or speak, only commands and the panel act. */
   paused: boolean;
   /** The `mind` module is running. */
   running: boolean;
@@ -506,6 +774,8 @@ export interface MindView {
   stats: MindStats | null;
   /** High-risk actions waiting for an owner. */
   pending_approvals: number;
+  /** The last press of the emergency stop, step by step; `null`: none since the core started. */
+  emergency: EmergencyReport | null;
 }
 
 export type { PendingApproval, Thought };
@@ -610,3 +880,48 @@ export interface TelemetryView {
   interval_ms: number;
   points: TelemetryPoint[];
 }
+
+// ---- body, arbiter, affect, plan, prompts (docs/design/v2-architecture.md §3) -------------
+
+/** One arbiter decision (`arbiter.decision`) with what the ledger knows about its impulse. */
+export interface ArbiterDecisionView extends ArbiterDecision {
+  /** Where the impulse was aimed (`null`: unknown or anywhere). */
+  context: ContextKey | null;
+  /** What it was, short zh-TW, when the ledger still has it. */
+  summary: string | null;
+}
+
+/** `GET /api/arbiter/decisions`: decisions seen since the `api` module started, newest first. */
+export interface ArbiterDecisionsView {
+  decisions: ArbiterDecisionView[];
+}
+
+/** `GET /api/mind/goals`. */
+export interface GoalsView {
+  /** Pending and active goals, soonest trigger first, then (with `closed=true`) closed ones. */
+  goals: Goal[];
+  /** The closed goals were asked for and the agenda can list them. */
+  closed_included: boolean;
+}
+
+/** `GET /api/mind/plan`: today's plan in her words (`null`: not written yet). */
+export interface DayPlanView {
+  day_plan: string | null;
+}
+
+/** One saved prompt without its blocks and messages (`GET /api/prompts`). */
+export interface PromptSummary {
+  turn: TurnId;
+  context: ContextKey;
+  at: Timestamp;
+  purpose: string;
+  reasoning: ReasoningLevel;
+  prompt_tokens: number | null;
+  blocks: number;
+  messages: number;
+  /** Characters of all kept messages. */
+  chars: number;
+}
+
+/** The outcome kinds of a turn (`TurnOutcome["type"]`). */
+export type TurnOutcomeKind = TurnOutcome["type"];

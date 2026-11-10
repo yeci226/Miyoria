@@ -1,14 +1,14 @@
 // Her mind loop and autonomy: `GET /api/mind` (status and call counts), `GET
 // /api/mind/thoughts` (her thought journal, newest first), `GET /api/mind/approvals` (high-risk
 // actions waiting for an owner), `POST /api/mind/approvals/{id}/approve|deny` and `POST
-// /api/mind/pause|resume` (the emergency stop). Changes need the owner-level node
-// `owner.autonomy.approve` (the bearer token has every right).
+// /api/mind/pause|resume` (the emergency stop: `emergency` says how each of its steps went).
+// Changes need the owner-level node `owner.autonomy.approve` (the bearer token has every right).
 
 import { ActuatorRegistryKey, NODE_APPROVE } from "@miyoria/actions";
 import { AuthorizerKey, MindKey } from "@miyoria/types";
 import { ApiError } from "./errors.js";
 import { json, param, type Route } from "./route.js";
-import { type ApiContext, type ApiState, actorOf } from "./state.js";
+import { type ApiContext, type ApiState, actorOf, toJson } from "./state.js";
 import type { MindView } from "./types.js";
 
 const DEFAULT_THOUGHTS = 50;
@@ -33,6 +33,7 @@ function mindView(state: ApiState): MindView {
     accepting: mind?.accepting ?? false,
     stats: mind?.stats() ?? null,
     pending_approvals: registry?.escalations.pending().length ?? 0,
+    emergency: registry?.emergency.last ?? null,
   };
 }
 
@@ -49,8 +50,18 @@ async function answer(state: ApiState, c: ApiContext, approved: boolean): Promis
 async function setPaused(state: ApiState, c: ApiContext, paused: boolean): Promise<Response> {
   requireOwner(state, c);
   const registry = state.service(ActuatorRegistryKey, "actuator registry");
-  await registry.setPaused(paused);
-  await state.audit(c, paused ? "autonomy.pause" : "autonomy.resume", "autonomy", {}, true);
+  const actor = actorOf(c);
+  const report = paused
+    ? await registry.emergency.stop(actor, actor)
+    : await registry.emergency.resume(actor);
+  const ok = report.steps.every((s) => s.ok);
+  await state.audit(
+    c,
+    paused ? "autonomy.pause" : "autonomy.resume",
+    "autonomy",
+    toJson(report),
+    ok,
+  );
   return json(mindView(state));
 }
 

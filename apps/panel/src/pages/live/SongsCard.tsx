@@ -47,7 +47,7 @@ function Title({ s }: { s: SongView }) {
 function SongRow({ s, playing }: { s: SongView; playing: boolean }) {
   const { play } = useSongMutations();
   return (
-    <li className={cn("flex items-center gap-3 px-4 py-2.5", playing && "bg-brand/[0.07]")}>
+    <li className={cn("flex items-center gap-3 py-(--row-y)", playing && "font-medium")}>
       <span className="flex size-4 shrink-0 items-center justify-center">
         {playing ? <Dot tone="brand" pulse /> : s.state === "ready" ? <Dot tone="success" /> : s.state === "failed" ? <Dot tone="danger" /> : <Dot />}
       </span>
@@ -64,9 +64,9 @@ function SongRow({ s, playing }: { s: SongView; playing: boolean }) {
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={Math.round(s.progress * 100)}
-            className="h-1 overflow-hidden rounded-full bg-muted"
+            className="h-1 overflow-hidden rounded-[2px] bg-muted"
           >
-            <span className="block h-full rounded-full bg-chart-1 transition-[width] duration-500" style={{ width: `${Math.max(3, s.progress * 100)}%` }} />
+            <span className="block h-full rounded-[2px] bg-secondary-line transition-[width] duration-500" style={{ width: `${Math.max(3, s.progress * 100)}%` }} />
           </span>
         </div>
       )}
@@ -85,7 +85,7 @@ function SongRow({ s, playing }: { s: SongView; playing: boolean }) {
       )}
       {playing && <StatusBadge tone="brand">唱歌中</StatusBadge>}
       {s.state === "failed" && (
-        <span className="max-w-40 truncate text-xs text-[oklch(0.74_0.16_25)]" title={s.error ?? undefined}>
+        <span className="max-w-40 truncate text-xs text-primary" title={s.error ?? undefined}>
           {s.error ?? "失敗"}
         </span>
       )}
@@ -116,7 +116,7 @@ function RequestForm() {
     );
   };
   return (
-    <form onSubmit={submit} className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+    <form onSubmit={submit} className="flex flex-wrap items-center gap-2 pb-2">
       <label htmlFor={`${id}-q`} className="sr-only">
         歌名
       </label>
@@ -127,7 +127,7 @@ function RequestForm() {
         maxLength={300}
         disabled={!canWrite}
         title={canWrite ? undefined : READ_ONLY_HINT}
-        placeholder="歌名、歌手或 YouTube 連結"
+        placeholder="歌名、歌手或 YouTube / bilibili 連結"
         className="h-8 min-w-0 flex-1 basis-48"
       />
       <Select value={key} onValueChange={setKey} disabled={!canWrite}>
@@ -142,7 +142,7 @@ function RequestForm() {
           ))}
         </SelectContent>
       </Select>
-      <Button writes type="submit" size="sm" busy={request.isPending} disabled={!query.trim()}>
+      <Button writes type="submit" size="sm" variant="secondary" busy={request.isPending} disabled={!query.trim()}>
         <Plus />
         點歌
       </Button>
@@ -164,7 +164,7 @@ export function SongsCard() {
   const waiting = open.filter((s) => s.state !== "failed" && s.state !== "playing").length;
 
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>
           歌單
@@ -203,12 +203,12 @@ export function SongsCard() {
           <>
             <RequestForm />
             {open.length === 0 ? (
-              <p className="flex items-center justify-center gap-2 px-4 py-8 text-sm text-muted-foreground">
+              <p className="flex items-center gap-2 py-3 text-[13px] text-muted-foreground">
                 <Music className="size-4" aria-hidden />
                 歌單是空的
               </p>
             ) : (
-              <ul className="divide-y" aria-label="歌單">
+              <ul className="divide-y divide-line-soft" aria-label="歌單">
                 {open.map((s) => (
                   <SongRow key={s.no} s={s} playing={s.no === data?.playing} />
                 ))}
@@ -220,14 +220,14 @@ export function SongsCard() {
                   type="button"
                   aria-expanded={showDone}
                   onClick={() => setShowDone((v) => !v)}
-                  className="w-full px-4 py-2 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50"
+                  className="w-full py-(--row-y) text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 >
                   {showDone ? "收起" : `唱過 / 取消的 ${finished.length} 首`}
                 </button>
                 {showDone && (
-                  <ul className="divide-y border-t text-muted-foreground" aria-label="唱過的歌">
+                  <ul className="divide-y divide-line-soft border-t text-muted-foreground" aria-label="唱過的歌">
                     {finished.map((s) => (
-                      <li key={s.no} className="flex items-center gap-3 px-4 py-2 text-sm">
+                      <li key={s.no} className="flex items-center gap-3 py-(--row-y) text-sm">
                         <span className="min-w-0 flex-1 truncate">{s.title ?? s.query}</span>
                         <span className="text-xs">{s.state === "cancelled" ? "取消" : "唱完"}</span>
                         <time className="text-xs" dateTime={s.created_at} title={fmtDateTime(s.created_at)}>
@@ -246,7 +246,6 @@ export function SongsCard() {
         open={confirmAll}
         title="取消全部的歌?"
         confirmLabel="全部取消"
-        destructive
         busy={stop.isPending}
         onClose={() => setConfirmAll(false)}
         onConfirm={() =>

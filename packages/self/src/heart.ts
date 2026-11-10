@@ -1,10 +1,12 @@
-// How she feels about people beyond the social numbers: the romance she feels for each (心動),
+// How she feels about people beyond the social numbers: the attachment she has for each (在意,
+// stored as `romance`; a crush grows from it),
 // her active emotions toward them (想念, 嫉妒, 感激, 不爽) and her crush (暗戀). Pure; `now`
 // (epoch ms) is passed in.
 //
-// * Romance grows only from what happens (warm, flirty, caring moments with someone she
-//   already likes), by at most `daily_gain` per person per local day; it fades slowly
-//   (`half_life_days`) and drops without limit when they hurt her. Nobody can set it.
+// * Attachment ("romance") no longer grows by itself from events: only the affect service moves
+//   it, on Reflect's proposals, in small steps within a daily cap (`attach`). It fades slowly
+//   (`half_life_days`) and drops without limit when they hurt her. (`romance()` keeps the old
+//   per-day growth for callers that still want it.)
 // * Her crush is whoever has the highest romance at or above `crush_threshold`; someone else
 //   needs `crush_margin` more to take the place. It can be nobody.
 // * Emotions toward someone fade with their own half-lives (her temperament).
@@ -167,6 +169,34 @@ export class HeartBook {
     }
     this.#pickCrush(now);
     return r.romance - before;
+  }
+
+  /**
+   * Moves attachment by `delta` directly (no per-day growth: the bond ledger of the service
+   * caps what Reflect may change). Returns the change made.
+   */
+  attach(person: PersonId, delta: number, now: number): number {
+    if (!Number.isFinite(delta) || delta === 0) return 0;
+    this.advance(now);
+    const r = this.#rec(person);
+    const before = r.romance;
+    r.romance = clamp01(r.romance + delta);
+    this.#pickCrush(now);
+    return r.romance - before;
+  }
+
+  /** Gives someone no record yet an attachment (the migration). Returns whether it did. */
+  seed(person: PersonId, attachment: number, name: string | null, now: number): boolean {
+    if (this.#people.has(person)) return false;
+    const r = this.#rec(person);
+    r.romance = clamp01(attachment);
+    if (name !== null && name.trim() !== "") r.name = [...name.trim()].slice(0, MAX_NAME).join("");
+    this.#pickCrush(now);
+    return true;
+  }
+
+  has(person: PersonId): boolean {
+    return this.#people.has(person);
   }
 
   /** Stirs or calms an emotion toward `person`; returns the new intensity. */

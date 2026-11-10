@@ -1,0 +1,64 @@
+{
+  "id": "self-talk-death-spiral-26",
+  "title": "26 lines in a row with nobody answering, in the game's death spiral",
+  "category": "repeat",
+  "incident": {
+    "at": "2026-11-08T02:14:59+08:00",
+    "summary": "Between 02:16 and 02:20 she said 26 lines in a row (the longest run of the two days; target <= 3, v3 §18.1 自言自語比).",
+    "source": [
+      "message_log seq 11350-11375 (is_self rows)"
+    ]
+  },
+  "harness": "trace",
+  "trace": [
+    {"type":"heard","t":0,"who":"viewer-1"},
+    {"type":"said","t":84.5,"channel":"voice","text":"呼,差點就掛了。不過這點程度我還游刃有餘啦!"},
+    {"type":"said","t":90.6,"channel":"voice","text":"果然水裡最舒服,畢竟是我的主場嘛。"},
+    {"type":"said","t":96.8,"channel":"voice","text":"哼哼,這點程度還難不倒我啦!"},
+    {"type":"said","t":99.9,"channel":"voice","text":"果然還是海裡最舒服。"},
+    {"type":"said","t":118.4,"channel":"voice","text":"呼,差點就掛了。不過這點程度我還游刃有餘啦!"},
+    {"type":"said","t":121.8,"channel":"voice","text":"果然還是海裡最舒服,畢竟是我的主場嘛。"},
+    {"type":"said","t":131.3,"channel":"voice","text":"哼哼,這點程度還難不倒我啦!"},
+    {"type":"said","t":134,"channel":"voice","text":"果然還是海裡最舒服。"},
+    {"type":"said","t":143.8,"channel":"voice","text":"哼哼,換氣換得剛剛好!"},
+    {"type":"said","t":146.2,"channel":"voice","text":"果然還是海裡最好,畢竟這可是我的主場啊。"},
+    {"type":"said","t":156.7,"channel":"voice","text":"哼哼,這點程度還難不倒我啦!"},
+    {"type":"said","t":160.3,"channel":"voice","text":"果然還是海裡最舒服,畢竟這可是我的主場啊!"},
+    {"type":"said","t":244.7,"channel":"voice","text":"等等等等,血剩六而已欸!?"},
+    {"type":"said","t":252.5,"channel":"voice","text":"肚子也是零,這不是要死了嗎!"},
+    {"type":"said","t":256.2,"channel":"voice","text":"不追魚了,也不漂了,先上岸找東西吃!"},
+    {"type":"said","t":260.4,"channel":"voice","text":"哼,才不會在這裡沉下去咧,我可是深海藍鯨喔。"},
+    {"type":"said","t":266.7,"channel":"voice","text":"等、等一下,血只剩六是怎樣啦!"},
+    {"type":"said","t":270.6,"channel":"voice","text":"肚子還是空的吧,這根本不是找食物的時候啊!"},
+    {"type":"said","t":275.9,"channel":"voice","text":"哇,快沒氣了!"},
+    {"type":"said","t":278,"channel":"voice","text":"我自己往上游,自己往上游!"},
+    {"type":"said","t":281,"channel":"voice","text":"哇,氧氣快沒了啦!"},
+    {"type":"said","t":283,"channel":"voice","text":"哼,這點小事難不倒我,我可是深海鯨魚耶。"},
+    {"type":"said","t":288.6,"channel":"voice","text":"……呼,總算浮上來了,剛好趕上。"},
+    {"type":"said","t":292,"channel":"voice","text":"不過血只剩一格欸,現在再被什麼打到就直接沉了。"},
+    {"type":"said","t":297.7,"channel":"voice","text":"哼哼，我的肺活量果然不是蓋的吧！"},
+    {"type":"said","t":301.9,"channel":"voice","text":"不過肚子還是空的欸……"},
+    {"type":"heard","t":372.3,"who":"viewer-2"}
+  ],
+  "control": [
+    {"type":"heard","t":0,"who":"viewer-1"},
+    {"type":"said","t":84.5,"channel":"voice","text":"呼,差點就掛了。不過這點程度我還游刃有餘啦!"},
+    {"type":"said","t":90.6,"channel":"voice","text":"果然水裡最舒服,畢竟是我的主場嘛。"},
+    {"type":"said","t":96.8,"channel":"voice","text":"哼哼,這點程度還難不倒我啦!"},
+    {"type":"heard","t":372.3,"who":"viewer-2"},
+    {"type":"heard","t":101.8,"who":"viewer-1"}
+  ],
+  "checks": [
+    {
+      "rule": "no_self_talk_run",
+      "max": 3
+    },
+    {
+      "rule": "min_said",
+      "min": 3
+    }
+  ],
+  "status": "xfail",
+  "reason": "a long run of lines with nobody answering was not stopped (cause not confirmed: no limit on unanswered runs was found in the log)",
+  "flips_with": "floor / arbiter: a budget for unanswered lines that her own events do not reset (v3 §7.2); re-record the case and run `--trace`"
+}

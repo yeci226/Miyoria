@@ -99,11 +99,11 @@ function categoryPage(list: readonly Category[], name: string): CommandReply {
 
 /** Registers `/help`. */
 export function registerHelp(registry: CommandRegistry): void {
-  const list = async (inv: Invocation) => categories(registry, await registry.permitted(inv));
+  const list = async (inv: Invocation) =>
+    categories(registry, await registry.permitted(inv, { panels: true }));
   registry.register(
     commandSpec("help", "列出你可以使用的指令，也可以確認她是否在線上", {
       permission: HELP_NODE,
-      ephemeral: true,
     }),
     async (inv) => overview(await list(inv)),
     {

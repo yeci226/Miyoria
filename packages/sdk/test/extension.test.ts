@@ -285,4 +285,32 @@ describe("extension runtime", () => {
     expect(order).toEqual(["hook", "deactivate"]);
     expect(h.exits).toEqual([0]);
   });
+
+  it("declares steer only when the executor has it, and dispatches task.steer to it", async () => {
+    const steers: unknown[] = [];
+    const base = {
+      observe: async () => ({ at: "2026-11-01T00:00:00Z", state: {}, task: null, summary: "" }),
+      start: async () => {},
+      cancel: async () => {},
+      events: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }) }),
+    };
+    const info = { name: "Fake", goals: [] };
+    const steerable = fakeHost({
+      activate: (ctx) =>
+        ctx.tasks.register({ ...base, steer: async (steer) => void steers.push(steer) }, info),
+    });
+    const declared = await steerable.initialize();
+    expect(declared.contributions.executor?.steer).toBe(true);
+    const steer = { id: "s1", task: "t1", patch: { a: 1 }, why: "w", cause: "c" };
+    expect(await steerable.host.request("task.steer", { steer })).toEqual({});
+    expect(steers).toEqual([steer]);
+    await expect(steerable.host.request("task.steer", {})).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+
+    const plain = fakeHost({ activate: (ctx) => ctx.tasks.register(base, info) });
+    const plainInit = await plain.initialize();
+    expect(plainInit.contributions.executor).not.toHaveProperty("steer");
+    await expect(plain.host.request("task.steer", { steer })).rejects.toMatchObject({
+      code: ErrorCode.MethodNotFound,
+    });
+  });
 });

@@ -1,16 +1,21 @@
 // Follow-ups: the outcome of a high-risk request whose result matters (`tool.followup`, e.g.
 // `code.run`) that was not ready while the tool call could wait. It comes back to her as an
-// `agent_initiative` (reason `action_result`) in the context she asked from; the agent wraps the
-// hint in an untrusted data block. When the agent skips the initiative (a turn in flight, people
-// still talking), the delivery is tried again every few seconds until it is too old to matter.
+// impulse of source `followup` (reason `action_result`) in the context she asked from, for the
+// Arbiter (a busy place is retried there until the impulse expires); the agent wraps the hint in
+// an untrusted data block. Without the Arbiter the agent opens it as an initiative, and when it
+// skips one (a turn in flight, people still talking) the delivery is tried again every few
+// seconds until it is too old to matter.
 
 import { getLogger } from "@miyoria/kernel";
 import {
   type AccountRef,
+  ARBITER_IMPULSE_TOPIC,
   type ContextKey,
   contextKeyEquals,
   type DecisionTrace,
   type Event,
+  newImpulse,
+  v2Event,
 } from "@miyoria/types";
 import type { ActionOutcome, ActionRequest, Capability } from "./capability.js";
 import { deniedText } from "./capability.js";
@@ -98,10 +103,21 @@ export class Followups {
     d.sentAt = this.#now();
     this.#prune();
     this.#pending.push(d);
-    this.#publish({
-      type: "agent_initiative",
-      data: { context: d.context, reason: FOLLOWUP_REASON, hint: d.hint, about: d.about },
-    });
+    const now = this.#now();
+    const impulse = newImpulse(
+      {
+        source: "followup",
+        context: d.context,
+        account: d.about.length === 1 ? (d.about[0] ?? null) : null,
+        ttlMs: Math.max(d.firstAt + FOLLOWUP_MAX_AGE_MS - now, 0),
+        why: "你之前要求的事有結果了",
+        hint: d.hint,
+        about: d.about,
+        reason: FOLLOWUP_REASON,
+      },
+      now,
+    );
+    this.#publish(v2Event(ARBITER_IMPULSE_TOPIC, impulse));
   }
 
   #prune(): void {

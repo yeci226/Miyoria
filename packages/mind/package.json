@@ -1,7 +1,7 @@
 {
   "name": "@miyoria/mind",
   "version": "0.1.0",
-  "description": "Her mind loop (module `mind`): inner monologue, feelings, policy, agenda and intents she acts on",
+  "description": "Her Deliberate calls (module `mind`): Appraise, Plan, her goals and the impulses she acts on",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -27,7 +27,6 @@
     "@miyoria/llm": "workspace:*",
     "@miyoria/social": "workspace:*",
     "@miyoria/store": "workspace:*",
-    "@miyoria/tools": "workspace:*",
     "@miyoria/types": "workspace:*",
     "zod": "^4.6.7"
   },

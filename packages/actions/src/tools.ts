@@ -84,23 +84,32 @@ export class CapabilityTool implements Tool {
       args,
       why,
       turn: ctx.turn,
+      message: ctx.message,
     };
     if (this.capability.risk === "high") {
       // The review (and maybe the owners) take longer than a tool call may; it goes on alone.
-      const running = this.registry.invoke(request);
+      const running = this.registry.invoke(request, { activity: "detach" });
       if (this.capability.tool?.followup) return this.#waitOrFollowUp(ctx, request, running);
+      // Nobody waits for it any more: the outcome reaches her as a notice (and the ledger).
       void running.then(
-        (outcome) =>
-          log.info({ capability: this.capability.name, status: outcome.status }, "reviewed action"),
+        (outcome) => {
+          log.info({ capability: this.capability.name, status: outcome.status }, "reviewed action");
+          this.registry.notifyLate(this.capability, request, outcome);
+        },
         (error: unknown) =>
           log.warn({ capability: this.capability.name, err: errorMessage(error) }, "review failed"),
       );
       return REVIEW_PENDING;
     }
+    // Activity capabilities answer once the ActivityManager accepted them ("開始了,task 7");
+    // the outcome comes back later as a notice. Timing out or a cancelled turn cancels a run
+    // still waiting in its lane.
     const outcome = await this.registry.invoke(request, {
       signal: ctx.signal,
       priority: ctx.priority,
+      activity: "detach",
     });
+    if (outcome.status === "done") ctx.report?.(outcome.result.data);
     return answer(outcome);
   }
 

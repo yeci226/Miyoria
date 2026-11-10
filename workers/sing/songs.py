@@ -6,7 +6,8 @@
         video.mp4?                         the original video, muted on stream (a hard link of
                                            the source's when the volume allows; library: video.<ext>)
     <root>/_sources/<source_key>/  downloaded audio and its stems, reused when only the key changes
-        source.wav  vocals.wav  instrumental.wav  info.json  video.mp4?  video.json?
+        source.wav  vocals.wav  instrumental.wav  lead.wav?  backing.wav?  info.json  video.mp4?  video.json?
+                                           lead + backing = vocals (leadsplit.py); older stems get them on demand
     <root>/queries.json          normalised query → source key (so repeated requests skip the search)
     <root>/library/              the owner's own files: full songs, or a folder with
                                  vocals.* + instrumental.* (+ lyrics.lrc, info.json {title, artist});
@@ -63,13 +64,21 @@ def normalize_query(q: str) -> str:
     return re.sub(r"\s+", " ", q).strip()
 
 
-def song_id(source_key: str, pitch: int | None, key: int) -> str:
-    """``<source_key>`` for auto pitch in the original key, else with ``-p<n>`` / ``-k<n>``."""
+# What happens to the song's backing voices (harmonies, chorus): kept as recorded (default),
+# dropped, converted to her voice like the lead, or dropped with the instrumental (a cappella).
+BACKING_MODES = ("keep", "drop", "convert", "acapella")
+BACKING_SUFFIX = {"keep": "", "drop": "-nobk", "convert": "-cvbk", "acapella": "-acap"}
+
+
+def song_id(source_key: str, pitch: int | None, key: int, backing: str = "keep") -> str:
+    """``<source_key>`` for auto pitch in the original key with the backing voices as recorded,
+    else with ``-p<n>`` / ``-k<n>`` / the backing mode's suffix (BACKING_SUFFIX)."""
     sid = source_key
     if pitch is not None:
         sid += f"-p{pitch:+d}"
     if key:
         sid += f"-k{key:+d}"
+    sid += BACKING_SUFFIX.get(backing, "")
     return safe_id(sid, 96)
 
 

@@ -1,7 +1,9 @@
 import { Ban, Save } from "lucide-react";
 import { useId, useState } from "react";
+import { isApiError } from "@/api/http";
 import type { PersonDetail, RelationshipDelta } from "@/api/types";
-import { useAdjustPerson, usePerson, useUpdatePerson } from "@/app/queries";
+import { READ_ONLY_HINT, useCanWrite } from "@/app/session";
+import { useAdjustPerson, useAdjustWallet, usePerson, usePersonWallet, useUpdatePerson } from "@/app/queries";
 import { TimeChart } from "@/components/charts/charts";
 import { ConfirmDialog } from "@/components/confirm";
 import { Facts } from "@/components/json-view";
@@ -99,7 +101,7 @@ export function RelationshipEditor({ detail }: { detail: PersonDetail }) {
         <Textarea id={`${id}-notes`} rows={4} value={shown.notes} onChange={(e) => change("notes", e.target.value)} />
       </Field>
       <div className="flex items-center gap-2">
-        <Button writes type="submit" size="sm" busy={update.isPending} disabled={edits === null}>
+        <Button writes type="submit" size="sm" variant="secondary" busy={update.isPending} disabled={edits === null}>
           <Save />
           儲存
         </Button>
@@ -114,6 +116,116 @@ export function RelationshipEditor({ detail }: { detail: PersonDetail }) {
 }
 
 const STEPS = [-10, -5, 5, 10] as const;
+const MAX_ADJUST = 100_000;
+const MAX_NOTE = 100;
+const CURRENCY = "魚幣";
+
+/** A signed whole number, or null when the text is not one a hand adjustment may use. */
+export function parseAmount(text: string): number | null {
+  const t = text.trim();
+  if (!/^[+-]?\d+$/.test(t)) return null;
+  const n = Number(t);
+  return n !== 0 && Math.abs(n) <= MAX_ADJUST ? n : null;
+}
+
+const signed = (n: number) => (n > 0 ? `+${n}` : `−${-n}`);
+
+/** Their fish coins: balance, newest rows, and (for those who may) a hand adjustment. */
+export function WalletSection({ personId, name }: { personId: string; name: string }) {
+  const wallet = usePersonWallet(personId);
+  const adjust = useAdjustWallet(personId);
+  const canWrite = useCanWrite();
+  const id = useId();
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [denied, setDenied] = useState(false);
+
+  if (wallet.isPending) return <Section title={CURRENCY}><SkeletonRows count={2} /></Section>;
+  if (wallet.isError) {
+    // No economy module (or an older Core): nothing to show.
+    if (isApiError(wallet.error) && (wallet.error.kind === "unavailable" || wallet.error.kind === "not_provided")) return null;
+    return <Section title={CURRENCY}><ErrorLine error={wallet.error} onRetry={() => void wallet.refetch()} /></Section>;
+  }
+
+  const n = parseAmount(amount);
+  const trimmed = note.trim();
+  const noteOk = trimmed.length > 0 && [...trimmed].length <= MAX_NOTE;
+  const disabledWhy = !canWrite ? READ_ONLY_HINT : denied ? "你的帳號沒有調整魚幣的權限(需要 admin.economy.adjust)" : undefined;
+  const ready = n !== null && noteOk;
+
+  const submit = () => {
+    if (n === null) return;
+    adjust.mutate(
+      { amount: n, note: trimmed, key: crypto.randomUUID() },
+      {
+        onSuccess: (r) => {
+          notify.ok(`${name} 現在有 ${r.balance} ${CURRENCY}`);
+          setConfirm(false);
+          setAmount("");
+          setNote("");
+        },
+        onError: (e) => {
+          if (isApiError(e) && e.status === 403) setDenied(true);
+          setConfirm(false);
+          notify.error(e, "調整失敗");
+        },
+      },
+    );
+  };
+
+  return (
+    <Section title={CURRENCY}>
+      <p className="font-mono text-2xl tabular-nums">
+        {wallet.data.balance}
+        <span className="ml-1.5 font-sans text-sm text-muted-foreground">{CURRENCY}</span>
+      </p>
+      {wallet.data.ledger.length === 0 ? (
+        <p className="text-sm text-muted-foreground">還沒有紀錄</p>
+      ) : (
+        <ul className="divide-y divide-line-soft">
+          {wallet.data.ledger.map((l, i) => (
+            <li key={`${l.ts}-${i}`} className="flex items-baseline gap-3 py-2 text-sm">
+              <span className="min-w-0 flex-1 truncate">{l.label}</span>
+              <span className="font-mono text-xs tabular-nums">{signed(l.delta)}</span>
+              <time className="w-20 text-right text-[13px] text-muted-foreground" dateTime={l.ts} title={fmtDateTime(l.ts)}>
+                {fmtRelative(l.ts)}
+              </time>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="grid gap-3 sm:grid-cols-[7rem_minmax(0,1fr)_auto] sm:items-end"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (ready && !disabledWhy) setConfirm(true);
+        }}
+      >
+        <Field label="數量" htmlFor={`${id}-amount`}>
+          <Input id={`${id}-amount`} inputMode="numeric" placeholder="+50 或 -20" value={amount} disabled={Boolean(disabledWhy)} title={disabledWhy} onChange={(e) => setAmount(e.target.value)} />
+        </Field>
+        <Field label="原因" htmlFor={`${id}-note`}>
+          <Input id={`${id}-note`} maxLength={MAX_NOTE} value={note} disabled={Boolean(disabledWhy)} title={disabledWhy} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+        <Button type="submit" size="sm" variant="secondary" disabled={!ready || Boolean(disabledWhy)} title={disabledWhy}>
+          調整
+        </Button>
+      </form>
+      {denied && <p className="text-[13px] text-muted-foreground">{disabledWhy}</p>}
+      <ConfirmDialog
+        open={confirm}
+        title={n !== null && n > 0 ? `給 ${name} 加 ${n} ${CURRENCY}` : `從 ${name} 扣 ${n === null ? 0 : -n} ${CURRENCY}`}
+        confirmLabel="調整"
+        busy={adjust.isPending}
+        onClose={() => setConfirm(false)}
+        onConfirm={submit}
+      >
+        原因:{trimmed}
+      </ConfirmDialog>
+    </Section>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -155,7 +267,7 @@ function PersonBody({ detail }: { detail: PersonDetail }) {
             writes
             size="sm"
             variant="outline"
-            className={detail.blocked ? undefined : "text-[oklch(0.74_0.16_25)] hover:text-[oklch(0.78_0.16_25)]"}
+            className={detail.blocked ? undefined : "text-primary hover:text-primary"}
             busy={update.isPending && update.variables?.blocked !== undefined}
             onClick={() => (detail.blocked ? setBlocked(false) : setConfirmBlock(true))}
           >
@@ -176,7 +288,7 @@ function PersonBody({ detail }: { detail: PersonDetail }) {
                 <dd className="text-right font-mono text-xs tabular-nums">{Math.round(r.affinity)}</dd>
                 <dt className="text-muted-foreground">信任</dt>
                 <dd>
-                  <Meter value={r.trust / 100} tone="success" label="信任" />
+                  <Meter value={r.trust / 100} tone="brand" label="信任" />
                 </dd>
                 <dd className="text-right font-mono text-xs tabular-nums">{Math.round(r.trust)}</dd>
                 <dt className="text-muted-foreground">熟悉</dt>
@@ -217,8 +329,10 @@ function PersonBody({ detail }: { detail: PersonDetail }) {
           <RelationshipEditor key={detail.person.id} detail={detail} />
         </Section>
 
+        <WalletSection personId={detail.person.id} name={detail.person.display_name} />
+
         <Section title="帳號">
-          <ul className="divide-y rounded-md border">
+          <ul className="divide-y divide-line-soft rounded-md border">
             {detail.person.accounts.map((a) => (
               <li key={accountString(a.account)} className="flex items-center gap-3 px-3 py-2.5 text-sm">
                 <span className="min-w-0 flex-1">
@@ -236,7 +350,7 @@ function PersonBody({ detail }: { detail: PersonDetail }) {
 
         {detail.history.length > 0 && (
           <Section title="最近的變化">
-            <ul className="divide-y rounded-md border">
+            <ul className="divide-y divide-line-soft rounded-md border">
               {[...detail.history]
                 .reverse()
                 .slice(0, 20)
@@ -267,7 +381,6 @@ function PersonBody({ detail }: { detail: PersonDetail }) {
         open={confirmBlock}
         title={`封鎖 ${detail.person.display_name}?`}
         confirmLabel="封鎖"
-        destructive
         busy={update.isPending}
         onClose={() => setConfirmBlock(false)}
         onConfirm={() => setBlocked(true)}

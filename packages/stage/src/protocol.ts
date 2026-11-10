@@ -49,6 +49,23 @@ export function sceneTransitionOf(msg: {
   return msg.transition ? { name: msg.transition, duration_ms: msg.transition_ms ?? null } : null;
 }
 
+/** Expressions the economy can show for a gift (`stage.expression`); the avatar config maps them to files. */
+export const GIFT_EXPRESSIONS = ["heart", "blush", "squint", "big_bowl"] as const;
+export type GiftExpression = (typeof GIFT_EXPRESSIONS)[number];
+export const GiftExpressionSchema = z.enum(GIFT_EXPRESSIONS);
+
+/** Longest time a gift expression stays on, in seconds. */
+export const GIFT_EXPRESSION_MAX_S = 15;
+
+/** Longest giver name / gift label the overlay line takes (code units). */
+export const GIFT_NAME_MAX = 32;
+export const GIFT_LABEL_MAX = 24;
+
+/** Longest payer name / message / song title a screen card takes (code units). */
+export const SCREEN_NAME_MAX = 32;
+export const SCREEN_TEXT_MAX = 200;
+export const SCREEN_SONG_MAX = 128;
+
 /** `song_video` actions. */
 export type SongVideoAction = "play" | "stop";
 export const SongVideoActionSchema = z.enum(["play", "stop"]);
@@ -174,7 +191,11 @@ const StageMessageSchema = z.discriminatedUnion("type", [
 /** Text frames sent by Core. */
 export type CoreMessage =
   | { type: "welcome"; session: string }
-  | { type: "emotion"; name: string; intensity: number }
+  /**
+   * `resting`: not a moment of a line but how she looks while nothing else is shown, until the
+   * next `resting` one (`neutral`: nothing stands out). An older node shows it for a moment.
+   */
+  | { type: "emotion"; name: string; intensity: number; resting?: boolean }
   | { type: "subtitle"; turn: string; text: string; final: boolean }
   | { type: "speaking"; state: SpeakingState }
   /**
@@ -185,6 +206,24 @@ export type CoreMessage =
   | { type: "stream"; action: StreamAction; id?: number }
   | { type: "avatar_hotkey"; name: string; id?: number }
   | { type: "gaze"; target: GazeTarget }
+  /**
+   * Shows a gift expression for `seconds` (the node maps `expression` to a VTS expression file),
+   * then takes it off and restores her own. Answered (with `id`) once it is on.
+   */
+  | { type: "avatar_expression"; expression: GiftExpression; seconds: number; id?: number }
+  /** Someone fed her something (`economy.gift`); the overlay merges gifts into one line. */
+  | { type: "gift"; name: string; item: string; count: number; label: string }
+  /**
+   * A paid message or a song dedication (`economy.screen`). Unlike gifts they are not merged: the
+   * overlay queues them and shows one at a time. `song` is the title for a dedication, else null.
+   */
+  | {
+      type: "screen";
+      kind: "message" | "dedication";
+      name: string;
+      text: string;
+      song: string | null;
+    }
   /**
    * The song she sings has a video: `play` shows `path` (a file in the song worker's cache on
    * the streaming PC) in the media source, muted, `offset_ms` into the song at the moment the
@@ -210,7 +249,16 @@ export type CoreMessage =
 
 const CoreMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("welcome"), session: z.string() }),
-  z.object({ type: z.literal("emotion"), name: z.string(), intensity: z.number() }),
+  z.object({
+    type: z.literal("emotion"),
+    name: z.string(),
+    intensity: z.number(),
+    // Added after v1 shipped; older Cores leave it out (older nodes ignore it).
+    resting: z
+      .boolean()
+      .nullish()
+      .transform((v) => v ?? undefined),
+  }),
   z.object({ type: z.literal("subtitle"), turn: z.string(), text: z.string(), final: z.boolean() }),
   z.object({ type: z.literal("speaking"), state: SpeakingStateSchema }),
   z.object({
@@ -233,6 +281,26 @@ const CoreMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("stream"), action: StreamActionSchema, id: requestId }),
   z.object({ type: z.literal("avatar_hotkey"), name: z.string(), id: requestId }),
   z.object({ type: z.literal("gaze"), target: GazeTargetSchema }),
+  z.object({
+    type: z.literal("avatar_expression"),
+    expression: GiftExpressionSchema,
+    seconds: z.number().min(1).max(GIFT_EXPRESSION_MAX_S),
+    id: requestId,
+  }),
+  z.object({
+    type: z.literal("gift"),
+    name: z.string().max(GIFT_NAME_MAX),
+    item: z.string().max(32),
+    count: z.number().int().min(1).max(99),
+    label: z.string().max(GIFT_LABEL_MAX),
+  }),
+  z.object({
+    type: z.literal("screen"),
+    kind: z.enum(["message", "dedication"]),
+    name: z.string().max(SCREEN_NAME_MAX),
+    text: z.string().max(SCREEN_TEXT_MAX),
+    song: z.string().max(SCREEN_SONG_MAX).nullable(),
+  }),
   z.object({
     type: z.literal("song_video"),
     action: SongVideoActionSchema,

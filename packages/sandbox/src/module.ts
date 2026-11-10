@@ -10,8 +10,9 @@ import {
   sleep,
 } from "@miyoria/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
-import { customEvent, type ProfileId } from "@miyoria/types";
+import { customEvent, FileReaderKey, type ProfileId } from "@miyoria/types";
 import { SandboxConfigSchema } from "./config.js";
+import { SandboxFileReader } from "./files.js";
 import { SandboxGate } from "./gate.js";
 import { ProposedTools, ProposedToolsKey } from "./proposed.js";
 import { type DockerRunner, ProcessDockerRunner } from "./runner.js";
@@ -69,6 +70,12 @@ export class SandboxModule implements Module {
     });
     this.#sandbox = sandbox;
     ctx.provide(SandboxKey, sandbox);
+    if (config.files.enabled) {
+      ctx.provide(
+        FileReaderKey,
+        new SandboxFileReader({ sandbox, config: config.files, clock: ctx.clock }),
+      );
+    }
     const store = ctx.services.get(SettingsStoreKey);
     let tools: ProposedTools | null = null;
     if (store) {

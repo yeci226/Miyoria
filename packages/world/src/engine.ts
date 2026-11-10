@@ -6,7 +6,10 @@
 // * `came_online`: someone she cares about went from offline to online / idle / dnd.
 // * `joined_voice`: someone she cares about joined (or moved to) a voice channel.
 // * `started_game`: someone started playing a game she is interested in.
-// * `channel_quiet`: a lively channel had no messages for `quiet_after_secs`.
+// * `channel_quiet`: a lively channel had no messages for `quiet_after_secs`, or the voice
+//   channel she is in went quiet after a conversation (nobody, her included, said anything for
+//   `voice_quiet_secs`). The one "cold channel" signal (docs/design/v2-architecture.md §3.3):
+//   her mind / Plan wakes on it and decides whether to raise something.
 // * `mentioned`: she was mentioned / replied to in a guild context she has not spoken in for
 //   `away_secs`.
 //
@@ -15,6 +18,7 @@
 
 import {
   type AccountRef,
+  type ActivitySnapshot,
   type Attitude,
   type Author,
   accountRefString,
@@ -100,7 +104,13 @@ interface VoiceLines {
   lines: { at: number; speaker: string }[];
   her_last_at: number | null;
   touched: number;
+  /** The current lull was reported (a new utterance clears it). */
+  lulled: boolean;
 }
+
+/** Lines of the others within this long before the last make a voice conversation. */
+const VOICE_CONVERSATION_MS = 5 * 60_000;
+const VOICE_CONVERSATION_LINES = 3;
 
 interface ChannelRec {
   context: ContextKey;
@@ -365,6 +375,7 @@ export class WorldEngine {
     }
     if (speaker.is_bot) return;
     const rec = this.#voiceLines(context, now);
+    rec.lulled = false;
     rec.lines.push({ at: now, speaker: speaker.display_name });
     if (rec.lines.length > MAX_LINES) rec.lines.splice(0, rec.lines.length - MAX_LINES);
     this.#pruneVoice(rec, now);
@@ -447,6 +458,8 @@ export class WorldEngine {
     }
     const voiceForgetMs = this.config.voice_activity_window_secs * 1000 * 6;
     for (const [key, rec] of this.#voiceTalk) {
+      const lull = this.#voiceLull(key, rec, now);
+      if (lull) out.push(lull);
       this.#pruneVoice(rec, now);
       if (rec.lines.length === 0 && now - rec.touched >= voiceForgetMs) {
         this.#voiceTalk.delete(key);
@@ -455,13 +468,42 @@ export class WorldEngine {
     return out;
   }
 
+  /** The voice channel she is in (`key`) went quiet after a conversation (once per lull). */
+  #voiceLull(key: string, rec: VoiceLines, now: number): Candidate | null {
+    const here = this.#herVoice;
+    if (here === null || rec.lulled) return null;
+    if (voiceKey(here.platform, here.scope ?? "", here.channel) !== key) return null;
+    const last = rec.lines.at(-1)?.at ?? null;
+    const quietMs = this.config.voice_quiet_secs * 1000;
+    if (last === null || now - last < quietMs) return null;
+    if (rec.her_last_at !== null && now - rec.her_last_at < quietMs) return null;
+    const lines = rec.lines.filter((l) => last - l.at < VOICE_CONVERSATION_MS).length;
+    if (lines < VOICE_CONVERSATION_LINES) return null;
+    rec.lulled = true;
+    return {
+      kind: "channel_quiet",
+      key: `channel_quiet:${key}#voice`,
+      account: null,
+      person: null,
+      display_name: null,
+      context: { ...here, kind: "voice" },
+      detail: `語音裡大家 ${Math.round((now - last) / 1000)} 秒沒說話了(之前 5 分鐘 ${lines} 句)`,
+      score: 0.3,
+    };
+  }
+
   // ---- queries --------------------------------------------------------------------------
 
-  snapshot(now: number, sig: Signals, game: string | null): WorldSnapshot {
+  snapshot(
+    now: number,
+    sig: Signals,
+    game: string | null,
+    activity: ActivitySnapshot | null = null,
+  ): WorldSnapshot {
     return {
       at: toTimestamp(now),
       time: this.time(now),
-      her: this.her(game),
+      her: this.her(game, activity),
       people: this.people(sig),
       voice_channels: this.voiceChannels(sig, now),
       channels: this.channels(now),
@@ -472,7 +514,13 @@ export class WorldEngine {
     return timeContext(now, this.config.utc_offset_minutes);
   }
 
-  her(game: string | null): HerStatus {
+  /**
+   * Her own situation. With the ActivityManager's snapshot (`activity`) her voice channel, the
+   * broadcast, the game and the song come from it (the one copy everyone reads); without it, from
+   * what the world saw on the bus. The OBS scene is always the one OBS reports.
+   */
+  her(game: string | null, activity: ActivitySnapshot | null = null): HerStatus {
+    if (activity !== null) return this.#herFrom(game, activity);
     const voice = this.#herVoice;
     let voiceName: string | null = null;
     if (voice) {
@@ -491,6 +539,34 @@ export class WorldEngine {
       streaming: this.#stage.streaming,
       scene: this.#stage.scene,
       game,
+      singing: null,
+    };
+  }
+
+  #herFrom(game: string | null, snapshot: ActivitySnapshot): HerStatus {
+    const p = snapshot.presence;
+    const voice = p.type === "in" ? { ...p.channel } : null;
+    let voiceName: string | null = null;
+    if (voice) {
+      for (const v of this.#voice.values()) {
+        if (v.guild === voice.scope && v.channel === voice.channel && v.channel_name !== null) {
+          voiceName = v.channel_name;
+          break;
+        }
+      }
+    }
+    const b = snapshot.broadcast;
+    const golive = b.type === "off" ? null : b.golive ? "live" : b.type === "live" ? null : b.type;
+    const a = snapshot.activity;
+    const running = a.type !== "idle" && a.phase === "running";
+    return {
+      voice,
+      voice_name: voiceName,
+      golive,
+      streaming: b.type !== "off" && b.obs,
+      scene: this.#stage.scene,
+      game: running && a.type === "game" ? (game ?? a.target) : null,
+      singing: running && a.type === "singing" ? a.target : null,
     };
   }
 
@@ -773,7 +849,7 @@ export class WorldEngine {
     const key = voiceKey(context.platform, context.scope ?? "", context.channel);
     let rec = this.#voiceTalk.get(key);
     if (!rec) {
-      rec = { lines: [], her_last_at: null, touched: now };
+      rec = { lines: [], her_last_at: null, touched: now, lulled: false };
       this.#voiceTalk.set(key, rec);
       const max = Math.max(this.config.max_channels, 1);
       if (this.#voiceTalk.size > max) {

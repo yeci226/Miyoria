@@ -3,12 +3,23 @@ import { defineManifest, errorMessage, type Module, type ModuleContext } from "@
 import type { Profile } from "@miyoria/profile";
 import { SettingsStoreKey } from "@miyoria/store";
 import { ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
-import { IntentSinkKey, SelfStateKey } from "@miyoria/types";
+import {
+  ImpulseHostKey,
+  IntentSinkKey,
+  MouthKey,
+  PromptContributorsKey,
+  ProposalBoardKey,
+  pipelineOf,
+  SelfStateKey,
+  TurnFocusViewKey,
+  TurnSilencerKey,
+} from "@miyoria/types";
 
 import { activenessCapability, chatCapabilities } from "./actions.js";
 import { type RandomSource, SeededRandom } from "./attention.js";
 import { AgentCommands } from "./commands.js";
-import { AgentConfigSchema } from "./config.js";
+import { SavedPromptsKey } from "./compiler.js";
+import { AgentConfigSchema, deprecatedAgentKeys } from "./config.js";
 import {
   AgentHandle,
   AgentHandleKey,
@@ -18,9 +29,10 @@ import {
   type VoiceRooms,
 } from "./handle.js";
 import { AgentIntents } from "./intents.js";
+import { WorkingNotes } from "./notes.js";
 import { PersonaHandle, PersonaHandleKey } from "./persona.js";
 import { Agent } from "./runtime.js";
-import { ReactTool } from "./tools.js";
+import { DropNoteTool, KeepNoteTool, ReactTool } from "./tools.js";
 import { TimeoutError, timeout } from "./util.js";
 import type { FetchLike } from "./vision.js";
 
@@ -43,7 +55,13 @@ const SETTINGS_LOAD_TIMEOUT_MS = 5_000;
  * while running, and the capabilities `channel.activeness` (her talkativeness here for a while,
  * offered as the `channel_activeness` tool), `chat.start` and `chat.dm` (talking on her own) in
  * the actuator registry. Provides `IntentSinkKey`: her mind loop's intents become turns she
- * starts herself (principal `self`, with tools).
+ * starts herself (principal `self`, with tools). Provides `ImpulseHostKey`: the Arbiter's
+ * accepted impulses open her turns here (and her intents go through the Arbiter while it runs).
+ * Under `pipeline = "v3"` her turns are turns of the main line (mainline/main.ts), which also
+ * provides `MouthKey` and `ProposalBoardKey`.
+ * Provides `TurnFocusViewKey` (whom each turn in
+ * flight answers, for voice barge-in) and `SavedPromptsKey` (compressed prompts of recent turns,
+ * also published as `agent.prompt`); every turn ends with an `agent.turn.outcome`.
  *
  * Uses the optional services `SettingsStoreKey` (persisting runtime settings), `AuthorizerKey`
  * (tool permissions), `CommandRegistryKey`, `PromptContributorsKey` (per-turn context),
@@ -58,7 +76,8 @@ export class AgentModule implements Module {
   readonly manifest = defineManifest(AgentModule.ID, "Agent", {
     description: "Attention, conversation and reply generation",
     requires: ["llm", "scheduler"],
-    optional: ["commands"],
+    // `facts`: the main line follows the log from the start.
+    optional: ["commands", "facts"],
     configSchema: AgentConfigSchema,
   });
 
@@ -74,6 +93,7 @@ export class AgentModule implements Module {
   readonly #voiceRooms: VoiceRooms = new Map();
   readonly #commands = new AgentCommands();
   #unregister: (() => void)[] = [];
+  #agent: Agent | null = null;
 
   constructor(profile: Profile) {
     this.#persona = new PersonaHandle(profile);
@@ -119,6 +139,13 @@ export class AgentModule implements Module {
 
   async start(ctx: ModuleContext): Promise<void> {
     const config = ctx.config(AgentConfigSchema);
+    const gone = deprecatedAgentKeys(ctx.rawConfig);
+    if (gone.length > 0) {
+      ctx.log.warn(
+        { keys: gone },
+        "[modules.agent] keys are deprecated and ignored: attention cooldowns and multipliers are gone (when she starts something on her own is [modules.arbiter])",
+      );
+    }
     const random =
       this.#random ??
       (config.seed !== null ? new SeededRandom(config.seed) : SeededRandom.fromEntropy());
@@ -143,6 +170,14 @@ export class AgentModule implements Module {
     if (!own) ctx.log.info("using the app's tool registry");
     this.#tools = tools;
     tools.register(new ReactTool(ctx));
+    // What she keeps from a turn's tool results for the rest of the conversation (notes.ts).
+    const notes = new WorkingNotes(() => ctx.clock.now());
+    tools.register(new KeepNoteTool(notes));
+    tools.register(new DropNoteTool(notes));
+    const contributors = ctx.services.get(PromptContributorsKey);
+    const contributor = notes.contributor();
+    contributors?.register(contributor);
+    this.#unregister.push(() => contributors?.unregister(contributor.key));
     const actuators = actuatorsFor(ctx);
     this.#unregister.push(
       actuators.register(
@@ -150,7 +185,7 @@ export class AgentModule implements Module {
       ),
     );
 
-    const events = ctx.subscribe(Agent.topics());
+    const events = ctx.subscribe(Agent.topics(pipelineOf(ctx.services) === "v3"));
     ctx.provide(PersonaHandleKey, this.#persona);
     ctx.provide(AgentHandleKey, handle);
     if (own) ctx.provide(ToolRegistryKey, tools);
@@ -173,12 +208,26 @@ export class AgentModule implements Module {
       this.#unregister.push(actuators.register(capability));
     }
     ctx.provide(IntentSinkKey, intents);
+    ctx.provide(ImpulseHostKey, intents);
+    ctx.provide(TurnSilencerKey, agent);
+    ctx.provide(TurnFocusViewKey, agent.focusBoard);
+    ctx.provide(SavedPromptsKey, agent.prompts);
+    this.#agent = agent;
+    if (agent.mainline !== null) {
+      ctx.provide(MouthKey, agent.mainline);
+      ctx.provide(ProposalBoardKey, agent.mainline.proposals);
+      await agent.mainline.start();
+    }
     ctx.spawn("events", () => agent.run(events));
   }
 
   async stop(): Promise<void> {
     this.#commands.uninstall();
+    this.#agent?.mainline?.stop();
+    this.#agent = null;
     this.#tools.unregister(ReactTool.NAME);
+    this.#tools.unregister(KeepNoteTool.NAME);
+    this.#tools.unregister(DropNoteTool.NAME);
     for (const unregister of this.#unregister.splice(0)) unregister();
   }
 }

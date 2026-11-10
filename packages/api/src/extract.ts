@@ -2,8 +2,11 @@
 // (415), must parse (400) and must match the expected shape (422); query strings that do not
 // match their shape are 400.
 
+import { errorMessage } from "@miyoria/kernel";
+import type { ContextKey } from "@miyoria/types";
 import { z } from "zod";
 import { ApiError } from "./errors.js";
+import { ContextKeySchema } from "./schemas.js";
 import type { ApiContext } from "./state.js";
 
 function issueText(error: z.ZodError): string {
@@ -77,3 +80,27 @@ export const boolParam = z
 
 /** `usize` in a JSON body. */
 export const usizeJson = z.number().int().nonnegative();
+
+/** A JSON-encoded `ContextKey` query value (`?context={"platform":...}`); empty or missing: `null`. */
+export function contextParam(raw: string | undefined): ContextKey | null {
+  const text = raw?.trim() ?? "";
+  if (text === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw ApiError.badRequest(`\`context\` must be a JSON context key: ${errorMessage(error)}`);
+  }
+  const key = ContextKeySchema.safeParse(parsed);
+  if (!key.success) {
+    throw ApiError.badRequest(
+      `\`context\` must be a JSON context key: ${key.error.issues[0]?.message ?? "invalid"}`,
+    );
+  }
+  return key.data;
+}
+
+/** `limit` clamped to `1..max`, `fallback` when absent. */
+export function clampLimit(limit: number | undefined, fallback: number, max: number): number {
+  return Math.min(Math.max(limit ?? fallback, 1), max);
+}

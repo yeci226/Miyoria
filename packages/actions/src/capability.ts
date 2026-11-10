@@ -2,14 +2,17 @@
 // schema and an executor. Every caller (her tools, slash commands, the panel, the game
 // director) goes through `ActuatorRegistry.invoke`, which runs the gate first.
 
-import type { ReplyFile } from "@miyoria/commands";
+import type { CommandReply, ReplyFile } from "@miyoria/commands";
 import type { ServiceLookup } from "@miyoria/kernel";
 import type {
   AccountRef,
+  ActivityRequest,
   JsonObject,
   JsonValue,
   LaneKey,
+  MessageRef,
   Principal,
+  TaskId,
   Timestamp,
   TurnId,
 } from "@miyoria/types";
@@ -36,8 +39,9 @@ export interface CapabilityTool {
   /**
    * High risk only: the result matters to her (e.g. program output). The tool waits up to
    * `[modules.actions] inline_wait_ms` for the review and the run; when that is not enough it
-   * answers "pending" and the outcome comes back later as a follow-up turn (`agent_initiative`,
-   * reason `action_result`). Without it a high-risk tool only says the request is under review.
+   * answers "pending" and the outcome comes back later as a follow-up turn (an impulse of source
+   * `followup`, reason `action_result`). Without it a high-risk tool only says the request is
+   * under review.
    */
   followup?: boolean;
 }
@@ -66,12 +70,23 @@ export interface ExecContext {
   decision: GateDecision;
   services: ServiceLookup;
   signal: AbortSignal;
+  /**
+   * The ActivityManager task this run is a step of (`null` / missing: a plain call). Set when
+   * the manager executes a routed request (see `Capability.activity`).
+   */
+  task?: TaskId | null;
 }
 
 /** An executor's result: a short text (for her or the command) and optional details. */
 export interface ActionResult {
   text: string;
   data: JsonValue;
+  /**
+   * A card for everyone where the request came from (what moved in coins, a receipt): posted by
+   * the executor when she acted in a chat or voice turn, and she is told it is there so she
+   * reacts instead of reading the numbers out. Command replies show their own text instead.
+   */
+  receipt?: CommandReply;
 }
 
 /**
@@ -111,6 +126,15 @@ export interface Capability<A = unknown> {
   lane?(args: A, principal: Principal): LaneKey | null;
   /** `false`: her mind is not offered this for now (it may also refuse in `check`). */
   available?(): boolean;
+  /**
+   * The ActivityManager transitions this request stands for (v2 §3.2; `voice.join` →
+   * `ensure_voice`, `game.start` → `start`, ...). When the app runs an ActivityManager (it
+   * installs itself as the registry's `ActivityRouter`), a call the gate allowed is handed to it
+   * instead of executing here: the manager serializes it with everything else that touches the
+   * same resource, answers idempotently, and runs `execute` itself as a step of its task.
+   * `null` (or no hook): execute as usual.
+   */
+  activity?(args: A, principal: Principal): ActivityRequest[] | null;
   /** Checks against live state after the schema (e.g. the scene exists); returns why not. */
   check?(args: A, principal: Principal): string | null;
   /** The owners' approval card shows this instead of the raw JSON arguments. */
@@ -135,6 +159,8 @@ export interface ActionRequest {
   /** Why she (or whoever) wants it, for the audit and the review. */
   why: string | null;
   turn: TurnId | null;
+  /** The message (or voice utterance) the turn answers; set by capability tools. */
+  message?: MessageRef | null;
   /**
    * Who an autonomous request is about when the capability itself names nobody (e.g. she joins
    * a voice channel because someone is there): their consent and per-person limits apply.
@@ -146,6 +172,7 @@ export interface ActionRequest {
 export type GateStage =
   | "unknown"
   | "args"
+  | "directive"
   | "pause"
   | "prohibition"
   | "consent"
@@ -184,6 +211,7 @@ export type ActionOutcome =
 const DENIED_TEXT: Readonly<Record<GateStage, string>> = {
   unknown: "這個功能目前無法使用。",
   args: "參數不正確。",
+  directive: "有規則不允許這件事。",
   pause: "她的自主行動已暫停。",
   prohibition: "這個動作被設定禁止。",
   consent: "對方不希望她這樣做。",

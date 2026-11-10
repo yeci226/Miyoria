@@ -85,7 +85,7 @@ export interface CommandReply {
   text: string;
   /**
    * `true` makes the reply visible to the invoker only. Visibility otherwise follows the
-   * command's declaration (`CommandSpec.ephemeral`); see `replyEphemeral`.
+   * command's visibility (`CommandSpec.ephemeral`, overridable); see `replyEphemeral`.
    */
   ephemeral?: boolean;
   tone?: Tone;

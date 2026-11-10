@@ -9,28 +9,38 @@ import {
   type Module,
   type ModuleContext,
 } from "@miyoria/kernel";
-import { LlmRouterKey } from "@miyoria/llm";
+import { contextSession, LlmRouterKey } from "@miyoria/llm";
 import { SpeechServiceKey } from "@miyoria/speech";
 import { SettingsStoreKey } from "@miyoria/store";
 import {
+  customEvent,
   type JsonObject,
   type ProfileId,
+  VOICE_BARGE_IN_TOPIC,
   VoiceFloorKey,
   VoiceSinkKey,
   WorldStateKey,
 } from "@miyoria/types";
 import { voiceCapabilities } from "./actions.js";
 import { BargeIn } from "./barge.js";
+import { ClipRecorder } from "./clips.js";
 import { registerCommands, unregisterCommands } from "./commands.js";
 import { VoiceConfigSchema, VoiceProfile } from "./config.js";
 import { Consent } from "./consent.js";
+import { E2eLatency, e2eJson } from "./e2e.js";
+import { SelfEchoGuard } from "./echo.js";
 import { Hearing, StreamHearingKey } from "./hearing.js";
 import { type VoiceLink, VoiceLinkKey } from "./link/link.js";
 import { VoiceLinkModule } from "./link/module.js";
 import { Listener } from "./listen.js";
+import { LinePrefetch } from "./prefetch.js";
+import { sileroVad } from "./silero.js";
 import { Speaker } from "./sink.js";
+import { LATENCY_TOPIC } from "./topics.js";
 import { SpeechTranslator } from "./translate.js";
+import { HttpTurnJudge, TurnGate } from "./turn.js";
 import { Semaphore } from "./util.js";
+import { registerVadEngine } from "./vad.js";
 
 /**
  * Module `voice`: listens in voice channels (VAD → ASR → `voice_utterance`) and speaks
@@ -52,14 +62,21 @@ export class VoiceModule implements Module {
   });
   readonly #profileId: ProfileId;
   readonly #voice: JsonObject | null;
+  readonly #names: readonly string[];
+  #barge: BargeIn | null = null;
+  #e2e: E2eLatency | null = null;
   #link: VoiceLink | null = null;
   #commands: CommandMount | null = null;
   #capabilities: (() => void)[] = [];
 
-  /** `voice` is the profile's `voice.toml` (`Profile.voice`). */
-  constructor(profileId: ProfileId, voice: JsonObject | null) {
+  /**
+   * `voice` is the profile's `voice.toml` (`Profile.voice`); `names`: what people call her
+   * (`Profile.names()`), so her name in a transcript stops her when somebody talks over her.
+   */
+  constructor(profileId: ProfileId, voice: JsonObject | null, names: readonly string[] = []) {
     this.#profileId = profileId;
     this.#voice = voice;
+    this.#names = names;
   }
 
   async start(ctx: ModuleContext): Promise<void> {
@@ -72,7 +89,72 @@ export class VoiceModule implements Module {
       ctx.log.warn("no settings store: voice consent choices are kept in memory only");
     }
     const consent = new Consent(config.consent, store, ctx.clock);
-    const barge = new BargeIn(config.barge_in, config.barge_in_ms, config.barge_in_fade_ms);
+    let speaker: Speaker | null = null;
+    if (config.vad_engine === "silero") registerVadEngine("silero", sileroVad);
+    const smartTurn = config.turn_engine === "smart-turn";
+    const gate = smartTurn ? new TurnGate(() => ctx.clock.now()) : null;
+    const barge = new BargeIn(
+      config.barge_in,
+      config.barge_in_ms,
+      config.barge_in_fade_ms,
+      {
+        duckMs: config.barge_in_duck_ms,
+        duckGain: config.barge_in_duck_gain,
+        focusStopMs: config.barge_in_focus_stop_ms,
+        // The utterance of somebody who just stopped talking arrives after the end silence.
+        settleMs: Math.max(config.end_silence_ms, smartTurn ? config.turn_max_silence_ms : 0) + 500,
+        publish: (record) => {
+          ctx.publish(
+            customEvent(VOICE_BARGE_IN_TOPIC, {
+              context: { ...record.context },
+              turn: record.turn,
+              account: record.account === null ? null : { ...record.account },
+              action: record.action,
+              reason: record.reason,
+            }),
+            { turn: record.turn },
+          );
+          // The rest of her lines are dropped: do not synthesize them for nothing.
+          if (record.action === "stop" && record.context.scope !== null) {
+            speaker?.cancelPrefetch(record.context.scope);
+          }
+        },
+      },
+      () => ctx.clock.now(),
+    );
+    this.#barge = barge;
+    const echo = new SelfEchoGuard({
+      now: () => ctx.clock.now(),
+      tailMs: config.self_echo_tail_ms,
+    });
+    const prefetch =
+      config.tts_prefetch > 0
+        ? new LinePrefetch({
+            limit: config.tts_prefetch,
+            ttlMs: config.tts_prefetch_ttl_ms,
+            signal: ctx.signal,
+          })
+        : null;
+
+    const e2e = new E2eLatency({
+      now: () => ctx.clock.now(),
+      emit: (record) => {
+        ctx.log.info(
+          {
+            turn: record.turn,
+            complete: record.complete,
+            reason: record.reason,
+            total_ms: record.total_ms,
+            ...record.segments,
+          },
+          "voice e2e latency",
+        );
+        ctx.publish(customEvent(LATENCY_TOPIC, { stage: "e2e", ...e2eJson(record) }), {
+          turn: record.turn,
+        });
+      },
+    });
+    this.#e2e = e2e;
 
     if (!speech.hasTts()) ctx.log.warn("no TTS provider configured: she cannot speak");
     let translator: SpeechTranslator | null = null;
@@ -89,10 +171,21 @@ export class VoiceModule implements Module {
         ctx.log.warn("tts_translate is set but there is no LLM router: she speaks untranslated");
       }
     }
-    ctx.provide(
-      VoiceSinkKey,
-      new Speaker({ ctx, link, speech, profile, config, barge, translator }),
-    );
+    speaker = new Speaker({
+      ctx,
+      link,
+      speech,
+      profile,
+      config,
+      barge,
+      translator,
+      session: (context) => contextSession(this.#profileId, context),
+      echo,
+      prefetch,
+      e2e,
+      gate,
+    });
+    ctx.provide(VoiceSinkKey, speaker);
 
     if (speech.hasAsr()) {
       const asrSlots = new Semaphore(Math.max(1, config.asr_concurrency));
@@ -105,6 +198,22 @@ export class VoiceModule implements Module {
         config,
         barge,
         asrSlots,
+        echo,
+        names: [...config.names, ...this.#names],
+        e2e,
+        turn: smartTurn
+          ? new HttpTurnJudge({
+              url: config.turn_url,
+              timeoutMs: config.turn_timeout_ms,
+              now: () => ctx.clock.now(),
+              warn: (message) => ctx.log.warn(message),
+            })
+          : null,
+        gate,
+        clips:
+          config.clip_dir === null
+            ? null
+            : new ClipRecorder(config.clip_dir, (message) => ctx.log.warn(message)),
       });
       const audio = link.subscribeAudio(ctx.signal);
       ctx.spawn("listen", (signal) => listener.run(audio, signal));
@@ -128,12 +237,22 @@ export class VoiceModule implements Module {
     this.#commands = commands;
     commands.attach(ctx);
     ctx.log.info(
-      { voice: profile.voice, consent: config.consent, speaks: translator?.language ?? null },
+      {
+        voice: profile.voice,
+        consent: config.consent,
+        speaks: translator?.language ?? null,
+        turn: config.turn_engine,
+        vad: config.vad_engine,
+      },
       "voice module running",
     );
   }
 
   async stop(): Promise<void> {
+    this.#barge?.close();
+    this.#barge = null;
+    this.#e2e?.clear();
+    this.#e2e = null;
     this.#commands?.detach();
     this.#commands = null;
     for (const unregister of this.#capabilities) unregister();

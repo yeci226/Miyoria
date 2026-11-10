@@ -41,7 +41,7 @@ function When({ at }: { at: string | null }) {
 }
 
 function stateOf(m: MindView): { tone: Tone; label: string } {
-  if (m.paused) return { tone: "warning", label: "已暫停" };
+  if (m.paused) return { tone: "warning", label: "已緊急停止" };
   if (!m.running) return { tone: "neutral", label: "心智迴圈未啟動" };
   if (m.stats?.idle_reason === "budget exhausted") return { tone: "danger", label: "額度用完" };
   if (!m.accepting) return { tone: "neutral", label: "休息中" };
@@ -50,7 +50,7 @@ function stateOf(m: MindView): { tone: Tone; label: string } {
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="min-w-0 bg-card px-4 py-3">
+    <div className="min-w-0">
       <dt className="text-[13px] text-muted-foreground">{label}</dt>
       <dd className="mt-0.5 truncate tabular-nums">{children}</dd>
     </div>
@@ -67,14 +67,14 @@ function AutonomyCard() {
   // The idle run as her newest thought saw it (`null`: she just did something).
   const idle = useThoughtHistory().data?.[0]?.idle ?? null;
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>自主行動</CardTitle>
         {state && <StatusBadge tone={state.tone}>{state.label}</StatusBadge>}
         {m && (
           <CardAction>
             <Label htmlFor={`${id}-pause`} className="font-normal text-muted-foreground">
-              暫停
+              緊急停止
             </Label>
             <Switch
               id={`${id}-pause`}
@@ -83,7 +83,7 @@ function AutonomyCard() {
               title={!canWrite ? READ_ONLY_HINT : undefined}
               onCheckedChange={(p) =>
                 pause.mutate(p, {
-                  onSuccess: () => notify.ok(p ? "已暫停她的自主行動" : "已恢復她的自主行動"),
+                  onSuccess: () => notify.ok(p ? "已緊急停止" : "已解除緊急停止"),
                   onError: (e) => notify.error(e),
                 })
               }
@@ -93,7 +93,7 @@ function AutonomyCard() {
       </CardHeader>
       <QueryView query={mind} skeleton={<SkeletonRows count={1} />}>
         {(v) => (
-          <dl className="grid grid-cols-2 gap-px bg-border sm:grid-cols-5 [&>div:last-child]:col-span-2 sm:[&>div:last-child]:col-span-1" aria-label="心智迴圈">
+          <dl className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-5 [&>div:last-child]:col-span-2 sm:[&>div:last-child]:col-span-1" aria-label="心智迴圈">
             <Fact label="這小時">
               {v.stats ? `${v.stats.calls_last_hour} / ${v.stats.max_calls_per_hour}` : "—"}
             </Fact>
@@ -106,7 +106,7 @@ function AutonomyCard() {
             </Fact>
             <Fact label="沒事做">
               {idle && idle.thoughts > 0 ? (
-                <span className="text-warning">連續 {idle.thoughts} 次 · {idle.minutes} 分鐘</span>
+                <span className="text-primary">連續 {idle.thoughts} 次 · {idle.minutes} 分鐘</span>
               ) : (
                 <span className="text-muted-foreground">剛做過事</span>
               )}
@@ -163,17 +163,17 @@ function ApprovalsCard() {
   const approvals = useApprovals();
   const n = approvals.data?.length ?? 0;
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>
           等待確認
-          {n > 0 && <span className="font-normal text-warning tabular-nums">{n}</span>}
+          {n > 0 && <span className="font-normal text-primary tabular-nums">{n}</span>}
         </CardTitle>
       </CardHeader>
       <QueryView query={approvals} skeleton={<SkeletonRows count={1} />}>
         {(list) =>
           list.length === 0 ? (
-            <EmptyLine className="py-6">沒有等待確認的動作</EmptyLine>
+            <EmptyLine>沒有等待確認的動作</EmptyLine>
           ) : (
             <Table aria-label="等待確認">
               <TableHeader>
@@ -217,7 +217,7 @@ function IntentLine({ intent }: { intent: ThoughtIntent }) {
         <ul className="grid gap-0.5" aria-label="閘門決定">
           {intent.decisions.map((d) => (
             <li key={`${d.at}-${d.capability}`} className="font-mono text-xs text-muted-foreground">
-              <span className={d.allowed ? "text-success" : "text-destructive"}>{d.allowed ? "放行" : "擋下"}</span>{" "}
+              <span className={d.allowed ? "text-foreground" : "text-primary"}>{d.allowed ? "放行" : "擋下"}</span>{" "}
               {d.capability} · {STAGE_LABEL[d.stage] ?? d.stage} · {d.reason}
             </li>
           ))}
@@ -225,7 +225,7 @@ function IntentLine({ intent }: { intent: ThoughtIntent }) {
       )}
       {intent.said && (
         <p className="text-[13px] leading-relaxed">
-          <span className="mr-1.5 font-medium text-brand">她</span>
+          <span className="mr-1.5 font-medium text-primary">她</span>
           {intent.said}
         </p>
       )}
@@ -237,7 +237,7 @@ function ThoughtItem({ t, onOpen }: { t: Thought; onOpen: () => void }) {
   const kinds = [...new Set(t.triggers.map((x) => x.kind))];
   const detail = t.triggers.find((x) => x.detail.trim() !== "")?.detail;
   return (
-    <li className="group grid gap-x-6 gap-y-2 px-4 py-4 sm:grid-cols-[8rem_minmax(0,1fr)]">
+    <li className="group grid gap-x-6 gap-y-2 py-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px] text-muted-foreground sm:flex-col sm:gap-1">
         <When at={t.at} />
         <span>{kinds.map((k) => TRIGGER_LABEL[k] ?? k).join("、")}</span>
@@ -245,20 +245,20 @@ function ThoughtItem({ t, onOpen }: { t: Thought; onOpen: () => void }) {
           {t.tokens !== null ? `${fmtInt(t.tokens)} tok` : "—"} · {fmtMs(t.ms)}
           {t.cost_usd != null && ` · ${fmtCost(t.cost_usd)}`}
         </span>
-        {t.idle && t.idle.thoughts > 0 && <span className="text-xs text-warning">連續第 {t.idle.thoughts + 1} 次沒事</span>}
+        {t.idle && t.idle.thoughts > 0 && <span className="text-xs text-primary">連續第 {t.idle.thoughts + 1} 次沒事</span>}
       </div>
       <div className="grid min-w-0 gap-2.5">
         <div className="flex items-start gap-3">
           <div className="grid min-w-0 flex-1 gap-2.5">
             {detail && <p className="text-[13px] text-muted-foreground">{detail}</p>}
             {t.error ? (
-              <p className="font-mono text-xs text-destructive">{t.error}</p>
+              <p className="font-mono text-xs text-primary">{t.error}</p>
             ) : (
               <p className="max-w-[70ch] leading-relaxed">{t.thought || "—"}</p>
             )}
           </div>
           <Button size="sm" variant="ghost" className="shrink-0 text-muted-foreground" onClick={onOpen} aria-label={`看 ${fmtTime(t.at)} 的想法的全部細節`}>
-            {t.has_reasoning && <Brain className="text-brand" aria-label="有推理" />}
+            {t.has_reasoning && <Brain className="text-primary" aria-label="有推理" />}
             細節
             <ChevronRight />
           </Button>
@@ -319,7 +319,7 @@ function TimelineCard({ onOpen }: { onOpen: (id: string) => void }) {
   );
   const kinds = [...new Set(all.flatMap((t) => t.triggers.map((x) => x.kind)))];
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>
           想法
@@ -330,7 +330,7 @@ function TimelineCard({ onOpen }: { onOpen: (id: string) => void }) {
           )}
         </CardTitle>
       </CardHeader>
-      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2 pb-2">
         <SearchInput value={text} onChange={setText} placeholder="搜尋想法、意圖、她說的話" label="搜尋想法" className="sm:w-64" />
         <Select value={kind} onValueChange={setKind}>
           <SelectTrigger size="sm" className="w-32" aria-label="觸發原因">
@@ -356,18 +356,18 @@ function TimelineCard({ onOpen }: { onOpen: (id: string) => void }) {
       <QueryView query={thoughts} skeleton={<SkeletonRows count={4} />}>
         {() =>
           all.length === 0 ? (
-            <EmptyLine className="py-8">還沒有想法</EmptyLine>
+            <EmptyLine>還沒有想法</EmptyLine>
           ) : visible.length === 0 ? (
-            <EmptyLine className="py-8">沒有符合的想法</EmptyLine>
+            <EmptyLine>沒有符合的想法</EmptyLine>
           ) : (
             <>
-              <ol className="divide-y" aria-label="想法時間軸">
+              <ol className="divide-y divide-line-soft" aria-label="想法時間軸">
                 {visible.slice(0, shown).map((t) => (
                   <ThoughtItem key={t.id} t={t} onOpen={() => onOpen(t.id)} />
                 ))}
               </ol>
               {visible.length > shown && (
-                <div className="border-t p-3 text-center">
+                <div className="pt-3 text-center">
                   <Button size="sm" variant="outline" onClick={() => setShown((n) => n + PAGE)}>
                     再顯示 {Math.min(PAGE, visible.length - shown)} 則
                   </Button>
@@ -386,7 +386,7 @@ function DigestItem({ d }: { d: ThoughtDigest }) {
     .map(([k, n]) => `${k} ×${n}`)
     .join("、");
   return (
-    <li className="grid gap-x-6 gap-y-1.5 px-4 py-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
+    <li className="grid gap-x-6 gap-y-1.5 py-2.5 sm:grid-cols-[8rem_minmax(0,1fr)]">
       <div className="text-[13px] text-muted-foreground">
         <When at={d.to} />
         <div className="tabular-nums">{d.count} 個想法</div>
@@ -405,14 +405,14 @@ function DigestsCard() {
   const list = digests.data ?? [];
   if (list.length === 0) return null;
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>
           更早的想法(整理)
           <span className="font-normal text-muted-foreground tabular-nums">{list.length}</span>
         </CardTitle>
       </CardHeader>
-      <ol className="divide-y" aria-label="想法整理">
+      <ol className="divide-y divide-line-soft" aria-label="想法整理">
         {list.map((d) => (
           <DigestItem key={d.id} d={d} />
         ))}
@@ -422,12 +422,12 @@ function DigestsCard() {
 }
 
 const INTENT_COLOR: Record<IntentStatus, string> = {
-  done: "var(--success)",
+  done: "var(--chart-2)",
   started: "var(--chart-1)",
-  pending: "var(--chart-quiet)",
-  dropped: "oklch(0.32 0 0)",
-  denied: "var(--destructive)",
-  failed: "var(--warning)",
+  pending: "var(--chart-3)",
+  dropped: "var(--chart-quiet)",
+  denied: "var(--chart-4)",
+  failed: "var(--chart-5)",
 };
 
 const INTENT_ORDER: IntentStatus[] = ["done", "started", "pending", "dropped", "denied", "failed"];
@@ -445,20 +445,20 @@ function ThoughtStats() {
   );
   const intents = inRange.flatMap((t) => t.intents);
   return (
-    <div className="grid gap-4">
+    <div className="grid gap-3">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-base font-semibold tracking-tight">她怎麼想</h2>
+        <h2 className="text-[15px] font-semibold tracking-[-0.01em]">她怎麼想</h2>
         <RangeToggle range={range} onChange={setRange} />
       </div>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="grid gap-(--stage-gap) lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <ThoughtsBlock range={range} />
         <ChartBlock title="觸發原因與結果" value={fmtInt(intents.length)} unit="個意圖">
           {history.isPending ? (
             <SkeletonRows count={3} />
           ) : inRange.length === 0 ? (
-            <EmptyLine className="py-6">這段時間沒有想法</EmptyLine>
+            <EmptyLine>這段時間沒有想法</EmptyLine>
           ) : (
-            <div className="grid gap-6">
+            <div className="grid gap-5">
               <SegmentBar
                 label="意圖的結果"
                 parts={INTENT_ORDER.map((s) => ({ key: s, label: INTENT_LABEL[s], value: intents.filter((i) => i.status === s).length, color: INTENT_COLOR[s] })).filter((p) => p.value > 0)}
@@ -478,7 +478,7 @@ function ThoughtStats() {
 
 export function ThoughtsTab({ thought, onThought }: { thought?: string; onThought: (id: string | undefined) => void }) {
   return (
-    <div className="grid gap-6">
+    <div className="grid gap-(--stage-gap)">
       <AutonomyCard />
       <ApprovalsCard />
       <ThoughtStats />

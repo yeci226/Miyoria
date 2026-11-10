@@ -41,6 +41,14 @@ export function recency(updatedAt: Timestamp, now: Timestamp, tauDays: number): 
   return Math.exp(-ageDays / Math.max(tauDays, 0.01));
 }
 
+/**
+ * The recency time constant of a record (days): episodes fade over hours to days, everything
+ * else (facts, her notes, followups) over weeks.
+ */
+export function recencyTau(config: MemoryConfig, kind: MemoryRecord["kind"]): number {
+  return kind === "episode" ? config.episode_recency_tau_days : config.recency_tau_days;
+}
+
 /** Signals of a record. `text` is already normalized (0..1). */
 export function signals(
   config: MemoryConfig,
@@ -53,19 +61,59 @@ export function signals(
   return {
     vector: clamp(vector ?? 0, 0, 1),
     text: clamp(text, 0, 1),
-    recency: recency(record.updated_at, now, config.recency_tau_days),
+    recency: recency(record.updated_at, now, recencyTau(config, record.kind)),
     importance: clamp(record.importance, 0, 1),
     subject: record.subjects.some((s) => present.includes(s)) ? 1 : 0,
   };
 }
 
 /**
- * Final score: the weighted sum, scaled by confidence for facts (a fact she is unsure about
- * ranks lower).
+ * The confidence of a fact after fading: not reinforced for `decay_after_days`, it loses
+ * `decay_per_day` of itself each day. Computed when it is read; the stored value is what the
+ * record had when it was last written (so reinforcing it, which rewrites it, starts over).
+ * Other kinds do not fade this way (episodes have their own recency and pruning).
  */
-export function finalScore(config: MemoryConfig, record: MemoryRecord, s: Signals): number {
+export function fadedConfidence(
+  config: MemoryConfig,
+  record: MemoryRecord,
+  now: Timestamp,
+): number {
+  const c = clamp(record.confidence, 0, 1);
+  if (record.kind !== "fact") return c;
+  const f = config.forgetting;
+  const idleDays =
+    (timestampMs(now) - timestampMs(record.updated_at)) / DAY_MS - f.decay_after_days;
+  return idleDays > 0 ? c * clamp(f.decay_per_day, 0, 1) ** idleDays : c;
+}
+
+/**
+ * What she should trust the record: faded, and a memory of unknown provenance (written before
+ * origins were recorded) counts for `unknown_origin_factor` of that.
+ */
+export function effectiveConfidence(
+  config: MemoryConfig,
+  record: MemoryRecord,
+  now: Timestamp,
+): number {
+  const faded = fadedConfidence(config, record, now);
+  return (record.origin ?? "unknown") === "unknown" ? faded * config.unknown_origin_factor : faded;
+}
+
+/**
+ * Final score: the weighted sum, scaled by confidence for facts (a fact she is unsure about
+ * ranks lower). With `now` the confidence is the effective one (faded, origin weighed).
+ */
+export function finalScore(
+  config: MemoryConfig,
+  record: MemoryRecord,
+  s: Signals,
+  now?: Timestamp,
+): number {
   const base = signalScore(s, config.weights);
-  return record.kind === "fact" ? base * (0.5 + 0.5 * clamp(record.confidence, 0, 1)) : base;
+  if (record.kind !== "fact") return base;
+  const confidence =
+    now === undefined ? record.confidence : effectiveConfidence(config, record, now);
+  return base * (0.5 + 0.5 * clamp(confidence, 0, 1));
 }
 
 /** Fraction of query tokens contained in the record's tokens. */

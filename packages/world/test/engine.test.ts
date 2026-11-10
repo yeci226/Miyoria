@@ -261,6 +261,27 @@ describe("voice conversation", () => {
   const room = { platform: "discord", scope: G, channel: "v1", kind: "voice" } as const;
   const speaker = (id: string) => ({ account: acct(id), display_name: `user${id}`, is_bot: false });
 
+  it("reports the voice channel she is in going quiet after a conversation, once", () => {
+    const social = new FakeSocial();
+    const w = engine({ voice_quiet_secs: 40 });
+    w.addSelf(acct("7"));
+    w.voiceState(voice("7", "v1"), T0, social);
+    for (let i = 0; i < 4; i++) w.utterance(room, speaker(i % 2 ? "1" : "2"), T0 + i * 10_000);
+    const last = T0 + 30_000;
+    expect(w.tick(last + 30_000)).toEqual([]);
+    const lull = w.tick(last + 45_000);
+    expect(lull.map((c) => [c.kind, c.key])).toEqual([
+      ["channel_quiet", "channel_quiet:discord:100:v1#voice"],
+    ]);
+    expect(lull[0]?.context).toEqual(room);
+    expect(w.tick(last + 90_000)).toEqual([]);
+    // Talk resumes, then a new lull is news again; her own words keep it from being quiet.
+    w.utterance(room, speaker("1"), last + 100_000);
+    w.utterance(room, speaker("7"), last + 130_000);
+    expect(w.tick(last + 150_000)).toEqual([]);
+    expect(w.tick(last + 175_000).map((c) => c.kind)).toEqual(["channel_quiet"]);
+  });
+
   it("counts utterances as activity, so a busy voice channel is never quiet", () => {
     const social = new FakeSocial();
     const w = engine();
@@ -365,5 +386,40 @@ describe("snapshot and summary", () => {
       part_of_day: "深夜",
       utc_offset_minutes: 480,
     });
+  });
+});
+
+describe("her status", () => {
+  it("comes from the ActivityManager's snapshot when there is one, singing included", () => {
+    const w = engine();
+    const at = new Date(T0).toISOString();
+    const channel = { platform: "discord", scope: "g1", channel: "v1", kind: "voice" as const };
+    const her = w.her("Minecraft", {
+      version: 3,
+      at,
+      presence: { type: "in", channel, since: at },
+      broadcast: { type: "live", guild: "g1", golive: true, obs: true, task: null, since: at },
+      activity: {
+        type: "singing",
+        target: "夜に駆ける",
+        phase: "running",
+        task: null,
+        failure: null,
+        since: at,
+      },
+      override: null,
+      scene: "唱歌",
+    });
+    expect(her).toEqual({
+      voice: channel,
+      voice_name: null,
+      golive: "live",
+      streaming: true,
+      scene: null,
+      game: null,
+      singing: "夜に駆ける",
+    });
+    // Without the manager: what the world saw on the bus, never singing.
+    expect(w.her(null).singing).toBeNull();
   });
 });

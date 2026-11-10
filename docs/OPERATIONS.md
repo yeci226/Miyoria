@@ -37,6 +37,8 @@
 
 ## 2. 部署型態
 
+> 三台電腦分工(直播機、Bot 服務機、GPU 推論機)的設定、安裝和啟動指令見根目錄 README「多台電腦」和 `workers/README.md`「快速安裝」:`miyoria init` 選角色並寫好位址,`miyoria install` / `doctor` / `start` 依角色運作。`[machine]` 的 `roles` 決定這台電腦跑哪些服務,`[machine.hosts]` 是別台電腦連進來用的位址;`[stack.workers.<名稱>]` 仍可逐欄位覆蓋 worker 的 venv、埠和環境變數。
+
 ### A. All-in-one(一台機器全包)
 
 開發或自己小規模使用。全部跑在直播機(Windows)上。
@@ -220,11 +222,82 @@ python -m venv .venv && .venv/Scripts/pip install -r fake/requirements.txt   # L
 WORKER_ASR_URL=http://127.0.0.1:8001 WORKER_TTS_URL=http://127.0.0.1:8002 python -m pytest tests/test_contract.py
 ```
 
+做歌時的 GPU 分配由 song worker 依當下狀態決定,不用設大小。`GET :8005/health` 的 `gpu` 欄位看得到決定和原因,學到的數字存在歌曲快取的 `_gpu-profile.json`,換卡會重來。要固定做法時設 `SING_GPU_POLICY`:
+
+| 值 | 行為 |
+|---|---|
+| `auto`(預設) | 放得下就共用,放不下先用 CPU 和等待,語音只在必要時短暫下線 |
+| `share` | 永遠不動語音 |
+| `wait` | 永遠不動語音,沒空間就等 |
+| `offload` | 一律讓語音下線(舊行為) |
+
+TTS 和 ASR 的模型跑在子程序,`/offload` 結束子程序,回傳的 `released_mb` 是整張卡實際還回的量。`TTS_ENGINE_PROCESS=0` 或 `ASR_ENGINE_PROCESS=0` 可以改回同一個程序,但卸載就不一定還得回顯存。
+
+### 從原始碼一個指令跑起來:`up`、`doctor --deep`、`update`
+
+只用在原始碼 checkout(要有 `workers/`、`apps/`、`pnpm-workspace.yaml`);npm 安裝的版本沒有 worker,也沒有可重建的東西。
+
+**設定(選用)。** 沒有 `[stack]` 時 `miyoria up` 只啟動 core,和 `miyoria core` 一樣。要讓它啟動 worker,在 `miyoria.toml` 寫:
+
+```toml
+[stack]
+# voice_node = true             # 另外啟動 apps/voice-node(pnpm start)
+# stage = true                  # 另外啟動 miyoria stage
+# start_timeout_secs = 180      # 每個服務等健康檢查的秒數
+
+[stack.workers]
+asr = { venv = "workers/.venv-asr-qwen", port = 8003, env = { ASR_BACKEND = "qwen3", ASR_QWEN_SIZE = "0.6B" } }
+tts = { venv = "workers/.venv-tts-faster", port = 8002 }
+sing = { venv = "workers/.venv-sing", port = 8005, offload = ["tts", "asr"] }
+```
+
+每個 worker 的欄位:`venv`(預設 `workers/.venv-<名字>`)、`port`(asr、tts、sing、turn 有預設:沒有 `[machine]` 時 asr 8001、tts 8002、sing 8005、turn 8006;有 `[machine]` 時 asr 8003)、`host`、`dir`(`workers/` 底下的資料夾,預設同名)、`entry`(預設 `server.py`)、`env`、`offload`、`vram_mb`(顯存估計,預設 asr qwen3 0.6B 約 1500、tts 約 5000、sing 約 7500)、`start_timeout_secs`。`[speech.asr.*]`、`[speech.tts.*]`、`[modules.sing]` 的 `url` 要指到同一個 port,`doctor --deep` 會比對。
+
+**`miyoria up`**
+
+- 順序:被 `offload` 的 worker 先起,然後 sing,接著 core、voice node、stage。每一個都要通過健康檢查(worker 是 `GET /health`,core 是 `/api/health`)才起下一個。
+- `offload = ["tts", "asr"]` 會替 sing 設好 `SING_OFFLOAD_URLS`(沒有它,12 GB 的卡在做歌時會溢出,轉換慢約 76 倍)。`env` 裡自己寫的值優先。
+- worker 只繼承系統基本變數、CUDA 與模型快取、proxy;不繼承 shell 裡的 API key 和 token,也不會繼承舊的 `ASR_MODEL`。
+- 已經在回應 `/health` 的服務直接沿用,不會重起。埠被別的程式佔用,或被 Windows 保留(EACCES)時停下來說明並附修正,**不會替你結束別人的程式**。
+- 日誌在 `data/stack/logs/<服務>.log`。Ctrl+C 依相反順序停止這次啟動的服務。
+- 選項:`--only asr,core`、`--skip sing`、`--timeout 300`、`--dry-run`(只列順序和指令)、`--no-check`。
+
+**`miyoria doctor --deep`**(`--deep-only` 只跑部署檢查,不連 LLM、Discord、資料庫)。只讀:不會改 Windows、防火牆或防毒設定,每個 ✗ / ! 都附修正步驟。
+
+| 檢查 | 抓什麼 |
+|---|---|
+| 埠 | 動態埠範圍從 1024 開始、設定裡的埠落在 Windows 保留範圍(綁定 EACCES 但沒人在聽)、埠被別的程式佔用 |
+| 建置 | SDK、擴充 `dist`、面板、overlay 比原始碼舊或是空的 |
+| Minecraft mod | jar 比原始碼舊、遊戲 `mods/` 裡的 jar 和建置出來的不同、`Protocol.java` 與 `PROTOCOL.md` 的協定版本不一致、找不到 JDK 21(PATH 上是 Java 8 也會說) |
+| worker 設定 | venv 與 `server.py` 存在、埠不重複、sing 沒設 `offload`、`SING_OFFLOAD_URLS` 與 `offload` 不一致、`ASR_BACKEND=qwen3` 卻留著 `ASR_MODEL`、`speech.*.url` / `modules.sing.url` 的埠和 worker 不同 |
+| 快取資料夾 | yt-dlp 快取和歌曲資料夾能不能寫入 |
+| 暫存檔 | 在暫存資料夾寫、讀、刪 2 MB 檔案(防毒鎖檔的症狀)、殘留的 `esbuild-*`、偵測到 Kaspersky 等會說明 |
+| 顯存 | `nvidia-smi` 的使用量,以及各 worker 估計值(含 offload)的尖峰是否超過總量 92% |
+| 服務健康 | 各服務 `/health`;執行中的 core 版本和這份 CLI 不同 |
+| 舊設定 | V2 留下的 `ambient_factor`、`cooldown_ms`、`min_cooldown_ms`、`interrupt_scale`,聊天等級 `ambient`(只列鍵名) |
+
+Windows 保留埠的處理需要系統管理員,要自己做:`netsh interface ipv4 show excludedportrange protocol=tcp` 查看,`net stop winnat` 再 `net start winnat` 釋放;長期做法是 `netsh int ipv4 set dynamic tcp start=49152 num=16384`(要重開機)。
+
+**`miyoria update`**
+
+1. `git pull --ff-only`(工作目錄有未提交的變更就略過;`--no-pull` 不做)。
+2. `pnpm install`(只在 `pnpm-lock.yaml` 比上次安裝新時)。
+3. 只重建過期的:SDK、各擴充的 `dist`、面板、overlay、Minecraft mod。比的是原始碼和輸出的檔案時間;`--force` 全部重建,`--skip-mod` 跳過 mod。
+4. 面板與 overlay 一律用 `vite build --minify false --target esnext`(避開防毒鎖住 esbuild 暫存檔),輸出先到 `dist.next`,成功才換掉 `dist`;失敗時舊的 `dist` 原封不動。
+5. mod 用找到的 JDK 21 建置(只對這次 Gradle 設 `JAVA_HOME`,不改系統設定)。要覆蓋 `<minecraft_dir>/mods` 裡的 jar 時**先問**,舊檔備份到 `<minecraft_dir>/miyoria-backup/<時間>/`;自動化加 `--yes`,非互動又沒有 `--yes` 就不覆蓋。請先關掉遊戲。
+6. 最後列出 V2 留下的舊設定值(只提示,不自動改寫)。
+
+`--dry-run` 只列出會做的事。更新後已在執行的 core / worker 要重啟(`miyoria up`)。
+
 ### Stage 與管理面板
 
 Stage 要直接碰 VTube Studio / OBS / 遊戲,所以原生在直播機執行,不放 Docker:`miyoria stage`,讀 `miyoria.toml` 的 `[stage]`(`core_url`、`token` = `STAGE_LINK_TOKEN`、`[stage.vts]`、`[stage.obs]`),協定見 [stage-link.md](protocols/stage-link.md);overlay 見 [apps/overlay/README.md](../apps/overlay/README.md)。
 
+餵食禮物的那一行(「Owen 餵了她一碗白飯」,60 秒內合併、約 8 秒後淡出)在預設的 overlay 頁(`http://127.0.0.1:7884/overlay/`)裡一起顯示;只要這一行時用 `…/overlay/?show=gifts`。
+
 管理面板是靜態檔,由 Core 提供(`[modules.api] panel_dir`,`MIYORIA_PANEL_DIR` 可覆寫):npm 套件與 Docker 映像檔都已內含;從原始碼跑時先 `pnpm --filter @miyoria/panel build`(或 `pnpm build:web`,輸出 `apps/panel/dist`,Core 預設就讀這裡)。開發時 `pnpm --filter @miyoria/panel dev`(Vite,`http://localhost:5178`,`/api` 轉給 `MIYORIA_CORE_URL`,預設 `http://127.0.0.1:7878`)。
+
+**連結預覽**:Discord、Slack、X 這類爬蟲不跑 JavaScript,所以 Core 送出 `index.html` 時按路由改寫 `<!-- meta:start -->` 到 `<!-- meta:end -->` 之間的標籤(標題、描述、`og:*`、Twitter card,`packages/api/src/meta.ts`)。`/card/<編號>` 的標籤帶那張卡的名字、稱呼、編號和框(都是卡片頁本來就顯示的),`og:image` 指到 `/og/card/<編號>.png?v=<卡片資料的雜湊>`:只有那張卡本身,1000×1397(卡的原比例,四角透明),和面板同一份繪圖(`packages/card-face`)用 resvg 畫出來,不需要瀏覽器。站台預設圖 `/og/default.png`(1200×630)是毛玻璃:靠左貼齊邊緣一片玻璃放名字和一句話,她站在右邊、壓過玻璃的邊。玻璃後面的光是她自己的立繪放大模糊做的,不用面板的背景圖(那是遊戲美術,只放在 owner 自己的螢幕上,不放進誰都能抓的預覽圖);沒有立繪就用暮色漸層(resvg 沒有 backdrop-filter,模糊是事先用 sharp 做好的)。圖按編號加資料版本留在記憶體(最近 64 張),卡的資料變了(換框、作廢)網址的 `v` 就變,上游快取不會吃到舊圖。編號不存在、格式不對、已作廢或讀不到時給站台預設標籤和 `/og/default.png`,不含任何人的資料。網址的 origin 取 `X-Forwarded-Host` / `X-Forwarded-Proto`,沒有就用 `Host`(隧道要把原本的 Host 傳進來)。畫圖用系統字型(Windows 的微軟正黑體,Linux 要裝 Noto Sans CJK);立繪讀 `panel_dir` 裡的 `card-<pose>.local.webp`,沒有就畫不含立繪的卡。
 
 面板有七頁(側欄可收合,`Ctrl/⌘ + B`;`Ctrl/⌘ + K` 開搜尋,可跳到頁面、人、子系統):
 
@@ -239,6 +312,10 @@ Stage 要直接碰 VTube Studio / OBS / 遊戲,所以原生在直播機執行,�
 | 設定 | Core 位址與 token |
 
 側欄底部的圓點是 Core 與事件串流的狀態(滑過看版本與位址)。唯讀帳號(沒有 `admin.panel.write`)看得到所有東西,但修改類的控制項會停用。
+
+### 上網查資料
+
+模組 `web`(預設開著,`[modules.web]`)給她兩個工具:`web_search`(DuckDuckGo 的 HTML 搜尋,`region` 預設 `tw-tzh`)和 `web_read`(讀一個公開網頁的文字,上限 `read_chars`)。要有 `tools.web` 才能請她用,member 以上預設有,restricted 沒有。不要上網就在 `miyoria.toml` 寫 `[modules.web] enabled = false`。網頁只讀 http / https,DNS 解出來是內部、私有或 localhost 的位址一律拒絕,轉址最多 3 次且每一站重新檢查;每人 10 分鐘 6 次搜尋 / 10 次讀頁、全部人 30 / 60 次,相同搜尋 10 分鐘內用快取。查到的東西回給她時標成不可信的資料,裡面的指令她不會照做。DuckDuckGo 要求驗證或回錯誤時,她只會說現在查不到,程式不會繞過。`result_chars`(預設 3900)要低於 `[modules.agent] max_tool_result_chars`(你的設定是 4000;預設的 1000 會把網頁內容切掉)。
 
 ## 5. Discord 設定
 
@@ -272,9 +349,16 @@ Stage 要直接碰 VTube Studio / OBS / 遊戲,所以原生在直播機執行,�
 
 誰能登入:
 
-- `[modules.auth] owners` 裡的擁有者,以及**全域**指派了 `admin` 角色的人(`*` / `admin.*` 已包含 `admin.panel.access` 與 `admin.panel.write`)。其他人會看到「沒有管理面板權限」。
+- `[modules.auth] owners` 裡的擁有者,以及**全域**指派了 `admin` 角色的人(`*` / `admin.*` 已包含 `admin.panel.access` 與 `admin.panel.write`)。其他人登入後是「成員」:只看得到公開頁和她眼中的自己,所有管理 API 都拒絕(`[modules.api.public] enabled = false` 時才是直接拒絕登入)。之後才拿到權限的人要重新登入一次。
 - 開放給其他角色:`/admin perm allow role:moderator node:admin.panel.access scope:global`(唯讀,修改類按鈕會停用),要能修改再加 `node:admin.panel.write`。面板檢查時沒有伺服器 / 頻道,所以只算 `scope:global` 的指派與覆寫。
 - 拿掉角色或權限後幾秒內生效,已登入的人會被送回登入畫面。登入 session 預設 7 天(`session_days`),存在資料庫(只存 token 的雜湊),Core 重啟不會掉;登出會立刻刪掉。
+
+公開頁(`[modules.api.public]`,預設開):
+
+- 根網址對沒登入的人顯示她現在在做什麼、歌單和今天的統計,API 在 `/api/public/*`;登入的成員多看到她眼中的自己、下載資料、請她忘記、點歌,API 在 `/api/member/*`。管理用的 token 表單在 `#/login`,頁面上沒有連結。
+- 放在 Cloudflare tunnel 後面時,請求都從本機進來,速率限制看 `CF-Connecting-IP`。Core 綁在 `127.0.0.1` 才能信這個標頭;綁到其他位址時,非本機的連線一律用連線位址。
+- `identify` 不能證明對方是伺服器成員:任何 Discord 帳號都能登入成員頁,但什麼資料都沒有,而且她不認識的帳號不能點歌。
+- 公開頁會把 `apps/panel/dist` 裡的預設背景圖傳給所有訪客。那張圖是遊戲 CG,對外開放前先確認授權,或把 `public/background.local.jpg` 拿掉,面板會退回暮色漸層。
 
 從別台機器用面板:cookie 和 token 都會走明文 HTTP,所以要嘛走 Tailscale(`redirect_uri` 用 tailnet 位址,例如 `http://100.x.y.z:7878/api/auth/oauth/callback`,並把 `[modules.api] bind` 綁到那個位址),要嘛放在 https 反向代理後面(`redirect_uri = "https://panel.example.com/api/auth/oauth/callback"`,cookie 自動加上 `Secure`)。無論哪種,Developer Portal 的 redirect、`redirect_uri` 和你在瀏覽器開的網址三者要一致。
 
@@ -305,6 +389,7 @@ docker compose -f deploy/docker-compose.yml --profile core logs -f core
 - 資料庫 migration 在 Core 啟動時自動往前套用。**migration 不會自動回退**,要降版就是「還原備份 + 換回舊版映像檔」。
 - 想保留舊版可回退:升級前 `docker tag miyoria-core:local miyoria-core:previous`,出問題時在 `deploy/.env` 設 `MIYORIA_IMAGE=miyoria-core:previous`,`up -d` 時不加 `--build`。
 - voice node:`git pull && pnpm install && pnpm --filter @miyoria/voice-node build`,再重啟。Core 與 voice node 的協定版本不符會用 close code `4400` 拒絕連線,兩邊要一起升級。
+- 從原始碼升級可以用 `miyoria update`(見 §4「從原始碼一個指令跑起來」),升級後跑 `miyoria doctor --deep`。
 - 設定檔有新欄位時,對照 `miyoria.example.toml` 手動合併,或重跑 `miyoria init`(可重複執行,Enter 保留現值,寫入前會問)。
 - Postgres 大版本(例如 17 → 18)升級不能直接換 image tag:先備份,用新版 image 開一個新 volume,再還原。
 
@@ -452,10 +537,29 @@ Voice node 的層級用它的 `LOG_LEVEL`(`error|warn|info|debug`);`debug` 會�
 - [ ] **備份有加密或放在受信任處**:dump 內含所有人的對話記憶。
 - [ ] **收音同意**:語音頻道有公告她在聽;`[modules.voice] consent` 設定符合你的社群規則;預設不存音訊。
 - [ ] **成本煞車**:LLM 供應者後台設用量上限;用 `miyoria status` 定期看用量。
+- [ ] **公開頁**:對外的 tunnel 只應指到 Core;`metrics_public` 維持 false(tunnel 會把 `/metrics` 一起開出去)。
 - [ ] **面板權限**:只有需要的角色有 `admin.panel.access` / `admin.panel.write`;`DISCORD_CLIENT_SECRET` 跟其他秘密一樣只放 `.env`。
 - [ ] Token 外洩時:立刻到 Discord Developer Portal Reset Token / 換 self 帳號密碼,重新產生 `MIYORIA_API_TOKEN` / `VOICE_LINK_TOKEN`(刪掉 `.env` 裡那行再跑 `miyoria init`,或手動改),重啟所有節點。
 
 ## 10. 疑難排解
+
+### 她什麼動作都不做,日誌寫 `cannot read the rules`
+
+規則(docs/design/v3-architecture.md §9)讀不到時,除了停止類動作,她的動作全部擋下,面板 `GET /api/directives` 的 `healthy` 會是 `false`。這是刻意的:規則讀不到,就當作規則擋住了。資料庫恢復後,下一次讀取(最多 `[modules.directive] refresh_secs` 秒)就會自己恢復。關掉 `directive` 模組沒有用,它只管工具和指令,規則本身一直生效。
+
+### 她完全不回話,面板寫「已緊急停止」
+
+緊急停止開著(面板的按鈕、`/admin autonomy pause`、`/miyo` 的「緊急停止」、`POST /api/mind/pause` 都是同一件事,重啟後仍然有效)。按下去依序做:設定暫停、結束進行中的回合並丟掉排隊的話、打斷正在播的語音,再以 `panel` 身分停唱歌、關台、離開語音、停遊戲。每一步的結果都會回報,其中一步失敗不影響後面的步驟,再按一次會全部重做。
+
+停止期間聽到的話會留在她的歷史裡,但不會回。解除(`/admin autonomy resume`、面板「解除停止」)後她會再開口,語音、直播和遊戲不會自動回來。每一步最多等 `[modules.actions] emergency_step_ms`。
+
+### 她說「Filtered.」
+
+那句話被內容安全擋下來了(`[modules.moderation]`,§16)。`moderation.block` 事件和日誌的 `output blocked` 有規則 id,不會有內容;誤擋時用 `allow` 或 `disabled_rules`。被擋的句子在 DeliveryLedger 記成 `blocked`:不算講過,同一個版本也不會再講一次。
+
+### 她拒絕做某件事,說有規則
+
+看 `/miyo` 或 `/admin` 的「規則」頁、或 `GET /api/directives`。`deny` 對所有人有效,主人自己的指令也一樣,要解除才會恢復。
 
 先做這三件事:`miyoria doctor`、看 log(§8)、`miyoria module list`。
 
@@ -483,3 +587,16 @@ Voice node 的層級用它的 `LOG_LEVEL`(`error|warn|info|debug`);`debug` 會�
 | 想完全重來 | 原生:停掉 Core,刪掉 `data/`(SQLite)。Docker:`docker compose -f deploy/docker-compose.yml --profile core down -v` 會**刪掉資料庫與 Core 資料 volume**。先備份(§7)。 |
 | 啟動時說 `No such built-in module: node:sqlite` 或 `npx miyoria` 拒絕安裝(engines) | Node 版本太舊:要 Node ≥ 24(`node -v`)。 |
 | 磁碟被 Docker 吃滿 | `docker system df`;`docker image prune`、`docker builder prune`;設定日誌輪替(§8)。 |
+
+## 切回 V2
+
+`[core] pipeline` 決定誰能讓她開口和動手。預設 `v3`:只有主線能說話或動作,其他模組只寫事實和提案。主線出問題時,在 `miyoria.toml` 寫:
+
+```toml
+[core]
+pipeline = "v2"
+```
+
+重開 core 就回到舊路徑(回話、Plan、遊戲導演各自決定)。不用改別的設定,`[modules.arbiter.floor]` 和 `[modules.agent.mainline]` 在 V2 下不會被讀。事件日誌在兩邊都會繼續寫。值打錯時 core 不會啟動,錯誤會寫 `core.pipeline`。
+
+V3 下要查一句話的來龍去脈,看事件日誌:`decision`(來源 `mainline`,含沉默的理由)、`utterance`、`delivered`,動作是 `action` 和 `result`(來源 `mainline.hands`,`accepted` 只代表受理)。

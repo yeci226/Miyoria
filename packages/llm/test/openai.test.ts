@@ -30,7 +30,7 @@ import {
   toolResultMessage,
   userMessage,
 } from "../src/index.js";
-import { requestBody } from "../src/openai/wire.js";
+import { bodyJson, requestBody } from "../src/openai/wire.js";
 
 type Canned =
   /** SSE body, sent in pieces of `split` bytes. */
@@ -219,6 +219,14 @@ describe("wire", () => {
       temperature: 0.5,
       response_format: { type: "json_object" },
     });
+  });
+
+  it("drops half emoji left by a cut, keeping whole ones", () => {
+    const cut = "好喔🐟".slice(0, 3); // "好喔" + the first half of the fish
+    const json = bodyJson(requestBody({ messages: [userMessage(`${cut}|\uDC1F|🐟`)] }));
+    // No lone surrogate escape left for a strict parser to refuse.
+    expect(json).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/i);
+    expect(JSON.parse(json).messages[0].content).toBe("好喔||🐟");
   });
 });
 

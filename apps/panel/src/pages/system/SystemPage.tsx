@@ -50,7 +50,7 @@ function NameCell({ name, id }: { name: string; id: string }) {
 function Reason({ text, failed }: { text: string | null; failed: boolean }) {
   if (!text) return <span className="text-muted-foreground">—</span>;
   return (
-    <span className={failed ? "line-clamp-2 text-[oklch(0.74_0.16_25)]" : "line-clamp-2 text-muted-foreground"} title={text}>
+    <span className={failed ? "line-clamp-2 text-primary" : "line-clamp-2 text-muted-foreground"} title={text}>
       {text}
     </span>
   );
@@ -132,7 +132,7 @@ function ModulesTab({ filterText, filter }: { filterText: string; filter: Filter
 
   return (
     <>
-      <Card className="overflow-hidden">
+      <Card>
         <QueryView query={modules}>
           {() => (
             <DataTable
@@ -151,7 +151,6 @@ function ModulesTab({ filterText, filter }: { filterText: string; filter: Filter
         open={pending !== null}
         title={pending ? `${VERB[pending.action]}「${pending.m.name}」?` : ""}
         confirmLabel={pending ? VERB[pending.action] : ""}
-        destructive={pending?.action === "disable"}
         busy={action.isPending}
         onClose={() => setPending(null)}
         onConfirm={() =>
@@ -243,7 +242,7 @@ function ExtensionsTab({ filterText }: { filterText: string }) {
   );
 
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <QueryView query={extensions}>
         {(list) => (
           <DataTable
@@ -261,7 +260,6 @@ function ExtensionsTab({ filterText }: { filterText: string }) {
         open={pending !== null}
         title={pending ? `${VERB[pending.action]}「${pending.x.name}」?` : ""}
         confirmLabel={pending ? VERB[pending.action] : ""}
-        destructive={pending?.action === "disable"}
         busy={action.isPending}
         onClose={() => setPending(null)}
         onConfirm={() =>
@@ -343,7 +341,7 @@ function McpTab({ filterText }: { filterText: string }) {
           <button
             type="button"
             onClick={() => setTools(s)}
-            className="inline-flex items-center gap-1 rounded-sm tabular-nums outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="inline-flex items-center gap-1 rounded-sm tabular-nums outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
           >
             {s.tools.length}
             {s.remote_tool_count !== s.tools.length && <span className="text-muted-foreground">/ {s.remote_tool_count}</span>}
@@ -376,7 +374,7 @@ function McpTab({ filterText }: { filterText: string }) {
   );
 
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <QueryView query={servers}>
         {(list) => (
           <DataTable
@@ -417,7 +415,7 @@ function McpTab({ filterText }: { filterText: string }) {
           </SheetHeader>
           <SheetBody className="p-0">
             {tools && tools.tools.length > 0 ? (
-              <ul className="divide-y">
+              <ul className="divide-y divide-line-soft">
                 {tools.tools.map((t) => (
                   <li key={t.name} className="grid gap-1 px-6 py-3">
                     <code className="text-[13px]">{t.name}</code>
@@ -448,17 +446,17 @@ export function SystemPage() {
   const needle = text.trim().toLowerCase();
   const [filter, setFilter] = useState<Filter>("all");
   return (
-    <Page>
-      <PageHeader title="系統" />
-      <Tabs className="gap-4" value={tab} onValueChange={(t) => void navigate({ to: "/system", search: { tab: t as SystemTab }, replace: true })}>
-        <TabsList>
-          {SYSTEM_TABS.map((t) => (
-            <TabsTrigger key={t.tab} value={t.tab}>
-              {t.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        <Toolbar>
+    <Tabs value={tab} onValueChange={(t) => void navigate({ to: "/system", search: { tab: t as SystemTab }, replace: true })}>
+      <TabsList>
+        {SYSTEM_TABS.map((t) => (
+          <TabsTrigger key={t.tab} value={t.tab}>
+            {t.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      <Page>
+        <PageHeader title="系統" />
+        <Toolbar className="-mb-4">
           <SearchInput value={text} onChange={setText} placeholder="搜尋名稱或 id" label="搜尋" />
           {tab === "modules" && <ModuleFilter value={filter} onChange={setFilter} />}
         </Toolbar>
@@ -471,7 +469,7 @@ export function SystemPage() {
         <TabsContent value="mcp">
           <McpTab filterText={needle} />
         </TabsContent>
-      </Tabs>
-    </Page>
+      </Page>
+    </Tabs>
   );
 }

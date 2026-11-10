@@ -3,7 +3,15 @@
 // appears, disappears or changes goes through motion.ts, so nothing pops.
 import { ActivityCapsule } from "./activity.js";
 import type { OverlayConfig } from "./config.js";
-import { type Action, initialState, type OverlayState, type QueueItem, reduce, shownActivity } from "./feed.js";
+import {
+  type Action,
+  initialState,
+  type OverlayState,
+  type QueueItem,
+  reduce,
+  type ScreenCard,
+  shownActivity,
+} from "./feed.js";
 import { emotionColor } from "./emotion.js";
 import { isPresent, present, reflow, removeAfterExit, Swap } from "./motion.js";
 import {
@@ -17,6 +25,8 @@ import {
 import { Wave } from "./wave.js";
 
 const QUEUE_SHOWN = 5;
+/** How long one paid message / dedication stays up before the next one comes. */
+export const SCREEN_SHOW_MS = 12_000;
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -79,6 +89,13 @@ export class Overlay {
   private readonly offline: HTMLElement;
   private readonly wave: Wave;
   private readonly activity: ActivityCapsule;
+  private readonly gift: HTMLElement;
+  private readonly giftText: Swap;
+  private readonly screen: HTMLElement;
+  private readonly screenBody: Swap;
+  /** The card whose time is running, and its timer. */
+  private screenShown: number | null = null;
+  private screenTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     root: HTMLElement,
@@ -139,6 +156,18 @@ export class Overlay {
     // What she is doing (bottom left, right of the voice bars). Also shows an older Core's notice
     // (「準備歌曲中…」).
     this.activity = new ActivityCapsule(main);
+
+    // The line for what people fed her (top centre, over the model's head room).
+    this.gift = el("div", "gift is-out", main);
+    this.gift.hidden = true;
+    this.gift.setAttribute("role", "status");
+    this.giftText = new Swap(el("span", "gift__text", this.gift));
+
+    // Paid messages and song dedications, one at a time (top centre, under the gift line).
+    this.screen = el("div", "shout is-out", main);
+    this.screen.hidden = true;
+    this.screen.setAttribute("role", "status");
+    this.screenBody = new Swap(el("div", "shout__body", this.screen));
 
     this.offline = el("div", "offline is-out", main, "feed offline");
     this.offline.hidden = true;
@@ -243,6 +272,26 @@ export class Overlay {
     this.restEl.textContent = b;
   }
 
+  // ── paid screen messages ─────────────────────────────────────────────────
+
+  /** Shows the first card of the queue for `SCREEN_SHOW_MS`, then tells the reducer it is done. */
+  private renderScreen(): void {
+    const card = this.cfg.show.has("screen") ? (this.state.screens[0] ?? null) : null;
+    if (card === null) {
+      clearTimeout(this.screenTimer);
+      this.screenTimer = undefined;
+      this.screenShown = null;
+      present(this.screen, false);
+      return;
+    }
+    if (card.id === this.screenShown) return;
+    this.screenShown = card.id;
+    this.screenBody.set(String(card.id), (item) => screenCard(item, card), !isPresent(this.screen));
+    present(this.screen, true);
+    clearTimeout(this.screenTimer);
+    this.screenTimer = setTimeout(() => this.dispatch({ type: "screen_done", id: card.id }), SCREEN_SHOW_MS);
+  }
+
   // ── side panel and activity ──────────────────────────────────────────────
 
   private renderPanel(): void {
@@ -255,6 +304,12 @@ export class Overlay {
       this.activity.accent(c);
     }
     this.activity.show(show.has("activity") ? shownActivity(this.state) : null);
+
+    const gift = show.has("gifts") ? this.state.gift : null;
+    if (gift !== null) this.giftText.text(gift, !isPresent(this.gift));
+    present(this.gift, gift !== null);
+
+    this.renderScreen();
 
     // A panel that is fading in opens its sections at once instead of unfolding them behind the fade.
     const instant = !isPresent(this.panel);
@@ -298,6 +353,16 @@ export class Overlay {
     });
     if (!panelOn) present(this.panel, false);
   }
+}
+
+/** The card on the screen for a paid message or dedication. */
+function screenCard(item: HTMLElement, card: ScreenCard): void {
+  item.classList.add("shout__card");
+  const head = el("div", "shout__head", item);
+  el("span", "shout__tag", head, card.kind === "dedication" ? "點歌獻詞" : "留言");
+  el("span", "shout__name", head, card.name);
+  el("div", "shout__text", item, card.text);
+  if (card.song) el("div", "shout__song", item, `\u266A ${card.song}`);
 }
 
 /** Keys of queue items; a repeated item gets its occurrence number. */

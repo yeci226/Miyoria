@@ -86,40 +86,18 @@ export function parseActiveness(s: string): Activeness {
   }
 }
 
-/** Multiplier for the reply probability of ambient turns. */
-export function probabilityFactor(level: Activeness): number {
-  return level === "low" ? 0.5 : level === "high" ? 1.6 : 1.0;
-}
-
-/** Multiplier for the ambient cooldown. */
-export function cooldownFactor(level: Activeness): number {
-  return level === "low" ? 2.0 : level === "high" ? 0.5 : 1.0;
-}
-
-function clamp01(x: number): number {
-  return Math.min(Math.max(x, 0), 1);
-}
-
-/** Scales an ambient reply probability, clamped to `[0, 1]`. */
-export function scaleByActiveness(level: Activeness, probability: number): number {
-  return clamp01(probability * probabilityFactor(level));
-}
-
 /** A channel mode in config; also accepts the old `ambient` (= `normal`). */
 export const ChannelModeSchema = z
   .enum(["off", "mention-only", "quiet", "normal", "lively", "always", "ambient"])
   .transform((v): ChannelMode => (v === "ambient" ? "normal" : v));
 export const ActivenessSchema = z.enum(["low", "medium", "high"]);
 
-/** `[modules.agent.attention]`: when she replies. */
+/**
+ * `[modules.agent.attention]`: when she replies. Only the prefilter, the score thresholds, the
+ * share cap and the gray-zone check: cooldowns and the other multipliers are gone (see
+ * `DEPRECATED_AGENT_KEYS`).
+ */
 export const AttentionConfigSchema = z.object({
-  /** Minimum time between her replies to turns that did not address her. */
-  cooldown_ms: z.number().int().nonnegative().default(5000),
-  /**
-   * Hard floor of that cooldown when she sets her own talkativeness (which scales it): however
-   * chatty she wants to be, never faster than this.
-   */
-  min_cooldown_ms: z.number().int().nonnegative().default(2000),
   /** Window (in messages) for the anti-spam share check. */
   recent_window: z.number().int().nonnegative().default(20),
   /** Overrides the profile's `behavior.max_share_of_recent`. */
@@ -137,6 +115,11 @@ export const AttentionConfigSchema = z.object({
   llm_check_timeout_ms: z.number().int().nonnegative().default(8000),
   /** Reply probability after the LLM check said yes. */
   llm_yes_probability: z.number().default(0.9),
+  /**
+   * Lowest talkativeness lessons and moods can push her to (her own setting of exactly 0 still
+   * silences her). Someone answering what she just said is never shut out by it either way.
+   */
+  talk_floor: z.number().min(0).max(1).default(0.15),
 });
 export type AttentionConfig = z.output<typeof AttentionConfigSchema>;
 
@@ -147,6 +130,10 @@ export type AttentionConfig = z.output<typeof AttentionConfigSchema>;
 export const VoiceConfigSchema = z.object({
   /** Quiet time after an utterance before her turn starts (the speaker may continue). */
   debounce_ms: z.number().int().nonnegative().default(700),
+  /** The same when the utterance calls her (her name, a question right after she spoke). */
+  direct_debounce_ms: z.number().int().nonnegative().default(400),
+  /** The same when a model judged the speaker done (`turn_engine = "smart-turn"`). */
+  turn_debounce_ms: z.number().int().nonnegative().default(100),
   /**
    * Upper bound on the debounce of one turn. While someone is speaking the debounce is
    * extended up to this.
@@ -157,29 +144,10 @@ export const VoiceConfigSchema = z.object({
    * act like `normal` in voice.
    */
   default_mode: ChannelModeSchema.default("normal"),
-  /**
-   * Multiplies the reply probability of ambient voice turns (only while she has not set her own
-   * talkativeness for voice).
-   */
-  ambient_factor: z.number().default(0.5),
-  /**
-   * Minimum time between her replies to voice turns that did not address her, counted from
-   * when she last spoke.
-   */
-  cooldown_ms: z.number().int().nonnegative().default(20_000),
-  /** Hard floor of the voice cooldown when her own talkativeness scales it. */
-  min_cooldown_ms: z.number().int().nonnegative().default(5000),
   /** Her maximum share of recent voice history for ambient turns. */
   max_share_of_recent: z.number().default(0.2),
   /** A question this soon after she spoke counts as addressed to her. */
   question_window_ms: z.number().int().nonnegative().default(8000),
-  /**
-   * Multiplies the ambient reply probability while someone else is still talking (in a busy
-   * channel someone nearly always is). 0 = never join in over someone (also when she set her
-   * own talkativeness, which otherwise decides this); direct address and questions to her are
-   * not affected.
-   */
-  interrupt_scale: z.number().min(0).max(1).default(0.35),
   /**
    * Below this salience an ambient voice turn is ignored (text uses `attention.gray_low`).
    * Lower than in text: spoken chatter rarely carries the cues that raise the score.
@@ -189,6 +157,13 @@ export const VoiceConfigSchema = z.object({
   llm_check: z.boolean().default(false),
   /** Sentences that have not started playing within this time are dropped. */
   speak_ttl_ms: z.number().int().nonnegative().default(30_000),
+  /**
+   * Bilingual voice (she is heard in another language than she writes): she writes each
+   * `<voice>` line first and it goes to TTS as soon as it is complete; the written sentence
+   * after it becomes the subtitle and her history line (`agent.subtitle`). `false`: a line
+   * waits for its written sentence and both go out together.
+   */
+  voice_first: z.boolean().default(true),
   /**
    * While she is in a voice channel, messages typed in its text chat are part of the voice
    * conversation and she answers them by speaking (Discord voice channels have a text chat
@@ -205,6 +180,12 @@ export const VoiceConfigSchema = z.object({
    * `tts_translate`) to the voice channel's text chat, after each spoken reply.
    */
   text_echo: z.boolean().default(false),
+  /**
+   * While she is in a voice channel, what she has to say on her own in that server (task
+   * results, game lines, what she says after doing something) is said there instead of being
+   * posted to a text channel. Replies to people stay where they were asked.
+   */
+  keep_in_voice: z.boolean().default(true),
 });
 export type VoiceConfig = z.output<typeof VoiceConfigSchema>;
 
@@ -221,6 +202,10 @@ export const HistoryConfigSchema = z.object({
    * direct parent, when the platform delivered it with the reply).
    */
   reply_chain: z.number().int().nonnegative().default(3),
+  /** Lines before a quoted (out-of-view) reply parent shown with it. */
+  reply_context_before: z.number().int().nonnegative().default(5),
+  /** Lines after a quoted (out-of-view) reply parent shown with it. */
+  reply_context_after: z.number().int().nonnegative().default(3),
   /** A turn waits at most this long (from the start of the fetch) for missing context. */
   timeout_ms: z.number().int().nonnegative().default(3000),
 });
@@ -251,10 +236,94 @@ export const VisionConfigSchema = z.object({
 });
 export type VisionConfig = z.output<typeof VisionConfigSchema>;
 
+/**
+ * `[modules.agent.files]`: files people send her (not images). Reading, limits per person and
+ * the size caps belong to the sandbox (`[modules.sandbox.files]`); this only picks the files.
+ */
+export const FilesConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** Files per turn. */
+  max_files: z.number().int().nonnegative().default(2),
+});
+export type FilesConfig = z.output<typeof FilesConfigSchema>;
+
+/**
+ * `[modules.agent.prompt]`: the prompt compiler (docs/design/v2-architecture.md §3.5). Every
+ * data section has its own budget (characters of its body); over it a section is cut to whole
+ * lines (or characters), and when the contributed sections together exceed
+ * `max_context_chars` the room is shared fairly instead of the last ones dropping.
+ */
+export const PromptConfigSchema = z.object({
+  /** Budget per section key; sections without one get `default_budget`. */
+  budgets: z.record(z.string(), z.number().int().nonnegative()).default({
+    conversation: 900,
+    memory: 1000,
+    knowledge: 700,
+    lessons: 500,
+    world: 500,
+    game: 700,
+    sing: 400,
+    people: 800,
+    examples: 2500,
+  }),
+  default_budget: z.number().int().nonnegative().default(600),
+  /** Her own state (the trusted system part: mood, activity, policy, goals, limits). */
+  self_chars: z.number().int().nonnegative().default(1600),
+  /** Keep a compressed copy of every n-th turn's prompt (`agent.prompt`); 0 = none. */
+  save_every: z.number().int().nonnegative().default(1),
+  /** Saved prompts kept in memory. */
+  saved: z.number().int().nonnegative().default(50),
+  /** A saved message is cut to this many characters (head and tail kept). */
+  saved_message_chars: z.number().int().nonnegative().default(800),
+});
+export type PromptConfig = z.output<typeof PromptConfigSchema>;
+
+/**
+ * `[modules.agent.mainline]`: the main line of `pipeline = "v3"` (docs/design/v3-architecture.md
+ * §10). The prompt has no token cap by default (2026-11-08: 4000 left her with no conversation);
+ * each part keeps its own character budget.
+ */
+export const MainLineConfigSchema = z.object({
+  /** A cap on the prompt (null: none); over it the oldest history gives way. */
+  prompt_tokens: z.number().int().positive().nullable().default(null),
+  /** Her own state in the tail of the prompt. */
+  self_chars: z.number().int().nonnegative().default(1600),
+  /** What contributors add to the data part, together. */
+  data_chars: z.number().int().nonnegative().default(4000),
+  /** History lines shown at most, and their characters. */
+  history_lines: z.number().int().nonnegative().default(30),
+  history_chars: z.number().int().nonnegative().default(4000),
+  /** The newest lines kept even when the prompt is over `prompt_tokens`. */
+  history_floor: z.number().int().nonnegative().default(8),
+  /** One history entry. */
+  entry_chars: z.number().int().nonnegative().default(600),
+  /** Example dialogues in the data part (0: none). */
+  examples_chars: z.number().int().nonnegative().default(0),
+  /** Lines of "最近講過" in the tail. */
+  recent_lines: z.number().int().nonnegative().default(4),
+  /** Untrusted working-context entries in the data part. */
+  context_entries: z.number().int().nonnegative().default(4),
+  /** Proposals shown at most. */
+  proposals: z.number().int().nonnegative().default(3),
+  /** No first token for this long and the call counts as failed: the fixed line goes out. */
+  first_token_timeout_ms: z.number().int().positive().default(15_000),
+  /** The same with reasoning on: a provider can think this long before its first event. */
+  reasoning_first_token_timeout_ms: z.number().int().positive().default(60_000),
+  /** At most one fixed line per context this often. */
+  fallback_gap_ms: z.number().int().nonnegative().default(20_000),
+  /** A commitment without a date is due this long after she made it. */
+  commitment_due_secs: z.number().int().positive().default(120),
+  /** How often overdue commitments are looked for. */
+  commitment_sweep_ms: z.number().int().positive().default(5_000),
+  /** How long one spoken character takes, for what she keeps of a sentence cut off. */
+  ms_per_char: z.number().positive().default(180),
+});
+export type MainLineConfig = z.output<typeof MainLineConfigSchema>;
+
 /** `[modules.agent]` config section. */
 export const AgentConfigSchema = z.object({
   /** Quiet time after the last message before a turn starts. */
-  debounce_ms: z.number().int().nonnegative().default(1500),
+  debounce_ms: z.number().int().nonnegative().default(800),
   /** A typing notification pushes the turn start to at least this far out. */
   typing_extend_ms: z.number().int().nonnegative().default(2500),
   /** Upper bound on the total debounce of one turn. */
@@ -267,7 +336,7 @@ export const AgentConfigSchema = z.object({
    * When her conversation notes (module `conversation`) cover older lines, the prompt keeps only
    * the lines after them, but at least this many of the newest.
    */
-  history_after_fold: z.number().int().nonnegative().default(10),
+  history_after_fold: z.number().int().nonnegative().default(25),
   /** The history in the prompt is cut to this many characters, oldest entries first. */
   max_prompt_chars: z.number().int().nonnegative().default(16_000),
   /** One history entry is cut to this many characters. */
@@ -300,10 +369,15 @@ export const AgentConfigSchema = z.object({
   reply_ttl_ms: z.number().int().nonnegative().default(120_000),
   /** Longer replies are split into several messages. */
   max_message_chars: z.number().int().nonnegative().default(1900),
-  /** Send direct replies as platform replies to the triggering message. */
-  reply_reference: z.boolean().default(false),
+  /**
+   * Send replies to someone who called her as platform replies quoting the first message she
+   * answers (the turn's focus).
+   */
+  reply_reference: z.boolean().default(true),
   /** The typing indicator is resubmitted this often while generating. */
   typing_refresh_ms: z.number().int().nonnegative().default(8000),
+  /** The main line of `pipeline = "v3"`. */
+  mainline: MainLineConfigSchema.prefault({}),
   /** Offer registered tools to the model. */
   tools_enabled: z.boolean().default(true),
   /** Rounds of tool calls per turn before she must answer. */
@@ -324,7 +398,7 @@ export const AgentConfigSchema = z.object({
   seed: z.number().int().nonnegative().nullable().default(null),
   /** Time limit for each prompt contributor; slower ones are skipped. */
   contributor_timeout_ms: z.number().int().nonnegative().default(800),
-  /** Contributed context added to the situation message is capped at this many characters. */
+  /** Contributed data sections together are budgeted to this many characters. */
   max_context_chars: z.number().int().nonnegative().default(4000),
   /**
    * While the LLM budget is exhausted, her canned "out of energy" line is sent at most once
@@ -339,8 +413,38 @@ export const AgentConfigSchema = z.object({
   voice: VoiceConfigSchema.prefault({}),
   history: HistoryConfigSchema.prefault({}),
   vision: VisionConfigSchema.prefault({}),
+  files: FilesConfigSchema.prefault({}),
+  prompt: PromptConfigSchema.prefault({}),
 });
 export type AgentConfig = z.output<typeof AgentConfigSchema>;
+
+/**
+ * Keys of `[modules.agent]` that are gone (attention's cooldowns and multipliers, v2 §3.3): an
+ * old `miyoria.toml` that still has them loads (they are ignored) with a deprecation warning.
+ */
+export const DEPRECATED_AGENT_KEYS: readonly string[] = [
+  "attention.cooldown_ms",
+  "attention.min_cooldown_ms",
+  "voice.ambient_factor",
+  "voice.cooldown_ms",
+  "voice.min_cooldown_ms",
+  "voice.interrupt_scale",
+];
+
+/** The deprecated keys `raw` (the `[modules.agent]` section) still sets. */
+export function deprecatedAgentKeys(raw: unknown): string[] {
+  const obj = (v: unknown): Record<string, unknown> | null =>
+    v !== null && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : null;
+  const root = obj(raw);
+  if (root === null) return [];
+  return DEPRECATED_AGENT_KEYS.filter((path) => {
+    const [section, key] = path.split(".") as [string, string];
+    const part = obj(root[section]);
+    return part !== null && Object.hasOwn(part, key);
+  });
+}
 
 /** The defaults (Rust `AgentConfig::default()`). */
 export function defaultAgentConfig(): AgentConfig {

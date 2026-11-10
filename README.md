@@ -31,6 +31,67 @@ npx miyoria stage obs-setup   # builds her OBS scenes and sources (add --dry-run
 
 Her data lives in `data/miyoria.db` (SQLite through `node:sqlite`, so there is no database to install). `npx miyoria config` changes settings one at a time. `miyoria status`, `miyoria decisions` (why she spoke or stayed quiet) and `miyoria events 'agent.*'` let you watch a running Core. `npx miyoria --help` lists everything.
 
+## 快速開始:從全新的 clone 到「bot 在我的伺服器上線並回話」
+
+需要:Node.js 24(其餘 pnpm、Python、ffmpeg 由 `miyoria install` 補)、一個 Discord bot token(Developer Portal → Bot,打開 Message Content Intent;預設還要 Presence 和 Server Members Intent,不想開就之後 `miyoria config set modules."platform.discord.bot".presence_intents false`)、一組 LLM API key(DeepSeek 或任何 OpenAI 相容的服務)。**不需要顯卡**:語音辨識 / 合成、唱歌、VTube Studio、OBS、Minecraft 都是選用,預設全部關著,只有文字聊天。
+
+```bash
+git clone <這個 repo> && cd Miyoria
+node scripts/setup.mjs        # 確認 pnpm(沒有就用 corepack 啟用)、pnpm install、然後開 miyoria init
+```
+
+`miyoria init` 只問必要的:LLM 的 key、Discord token、這台電腦跑什麼(預設「只有 core」= 文字聊天,不用 GPU)。結束時會問要不要現在安裝這台電腦缺的東西,列出清單和大小、只問一次。之後:
+
+```bash
+pnpm dev doctor               # 檢查 Node、pnpm、LLM、Discord、資料庫,以及選的角色缺什麼
+pnpm dev start                # 在 Windows Terminal 分頁啟動(其他系統:pnpm dev core)
+pnpm dev chat                 # 或先在終端機跟她聊天,不需要 Discord
+```
+
+要加語音、唱歌或直播時,重新執行 `miyoria init` 改角色(`inference` = ASR / TTS / 唱歌,要 NVIDIA 顯卡;`broadcast` = voice node + stage),再 `miyoria install`。
+
+哪些只有 Windows:`miyoria start` 的分頁(其他系統用 `miyoria up` 或 `miyoria core`)、`winget` 自動安裝(macOS 用 Homebrew;Linux 會印出 apt / dnf 指令,不替你跑 sudo)、直播機的 OBS / VTube Studio / voice node 的 Go Live(官方只在 Windows 測過)。`miyoria install` 不會裝、只會檢查並說明:NVIDIA 驅動 / CUDA、Docker Desktop、OBS、VTube Studio、Minecraft / Prism Launcher。針對這台電腦的workaround(防毒軟體鎖住 esbuild 暫存檔、WinNAT 保留埠)不是預設步驟,只在出問題時由 `miyoria doctor --deep` 提示。
+
+## 多台電腦:角色、安裝和啟動
+
+服務分成三個角色,每台電腦只跑你選的那些(名稱集中在 `packages/cli/src/stack/roles.ts`,之後要改只改那裡):
+
+| 角色 | 服務 | 說明 |
+|---|---|---|
+| `broadcast`(直播機) | `voice-node`、`stage` | Discord 語音 + Go Live、VTube Studio / OBS / overlay。OBS、VTube Studio、遊戲也在這台,但不由 Miyoria 啟動 |
+| `core`(Bot 服務機) | `core`、`turn` | Discord bot、所有模組、資料庫、管理面板(:7878);`turn` 是判斷講完的 worker(`vad_engine = "silero"` 用);檔案沙箱要 Docker |
+| `inference`(GPU 推論機) | `asr`、`tts`、`sing` | 全部 AI 模型;三個要在同一台,因為 sing 做歌時要它們讓出顯卡 |
+
+在原始碼資料夾裡(`pnpm dev <指令>` 等於 `miyoria <指令>`):
+
+```bash
+miyoria init                  # 第一題:這台電腦跑什麼(單機全部、只有一個角色、或自訂);多台電腦時再問各角色的區網位址
+miyoria init --yes --roles inference --inference-host 192.168.1.20   # 不互動版(--roles:all、角色或服務名稱,可逗號分隔)
+miyoria install --dry-run     # 只安裝這台電腦需要的:node 套件和建置、每個 worker 的 venv 與 pip;最後列出要手動下載的
+miyoria install
+miyoria doctor                # 這台電腦的角色缺什麼:套件、venv、模型檔、Docker、其他電腦的位址和連線
+miyoria start --dry-run       # 會開哪些分頁、哪些已在執行而略過
+miyoria start                 # 這台電腦設定的角色;每個服務一個 Windows Terminal 分頁
+miyoria start inference       # 或指定角色 / 服務:broadcast、core、inference、all、asr、tts ...
+```
+
+`miyoria start` 每個服務開一個分頁(同一個 Windows Terminal 視窗 `miyoria`),看得到輸出,要停就關分頁或在裡面按 Ctrl+C。已經在回應健康檢查、埠上有程式、或分頁還開著的服務不會再開第二份;不會自動重啟,也不會停任何服務。推論機會先開 asr、tts,等它們就緒再開 sing。`miyoria up` 是另一個選擇:背景執行、日誌寫檔、Ctrl+C 一起停,兩個指令都讀同一份 `[machine]`。
+
+設定存在 `miyoria.toml`(不進 git):
+
+```toml
+[machine]
+roles = ["core"]               # broadcast | core | inference,可以多個;單機 = 三個都寫
+# services = ["core", "asr"]   # 自訂:直接列服務,寫了就取代 roles
+[machine.hosts]
+core = "192.168.1.10"          # 跑 core 的電腦:core 綁這個位址(admin API / voice.link / stage.link),直播機連它
+inference = "192.168.1.20"     # 跑 asr / tts / sing 的電腦:worker 綁這個位址,core 連它
+```
+
+全部在同一台時兩個位址都是 `127.0.0.1`(預設)。分開時 `miyoria init` 會把位址寫到用得到的地方:Core 的 `bind`、stage 的 `core_url`、`.env` 的 `ASR_URL` / `TTS_URL`、`[modules.sing] url`;直播機要用 core 那邊的 `STAGE_LINK_TOKEN` / `VOICE_LINK_TOKEN`(init 會請你貼上),voice node 另外要在 `apps/voice-node/.env` 填 `SELF_TOKEN`。分開跑還有兩件事沒處理(見 [backlog](docs/design/backlog.md)):歌曲影片是推論機上的本機路徑,Minecraft 擴充在 core 那台開遊戲。
+
+沒有 `[machine]` 的舊設定檔行為不變。
+
 ## Autonomy at a glance
 
 Commands are overrides, not the main way to drive her. She runs a mind loop: she notices who is around, what people are doing and how she feels, then decides to talk, join voice, start a stream, switch scenes, play a game or sing. Every action goes through a gate. Low-risk actions run straight away. Risky ones she reviews herself first, and she only asks the owner when she has doubts.

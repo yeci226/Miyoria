@@ -137,7 +137,6 @@ export function registerCommands(registry: CommandRegistry, queue: RequestQueue)
     commandSpec("queue upvote", "幫排隊中的項目加一票", {
       args: [argSpec("id", "項目編號", ArgKind.integer)],
       permission: perms.vote,
-      ephemeral: true,
     }),
     (q, inv) =>
       attempt(() =>
@@ -176,7 +175,6 @@ export function registerCommands(registry: CommandRegistry, queue: RequestQueue)
     commandSpec(`queue manage ${path}`, description, {
       args,
       permission: perms.manage,
-      ephemeral: true,
     });
   const optionalId = () =>
     argSpec("id", "項目編號（預設為進行中的項目）", ArgKind.integer, { required: false });

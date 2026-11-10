@@ -207,21 +207,21 @@ interface Stimulus {
    - 被封鎖或冷處理名單 → 忽略
    - 頻道的聊天等級:`off`(關閉)/ `mention-only`(只回提及)/ `quiet`(安靜)/ `normal`(一般,舊的 `ambient`)/ `lively`(活躍)/ `always`(每則都回,測試用)。文字頻道的 `quiet` / `normal` / `lively` 是上限,見下面與 [design/autonomy.md](design/autonomy.md) §21
    - 直接叫她(@、回覆、DM、叫名字)→ 一定進候選,而且優先
-   - 冷卻時間;她在近期訊息的佔比上限(例如最近 20 則最多 30% 是她,避免洗版)
+   - 她在近期訊息的佔比上限(例如最近 20 則最多 30% 是她,避免洗版);語音裡有人還在講話時不插嘴
 2. **Salience 評分**(特徵加權,不花錢):被叫到、問句、話題跟她的興趣或記憶相關、說話者的好感與熟悉度、目前 mood/energy、她正在做的事(玩遊戲時比較不會插話)
 3. **快速 LLM 判斷**(只用在 ambient 且分數落在灰色地帶時):`fast` 等級的模型讀短上下文,回傳 `{respond: bool, urgency, reason}`
 
-最後由 `respond_probability = f(score, affinity, mood, budget)` 抽樣,讓她的行為不會死板。生成階段的 LLM 也可以輸出 `<silence/>` 主動選擇不回。
+最後由 `respond_probability = score × 4^(2L−1)`(L = 她的 talkativeness)抽樣,讓她的行為不會死板。生成階段的 LLM 也可以輸出 `<silence/>` 主動選擇不回。
 
-**多話程度是她自己的**([design/autonomy.md](design/autonomy.md) §6):她在 `SelfState` 給這個情境(或伺服器、`voice` / `text`、`*`)定了 talkativeness L 時,attention 用它取代 activeness 與語音的 `ambient_factor` / `interrupt_scale`:插話機率 ×4^(2L−1)、冷卻 ×4^(1−2L)(不低於 `min_cooldown_ms`:文字 2 秒、語音 5 秒)、灰色地帶門檻 ×2^(1−2L)、語音裡別人還在講時 ×(0.2 + 0.6L),L ≤ 0.05 不插話。她沒定時照舊用設定的數字。近期佔比上限與最小冷卻是人設的底線;`interrupt_scale = 0` 仍代表永遠不壓過別人。`channel_activeness` 工具(有人說「活躍點」「安靜點」,`silent` / `low` / `medium` / `high`,最多一天)會設定該情境的 talkativeness。
+**多話程度是她自己的**([design/autonomy.md](design/autonomy.md) §6,v2 §3.3):attention 只留便宜的前置過濾(被叫到、名字、語音裡有人還在講就不插嘴)與「她的 talkativeness L × 佔比上限」,灰色區才問 `fast` 模型。L 是她在 `SelfState` 給這個情境(或伺服器、`voice` / `text`、`*`)定的值,加上 lesson 與情緒(`AffectSnapshot.biases`)的偏移與下限;她沒定時用等級的預設,設定的 activeness 只是把預設往下 / 往上移(−0.25 / +0.17)。插話機率 = 分數 × 4^(2L−1),L ≤ 0.05 不插話。好感、精力、activeness 倍率、語音的 `ambient_factor` / `interrupt_scale` 與所有冷卻都拿掉了(舊設定鍵照樣能讀,會警告);她自己多久開一次口是 Arbiter 的規則。`channel_activeness` 工具(有人說「活躍點」「安靜點」,`silent` / `low` / `medium` / `high`,最多一天)會設定該情境的 talkativeness。
 
-**聊天等級是上限**(`agent/src/levels.ts`,只用在文字頻道,語音不變):她的 talkativeness(含學到的事的調整)被限制在等級的上限內,整個插話倍率也不超過上限;她沒定時用等級的預設。等級另外加上最低分數、較長的冷卻(接著她剛說的話不算)、較低的佔比上限,以及她自己開話題(心智迴圈的 `chat.start` 與其他在那裡開口的意圖、initiative 回合;遊戲實況與動作結果不算)的最小間隔:
+**聊天等級是上限**(`agent/src/levels.ts`,只用在文字頻道,語音不變):她的 talkativeness(含學到的事的調整)被限制在等級的上限內,整個插話倍率也不超過上限;她沒定時用等級的預設。等級另外加上最低分數、較低的佔比上限,以及她自己開話題(她的 `chat.start` 意圖;唱歌報幕、遊戲實況與動作結果不算)的最小間隔(Arbiter 的規則之一):
 
-| 等級 | talkativeness 上限 / 沒定時 | 插話倍率 | 最低分數 | 冷卻下限 | 佔比上限 | 自己開話題間隔 |
-|---|---|---|---|---|---|---|
-| `quiet` 安靜 | 0.5 / 0.25 | ×0.5,最多 ×1 | 0.45 | 10 分鐘 | 15% | 3 小時 |
-| `normal` 一般 | 0.75 / 0.5 | ×1,最多 ×2 | (`gray_low`) | (`cooldown_ms`) | (profile) | (mind / initiative 自己的) |
-| `lively` 活躍 | 1 / 0.65 | ×1.5,最多 ×4 | (`gray_low`) | (`cooldown_ms`) | (profile) | (mind / initiative 自己的) |
+| 等級 | talkativeness 上限 / 沒定時 | 插話倍率 | 最低分數 | 佔比上限 | 自己開話題間隔 |
+|---|---|---|---|---|---|
+| `quiet` 安靜 | 0.5 / 0.25 | ×0.5,最多 ×1 | 0.45 | 15% | 3 小時 |
+| `normal` 一般 | 0.75 / 0.5 | ×1,最多 ×2 | (`gray_low`) | (profile) | (`[modules.arbiter]` 的間隔) |
+| `lively` 活躍 | 1 / 0.65 | ×1.5,最多 ×4 | (`gray_low`) | (profile) | (`[modules.arbiter]` 的間隔) |
 
 沒設定的頻道預設 `quiet`(profile 的 `behavior.default_channel_mode`)。她的回合情境(system)會寫這個頻道的等級;心智迴圈的地點也會標出等級與「現在不能主動開口」。
 
@@ -232,7 +232,8 @@ interface Stimulus {
 - **觸發來源**:頻道冷場 X 分鐘;有人進語音;記憶中的待追蹤事項(「你說明天要考試,考得怎樣?」);時間事件(早安、深夜);遊戲或直播事件;她自己的 mood(無聊度累積)。
 - **預算**:每個頻道每天有主動發話額度,依頻道設定與最近的反應調整(她主動講話都沒人理,就降低頻率)。
 - 主動發話也走 Attention → Generation → Scheduler 同一條路,只是 `priority` 較低,也可以被取代。
-- **心智迴圈在跑時**(`mind` 模組,§6.5),initiative 的觸發(冷場、打招呼、進語音問候、追問)變成給她的建議(`MindKey.suggest`),由她決定要不要、怎麼做;initiative 的每日次數、安靜時段與冷卻先套用(`[modules.initiative] to_mind`)。暫停中什麼都不做;沒有 mind 時照舊發 `agent.initiative`。遊戲導演的實況評論一律走 `agent.initiative`。
+- **Arbiter**(`arbiter` 模組,`ArbiterKey`,docs/design/v2-architecture.md §3.3)是她「現在要不要說話 / 做事」的唯一關卡:她的意圖(`plan`)、唱歌報幕(`song`)、遊戲實況(`game`)、追問與動作結果(`followup`)、notice、打招呼(`world`)都是 Impulse,規則只有 `[modules.arbiter]` 一份(暫停、預算、同意、聊天等級、安靜時段;她自己開話題的每日次數、間隔與沒人接的退避),並寫進她的帳本(prompt 的 `self.ledger`)。只有 `plan` / `agenda` 算她主動開的話題。接受的 Impulse 由 agent 的 `ImpulseHostKey` 開回合;地方忙的時候 Arbiter 稍後再試。沒有 Arbiter 時 agent 照舊處理 `agent.initiative`。「冷場」只有一個訊號:world 的 `channel_quiet`(文字與語音),它喚醒心智迴圈。
+- **不重複、不對空氣講話**(V3 階段 0 的止血,在 V3 主線完成前的 V2 做法):遊戲實況的 Impulse 帶 `attention`(內容鍵和多久後算新的一次,`packages/game/src/narration.ts`)。同一把鍵說出去後,`repeat_after_ms` 內 Arbiter 回 `rejected` / `repeat`;沒有真的說出去(沉默、取消、失敗、等到過期)不算說過。導演的自由實況也歸到它講的那件事上,換句話說還是同一把鍵。遊戲狀態照常留在她的 context,只是不會因此開口。她自己開口(`plan` / `agenda`)、遊戲實況和記憶追問算「她自己開口」,同一個地方連續 `max_unanswered` 次沒有人說話就回 `rejected` / `unanswered`,任何人說話就恢復;定義都在 `packages/arbiter/src/unanswered.ts`。她自己的動作照做,只是開場白先不說。回話、指令、面板、報幕、notice、答應的結果(`action_result`)、打招呼、緊急遊戲事件和有人要求的目標不帶鍵,兩條規則都不管。
 - **她的意圖**(`IntentSinkKey`,agent 提供):`chat.start` / `chat.dm` 過閘門後由 coordinator 開一個她自己發起的回合;其他能力先以 `self` 名義執行,成功後在她所在的地方開口(`voice.join` 等她真的進了語音頻道)。意圖不打斷進行中的回合、等待中的訊息或排隊的語音,過期就丟。
 
 ### 4.4 生成與工具
@@ -387,14 +388,7 @@ export interface Attitude {
 
 ### 6.8 上網(`web`)
 
-`[modules.web]` 有 `token`(DeepSeek API 金鑰)才啟動。她在聊天和語音回合可以用 `web_search`、`web_fetch`,自己發起的回合也可以;心智迴圈是單次 JSON 呼叫,沒有工具,所以不能直接上網。API 是獨立的 `POST /v1/tools/search`、`/v1/tools/fetch`,跟聊天用哪個模型無關;網頁由 DeepSeek 端抓取,網址碰不到本機網路。
-
-網頁是陌生人寫的,所以有兩層防線:
-
-- 結果包在 `dataBlock` 裡,`GUARD_RULES` 要她只當資料;內容裡的控制字元和 `⟦⟧` 都會先處理掉,關不掉區塊。
-- 這兩個工具標記 `outside`。成功回傳後,這一回合只剩 `outside` 工具可用(`Turn.#offers`),記憶、知識庫、動作都等下一回合。她的回覆內容仍然可能受網頁影響。
-
-工具結果預設上限 `max_tool_result_chars` 只有 1000 字,所以工具可以用 `maxResultChars` 自己設上限(`web` 用 `max_result_chars`,預設 4000 字)。
+模組 `web` 預設開著,給她 `web_search`(DuckDuckGo 的 HTML 搜尋)和 `web_read`(讀一個公開網頁的文字),以 capability `web.search` / `web.read` 註冊,權限節點 `tools.web`。網頁經過 SSRF 防護(`net.ts`),查到的內容標成不可信的資料(`web.ts`);設定和限制見 [OPERATIONS.md](OPERATIONS.md)。
 
 ## 7. Profile(角色)
 
@@ -788,7 +782,7 @@ extensions/minecraft/
 2. `game.start` 先用 `game_minecraft_observe` 確認遊戲開著、模組連上(`[modules.game] require_connected`)。沒開而且 adapter 能自己開(`state.launch.available`,`auto_launch`)時,透過閘門送 `launch`(principal `director`):adapter 用 Prism Launcher 的 CLI 開實例並直接進入最近玩的世界,導演每 2 秒 observe 等模組連上、世界載入(`launch_wait_secs`)。開不起來(找不到 Prism、啟動器出錯、逾時)就是失敗的動作並帶原因,她會照著跟大家說。`game.stop` 也送 `quit`,adapter 只關她自己開的遊戲(`quit_on_stop`)。
 3. 導演開始一個 session(實況送到她所在的語音頻道 > `stream_context` > 下指令的地方),發 `game.director.session` `started` → Stage 的場景導演切到 `game` 場景(帶轉場)。
 4. 有 `goal` 就設成目前目標;`stream: true` 時以同一個 principal 呼叫 `stream.start`(Go Live,OBS 跟著開播;另一個閘門決定,可能被擋)。
-5. 導演每 `decide_secs` 觀察、決定、以 `game.act`(principal `director`)行動,並用 `agent.initiative` 實況;遊戲聊天、事件文字對導演都是不可信資料。
+5. 導演每 `decide_secs` 觀察、決定、以 `game.act`(principal `director`)行動,並用 `game` Impulse(交給 Arbiter)實況;遊戲聊天、事件文字對導演都是不可信資料。
 6. `game stop` → `game.director.session` `stopped` → 場景切回 `chat`。
 
 **遊戲內聊天是獨立的對話**(模組 `game.chat`,`@miyoria/game`):
@@ -917,7 +911,7 @@ extensions/minecraft/
 4. **同意**:對方用 `/me privacy` 拒絕私訊(`dm`)或拒絕被她主動找(`approach`,`self` / `director` 發起時)→ 擋;對方自己要求的不算。
 5. **權限**:`user` 的 requester 要有能力的權限節點(現有 RBAC);沒有時她可以用工具參數 `on_own` 改以 `self` 名義做(受她自己的次數限制)。`command` + override 與 `panel` 到這裡就放行。
 6. **預算**:LLM 預算 exhausted 時擋下 `self` / `director`。
-7. **風險**:低 → 放行;中 / 高 → 次數限制(每能力每 24 小時、每人每 24 小時、冷卻;`[modules.actions.medium]` 與 `limits."<能力>"`,能力也可以帶自己的預設 `Capability.limits`;預算 degraded 時次數減半、冷卻加倍;只在記憶體);高 → **自我審核**:獨立的 `review` 用途呼叫(thinking 開,JSON),只看結構化請求(principal、requester 的關係數值、能力、參數、理由、底線),不看聊天原文,回 `allow` / `deny` / `uncertain`。`uncertain` 用 `ReplySink` 私訊每位擁有者一張確認卡(允許 / 拒絕按鈕,路由 `autonomy:approve|deny`,節點 `owner.autonomy.approve`),`escalation_timeout_ms`(預設 10 分鐘)內沒人回就拒絕;等待中的請求也能在面板「內心 → 想法」回答(`GET /api/mind/approvals`)。從回合呼叫的高風險工具會立刻回覆「要先審核」,審核在背景進行;結果對她有用的工具(`tool.followup`,例如 `code_run`)會先等 `inline_wait_ms`(預設 8 秒),來得及就直接回結果,來不及就回「還沒有結果」,之後用**後續回合**(`agent_initiative`,reason `action_result`,提示放在不可信資料區塊)告訴她結果或拒絕原因;被 agent 略過(回合進行中、冷卻)時會再試幾次。能力可以提供 `guidance`(給審核看的注意事項)、`describe`(確認卡上取代原始 JSON 的內容與附件,例如程式碼檔)與 `denied`(審核 / 擁有者拒絕後的處理);決定裡的 `reviewer` 記錄是誰判斷的(`self` 或擁有者帳號)。其他 module 可以用 `ActuatorRegistry.addStatus` 在 `/admin autonomy status` 加上自己的狀態行(例如沙箱)。
+7. **風險**:低 → 放行;中 / 高 → 次數限制(每能力每 24 小時、每人每 24 小時、冷卻;`[modules.actions.medium]` 與 `limits."<能力>"`,能力也可以帶自己的預設 `Capability.limits`;預算 degraded 時次數減半、冷卻加倍;只在記憶體);高 → **自我審核**:獨立的 `review` 用途呼叫(thinking 開,JSON),只看結構化請求(principal、requester 的關係數值、能力、參數、理由、底線),不看聊天原文,回 `allow` / `deny` / `uncertain`。`uncertain` 用 `ReplySink` 私訊每位擁有者一張確認卡(允許 / 拒絕按鈕,路由 `autonomy:approve|deny`,節點 `owner.autonomy.approve`),`escalation_timeout_ms`(預設 10 分鐘)內沒人回就拒絕;等待中的請求也能在面板「內心 → 想法」回答(`GET /api/mind/approvals`)。從回合呼叫的高風險工具會立刻回覆「要先審核」,審核在背景進行;結果對她有用的工具(`tool.followup`,例如 `code_run`)會先等 `inline_wait_ms`(預設 8 秒),來得及就直接回結果,來不及就回「還沒有結果」,之後用**後續回合**(`followup` Impulse,reason `action_result`,提示放在不可信資料區塊)告訴她結果或拒絕原因;地方忙的時候 Arbiter 會等(沒有 Arbiter 時被 agent 略過會再試幾次)。能力可以提供 `guidance`(給審核看的注意事項)、`describe`(確認卡上取代原始 JSON 的內容與附件,例如程式碼檔)與 `denied`(審核 / 擁有者拒絕後的處理);決定裡的 `reviewer` 記錄是誰判斷的(`self` 或擁有者帳號)。其他 module 可以用 `ActuatorRegistry.addStatus` 在 `/admin autonomy status` 加上自己的狀態行(例如沙箱)。
 
 每個決定(放行或擋下)都寫進稽核紀錄(`actor` = `self` / `user:discord:<id>` / `command:discord:<id>` / `panel:<actor>` / `director`,`action` = `gate.<能力>`,`detail` = 完整決定與原因),並發 `gate.decision` 事件。自主請求(`self` / `director`)可以帶 `about`(這件事是關於誰):能力本身沒有對象時,同意(「不要主動找我」)與每人次數套用在這個人身上。
 
@@ -1020,7 +1014,7 @@ miyoria/
 │  ├─ self/                   # 自我:慾望、無聊、方針、議程、感情描述
 │  ├─ mind/                   # 心智迴圈:內心獨白、意圖、想法日誌與摘要
 │  ├─ learning/               # 反思與學習:對話筆記、她整理的資料庫、回饋、學到的事、反思
-│  ├─ initiative/             # 主動發話
+│  ├─ arbiter/                # 唯一的「現在要不要」:Impulse、底線、她的帳本
 │  ├─ queue/                  # 觀眾請求佇列
 │  ├─ game/                   # 遊戲導演
 │  ├─ sing/                   # 點歌:歌單、唱歌的時機、播放(嘴型音軌、歌詞字幕)

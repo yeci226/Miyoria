@@ -38,9 +38,6 @@ owners = ["discord:${MIYORIA_OWNER_ID:-0}"]
 [modules.auth]
 owners = ["discord:${MIYORIA_OWNER_ID:-0}"]
 
-[modules.web]
-token = "${DEEPSEEK_API_KEY:-}"
-
 [modules."platform.discord.bot"]
 token = "${DISCORD_BOT_TOKEN:-}"
 command_guilds = []
@@ -78,6 +75,4 @@ barge_in = "stop"
 
 [modules.agent.voice]
 default_mode = "normal"
-ambient_factor = 0.5
-cooldown_ms = 20000
 debounce_ms = 700

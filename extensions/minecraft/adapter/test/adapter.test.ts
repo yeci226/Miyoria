@@ -1,7 +1,7 @@
-import type { GameEvent } from "@miyoria/sdk";
+import type { GameEvent, TaskEvent, TaskSpec } from "@miyoria/sdk";
 import { afterEach, describe, expect, it } from "vitest";
-import { toRequests } from "../src/actions.js";
-import { MinecraftAdapter, taskOf } from "../src/adapter.js";
+import { HIDDEN_ACTIONS, failureCode, toRequests } from "../src/actions.js";
+import { MinecraftAdapter, modFailureCode } from "../src/adapter.js";
 import { BridgeClient } from "../src/bridge.js";
 import { mapEvent } from "../src/events.js";
 import { compactState, summarize } from "../src/summary.js";
@@ -154,7 +154,7 @@ describe("events", () => {
 });
 
 describe("MinecraftAdapter", () => {
-  it("describes the game", async () => {
+  it("describes the game: one entry for getting items, a budget per goal", async () => {
     const { adapter } = await setup();
     const info = adapter.describe();
     expect(info.id).toBe("minecraft");
@@ -165,10 +165,7 @@ describe("MinecraftAdapter", () => {
       "explore",
       "farm",
       "build",
-      "get",
       "obtain",
-      "craft",
-      "smelt",
       "place",
       "chat",
       "stop",
@@ -180,6 +177,9 @@ describe("MinecraftAdapter", () => {
       "launch",
       "quit",
     ]);
+    // `get`, `craft` and `smelt` are still understood, just not offered.
+    expect(HIDDEN_ACTIONS.map((a) => a.name)).toEqual(["get", "craft", "smelt"]);
+    for (const a of info.actions) expect(a.budget_s, a.name).toBeGreaterThan(0);
   });
 
   it("observes through the mod", async () => {
@@ -193,6 +193,8 @@ describe("MinecraftAdapter", () => {
     const menu = await adapter.observe();
     expect(menu.summary).toContain("主選單");
     expect(menu.state).toMatchObject({ connected: true, in_game: false });
+    // The executor's observe is the same state, structured, with the running task.
+    expect(await adapter.tasks.observe()).toMatchObject({ state: { in_game: false }, task: null });
   });
 
   it("reports a missing connection instead of throwing", async () => {
@@ -201,10 +203,14 @@ describe("MinecraftAdapter", () => {
     const obs = await adapter.observe();
     expect(obs.state).toMatchObject({ connected: false, launch: { available: false } });
     expect(obs.summary).toContain("沒有連上 Minecraft");
-    expect(await adapter.act({ name: "stop" })).toMatchObject({ ok: false, message: expect.stringContaining("沒有連上") });
+    expect(await adapter.act({ name: "stop" })).toMatchObject({
+      ok: false,
+      code: "disconnected",
+      message: expect.stringContaining("沒有連上"),
+    });
   });
 
-  it("acts and maps mod errors", async () => {
+  it("acts and maps mod errors onto codes", async () => {
     const { mod, adapter } = await setup();
     mod.respond = (req) =>
       req.type === "baritone" ? { ok: true, data: { command: req.command } } : { ok: false, code: "invalid_args", message: "slot must be 0-8" };
@@ -216,11 +222,16 @@ describe("MinecraftAdapter", () => {
     expect(mod.requests.at(-1)).toMatchObject({ type: "baritone", command: "mine", blocks: ["iron_ore"], count: 3 });
     expect(await adapter.act({ name: "select", args: { item: "x" } })).toEqual({
       ok: false,
+      code: "invalid",
       message: "參數不對:slot must be 0-8",
     });
-    expect(await adapter.act({ name: "goto", args: {} })).toMatchObject({ ok: false });
+    expect(await adapter.act({ name: "goto", args: {} })).toMatchObject({ ok: false, code: "invalid" });
     // observe (her pickaxe, for the mine check), mine, select_slot
     expect(mod.requests.map((r) => r.type)).toEqual(["observe", "baritone", "select_slot"]);
+    expect(failureCode("not_visible")).toBe("not_found");
+    expect(failureCode("too_far")).toBe("unreachable");
+    expect(failureCode("missing_items")).toBe("precondition");
+    expect(failureCode("reflex_active")).toBe("busy");
   });
 
   it("checks capabilities before sending", async () => {
@@ -234,12 +245,13 @@ describe("MinecraftAdapter", () => {
     await waitFor(() => b.ready);
     expect(await adapter.act({ name: "get", args: { item: "iron_pickaxe" } })).toMatchObject({
       ok: false,
+      code: "precondition",
       message: expect.stringContaining("AltoClef"),
     });
     expect(m.requests).toHaveLength(0);
   });
 
-  it("streams mapped events, connection changes included", async () => {
+  it("streams mapped events, connection changes included; job events stay with the tasks", async () => {
     mod = await FakeMod.start();
     const m = mod;
     bridge = new BridgeClient({ endpoint: () => ({ url: m.url, token: m.token }), reconnectMinMs: 20 });
@@ -251,8 +263,10 @@ describe("MinecraftAdapter", () => {
     m.emit("death", { last_damage_source: "lava" });
     m.emit("chat", { sender: "Me", message: "x", system: false, self: true });
     m.emit("goal_reached", { goal: "GoalBlock{x=1,y=2,z=3}" });
+    m.emit("task_done", { task: "x", kind: "goto" });
+    m.emit("night_started", { time_of_day: 13000 });
     await waitFor(() => events.length === 3);
-    expect(events.map((e) => e.type)).toEqual(["connected", "death", "goal_reached"]);
+    expect(events.map((e) => e.type)).toEqual(["connected", "death", "night_started"]);
     expect(events[0]?.data).toMatchObject({ text: "連上 Minecraft 1.21.1(Baritone、AltoClef)" });
     expect(events[1]).toMatchObject({ important: true, data: { text: "死掉了(岩漿)" } });
     m.kick();
@@ -262,17 +276,26 @@ describe("MinecraftAdapter", () => {
   });
 });
 
-describe("path events", () => {
-  it("knows which task an action leaves running", () => {
-    expect(taskOf(toRequests({ name: "goto", args: { x: 1, z: 2 } }))).toBe("goto");
-    expect(taskOf(toRequests({ name: "mine", args: { block: "iron_ore" } }))).toBe("baritone");
-    expect(taskOf(toRequests({ name: "follow", args: { player: "Owen" } }))).toBe("baritone");
-    expect(taskOf(toRequests({ name: "get", args: { item: "bread" } }))).toBe("altoclef");
-    expect(taskOf(toRequests({ name: "stop" }))).toBeNull();
-    expect(taskOf(toRequests({ name: "chat", args: { message: "hi" } }))).toBeUndefined();
-    expect(taskOf(toRequests({ name: "look", args: { yaw: 0 } }))).toBeUndefined();
-  });
+/** Collects the executor's task events in the background. */
+function taskEvents(adapter: MinecraftAdapter): TaskEvent[] {
+  const out: TaskEvent[] = [];
+  void (async () => {
+    for await (const e of adapter.tasks.events()) out.push(e);
+  })();
+  return out;
+}
 
+const spec = (id: string, goal: string, args: Record<string, unknown> = {}, budget_s = 30): TaskSpec => ({
+  id,
+  goal,
+  args,
+  budget_s,
+});
+
+const ends = (events: TaskEvent[]) =>
+  events.filter((e) => e.type === "done" || e.type === "failed").map((e) => [e.task, e.type === "failed" ? e.code : "done"]);
+
+describe("tasks with an older mod (no task ids)", () => {
   /** Emits a marker and waits for it, so everything sent before it has been handled. */
   async function flush(m: FakeMod, events: GameEvent[]): Promise<void> {
     const n = events.filter((e) => e.type === "night_started").length;
@@ -280,40 +303,92 @@ describe("path events", () => {
     await waitFor(() => events.filter((e) => e.type === "night_started").length === n + 1);
   }
 
-  const types = (events: GameEvent[]) => events.map((e) => e.type).filter((t) => t !== "night_started");
-
-  it("only lets a goto end on goal_reached; mining ends on baritone_idle", async () => {
+  it("a goto ends on goal_reached; mining ignores path segments and ends on baritone_idle", async () => {
     const { mod: m, adapter } = await setup();
     const events = collect(adapter);
+    const tasks = taskEvents(adapter);
     await waitFor(() => events.length === 1); // connected
 
-    expect(await adapter.act({ name: "mine", args: { block: "iron_ore", count: 5 } })).toMatchObject({ ok: true });
-    expect(adapter.task).toBe("baritone");
+    await adapter.tasks.start(spec("m1", "mine", { block: "iron_ore", count: 5 }));
+    await waitFor(() => m.requests.some((r) => r.type === "baritone"));
+    // The work request carries the task id (an older mod just ignores it).
+    expect(m.requests.find((r) => r.type === "baritone")).toMatchObject({ command: "mine", task: "m1" });
     // Baritone reaches (or fails to path to) one ore after another while mining.
     m.emit("goal_reached", { goal: "GoalComposite" });
     m.emit("goal_failed", { reason: "no_path", goal: "GoalComposite" });
     await flush(m, events);
-    expect(types(events)).toEqual(["connected"]);
+    expect(ends(tasks)).toEqual([]);
     m.emit("baritone_idle", { process: "Mine", goal: null, cancelled: false });
-    await waitFor(() => types(events).includes("baritone_idle"));
-    expect(adapter.task).toBeNull();
+    await waitFor(() => ends(tasks).length === 1);
+    expect(ends(tasks)).toEqual([["m1", "done"]]);
 
-    expect(await adapter.act({ name: "goto", args: { x: 10, y: 64, z: 10 } })).toMatchObject({ ok: true });
-    expect(adapter.task).toBe("goto");
+    await adapter.tasks.start(spec("g1", "goto", { x: 10, y: 64, z: 10 }));
+    await waitFor(() => m.requests.filter((r) => r.type === "baritone").length === 2);
     m.emit("goal_reached", { goal: "GoalBlock{x=10,y=64,z=10}" });
-    await waitFor(() => types(events).includes("goal_reached"));
-    expect(types(events)).toEqual(["connected", "baritone_idle", "goal_reached"]);
+    await waitFor(() => ends(tasks).length === 2);
+    expect(tasks.find((e) => e.task === "g1" && e.type === "done")).toMatchObject({ detail: "抵達目標了" });
+    // No path: `unreachable`.
+    await adapter.tasks.start(spec("g2", "goto", { x: 99, z: 99 }));
+    await waitFor(() => m.requests.filter((r) => r.type === "baritone").length === 3);
+    m.emit("goal_failed", { reason: "no_path", goal: "GoalXZ" });
+    await waitFor(() => ends(tasks).length === 3);
+    expect(ends(tasks).at(-1)).toEqual(["g2", "unreachable"]);
+    // None of the job events reached the commentary stream.
+    expect(events.map((e) => e.type).filter((t) => t !== "night_started")).toEqual(["connected"]);
   });
 
-  it("chat and look do not change the running task", async () => {
+  it("chat runs alongside; a new body task supersedes the old one without a stop", async () => {
     const { mod: m, adapter } = await setup();
-    const events = collect(adapter);
-    await adapter.act({ name: "follow", args: { player: "Owen" } });
-    await adapter.act({ name: "chat", args: { message: "我跟著你" } });
-    m.emit("goal_reached", { goal: "GoalNear" });
-    await flush(m, events);
-    expect(types(events)).toEqual(["connected"]);
-    expect(adapter.task).toBe("baritone");
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("f1", "follow", { player: "Owen" }));
+    await adapter.tasks.start(spec("c1", "chat", { message: "我跟著你" }));
+    await waitFor(() => ends(tasks).length === 1);
+    expect(ends(tasks)).toEqual([["c1", "done"]]);
+    await adapter.tasks.start(spec("e1", "explore"));
+    await waitFor(() => ends(tasks).length === 2);
+    expect(ends(tasks)).toContainEqual(["f1", "superseded"]);
+    await waitFor(() => m.requests.filter((r) => r.type === "baritone").length === 2);
+    expect(m.requests.some((r) => r.type === "stop")).toBe(false);
+  });
+
+  it("cancel and timeout stop the mod's work and end the task with the code", async () => {
+    const { mod: m, adapter } = await setup();
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("m1", "mine", { block: "oak_log" }));
+    await waitFor(() => m.requests.some((r) => r.type === "baritone"));
+    await adapter.tasks.cancel("m1");
+    await waitFor(() => m.requests.some((r) => r.type === "stop"));
+    expect(ends(tasks)).toEqual([["m1", "cancelled"]]);
+
+    await adapter.tasks.start(spec("m2", "mine", { block: "oak_log" }, 0.2));
+    await waitFor(() => ends(tasks).length === 2);
+    expect(ends(tasks).at(-1)).toEqual(["m2", "timeout"]);
+    await waitFor(() => m.requests.filter((r) => r.type === "stop").length === 2);
+  });
+
+  it("an open-ended goal is done at the end of its budget", async () => {
+    const { mod: m, adapter } = await setup();
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("x1", "explore", {}, 1));
+    await waitFor(() => ends(tasks).length === 1, 3000);
+    expect(ends(tasks)).toEqual([["x1", "done"]]);
+    await waitFor(() => m.requests.at(-1)?.type === "stop");
+  });
+
+  it("an interrupting reflex or a death ends the job with busy / died", async () => {
+    const { mod: m, adapter } = await setup();
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("m1", "mine", { block: "oak_log" }));
+    await waitFor(() => m.requests.some((r) => r.type === "baritone"));
+    m.emit("reflex", { kind: "flee", target: "creeper", interrupted: "Mine" });
+    await waitFor(() => ends(tasks).length === 1);
+    expect(ends(tasks)).toEqual([["m1", "busy"]]);
+    await adapter.tasks.start(spec("c1", "craft", { item: "stick" }));
+    await waitFor(() => m.requests.some((r) => r.type === "craft"));
+    expect(m.requests.find((r) => r.type === "craft")).toMatchObject({ task: "c1" });
+    m.emit("death", { last_damage_source: "lava" });
+    await waitFor(() => ends(tasks).length === 2);
+    expect(ends(tasks).at(-1)).toEqual(["c1", "died"]);
   });
 
   it("waits for AltoClef itself to be idle before ending a get", async () => {
@@ -323,41 +398,85 @@ describe("path events", () => {
       req.type === "observe"
         ? { ok: true, data: { ...SNAPSHOT, altoclef: { available: true, busy: altoBusy } } }
         : { ok: true, data: {} };
-    const events = collect(adapter);
-    await waitFor(() => events.length === 1);
-    expect(await adapter.act({ name: "get", args: { item: "iron_pickaxe" } })).toMatchObject({ ok: true });
-    expect(adapter.task).toBe("altoclef");
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("a1", "obtain", { item: "iron_pickaxe", strategy: "altoclef" }));
+    await waitFor(() => m.requests.some((r) => r.type === "altoclef"));
+    expect(m.requests.find((r) => r.type === "altoclef")).toMatchObject({ command: "get iron_pickaxe 1", task: "a1" });
 
     // Baritone finishes one leg of the AltoClef task (walk to a tree), AltoClef keeps going.
     m.emit("goal_reached", { goal: "GoalGetToBlock" });
     m.emit("baritone_idle", { process: "Custom Goal", goal: null, cancelled: false });
     await waitFor(() => m.requests.filter((r) => r.type === "observe").length === 1);
-    await flush(m, events);
-    expect(types(events)).toEqual(["connected"]);
-    expect(adapter.task).toBe("altoclef");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ends(tasks)).toEqual([]);
 
     // The last leg: AltoClef is idle now.
     altoBusy = false;
     m.emit("baritone_idle", { process: "Custom Goal", goal: null, cancelled: false });
-    await waitFor(() => types(events).includes("baritone_idle"));
-    expect(events.find((e) => e.type === "baritone_idle")).toMatchObject({
-      data: { text: "AltoClef 任務做完了,停下來", altoclef_done: true },
-    });
-    expect(adapter.task).toBeNull();
+    await waitFor(() => ends(tasks).length === 1);
+    expect(tasks.find((e) => e.type === "done")).toMatchObject({ task: "a1", detail: "AltoClef 任務做完了" });
   });
 
-  it("forwards an idle we caused during an AltoClef task right away", async () => {
+  it("an idle we caused during an AltoClef task is a cancel, without asking AltoClef", async () => {
     const { mod: m, adapter } = await setup();
-    const events = collect(adapter);
-    await adapter.act({ name: "get", args: { item: "bread" } });
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("a1", "get", { item: "bread" }));
+    await waitFor(() => m.requests.some((r) => r.type === "altoclef"));
     m.emit("baritone_idle", { process: "Custom Goal", goal: null, cancelled: true });
-    await waitFor(() => types(events).includes("baritone_idle"));
+    await waitFor(() => ends(tasks).length === 1);
+    expect(ends(tasks)).toEqual([["a1", "cancelled"]]);
     expect(m.requests.some((r) => r.type === "observe")).toBe(false);
   });
 });
 
-describe("obtain", () => {
-  it("plans from the inventory, runs the steps and reports only the plan's end", async () => {
+describe("tasks with a mod that reports task ids", () => {
+  async function setupTasks() {
+    mod = await FakeMod.start();
+    mod.capabilities = { baritone: true, altoclef: true, screenshot: true, tasks: true };
+    const m = mod;
+    bridge = new BridgeClient({ endpoint: () => ({ url: m.url, token: m.token }), reconnectMinMs: 20, requestTimeoutMs: 500 });
+    const adapter = new MinecraftAdapter(bridge);
+    bridge.start();
+    const b = bridge;
+    await waitFor(() => b.ready);
+    return { mod: m, adapter };
+  }
+
+  it("ends exactly when the mod says, for that id, with the mod's code", async () => {
+    const { mod: m, adapter } = await setupTasks();
+    expect(adapter.modTasks).toBe(true);
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("m1", "mine", { block: "iron_ore" }));
+    await waitFor(() => m.requests.some((r) => r.type === "baritone"));
+    expect(m.requests.find((r) => r.type === "baritone")).toMatchObject({ command: "mine", task: "m1" });
+    // Nothing is guessed from Baritone's own events any more.
+    m.emit("goal_reached", { goal: "GoalComposite", task: "m1" });
+    m.emit("baritone_idle", { process: "Mine", goal: null, cancelled: false, task: "m1" });
+    m.emit("task_done", { task: "other", kind: "mine" });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(ends(tasks)).toEqual([]);
+    m.emit("task_done", { task: "m1", kind: "mine", detail: "挖完了" });
+    await waitFor(() => ends(tasks).length === 1);
+    expect(tasks.find((e) => e.type === "done")).toMatchObject({ task: "m1", detail: "挖完了" });
+
+    await adapter.tasks.start(spec("g1", "goto", { x: 1, z: 2 }));
+    await waitFor(() => m.requests.filter((r) => r.type === "baritone").length === 2);
+    m.emit("task_failed", { task: "g1", kind: "goto", code: "unreachable", message: "no path" });
+    await waitFor(() => ends(tasks).length === 2);
+    expect(ends(tasks).at(-1)).toEqual(["g1", "unreachable"]);
+
+    await adapter.tasks.start(spec("c1", "craft", { item: "stick" }));
+    await waitFor(() => m.requests.some((r) => r.type === "craft"));
+    m.emit("task_failed", { task: "c1", kind: "craft", code: "interrupted", message: "reflex: fight" });
+    await waitFor(() => ends(tasks).length === 3);
+    expect(ends(tasks).at(-1)).toEqual(["c1", "busy"]);
+    expect(modFailureCode("died")).toBe("died");
+    expect(modFailureCode("whatever")).toBe("internal");
+  });
+});
+
+describe("obtain: one entry, the old paths as strategies", () => {
+  it("plans from the inventory, runs the steps as progress and ends with the plan", async () => {
     const { mod: m, adapter } = await setup();
     let inventory: Record<string, number> = { oak_planks: 2 };
     m.respond = (req) =>
@@ -365,11 +484,10 @@ describe("obtain", () => {
         ? { ok: true, data: { ...SNAPSHOT, inventory, nearby_blocks: [], baritone: { available: true, busy: false } } }
         : { ok: true, data: {} };
     const events = collect(adapter);
+    const tasks = taskEvents(adapter);
     await waitFor(() => events.length === 1);
 
-    const started = await adapter.act({ name: "obtain", args: { item: "stick" } });
-    expect(started).toMatchObject({ ok: true, message: "開始取得木棒:做木棒×4(共 1 步)" });
-    expect(adapter.task).toBe("plan");
+    await adapter.tasks.start(spec("o1", "obtain", { item: "stick" }, 60));
     await waitFor(() => m.requests.some((r) => r.type === "craft"));
     expect(m.requests.find((r) => r.type === "craft")).toMatchObject({ item: "stick", count: 4 });
     const busy = await adapter.observe();
@@ -378,36 +496,57 @@ describe("obtain", () => {
 
     inventory = { stick: 4 };
     m.emit("craft_finished", { item: "stick", crafted: 4, requested: 4 });
-    await waitFor(() => events.some((e) => e.type === "plan_finished"));
-    expect(events.map((e) => e.type)).toEqual(["connected", "plan_step", "plan_finished"]);
-    expect(events.at(-1)).toMatchObject({ important: true, data: { text: "拿到木棒了" } });
-    expect(adapter.task).toBeNull();
-  });
-
-  it("answers right away when she has it, does not know it, or the plan is impossible", async () => {
-    const { mod: m, adapter } = await setup();
-    m.respond = (req) => (req.type === "observe" ? { ok: true, data: SNAPSHOT } : { ok: true, data: {} });
-    expect(await adapter.act({ name: "obtain", args: { item: "apple" } })).toMatchObject({ ok: false });
-    expect(await adapter.act({ name: "obtain", args: { item: "iron_pickaxe" } })).toMatchObject({
-      ok: true,
-      message: "背包裡已經有鐵鎬了",
-    });
+    await waitFor(() => ends(tasks).length === 1);
+    expect(tasks.map((e) => e.type)).toEqual(["started", "progress", "progress", "done"]);
+    expect(tasks.find((e) => e.type === "progress")).toMatchObject({ detail: "開始取得木棒:做木棒×4(共 1 步)" });
+    expect(tasks.at(-1)).toMatchObject({ type: "done", detail: "拿到木棒了" });
+    // The steps are not commentary events any more.
+    expect(events.map((e) => e.type)).toEqual(["connected"]);
     expect(adapter.plan).toBeNull();
   });
 
-  it("another action replaces the plan", async () => {
+  it("picks the strategy: done at once, AltoClef for what the planner does not know, else one craft", async () => {
+    const { mod: m, adapter } = await setup();
+    m.respond = (req) => (req.type === "observe" ? { ok: true, data: SNAPSHOT } : { ok: true, data: {} });
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("o1", "obtain", { item: "iron_pickaxe" }));
+    await waitFor(() => ends(tasks).length === 1);
+    expect(tasks.find((e) => e.type === "done")).toMatchObject({ task: "o1", detail: "背包裡已經有鐵鎬了" });
+    // Unknown to the planner, AltoClef installed: `get`.
+    await adapter.tasks.start(spec("o2", "obtain", { item: "golden_apple" }));
+    await waitFor(() => m.requests.some((r) => r.type === "altoclef"));
+    expect(m.requests.find((r) => r.type === "altoclef")).toMatchObject({ command: "get golden_apple 1" });
+    await adapter.tasks.cancel("o2");
+    // Forced to the planner: it says it does not know the item.
+    await adapter.tasks.start(spec("o3", "obtain", { item: "golden_apple", strategy: "plan" }));
+    await waitFor(() => ends(tasks).length === 3);
+    expect(ends(tasks).at(-1)).toEqual(["o3", "invalid"]);
+    // `craft`: one craft of the item itself (the old craft action).
+    await adapter.tasks.start(spec("o4", "obtain", { item: "golden_apple", strategy: "craft" }));
+    await waitFor(() => m.requests.some((r) => r.type === "craft"));
+    expect(m.requests.find((r) => r.type === "craft")).toMatchObject({ item: "golden_apple", count: 1, task: "o4" });
+    m.emit("craft_failed", { item: "golden_apple", crafted: 0, requested: 1, error: "ran out of gold_ingot" });
+    await waitFor(() => ends(tasks).length === 4);
+    expect(ends(tasks).at(-1)).toEqual(["o4", "precondition"]);
+    expect(adapter.plan).toBeNull();
+  });
+
+  it("another body task replaces the plan", async () => {
     const { mod: m, adapter } = await setup();
     m.respond = (req) =>
       req.type === "observe" ? { ok: true, data: { ...SNAPSHOT, inventory: {}, nearby_blocks: [] } } : { ok: true, data: {} };
-    const events = collect(adapter);
-    await adapter.act({ name: "obtain", args: { item: "crafting_table" } });
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("o1", "obtain", { item: "crafting_table" }, 60));
+    await waitFor(() => adapter.plan !== null);
     const runner = adapter.plan;
-    expect(runner).not.toBeNull();
-    await adapter.act({ name: "stop" });
+    await adapter.tasks.start(spec("s1", "stop"));
+    await waitFor(() => ends(tasks).length === 2);
+    expect(ends(tasks)).toEqual([
+      ["o1", "superseded"],
+      ["s1", "done"],
+    ]);
     expect(adapter.plan).toBeNull();
     expect(runner?.cancelled).toBe(true);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(events.some((e) => e.type === "plan_failed")).toBe(false);
   });
 });
 
@@ -446,15 +585,5 @@ describe("reflexes", () => {
     const result = await adapter.act({ name: "explore" });
     expect(result.ok).toBe(true);
     expect(m.requests.filter((r) => r.type === "baritone")).toHaveLength(2);
-  });
-
-  it("an interrupting reflex ends the running Baritone task", async () => {
-    const { mod: m, adapter } = await setup();
-    const events = collect(adapter);
-    await adapter.act({ name: "mine", args: { block: "oak_log" } });
-    expect(adapter.task).toBe("baritone");
-    m.emit("reflex", { kind: "flee", target: "creeper", interrupted: "Mine" });
-    await waitFor(() => events.some((e) => e.type === "reflex"));
-    expect(adapter.task).toBeNull();
   });
 });

@@ -4,12 +4,17 @@ export type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export type Handler = (c: ApiContext) => Response | Promise<Response>;
 
-/** One route. Protected routes need the bearer token or a panel session. */
+/**
+ * One route. A route is an admin route, which needs the bearer token or an admin session, unless
+ * it says otherwise: `public` needs nothing, `member` needs a session of any tier and gets the
+ * logged-in person as `c.get("member")`.
+ */
 export interface Route {
   method: Method;
   path: string;
   handler: Handler;
   public?: boolean;
+  member?: boolean;
 }
 
 /** A JSON response (`axum::Json`). */

@@ -16,7 +16,13 @@ import {
   timestampMs,
   type VoiceParticipant,
 } from "@miyoria/types";
-import type { LatencyStats, VoiceState } from "./types.js";
+import type {
+  E2eSegmentName,
+  E2eStats,
+  LatencyStats,
+  VoiceE2eLatency,
+  VoiceState,
+} from "./types.js";
 
 /** Topics the monitor follows. */
 export const MONITOR_TOPICS: readonly string[] = ["voice.*", "agent.turn.started"];
@@ -34,10 +40,25 @@ class Samples {
     while (this.#items.length > MAX_SAMPLES) this.#items.shift();
   }
 
-  stats(now: number): LatencyStats {
+  /** The sorted values still inside the window. */
+  #window(now: number): number[] {
     const cutoff = now - WINDOW_MS;
     while (this.#items.length > 0 && (this.#items[0]?.at ?? 0) < cutoff) this.#items.shift();
-    const values = this.#items.map((s) => s.ms).sort((a, b) => a - b);
+    return this.#items.map((s) => s.ms).sort((a, b) => a - b);
+  }
+
+  /** p50 / p90, for the end-to-end series. */
+  e2e(now: number): E2eStats {
+    const values = this.#window(now);
+    return {
+      p50_ms: percentile(values, 0.5),
+      p90_ms: percentile(values, 0.9),
+      samples: values.length,
+    };
+  }
+
+  stats(now: number): LatencyStats {
+    const values = this.#window(now);
     return {
       p50_ms: percentile(values, 0.5),
       p95_ms: percentile(values, 0.95),
@@ -53,6 +74,51 @@ export function percentile(sorted: readonly number[], p: number): number | null 
   return sorted[Math.min(Math.max(rank, 1), sorted.length) - 1] ?? null;
 }
 
+const E2E_SEGMENTS: readonly E2eSegmentName[] = [
+  "endpoint",
+  "asr",
+  "llm_first",
+  "tts_queue",
+  "tts_first",
+  "playback",
+];
+
+/** `speech_end → first_audio_played` and its segments (`voice.latency`, stage `e2e`). */
+class E2eSeries {
+  readonly total = new Samples();
+  readonly segments = new Map<E2eSegmentName, Samples>(E2E_SEGMENTS.map((s) => [s, new Samples()]));
+  /** Every measurement in the window, with why it is incomplete (`null`: it is complete). */
+  readonly #outcomes: Array<{ at: number; reason: string | null }> = [];
+
+  push(at: number, complete: boolean, reason: string | null, total: number | null): void {
+    this.#outcomes.push({ at, reason: complete ? null : (reason ?? "unknown") });
+    while (this.#outcomes.length > MAX_SAMPLES) this.#outcomes.shift();
+    if (complete && total !== null) this.total.push(at, total);
+  }
+
+  stats(now: number): VoiceE2eLatency {
+    const cutoff = now - WINDOW_MS;
+    while (this.#outcomes.length > 0 && (this.#outcomes[0]?.at ?? 0) < cutoff) {
+      this.#outcomes.shift();
+    }
+    const byReason: Record<string, number> = {};
+    let complete = 0;
+    for (const o of this.#outcomes) {
+      if (o.reason === null) complete += 1;
+      else byReason[o.reason] = (byReason[o.reason] ?? 0) + 1;
+    }
+    const segments = {} as Record<E2eSegmentName, E2eStats>;
+    for (const name of E2E_SEGMENTS) segments[name] = this.segments.get(name)?.e2e(now) as E2eStats;
+    return {
+      total: this.total.e2e(now),
+      segments,
+      complete,
+      incomplete: this.#outcomes.length - complete,
+      incomplete_by_reason: byReason,
+    };
+  }
+}
+
 interface Session {
   context: ContextKey;
   participants: VoiceParticipant[];
@@ -62,6 +128,7 @@ interface Session {
   asr: Samples;
   llm: Samples;
   tts: Samples;
+  e2e: E2eSeries;
 }
 
 function newSession(context: ContextKey, joinedAt: Timestamp): Session {
@@ -74,6 +141,7 @@ function newSession(context: ContextKey, joinedAt: Timestamp): Session {
     asr: new Samples(),
     llm: new Samples(),
     tts: new Samples(),
+    e2e: new E2eSeries(),
   };
 }
 
@@ -197,6 +265,22 @@ export class Monitor {
         if (v !== null) session.llm.push(atMs, v);
         break;
       }
+      case "e2e": {
+        const segments = payload.segments;
+        const complete = payload.complete === true;
+        const reason = typeof payload.reason === "string" ? payload.reason : null;
+        session.e2e.push(atMs, complete, reason, ms("total_ms"));
+        // Only a complete measurement feeds the percentiles: a failed one is a count, not a time.
+        if (complete && isJsonObject(segments)) {
+          for (const name of E2E_SEGMENTS) {
+            const v = segments[name];
+            if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+              session.e2e.segments.get(name)?.push(atMs, Math.trunc(Math.min(v, U32_MAX)));
+            }
+          }
+        }
+        break;
+      }
       default:
         break;
     }
@@ -215,6 +299,7 @@ export class Monitor {
           asr: s.asr.stats(now),
           llm_first_token: s.llm.stats(now),
           tts_first_audio: s.tts.stats(now),
+          e2e: s.e2e.stats(now),
         },
         last_turn: s.lastTurn,
       })),

@@ -43,6 +43,21 @@ export class PersonaHandle {
     return this.#profile.personaPrompt();
   }
 
+  /**
+   * The persona sections only (character core, speaking style): the fixed system part of her
+   * chat prompt. The example dialogues are data (`examples`), not rules.
+   */
+  corePrompt(): string {
+    return [this.#profile.ownIdentity(), ...this.#profile.sections.map((s) => s.body.trim())]
+      .filter((b) => b !== "")
+      .join("\n\n");
+  }
+
+  /** The profile's example dialogues (`persona/examples/*.md`). */
+  examples(): string[] {
+    return [...this.#profile.examples];
+  }
+
   displayName(): string {
     return this.#profile.displayName;
   }

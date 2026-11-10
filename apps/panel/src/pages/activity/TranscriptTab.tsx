@@ -29,18 +29,18 @@ export function TranscriptTab() {
   const { events } = useEvents();
   const lines = useMemo(() => transcriptOf(events), [events]);
   return (
-    <Card className="overflow-hidden">
+    <Card>
       {lines.length === 0 ? (
         <EmptyLine>還沒有語音轉錄</EmptyLine>
       ) : (
         <ul
-          className="max-h-[calc(100dvh-14rem)] divide-y overflow-y-auto"
+          className="max-h-[calc(100dvh-14rem)] divide-y divide-line-soft overflow-y-auto"
           aria-label="即時轉錄"
           aria-live="polite"
           aria-relevant="additions"
         >
           {lines.map(({ env, utterance: u, self }) => (
-            <li key={env.id} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 px-4 py-3">
+            <li key={env.id} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 py-2.5">
               <time dateTime={env.ts} className="pt-0.5 font-mono text-xs text-muted-foreground tabular-nums">
                 {fmtTime(env.ts)}
               </time>
@@ -49,7 +49,7 @@ export function TranscriptTab() {
                   {u ? (
                     <span className="font-medium">{u.speaker.display_name}</span>
                   ) : (
-                    <span className="font-medium text-[oklch(0.82_0.1_267)]">她</span>
+                    <span className="font-medium text-primary">她</span>
                   )}
                   {u?.emotion && <Badge variant="outline">{u.emotion}</Badge>}
                   {u && <span className="font-mono text-xs text-muted-foreground">ASR {u.asr_ms} ms</span>}

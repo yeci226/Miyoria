@@ -69,6 +69,8 @@ export interface RequestOptions {
   query?: Query;
   body?: unknown;
   signal?: AbortSignal;
+  /** Extra request headers (e.g. `Idempotency-Key`). */
+  headers?: Record<string, string>;
   /** Skip the bearer token (only `/api/health` is public). */
   public?: boolean;
 }
@@ -150,7 +152,7 @@ export class ApiClient {
     const hasBody = opts.body !== undefined;
     const init: RequestInit = {
       method,
-      headers: this.headers(hasBody ? { "Content-Type": "application/json" } : undefined, opts.public),
+      headers: this.headers({ ...(hasBody ? { "Content-Type": "application/json" } : {}), ...opts.headers }, opts.public),
       body: hasBody ? JSON.stringify(opts.body) : undefined,
       signal: opts.signal,
       credentials: "same-origin",

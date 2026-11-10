@@ -46,6 +46,8 @@ export {
   extensionModuleId,
   gameToolAllowed,
   HOST_VERSION,
+  RESERVED_PREFIXES,
+  reservedTopic,
   specEnv,
 } from "./extension.js";
 export {
@@ -87,6 +89,8 @@ export {
   CommandSpecSchema,
   type Contributions,
   ContributionsSchema,
+  type ExecutorDecl,
+  ExecutorDeclSchema,
   type ExtensionInfo,
   type HostInfo,
   type InitializeParams,
@@ -107,6 +111,7 @@ export {
   toolResultText,
 } from "./proxy.js";
 export {
+  CANCEL_METHOD,
   CLOSED,
   CONFLICT,
   encodeFrame,
@@ -126,4 +131,11 @@ export {
   UNAVAILABLE,
 } from "./rpc.js";
 export { ProfileIdKey } from "./services.js";
+export {
+  callFailureCode,
+  ProxyExecutor,
+  type ProxyExecutorOptions,
+  TaskCallError,
+  TaskExecutorRegistry,
+} from "./tasks.js";
 export { SKIP_DIRS, type Snapshot, sameSnapshot, snapshot, watchRoots } from "./watch.js";

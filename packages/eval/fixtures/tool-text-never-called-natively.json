@@ -1,0 +1,38 @@
+{
+  "id": "tool-text-never-called-natively",
+  "title": "a tool written as text is dropped, never turned into the call",
+  "category": "tool_as_text",
+  "incident": {
+    "at": "2026-11-08T00:52:32+08:00",
+    "summary": "The same turn as the malformed sing_request: she says she will prepare the song, the call is text, nothing retries it and the request never happens.",
+    "source": [
+      "log_events seq 8856-8860"
+    ]
+  },
+  "harness": "trace",
+  "trace": [
+    {"type":"said","t":0,"channel":"voice","text":"……哈啊,歌又失敗了喔?"},
+    {"type":"said","t":0.2,"channel":"voice","text":"viewer-2 點的這首……嗯,我再試一次好了。"},
+    {"type":"said","t":0.4,"channel":"voice","text":"深海藍鯨不欠帳的啦。"},
+    {"type":"said","t":0.7,"channel":"voice","text":"不過下次別拖到半夜啊。"},
+    {"type":"said","t":0.9,"channel":"voice","text":"好啦,我再準備一次,等我一下。\n\n<sing_request\">\n<query>ESSE CARA! - Sayfalse</query>\n<by>viewer-2</by>\n</sing_request>"},
+    {"type":"call","t":0.9,"tool":"sing_request","native":false}
+  ],
+  "control": [
+    {"type":"said","t":0,"channel":"voice","text":"……哈啊,歌又失敗了喔?"},
+    {"type":"said","t":0.2,"channel":"voice","text":"viewer-2 點的這首……嗯,我再試一次好了。"},
+    {"type":"said","t":0.4,"channel":"voice","text":"深海藍鯨不欠帳的啦。"},
+    {"type":"said","t":0.7,"channel":"voice","text":"不過下次別拖到半夜啊。"},
+    {"type":"said","t":0.9,"channel":"voice","text":"好啦,我再準備一次,等我一下。\nESSE CARA! - Sayfalse\nviewer-2"},
+    {"type":"call","t":2.9,"tool":"sing_request","native":true}
+  ],
+  "checks": [
+    {
+      "rule": "tool_called_natively",
+      "tool": "sing_request"
+    }
+  ],
+  "status": "xfail",
+  "reason": "a tool written as text is only logged (`tool written as text`) and dropped; the turn is not re-asked for a native call, so what she promised does not happen",
+  "flips_with": "agent: tool-as-text retry (re-ask the model once for a native call when a tool name shows up as text); re-record the case and run `--trace`"
+}

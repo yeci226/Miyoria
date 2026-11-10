@@ -11,9 +11,10 @@ import {
   Supervisor,
 } from "@miyoria/kernel";
 import {
+  type ChatProvider,
+  type ChatRequest,
   LlmRouter,
   LlmRouterKey,
-  type MockProvider,
   type ModelRef,
   parseModelRef,
 } from "@miyoria/llm";
@@ -22,6 +23,7 @@ import { type Social, SocialKey } from "@miyoria/social";
 import { MemorySettingsStore, SettingsStoreKey } from "@miyoria/store";
 import {
   type AccountRef,
+  ArbiterKey,
   type Attitude,
   type ContextKey,
   type Envelope,
@@ -45,6 +47,7 @@ import {
 import { vi } from "vitest";
 import { z } from "zod";
 import { MindModule } from "../src/index.js";
+import type { FakeArbiter } from "./fakes.js";
 
 export const GUILD = "g1";
 export const TEXT: ContextKey = {
@@ -77,6 +80,8 @@ class Stub implements Module {
 
 export class FakeWorld implements WorldState {
   voiceMembers: { account: AccountRef; name: string; streaming?: boolean }[] = [];
+  /** Accounts online (Owen by default). */
+  online = new Set<string>([OWEN.id]);
   herVoice: ContextKey | null = null;
   /** Conversation in the voice channel (from utterances). */
   voiceActivity: VoiceActivity | null = null;
@@ -96,7 +101,10 @@ export class FakeWorld implements WorldState {
         scene: null,
         game: this.game,
       },
-      people: [],
+      people: [...this.online].flatMap((id) => {
+        const p = this.person({ platform: "discord", id });
+        return p ? [p] : [];
+      }),
       voice_channels:
         this.voiceMembers.length === 0
           ? []
@@ -140,7 +148,7 @@ export class FakeWorld implements WorldState {
       account,
       person: "person-owen",
       display_name: "Owen",
-      status: "online",
+      status: this.online.has(account.id) ? "online" : "offline",
       activities: [
         {
           type: "playing",
@@ -212,10 +220,13 @@ export class FakeIntents implements IntentSink {
   }
 }
 
+/** A provider that records its requests (`MockProvider`, `ScriptedProvider`). */
+export type TestProvider = ChatProvider & { requests(): ChatRequest[] };
+
 export interface Rig {
   sup: Supervisor;
   store: MemorySettingsStore;
-  provider: MockProvider;
+  provider: TestProvider;
   registry: ActuatorRegistry;
   world: FakeWorld;
   social: FakeSocial;
@@ -234,8 +245,8 @@ export interface RigOptions {
   withIntents?: boolean;
   /** Provides more app services before start. */
   extra?: (sup: Supervisor) => void;
-  /** `[llm.thinking]` of the router (default: none, so no purpose thinks). */
-  thinking?: Record<string, boolean>;
+  /** An Arbiter to provide (none: the agent's intent sink is the fallback). */
+  arbiter?: FakeArbiter;
 }
 
 const running: Supervisor[] = [];
@@ -244,7 +255,7 @@ export async function stopRigs(): Promise<void> {
   for (const s of running.splice(0)) await s.stopAll();
 }
 
-export async function rig(provider: MockProvider, options: RigOptions = {}): Promise<Rig> {
+export async function rig(provider: TestProvider, options: RigOptions = {}): Promise<Rig> {
   const sup = new Supervisor();
   running.push(sup);
   const store = options.store ?? new MemorySettingsStore();
@@ -269,15 +280,14 @@ export async function rig(provider: MockProvider, options: RigOptions = {}): Pro
     );
   }
   sup.services.provide("app", ActuatorRegistryKey, registry);
+  if (options.arbiter) sup.services.provide("app", ArbiterKey, options.arbiter);
   options.extra?.(sup);
   const world = new FakeWorld();
   const social = new FakeSocial();
   const intents = new FakeIntents();
   const purposes = new Map<string, ModelRef[]>([["chat", [parseModelRef("p:chat")]]]);
   if (!options.chatOnly) purposes.set("mind", [parseModelRef("p:mind")]);
-  const router = new LlmRouter(new Map([["p", provider]]), purposes, {
-    thinking: new Map(Object.entries(options.thinking ?? {})),
-  });
+  const router = new LlmRouter(new Map([["p", provider]]), purposes);
   await sup.register(new Stub("llm", (ctx) => ctx.provide(LlmRouterKey, router)), null, true);
   await sup.register(new Stub("world", (ctx) => ctx.provide(WorldStateKey, world)), null, true);
   await sup.register(
@@ -295,7 +305,8 @@ export async function rig(provider: MockProvider, options: RigOptions = {}): Pro
   const events = sup.bus.subscribe("mind.*");
   await sup.register(
     new MindModule("p", { name: "DeepSeek-chan", persona: () => "你是住在深海的鯨魚娘。" }),
-    options.config ?? null,
+    // Her day plan is past by default (20:00 local in most tests): tests ask for it.
+    { daily_hour: 23, ...((options.config as object | null) ?? {}) } as JsonValue,
     true,
   );
   await sup.startAll();

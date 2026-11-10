@@ -2,8 +2,8 @@
 // / 安靜 / 一般 / 活躍 (plus the old 每則都回). A level is a ceiling, not a setting of her
 // personality: she still chooses how talkative she is there (`SelfState` talkativeness, the
 // `channel_activeness` tool), but whatever she chooses is capped by the level, and the level
-// also bounds her own conversation starts there (mind `chat.start` and other intents she opens
-// there, initiative turns). All numbers are here.
+// also bounds her own conversation starts there (`startGapMs`, applied by the Arbiter as one of
+// its rules; without it by the agent). All numbers are here.
 //
 // Voice contexts have no ceiling: the voice numbers (`[modules.agent.voice]`) apply as before.
 
@@ -24,16 +24,11 @@ export interface Ceiling {
   defaultTalk: number;
   /** Ambient turns scoring below this are ignored (on top of `gray_low`). */
   minScore: number;
-  /**
-   * Floor of the ambient cooldown after she spoke; not applied to a follow-up to what she just
-   * said (the normal cooldown still is).
-   */
-  minCooldownMs: number;
   /** Upper bound of her share of recent messages for ambient turns (with the profile's). */
   maxShare: number;
   /**
-   * At least this long between two conversations she starts herself here (0: only the mind's
-   * and initiative's own limits).
+   * At least this long between two conversations she starts herself here (0: none; the
+   * Arbiter applies it as one of its rules).
    */
   startGapMs: number;
 }
@@ -45,7 +40,6 @@ const QUIET: Ceiling = {
   defaultTalk: 0.25,
   // A plain question in a small group (0.3) is not enough; a topic of hers or a follow-up is.
   minScore: 0.45,
-  minCooldownMs: 10 * MINUTE_MS,
   maxShare: 0.15,
   startGapMs: 3 * 60 * MINUTE_MS,
 };
@@ -56,7 +50,6 @@ const NORMAL: Ceiling = {
   maxTalk: 0.75,
   defaultTalk: 0.5,
   minScore: 0,
-  minCooldownMs: 0,
   maxShare: 1,
   startGapMs: 0,
 };
@@ -67,7 +60,6 @@ const LIVELY: Ceiling = {
   maxTalk: 1,
   defaultTalk: 0.65,
   minScore: 0,
-  minCooldownMs: 0,
   maxShare: 1,
   startGapMs: 0,
 };
@@ -102,10 +94,10 @@ export function cappedTalk(ceiling: Ceiling, level: number | null): number {
 
 /**
  * Initiative reasons that are not her starting a conversation: the game director's live
- * commentary, the result of something she was asked to do, and what she says about a stream she
- * is watching (paced by the watch's own `speakGate`).
+ * commentary, the result of something she was asked to do, task notices, and what she says about
+ * a stream she is watching (paced by the watch's own `speakGate`).
  */
-export const UNCAPPED_INITIATIVES: readonly string[] = ["game", "action_result", "watch"];
+export const UNCAPPED_INITIATIVES: readonly string[] = ["game", "action_result", "notice", "watch"];
 
 /** The level in words, for notices, the panel and her prompt. */
 export function modeLabel(mode: ChannelMode): string {

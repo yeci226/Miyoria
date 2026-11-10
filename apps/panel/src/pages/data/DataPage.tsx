@@ -114,14 +114,13 @@ function DeleteDialog({
       open={target !== null}
       title={target ? `刪除「${CATEGORY_LABEL[target.id]}」` : ""}
       confirmLabel="刪除"
-      destructive
       busy={wipe.isPending}
       confirmDisabled={needsTyped && typed.trim() !== inventory.profile}
       onConfirm={confirm}
       onClose={close}
     >
       <div className="flex flex-col gap-4 text-sm">
-        <ul className="divide-y rounded-md border" aria-label="會刪除的資料">
+        <ul className="divide-y divide-line-soft rounded-md border" aria-label="會刪除的資料">
           {along.map((c) => (
             <li key={c.id} className="flex items-center justify-between gap-3 px-3 py-2">
               <span className="text-foreground">{CATEGORY_LABEL[c.id]}</span>
@@ -293,7 +292,6 @@ function ResetDialog({ open, profile, onClose }: { open: boolean; profile: strin
       open={open}
       title="回到初始狀態"
       confirmLabel="回到初始狀態"
-      destructive
       busy={reset.isPending}
       confirmDisabled={backup === null || typed.trim() !== profile}
       onConfirm={confirm}
@@ -308,7 +306,7 @@ function ResetDialog({ open, profile, onClose }: { open: boolean; profile: strin
             <span className="font-medium text-foreground">1. 下載完整備份</span>
             {backup ? (
               <p className="flex min-w-0 items-center gap-2 text-foreground">
-                <Check className="size-4 shrink-0 text-success" aria-hidden />
+                <Check className="size-4 shrink-0 text-foreground" aria-hidden />
                 <span className="sr-only">已下載</span>
                 <span className="truncate font-mono text-xs">{backup.name}</span>
               </p>
@@ -332,13 +330,13 @@ function ResetDialog({ open, profile, onClose }: { open: boolean; profile: strin
 function DangerZone({ profile }: { profile: string }) {
   const [open, setOpen] = useState(false);
   return (
-    <Card className="border-destructive/35">
-      <CardHeader className="border-destructive/25">
+    <Card>
+      <CardHeader>
         <CardTitle>危險區</CardTitle>
       </CardHeader>
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-4">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3 py-3">
         <p className="min-w-0 flex-1 text-sm">備份後刪除她的所有資料，回到剛安裝的狀態。</p>
-        <Button variant="destructive" writes onClick={() => setOpen(true)}>
+        <Button writes onClick={() => setOpen(true)}>
           回到初始狀態…
         </Button>
       </div>

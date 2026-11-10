@@ -22,6 +22,8 @@ export const EmotionConfigSchema = z.object({
   sustain: z.number().min(0).max(1).default(0.65),
   /** Decay time constant while held (ms). */
   decay_ms: z.number().nonnegative().default(3_000),
+  /** How far her resting face goes toward what she shows: her feeling's strength times this. */
+  resting_strength: z.number().min(0).max(1).default(0.6),
 });
 export type EmotionConfig = z.output<typeof EmotionConfigSchema>;
 

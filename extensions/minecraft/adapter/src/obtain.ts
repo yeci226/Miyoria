@@ -3,9 +3,14 @@
 // step, wait for the event that ends it, plan again. A failed step is tried once more after
 // re-planning; the second failure ends the plan with the reason. A reflex that interrupts a step
 // (lava, a fight...) is waited out and the step planned again, without counting as a failure.
+//
+// Steer (v3 §10.6): the top of each round, before it looks at the inventory and plans, is the
+// safe point between two steps. A queued change of target (`item`, `count`) is read there and
+// nowhere else, never in the middle of a mining or crafting job, and the next plan starts from
+// whatever is already in her inventory, which is the progress that is kept.
 
-import type { GameEvent } from "@miyoria/sdk";
-import { errorText } from "./actions.js";
+import type { GameEvent, TaskFailureCode } from "@miyoria/sdk";
+import { errorText, failureCode } from "./actions.js";
 import { BridgeError, type BridgeEvent } from "./bridge.js";
 import { zh } from "./names.js";
 import {
@@ -17,6 +22,7 @@ import {
   describeStep,
   itemName,
   members,
+  knows,
   normalizeItem,
   plan,
   planksOf,
@@ -28,6 +34,42 @@ export interface RunnerHost {
   request(type: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>;
   observe(): Promise<Snapshot>;
   emit(event: GameEvent): void;
+  /** A queued steer was applied at a step boundary, or the plan ended before it could be. */
+  steered?(steer: string, outcome: "applied" | "too_late", detail: string): void;
+}
+
+/** What a steer of an `obtain` plan may change. */
+export interface PlanPatch {
+  item?: string;
+  count?: number;
+}
+
+/**
+ * The patch of a steer, checked: only `item` (something the planner knows how to get) and
+ * `count` (1 to 64) can change in a running plan. The string is the reason it was refused.
+ */
+export function parsePlanPatch(patch: Record<string, unknown>): PlanPatch | string {
+  const out: PlanPatch = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === "item") {
+      const item = normalizeItem(typeof value === "string" ? value : "");
+      if (!/^#?[a-z0-9_]+$/.test(item)) return "item 要是物品 id";
+      if (!knows(item)) return `不知道怎麼取得${itemName(item)}(只會砍樹、挖礦、合成和用熔爐燒的東西)`;
+      out.item = item;
+    } else if (key === "count") {
+      if (typeof value !== "number" || !Number.isFinite(value)) return "count 要是數字";
+      out.count = Math.min(64, Math.max(1, Math.round(value)));
+    } else {
+      return `取得物品只能改 item 和 count,不能改 ${key}`;
+    }
+  }
+  return out.item === undefined && out.count === undefined ? "調整是空的" : out;
+}
+
+/** A change of target waiting for the next step boundary. */
+interface QueuedSteer {
+  id: string;
+  patch: PlanPatch;
 }
 
 export interface RunnerOptions {
@@ -50,6 +92,8 @@ export interface RunnerResult {
   ok: boolean;
   message: string;
   cancelled?: boolean;
+  /** Why it failed (`ok: false`), as a task failure code. */
+  code?: TaskFailureCode;
 }
 
 /** Events that end the runner's own steps; the adapter does not forward them while a plan runs. */
@@ -64,7 +108,7 @@ export const STEP_EVENTS = new Set([
 ]);
 
 type Wake = BridgeEvent | "timeout" | "cancelled" | "reflex";
-type Outcome = "done" | "progress" | "interrupted" | { fail: string };
+type Outcome = "done" | "progress" | "interrupted" | { fail: string; code: TaskFailureCode };
 
 interface Waiter {
   names: Set<string>;
@@ -90,19 +134,25 @@ function mostOf(inv: Inventory, group: string): string | undefined {
 }
 
 export class ObtainRunner {
-  readonly item: string;
-  readonly count: number;
+  #item: string;
+  #count: number;
   readonly #host: RunnerHost;
   readonly #o: Required<RunnerOptions>;
   #cancelled = false;
+  /** Changes of target waiting for the next step boundary, oldest first. */
+  #steers: QueuedSteer[] = [];
+  /** `run` has ended: a steer now comes too late. */
+  #over = false;
+  /** Failed steps by name (a step is tried once more after re-planning). */
+  readonly #failures = new Map<string, number>();
   #waiters = new Set<Waiter>();
   #plan: Step[] = [];
   #done = 0;
 
   constructor(host: RunnerHost, target: string, count: number, opts: RunnerOptions = {}) {
     this.#host = host;
-    this.item = normalizeItem(target);
-    this.count = count;
+    this.#item = normalizeItem(target);
+    this.#count = count;
     this.#o = {
       mineTimeoutMs: opts.mineTimeoutMs ?? 240_000,
       jobTimeoutMs: opts.jobTimeoutMs ?? 45_000,
@@ -112,6 +162,42 @@ export class ObtainRunner {
       reflexWaitMs: opts.reflexWaitMs ?? 60_000,
       maxSteps: opts.maxSteps ?? 40,
     };
+  }
+
+  get item(): string {
+    return this.#item;
+  }
+
+  get count(): number {
+    return this.#count;
+  }
+
+  /**
+   * Queues a change of target (`patch` from `parsePlanPatch`) for the next step boundary.
+   * `too_late`: the plan already ended. Nothing runs here: the plan reads it between steps.
+   */
+  steer(id: string, patch: PlanPatch): "queued" | "too_late" {
+    if (this.#over || this.#cancelled) return "too_late";
+    this.#steers.push({ id, patch });
+    return "queued";
+  }
+
+  /** Reads the queued changes: the one place a running plan's target changes. */
+  #applySteers(): void {
+    const queued = this.#steers.splice(0);
+    for (const { id, patch } of queued) {
+      if (patch.item !== undefined) this.#item = patch.item;
+      if (patch.count !== undefined) this.#count = patch.count;
+      // The new target may need steps the old one did not, and a failed step was another plan's.
+      this.#failures.clear();
+      const want = this.#want();
+      this.#event("plan_steered", `改成取得${want}`);
+      this.#host.steered?.(id, "applied", `目標改成${want},已有的東西照算`);
+    }
+  }
+
+  #want(): string {
+    return `${itemName(this.#item)}${this.#count > 1 ? `×${this.#count}` : ""}`;
   }
 
   /** Progress for `observe`. */
@@ -172,15 +258,29 @@ export class ObtainRunner {
   }
 
   #event(type: string, text: string, data: Record<string, unknown> = {}, important = false): void {
-    this.#host.emit({ type, data: { target: this.item, count: this.count, ...data, text }, important });
+    this.#host.emit({ type, data: { target: this.#item, count: this.#count, ...data, text }, important });
   }
 
   async run(): Promise<RunnerResult> {
-    const want = `${itemName(this.item)}${this.count > 1 ? `×${this.count}` : ""}`;
-    const failures = new Map<string, number>();
+    try {
+      return await this.#run();
+    } finally {
+      this.#over = true;
+      // A change that never reached a step boundary is too late: the plan is over.
+      for (const { id } of this.#steers.splice(0)) {
+        this.#host.steered?.(id, "too_late", "取得結束了,調整沒有機會生效");
+      }
+    }
+  }
+
+  async #run(): Promise<RunnerResult> {
+    const failures = this.#failures;
     try {
       for (let i = 0; i < this.#o.maxSteps; i++) {
         if (this.#cancelled) return { ok: false, message: "被叫停了", cancelled: true };
+        // The safe point: between two steps, nothing is running.
+        this.#applySteers();
+        const want = this.#want();
         const snap = await this.#host.observe();
         const inv = snap.inventory ?? {};
         if (countOf(inv, this.item) >= this.count) {
@@ -205,13 +305,15 @@ export class ObtainRunner {
           const key = describeStep(step);
           const n = (failures.get(key) ?? 0) + 1;
           failures.set(key, n);
-          if (n >= 2) return { ok: false, message: `取得${want}失敗,卡在「${key}」:${outcome.fail}` };
+          if (n >= 2) return { ok: false, message: `取得${want}失敗,卡在「${key}」:${outcome.fail}`, code: outcome.code };
         }
       }
-      return { ok: false, message: `取得${want}的步驟太多了,停下來` };
+      return { ok: false, message: `取得${this.#want()}的步驟太多了,停下來`, code: "internal" };
     } catch (error) {
-      if (error instanceof PlanError) return { ok: false, message: error.message };
-      if (error instanceof BridgeError) return { ok: false, message: errorText(error.code, error.message) };
+      if (error instanceof PlanError) return { ok: false, message: error.message, code: "precondition" };
+      if (error instanceof BridgeError) {
+        return { ok: false, message: errorText(error.code, error.message), code: failureCode(error.code) };
+      }
       throw error;
     }
   }
@@ -261,7 +363,7 @@ export class ObtainRunner {
           return "done";
       }
     } catch (error) {
-      if (error instanceof BridgeError) return { fail: errorText(error.code, error.message) };
+      if (error instanceof BridgeError) return { fail: errorText(error.code, error.message), code: failureCode(error.code) };
       throw error;
     }
   }
@@ -278,23 +380,26 @@ export class ObtainRunner {
       if (error.code === "not_visible") {
         return (await this.#explore(step.blocks))
           ? "progress"
-          : { fail: `附近看不到${step.blocks.map(zh).join("、")},探索了 ${Math.round(this.#o.exploreMs / 1000)} 秒也沒找到(去洞穴、山壁或地表其他地方找找)` };
+          : {
+              fail: `附近看不到${step.blocks.map(zh).join("、")},探索了 ${Math.round(this.#o.exploreMs / 1000)} 秒也沒找到(去洞穴、山壁或地表其他地方找找)`,
+              code: "not_found",
+            };
       }
       if (error.code === "too_far") {
         const block = /nearest (\S+) in sight/.exec(error.message)?.[1];
-        return block && (await this.#goto(block)) ? "progress" : { fail: errorText(error.code, error.message) };
+        return block && (await this.#goto(block)) ? "progress" : { fail: errorText(error.code, error.message), code: "unreachable" };
       }
       throw error;
     }
     if (wake === "reflex") return "interrupted";
     if (wake === "timeout") {
       await this.#host.request("stop").catch(() => undefined);
-      return { fail: `挖${itemName(step.item)}挖太久了` };
+      return { fail: `挖${itemName(step.item)}挖太久了`, code: "timeout" };
     }
     if (wake === "cancelled") return "interrupted";
     const after = countOf((await this.#host.observe()).inventory ?? {}, step.item);
     if (after >= before + step.count) return "done";
-    return after > before ? "progress" : { fail: `沒挖到${itemName(step.item)}` };
+    return after > before ? "progress" : { fail: `沒挖到${itemName(step.item)}`, code: "not_found" };
   }
 
   /** Explores until one of `blocks` comes into sight; false when the time runs out. */
@@ -337,7 +442,7 @@ export class ObtainRunner {
     const inv = snap.inventory ?? {};
     const log = mostOf(inv, "#logs");
     const item = step.item === "#planks" ? (log ? planksOf(log) : undefined) : step.item;
-    if (!item) return { fail: "沒有原木可以做木材" };
+    if (!item) return { fail: "沒有原木可以做木材", code: "precondition" };
     const count = Math.min(64, step.count);
     for (let tries = 0; tries < 3; tries++) {
       let wake: Wake;
@@ -348,24 +453,24 @@ export class ObtainRunner {
         throw error;
       }
       if (wake === "reflex" || wake === "cancelled") return "interrupted";
-      if (wake === "timeout") return { fail: `做${itemName(step.item)}沒有回應` };
-      if (wake.name === "craft_failed") return { fail: String(wake.data.error ?? "合成失敗") };
+      if (wake === "timeout") return { fail: `做${itemName(step.item)}沒有回應`, code: "timeout" };
+      if (wake.name === "craft_failed") return { fail: String(wake.data.error ?? "合成失敗"), code: "precondition" };
       const made = typeof wake.data.crafted === "number" ? wake.data.crafted : count;
-      if (made <= 0) return { fail: "材料不夠" };
+      if (made <= 0) return { fail: "材料不夠", code: "precondition" };
       // Fewer than asked (one kind of log ran out, a stack over 64): the next plan does the rest.
       return made >= step.count ? "done" : "progress";
     }
-    return { fail: `走不到工作台旁邊做${itemName(step.item)}` };
+    return { fail: `走不到工作台旁邊做${itemName(step.item)}`, code: "unreachable" };
   }
 
   async #smelt(step: Extract<Step, { kind: "smelt" }>, snap: Snapshot): Promise<Outcome> {
     const inv = snap.inventory ?? {};
     const input = step.input.startsWith("#") ? mostOf(inv, step.input) : step.input;
-    if (!input) return { fail: `沒有${itemName(step.input)}可以燒` };
+    if (!input) return { fail: `沒有${itemName(step.input)}可以燒`, code: "precondition" };
     const target = countOf(inv, step.item) + step.count;
     let ready = step.count * 10;
     for (let tries = 0; ; tries++) {
-      if (tries >= 3) return { fail: "一直放不進熔爐" };
+      if (tries >= 3) return { fail: "一直放不進熔爐", code: "internal" };
       let wake: Wake;
       try {
         wake = await this.#job(
@@ -379,8 +484,8 @@ export class ObtainRunner {
         throw error;
       }
       if (wake === "reflex" || wake === "cancelled") return "interrupted";
-      if (wake === "timeout") return { fail: "熔爐沒有回應" };
-      if (wake.name === "smelt_failed") return { fail: String(wake.data.error ?? "熔爐出錯") };
+      if (wake === "timeout") return { fail: "熔爐沒有回應", code: "timeout" };
+      if (wake.name === "smelt_failed") return { fail: String(wake.data.error ?? "熔爐出錯"), code: "precondition" };
       if (typeof wake.data.ready_in_secs === "number") ready = wake.data.ready_in_secs;
       break;
     }
@@ -395,10 +500,12 @@ export class ObtainRunner {
         throw error;
       }
       if (wake === "reflex" || wake === "cancelled") return "interrupted";
-      if (typeof wake === "object" && wake.name === "smelt_failed") return { fail: String(wake.data.error ?? "熔爐出錯") };
+      if (typeof wake === "object" && wake.name === "smelt_failed") {
+        return { fail: String(wake.data.error ?? "熔爐出錯"), code: "precondition" };
+      }
       if (countOf((await this.#host.observe()).inventory ?? {}, step.item) >= target) return "done";
       ready = 10;
     }
-    return { fail: `${itemName(step.item)}一直燒不好` };
+    return { fail: `${itemName(step.item)}一直燒不好`, code: "timeout" };
   }
 }

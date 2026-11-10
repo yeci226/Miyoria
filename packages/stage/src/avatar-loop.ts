@@ -20,7 +20,7 @@ import {
 } from "./lipsync.js";
 import { type GazeConfig, IdleMotion, MOTION_PARAMS, type MotionConfig } from "./motion.js";
 import { clampParam, type EmotionConfig, PoseBlender, paramRange } from "./pose.js";
-import type { GazeTarget } from "./protocol.js";
+import type { GazeTarget, GiftExpression } from "./protocol.js";
 import { Random } from "./random.js";
 import type { VtsClient, VtsConfig } from "./vts.js";
 import type { Watch } from "./watch.js";
@@ -72,7 +72,14 @@ export class AvatarLoop {
   #cues: Cue[] = [];
   #speaking = false;
   #intensity = 1;
+  #resting: { name: string; strength: number } | null = null;
   #known: Set<string> | null = null;
+  /** Expression files (lowercase → as given) her emotions and gestures want on. */
+  #wanted = new Map<string, string>();
+  /** Expression files VTS has on, as far as the loop knows. */
+  #live = new Map<string, string>();
+  /** A gift expression holding her face: nothing else shows an expression until `until`. */
+  #gift: { file: string; until: number } | null = null;
   #levelObserver: ((sample: LevelSample | null) => void) | null = null;
 
   constructor(
@@ -139,6 +146,27 @@ export class AvatarLoop {
     this.#send(this.#gestures.onEmotion(name, strength, now));
   }
 
+  /**
+   * How she looks while no emotion marker is shown: a pose only, weaker than the marker's, with no
+   * accent and no gesture. `neutral` (or a name the avatar does not know) is her plain rest.
+   */
+  resting(name: string, intensity: number): void {
+    const face = name.trim().toLowerCase();
+    const level = Math.min(Math.max(Number.isFinite(intensity) ? intensity : 0, 0), 1);
+    const strength = level * this.#config.emotion.resting_strength;
+    this.#resting = this.#config.avatar.knownEmotions().has(face) ? { name: face, strength } : null;
+    if (this.#emotion.current() !== null) return;
+    const target = this.#poseTarget();
+    this.#poser.set(target.name, target.strength, this.#clock.now());
+  }
+
+  /** What the pose should be now: the marker's emotion, else her resting face. */
+  #poseTarget(): { name: string | null; strength: number } {
+    const name = this.#emotion.current();
+    if (name !== null) return { name, strength: this.#intensity };
+    return this.#resting ?? { name: null, strength: this.#intensity };
+  }
+
   /** She started / stopped speaking a sentence (applied `latency_ms` later). */
   speaking(speaking: boolean): void {
     this.#later((now) => {
@@ -159,6 +187,15 @@ export class AvatarLoop {
   #send(commands: VtsCommand[]): void {
     const fade = this.#config.vts.expression_fade;
     for (const cmd of commands) {
+      if (cmd.type === "expression") {
+        const key = cmd.file.toLowerCase();
+        if (cmd.active) this.#wanted.set(key, cmd.file);
+        else this.#wanted.delete(key);
+        // A gift holds the face: what she wants is remembered and comes back after it.
+        if (this.#gift !== null) continue;
+        if (cmd.active) this.#live.set(key, cmd.file);
+        else this.#live.delete(key);
+      }
       void this.#commands.run(async () => {
         const client = this.#vts.get();
         if (!client || client.isClosed()) return;
@@ -172,8 +209,60 @@ export class AvatarLoop {
     }
   }
 
+  /**
+   * Shows a gift expression for `seconds` (her own expressions are taken off for the time, then
+   * put back). Resolves once it is on; rejects when VTube Studio is not connected or refuses it.
+   * A newer gift replaces the one showing.
+   */
+  async gift(expression: GiftExpression, seconds: number): Promise<void> {
+    const file = this.#config.avatar.giftExpressions.get(expression);
+    if (file === undefined) throw new Error(`no expression file is set for \`${expression}\``);
+    const client = this.#vts.get();
+    if (!client || client.isClosed()) throw new Error("VTube Studio is not connected");
+    const fade = this.#config.vts.expression_fade;
+    const key = file.toLowerCase();
+    const previous = this.#gift;
+    this.#gift = { file, until: this.#clock.now() + seconds * 1000 };
+    try {
+      await this.#commands.run(async () => {
+        for (const [k, f] of [...this.#live]) {
+          if (k === key) continue;
+          await client.setExpression(f, false, fade);
+          this.#live.delete(k);
+        }
+        await client.setExpression(file, true, fade);
+        this.#live.set(key, file);
+      });
+    } catch (error) {
+      this.#gift = previous;
+      if (previous === null) this.#endGift();
+      throw error;
+    }
+  }
+
+  /** Takes the gift expression off and puts back what her emotions and gestures want. */
+  #endGift(): void {
+    this.#gift = null;
+    const out: VtsCommand[] = [];
+    for (const [k, f] of this.#live) {
+      if (!this.#wanted.has(k)) out.push({ type: "expression", file: f, active: false });
+    }
+    for (const [k, f] of this.#wanted) {
+      if (!this.#live.has(k)) out.push({ type: "expression", file: f, active: true });
+    }
+    this.#send(out);
+  }
+
+  #tickGift(now: number): void {
+    if (this.#gift !== null && now >= this.#gift.until) this.#endGift();
+  }
+
   #onClient(client: VtsClient | null): void {
     this.#known = null;
+    // A new connection starts from nothing: no gift, no expression on.
+    this.#gift = null;
+    this.#wanted.clear();
+    this.#live.clear();
     if (!client) return;
     this.#send([...this.#gestures.reset(), ...this.#emotion.rest()]);
     this.#poser.set(null, 0, this.#clock.now());
@@ -228,10 +317,10 @@ export class AvatarLoop {
     const a = c.avatar;
     for (const cue of this.#cues.filter((q) => q.at <= now)) cue.run(now);
     this.#cues = this.#cues.filter((q) => q.at > now);
+    this.#tickGift(now);
     this.#send(this.#emotion.tick(now));
-    if (this.#poser.current() !== this.#emotion.current()) {
-      this.#poser.set(this.#emotion.current(), this.#intensity, now);
-    }
+    const target = this.#poseTarget();
+    if (this.#poser.current() !== target.name) this.#poser.set(target.name, target.strength, now);
     this.#send(this.#gestures.tick(now));
 
     const mouth = this.#mouthFrame(dt, now);
@@ -289,6 +378,8 @@ export class AvatarLoop {
       const now = this.#clock.now();
       const dt = Math.min(Math.max(now - last, 0), 200);
       last = now;
+      // A gift ends on time even while nobody watches.
+      this.#tickGift(now);
       if (!active()) {
         if (!paused) log.info("not streaming; the avatar rests");
         paused = true;

@@ -275,6 +275,304 @@ export interface SessionInfo {
 }
 
 // ---------------------------------------------------------------------------
+// public side (`/api/public/*`, `/api/member/*`)
+// ---------------------------------------------------------------------------
+
+export type PublicState = "singing" | "playing" | "live" | "in_voice" | "idle" | "offline";
+
+/** `GET /api/public/status`. */
+export interface PublicStatus {
+  state: PublicState;
+  live: boolean;
+  in_voice: boolean;
+  game: string | null;
+  today: PublicToday;
+  /** The last 14 local days, oldest first, today last. Missing on an older Core. */
+  days?: PublicDay[];
+}
+
+export interface PublicToday {
+  songs_sung: number;
+  hours_live: number;
+  hours_in_voice: number;
+}
+
+/** One local day, `date` as `YYYY-MM-DD`. */
+export interface PublicDay extends PublicToday {
+  date: string;
+}
+
+export interface PublicSong {
+  title: string | null;
+  artist: string | null;
+  duration_s: number | null;
+}
+
+/** `GET /api/public/songs`. */
+export interface PublicSongs {
+  playing: PublicSong | null;
+  upcoming: (PublicSong & { ready: boolean })[];
+  recent: PublicSong[];
+}
+
+/** `GET /api/member/session`. */
+export interface MemberSession {
+  name: string;
+  avatar_url: string | null;
+}
+
+/** 她眼中的你, in words. All `null` for someone she does not know. */
+export interface MemberCard {
+  call_name: string | null;
+  relationship: string | null;
+  affinity: string | null;
+  trust: string | null;
+  familiarity: string | null;
+  public_feeling: string | null;
+}
+
+export interface MemberSong {
+  title: string;
+  artist: string | null;
+  state: string;
+  requested_at: string;
+}
+
+/** `GET /api/member/me`. */
+/** Their own lines on one local day. */
+export interface MemberDay {
+  date: string;
+  text: number;
+  voice: number;
+}
+
+/** A card she gave someone: what she thought of them then, kept so its code can be checked. */
+export interface IssuedCard {
+  /** `MYR-XXXX-XXXX-XXXX`. */
+  serial: string;
+  issued_at: string;
+  name: string;
+  avatar_url: string | null;
+  /** The nth card this person has been given, from 1. */
+  number: number;
+  call_name: string | null;
+  relationship: string | null;
+  affinity: string | null;
+  trust: string | null;
+  familiarity: string | null;
+  public_feeling: string | null;
+  /** What she wrote for them as she issued it. Missing on an older Core, null when she did not. */
+  line?: string | null;
+  /** The stamp she put on it. Missing on an older Core. */
+  stamp?: string | null;
+  /** Fields she chose to add, at most three. Missing on an older Core. */
+  fields?: { label: string; text: string }[];
+  /** Which picture of her is on it (she picks within her feeling's band). */
+  pose: string;
+  /** The frame they had selected when it was issued; `null` is the plain border. Missing on an older Core. */
+  frame?: string | null;
+  /** A foil finish they bought. Missing on an older Core. */
+  foil?: boolean;
+  /** When a reroll replaced it: the card is void, never a valid one. Missing on an older Core. */
+  voided_at?: string | null;
+}
+
+/** A field on a fortune slip: its name (戀愛, 學業, ...) and what she wrote. */
+export interface FortuneField {
+  label: string;
+  text: string;
+}
+
+/** A fortune slip she wrote for them, one per local day (`GET`/`POST /api/member/fortune`). */
+export interface IssuedFortune {
+  id: string;
+  /** The local day it is for, `YYYY-MM-DD`. */
+  date: string;
+  issued_at: string;
+  rank: "大吉" | "吉" | "中吉" | "小吉" | "末吉" | "凶";
+  /** At most 8 characters. */
+  title: string;
+  /** Four lines of at most 7 characters. */
+  poem: string[];
+  /** At most three. */
+  fields: FortuneField[];
+  /** A personal line, at most 30 characters. */
+  line: string | null;
+}
+
+/** `GET /api/member/fortune`: today's slip or `null`, and the price of one. */
+export interface FortuneToday {
+  fortune: IssuedFortune | null;
+  price: number;
+}
+
+/** `POST /api/member/fortune`: the slip (today's own when one existed: nothing charged then). */
+export interface FortuneDraw {
+  fortune: IssuedFortune;
+  charged: number;
+  balance: number;
+}
+
+// ---------------------------------------------------------------------------
+// the coin economy (`/api/member/wallet` and the spends)
+
+export type FeedItem = "rice" | "big_bowl" | "dessert";
+export type GiftExpression = "heart" | "blush" | "squint";
+export type Hungry = "full" | "ok" | "hungry" | "starving";
+
+export interface EarnLine {
+  reason: "checkin" | "talked" | "voice" | "song" | "her_gift";
+  label: string;
+  amount: number;
+  earned_today: number;
+  cap: number;
+}
+
+export interface ShopItem {
+  id: string;
+  /** `card`, `song`, `stream` and `fortune` are newer: an older Core never sends them. */
+  kind: "feed" | "letter" | "expression" | "frame" | "card" | "song" | "stream" | "fortune";
+  label: string;
+  price: number;
+  available: boolean;
+  why: string | null;
+}
+
+export interface LedgerLine {
+  ts: string;
+  delta: number;
+  label: string;
+}
+
+/** `GET /api/member/wallet`. */
+export interface WalletView {
+  currency: string;
+  balance: number;
+  can_earn: boolean;
+  today_earned: number;
+  checked_in_today: boolean;
+  streak: number;
+  earn: EarnLine[];
+  shop: ShopItem[];
+  frames: { owned: string[]; selected: string | null };
+  /** Words, never the number; `null` for someone she does not know. */
+  hungry: Hungry | null;
+  /** Newest first. */
+  recent: LedgerLine[];
+  /** On the sponsor board. Missing on an older Core. */
+  on_board?: boolean;
+}
+
+/** `POST /api/member/checkin`. */
+export interface CheckinResult {
+  gained: number;
+  streak: number;
+  balance: number;
+}
+
+/** `POST /api/member/feed`. Refused (she is full): `accepted` false, nothing charged. */
+export interface FeedResult {
+  accepted: boolean;
+  eaten: number;
+  charged: number;
+  balance: number;
+  message: string;
+}
+
+/** `POST /api/member/letter` and `/expression`. */
+export interface SpendResult {
+  accepted: boolean;
+  charged: number;
+  balance: number;
+  message: string;
+}
+
+/** `POST /api/member/transfer`. */
+export interface TransferResult {
+  sent: number;
+  balance: number;
+  /** The receiver as their ledger names them. */
+  to: string;
+}
+
+/** `GET /api/public/board`: only people who chose to be on it. */
+export interface BoardView {
+  entries: { rank: number; name: string; spent: number }[];
+}
+
+/** One of her goals (`GET /api/member/goals`). */
+export interface GoalView {
+  id: string;
+  title: string;
+  /** What she will do when it is reached. */
+  promise: string;
+  target: number;
+  raised: number;
+  /** What this person put in. */
+  my_pledge: number;
+  deadline: string;
+  status: "open" | "reached" | "expired" | "cancelled";
+}
+
+/** `POST /api/member/goals/:id/pledge`. */
+export interface PledgeResult {
+  pledged: number;
+  raised: number;
+  target: number;
+  reached: boolean;
+  balance: number;
+  duplicate: boolean;
+}
+
+/** One bounty she has open (`GET /api/member/bounties`). */
+export interface BountyView {
+  id: string;
+  task: string;
+  reward: number;
+  posted_at: string;
+  expires_at: string;
+}
+
+/** `POST /api/member/frame`. */
+export interface FramesResult {
+  owned: string[];
+  selected: string | null;
+  balance: number;
+}
+
+/** `GET /api/member/card`. */
+export interface MemberCards {
+  /** Their newest card that is not voided. */
+  latest: IssuedCard | null;
+  today: number;
+  per_day: number;
+  /** Pictures their band allows, for a chosen pose. Missing on an older Core. */
+  poses?: { id: string; label: string }[];
+  /** Prices of the extras; null is off sale. Missing on an older Core. */
+  prices?: { pose: number | null; foil: number | null; reroll: number | null };
+  /** Rerolls of today's newest card still to buy today. Missing on an older Core. */
+  rerolls_left?: number;
+}
+
+export interface MemberView {
+  card: MemberCard;
+  memories: { text: string; kind: string; date: string }[];
+  songs: MemberSong[];
+  /** The last 30 local days, oldest first, today last. Missing on an older Core. */
+  activity?: MemberDay[];
+  can_request_song: boolean;
+  forget: { removes: string; keeps: string };
+}
+
+/** `POST /api/member/forget`. */
+export interface MemberForgetResult {
+  deleted: number;
+  about: number;
+  derived: number;
+  unverified: number;
+}
+
+// ---------------------------------------------------------------------------
 // panel routes
 
 /** A page of results. `next_cursor` is opaque; `null` on the last page. */
@@ -371,6 +669,27 @@ export interface PersonDetail extends PersonSummary {
   /** Oldest first, for the affinity chart. */
   history: RelationshipDelta[];
   memory_count: number;
+}
+
+/** `GET /api/people/{id}/wallet`: their coins and newest rows (newest first). */
+export interface PersonWalletView {
+  balance: number;
+  ledger: { ts: Timestamp; delta: number; label: string }[];
+}
+
+/** `POST /api/people/{id}/wallet/adjust`; a negative `amount` takes coins. */
+export interface WalletAdjustRequest {
+  amount: number;
+  /** 1 to 100 characters. */
+  note: string;
+  /** One per confirmed submit; the same key twice answers the first. */
+  key: string;
+}
+
+export interface WalletAdjustResult {
+  balance: number;
+  entry_id: string;
+  duplicate: boolean;
 }
 
 /** `POST /api/people/{id}/adjust`: added to the affinity, ignoring daily caps. */
@@ -655,8 +974,43 @@ export interface VoiceSession {
     asr: LatencyStats;
     llm_first_token: LatencyStats;
     tts_first_audio: LatencyStats;
+    /** Speech end to first audio. Absent on a Core older than the six-segment measurement. */
+    e2e?: VoiceE2eLatency;
   };
   last_turn: TurnId | null;
+}
+
+/** p50 / p90 of one end-to-end series; `null` percentiles without samples. */
+export interface E2eStats {
+  p50_ms: number | null;
+  p90_ms: number | null;
+  samples: number;
+}
+
+/** The six segments of `speech_end → first_audio_played`, in the order a listener hears them. */
+export type E2eSegmentName = "endpoint" | "asr" | "llm_first" | "tts_queue" | "tts_first" | "playback";
+
+/** Replies to human speech over the recent window; incomplete ones are only counted, by reason. */
+export interface VoiceE2eLatency {
+  total: E2eStats;
+  segments: Record<E2eSegmentName, E2eStats>;
+  complete: number;
+  incomplete: number;
+  incomplete_by_reason: Record<string, number>;
+}
+
+/** The payload of a `voice.latency` bus event with `stage: "e2e"`: one reply, measured. */
+export interface E2eRecord {
+  context: ContextKey;
+  turn: TurnId | null;
+  utterance: string;
+  complete: boolean;
+  reason: string | null;
+  total_ms: number | null;
+  segments: Record<E2eSegmentName, number | null>;
+  unattributed_ms: number | null;
+  prefetched: boolean;
+  provider: string | null;
 }
 
 /** `GET /api/voice`. */
@@ -796,6 +1150,8 @@ export interface HerStatus {
   streaming: boolean;
   scene: string | null;
   game: string | null;
+  /** The song she is singing. Absent on a Core from before the ActivityManager. */
+  singing?: string | null;
 }
 
 export interface TimeContext {
@@ -859,6 +1215,8 @@ export type DataCategoryId =
   | "people"
   | "channels"
   | "voice_consent"
+  | "event_log"
+  | "directives"
   | "privacy"
   | "queue"
   | "roles"
@@ -928,6 +1286,20 @@ export interface MindStats {
   idle_reason: string | null;
 }
 
+/** One step of the emergency stop, in the order they ran. */
+export interface EmergencyStep {
+  step: "pause" | "silence" | "song" | "stream" | "voice" | "game" | "resume";
+  ok: boolean;
+  detail: string;
+}
+
+export interface EmergencyReport {
+  paused: boolean;
+  by: string;
+  at: Timestamp;
+  steps: EmergencyStep[];
+}
+
 /** `GET /api/mind`, `POST /api/mind/pause|resume`. */
 export interface MindView {
   paused: boolean;
@@ -935,6 +1307,8 @@ export interface MindView {
   accepting: boolean;
   stats: MindStats | null;
   pending_approvals: number;
+  /** The last press of the emergency stop; `null`: none since the core started. */
+  emergency?: EmergencyReport | null;
 }
 
 export type ThoughtTriggerKind = "heartbeat" | "salient" | "suggestion" | "turn" | "voice_quiet" | "manual";
@@ -1390,4 +1764,506 @@ export interface GameStartRequest {
   game?: string;
   goal?: string;
   stream?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// body, arbiter, affect, plan, prompts (`packages/api/src/{body,affect,plan,prompts}.ts`)
+
+export type TaskId = string;
+export type Handle = string;
+
+export type ActivityResource = "presence" | "broadcast" | "activity";
+export type ActivityType = "idle" | "chatting" | "singing" | "game" | "browse";
+export type ActivityPhase = "starting" | "running" | "stopping" | "failed";
+
+export type HerPresence =
+  | { type: "none" }
+  | { type: "joining" | "in" | "leaving"; channel: ContextKey; task?: TaskId; since: Timestamp };
+
+export type HerBroadcast =
+  | { type: "off" }
+  | {
+      type: "starting" | "live" | "stopping";
+      guild: string;
+      golive: boolean;
+      obs: boolean;
+      task: TaskId | null;
+      since: Timestamp;
+    };
+
+export interface ActivityFailure {
+  code: string;
+  detail: string;
+  at: Timestamp;
+}
+
+export type HerActivity =
+  | { type: "idle"; since: Timestamp }
+  | {
+      type: Exclude<ActivityType, "idle">;
+      target: string | null;
+      phase: ActivityPhase;
+      task: TaskId | null;
+      failure: ActivityFailure | null;
+      since: Timestamp;
+    };
+
+export interface SceneOverride {
+  scene: string;
+  until: Timestamp;
+  by: string;
+}
+
+/** `GET /api/activity` (and the payload of `activity.changed`). */
+export interface ActivitySnapshot {
+  version: number;
+  at: Timestamp;
+  presence: HerPresence;
+  broadcast: HerBroadcast;
+  activity: HerActivity;
+  override: SceneOverride | null;
+  scene: string | null;
+}
+
+export type ActivityRequest =
+  | { type: "ensure_voice"; platform: string; guild: string; channel: string | null; follow: AccountRef | null }
+  | { type: "leave_voice" }
+  | { type: "ensure_live"; platform: string; guild: string; source: string | null }
+  | { type: "stop_live" }
+  | { type: "start"; activity: Exclude<ActivityType, "idle">; target: string | null; goal: string | null }
+  | { type: "stop"; activity: Exclude<ActivityType, "idle"> | null }
+  | { type: "scene_override"; scene: string; duration_ms: number }
+  | { type: "clear_override" };
+
+/** `GET /api/activity/tasks`, newest first. */
+export interface ActivityTask {
+  id: TaskId;
+  resource: ActivityResource;
+  request: ActivityRequest;
+  by: string;
+  turn: TurnId | null;
+  context: ContextKey | null;
+  status: "queued" | "running" | "done" | "failed";
+  created_at: Timestamp;
+  ended_at: Timestamp | null;
+  failure: ActivityFailure | null;
+  detail: string | null;
+}
+
+export type LedgerKind = "impulse" | "turn" | "task" | "notice";
+export type LedgerOutcome = "pending" | "ok" | "ignored" | "failed" | "denied";
+
+export interface LedgerEntry {
+  id: string;
+  at: Timestamp;
+  kind: LedgerKind;
+  source: string;
+  self_initiated: boolean;
+  context: ContextKey | null;
+  person: Handle | null;
+  summary: string;
+  outcome: LedgerOutcome;
+  detail: string | null;
+  impulse: string | null;
+  turn: TurnId | null;
+  task: TaskId | null;
+  updated_at: Timestamp;
+}
+
+export interface LedgerLimits {
+  initiatives_today: number;
+  initiative_cap: number | null;
+  unanswered_streak: number;
+  next_initiative_at: Timestamp | null;
+  quiet_hours: { start_hour: number; end_hour: number; active: boolean } | null;
+  paused: boolean;
+  blocked: { capability: string; reason: string; until: Timestamp | null }[];
+}
+
+export interface RaisedTopic {
+  /** What she said (her words, short). */
+  text: string;
+  context: ContextKey | null;
+  at: Timestamp;
+  status: "waiting" | "engaged" | "ignored";
+}
+
+/** `GET /api/arbiter/ledger`. */
+export interface LedgerView {
+  at: Timestamp;
+  entries: LedgerEntry[];
+  limits: LedgerLimits;
+  unanswered: RaisedTopic[];
+}
+
+export type ArbiterVerdict = "accepted" | "merged" | "deferred" | "rejected" | "preempted" | "expired";
+
+export type ArbiterReason =
+  | "budget"
+  | "rate"
+  | "cooldown"
+  | "quiet_hours"
+  | "consent"
+  | "paused"
+  | "ceiling"
+  | "busy"
+  | "unanswered"
+  | "superseded"
+  | "expired"
+  | "denied";
+
+/** One verdict of `GET /api/arbiter/decisions` (`data.decisions`). */
+export interface ArbiterDecisionView {
+  impulse: string;
+  source: string;
+  verdict: ArbiterVerdict;
+  reason: ArbiterReason | null;
+  detail: string;
+  retry_at: Timestamp | null;
+  merged_into: string | null;
+  turn: TurnId | null;
+  task: TaskId | null;
+  at: Timestamp;
+  context: ContextKey | null;
+  summary: string | null;
+}
+
+export interface ArbiterDecisionsView {
+  decisions: ArbiterDecisionView[];
+}
+
+export type EmotionName =
+  | "joy"
+  | "anger"
+  | "sorrow"
+  | "fear"
+  | "surprise"
+  | "disgust"
+  | "shy"
+  | "pride"
+  | "jealousy"
+  | "lonely"
+  | "missing"
+  | "gratitude"
+  | "guilt"
+  | "frustration";
+
+export type AffectDriveName = DriveName | "esteem" | "hunger" | "longing";
+
+export interface EmotionReading {
+  name: EmotionName;
+  intensity: number;
+  cause: string;
+  at: Timestamp;
+  person: PersonId | null;
+}
+
+export interface ShownEmotion {
+  from: EmotionName;
+  tag: string;
+  style: string;
+  masked: boolean;
+}
+
+export interface AffectBiases {
+  talkativeness: number;
+  initiative: number;
+  wants: { want: string; weight: number; person: Handle | null; why: string }[];
+}
+
+/** `GET /api/affect`. */
+export interface AffectSnapshot {
+  at: Timestamp;
+  drives: Partial<Record<AffectDriveName, number>>;
+  boredom: number;
+  top: EmotionReading[];
+  mood: Mood;
+  mood_line: string;
+  shown: ShownEmotion | null;
+  biases: AffectBiases;
+}
+
+export type RelationshipLabel = "很討厭" | "討厭" | "陌生人" | "認識" | "朋友" | "好朋友" | "摯友";
+
+/** `GET /api/affect/people`, highest attachment first. */
+export interface PersonCard {
+  person: PersonId;
+  handle: Handle;
+  call_name: string | null;
+  affinity: number;
+  trust: number;
+  familiarity: number;
+  attachment: number;
+  emotions: Partial<Record<"missing" | "jealousy" | "gratitude" | "resentment", number>>;
+  feeling: string;
+  label: RelationshipLabel;
+  owner: boolean;
+  blocked: boolean;
+  last_seen: Timestamp | null;
+  last_together: Timestamp | null;
+  updated_at: Timestamp;
+}
+
+export type GoalTrigger =
+  | { kind: "at"; time: Timestamp }
+  | { kind: "when_online"; person: Handle }
+  | { kind: "after_activity"; activity: string }
+  | { kind: "whenever" };
+
+export type GoalStatus = "pending" | "active" | "done" | "dropped";
+
+export interface Goal {
+  id: string;
+  what: string;
+  why: string;
+  trigger: GoalTrigger;
+  steps: string[];
+  status: GoalStatus;
+  expires: Timestamp;
+  person: Handle | null;
+  context: ContextKey | null;
+  source: "plan" | "plan_daily" | "reflect" | "panel";
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  closed_at: Timestamp | null;
+  close_reason: string | null;
+}
+
+/** `GET /api/mind/goals`. */
+export interface GoalsView {
+  goals: Goal[];
+  closed_included: boolean;
+}
+
+/** `GET /api/mind/plan`. */
+export interface DayPlanView {
+  day_plan: string | null;
+}
+
+export type ReasoningLevel = string;
+
+export interface CompiledBlock {
+  key: string;
+  authority: string;
+  source: string;
+  chars_in: number;
+  chars_out: number;
+  budget_chars: number;
+  fate: "kept" | "summarized" | "truncated" | "dropped";
+}
+
+/** `GET /api/prompts/{turn}`. */
+export interface SavedPrompt {
+  turn: TurnId;
+  context: ContextKey;
+  at: Timestamp;
+  purpose: string;
+  reasoning: ReasoningLevel;
+  blocks: CompiledBlock[];
+  messages: { role: "system" | "user" | "assistant"; text: string }[];
+  prompt_tokens: number | null;
+}
+
+/** `GET /api/prompts` items. */
+export interface PromptSummary {
+  turn: TurnId;
+  context: ContextKey;
+  at: Timestamp;
+  purpose: string;
+  reasoning: ReasoningLevel;
+  prompt_tokens: number | null;
+  blocks: number;
+  messages: number;
+  chars: number;
+}
+
+export type TurnReason = "addressed" | "reply_to_her" | "ambient" | "initiative" | "notice";
+
+export type TurnCancelCause = "input" | "barge_in" | "superseded" | "expired" | "floor" | "shutdown";
+
+export type TurnOutcome =
+  | { type: "sent"; parts: number }
+  | { type: "silence" }
+  | { type: "cancelled"; cause: TurnCancelCause; by: Handle | null }
+  | { type: "error"; error: string };
+
+export type TurnOutcomeKind = TurnOutcome["type"];
+
+/** `GET /api/turns/outcomes` items, newest first. */
+export interface TurnOutcomeRecord {
+  turn: TurnId;
+  context: ContextKey;
+  reason: TurnReason;
+  outcome: TurnOutcome;
+  addressed_by: Handle[];
+  focus: MessageRef[];
+  restarts: number;
+  reasoning: ReasoningLevel | null;
+  latency_ms: number | null;
+  at: Timestamp;
+}
+
+// ---------------------------------------------------------------------------
+// The fact layer (`GET /api/facts/*`; `packages/types` log-event.ts)
+
+export type LogEventKind =
+  | "observation"
+  | "thought"
+  | "decision"
+  | "utterance"
+  | "delivered"
+  | "action"
+  | "result"
+  | "steer"
+  | "directive"
+  | "proposal";
+
+/** One line of the EventLog. */
+export interface LogEvent {
+  id: Ulid;
+  at: Timestamp;
+  kind: LogEventKind;
+  /** What wrote it: `voice.asr`, `game.minecraft`, `plan`, ... */
+  source: string;
+  /** The event that caused this one. */
+  cause: Ulid | null;
+  context: ContextKey | null;
+  person: string | null;
+  body: unknown;
+}
+
+/** `body` of a `steer` line: the request (`phase: "request"`) or how it went (`"outcome"`). */
+export type SteerBody = SteerRequestBody | SteerOutcomeBody;
+
+export interface SteerRequestBody {
+  phase: "request";
+  /** The executor's topic prefix. */
+  owner: string;
+  task: Ulid;
+  /** The goal arguments to change. */
+  patch: Record<string, unknown>;
+  /** Why she steers, in her words. */
+  why: string;
+  /** The kind of principal that asked (`self`: the main line). */
+  by: string;
+}
+
+export type SteerOutcome = "applied" | "rejected" | "too_late";
+
+export interface SteerOutcomeBody {
+  phase: "outcome";
+  task: Ulid;
+  steer: Ulid;
+  outcome: SteerOutcome;
+  detail: string;
+}
+
+/** `body` of a `thought` line from the mind (source `mind`). */
+export interface MindThoughtBody {
+  thought: string;
+  changes: string[];
+  intents: ThoughtIntent[];
+  error: string | null;
+}
+
+/** `body` of a `thought` line from the game director (source `game.director`). */
+export interface DirectorThoughtBody {
+  game: string;
+  trigger: string[];
+  goal: string | null;
+  action: string | null;
+  verdict: string | null;
+  commentary: string | null;
+  busy: boolean | null;
+}
+
+export type ThoughtBody = MindThoughtBody | DirectorThoughtBody;
+
+/** `GET /api/facts/events` query. */
+export interface FactEventsQuery {
+  kind?: LogEventKind[];
+  /** Comma list on the wire. */
+  source?: string[];
+  /** One turn's lines and what they caused (a Core before this ignores it). */
+  turn?: string;
+  since?: Timestamp;
+  until?: Timestamp;
+  /** Events older than this id (paging newest first). */
+  before?: Ulid;
+  order?: "asc" | "desc";
+  limit?: number;
+}
+
+/** `GET /api/facts/events/:id/chain`: the causes, oldest first, the event asked for last. */
+export interface CauseChain {
+  events: LogEvent[];
+  /** False when an ancestor is gone or the walk hit its limit. */
+  complete: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// the owner's rules (`GET /api/directives`; `packages/types` directive.ts)
+
+export type DirectiveEffect = "deny" | "require_approval" | "prefer" | "avoid";
+
+export type DirectiveAuthority = "owner" | "moderator" | "system" | "viewer";
+
+export interface DirectiveScope {
+  /** A capability or tool name, or a pattern (`game.*`, `*`). */
+  capability?: string;
+  /** A word of what is being done: the game (`minecraft`), a goal, a target. */
+  activity?: string;
+  context?: ContextKey;
+  person?: Handle;
+}
+
+/** A stored rule and how it ended, if someone ended it. */
+export interface DirectiveRecord {
+  id: string;
+  issuer: AccountRef;
+  authority: DirectiveAuthority;
+  scope: DirectiveScope;
+  effect: DirectiveEffect;
+  text: string;
+  /** `until_revoked` never expires. */
+  expires: Timestamp | "until_revoked";
+  /** An EventLog id, `msg:<id>`, `command:<path>` or `panel:<actor>`. */
+  source_event: string;
+  created_at: Timestamp;
+  revoked_at: Timestamp | null;
+  revoked_by: string | null;
+}
+
+/** `GET /api/directives`: `healthy` is false while the store cannot be read (everything fails closed). */
+export interface DirectivesView {
+  healthy: boolean;
+  directives: DirectiveRecord[];
+}
+
+/** `POST /api/directives`. `minutes` left out: until revoked (a moderator has to say). */
+export interface AddDirectiveRequest {
+  text: string;
+  effect: DirectiveEffect;
+  scope?: { capability?: string; activity?: string };
+  minutes?: number | null;
+}
+
+/** The answer of a change: a `question` means nothing happened and the Core needs more. */
+export type DirectiveChange =
+  | { status: "added"; directive: DirectiveRecord; note: string | null }
+  | { status: "removed"; directive: DirectiveRecord }
+  | { status: "question"; question: string };
+
+/** One delivered line (`GET /api/facts/deliveries`), newest first; `answered_by` is who answered in the window. */
+export interface Delivery {
+  attention_key: string;
+  revision: number;
+  channel: "voice" | "text";
+  context: ContextKey;
+  said: string;
+  delivered_at: Timestamp;
+  audience: Handle[];
+  answered_by: Handle[];
+  /** Its `utterance` event. */
+  line: Ulid;
 }

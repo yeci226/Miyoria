@@ -125,9 +125,57 @@ async function onRequest(method, params) {
           ],
           prompts: ["facts"],
           subscriptions: config.subscriptions ?? ["*"],
+          ...(config.executor
+            ? {
+                executor: {
+                  name: "Fixture",
+                  goals: [
+                    { name: "echo", description: "Ends at once", budget_s: 5 },
+                    { name: "hang", description: "Never ends" },
+                    { name: "crash", description: "Exits the process" },
+                  ],
+                  guide: "just a fixture",
+                },
+              }
+            : {}),
         },
       };
     }
+    case "task.start": {
+      const task = params.task;
+      const at = new Date().toISOString();
+      const event = (e) =>
+        send({ method: "task.event", params: { event: { task: task.id, at, ...e } } });
+      event({ type: "started", goal: task.goal });
+      if (task.goal === "echo") {
+        event({ type: "progress", progress: 0.5, detail: "half" });
+        event({ type: "done", detail: `echo ${JSON.stringify(task.args)}`, data: task.args });
+        // A stale word after the end: the host drops it.
+        event({ type: "failed", code: "internal", detail: "late" });
+      } else if (task.goal === "crash") {
+        setTimeout(() => process.exit(4), 10);
+      } else if (task.goal !== "hang") {
+        event({ type: "failed", code: "invalid", detail: `unknown goal ${task.goal}` });
+      }
+      return {};
+    }
+    case "task.cancel": {
+      const at = new Date().toISOString();
+      send({
+        method: "task.event",
+        params: {
+          event: { type: "failed", task: params.task, code: "cancelled", detail: "cancelled", at },
+        },
+      });
+      return {};
+    }
+    case "task.observe":
+      return {
+        at: new Date().toISOString(),
+        state: { fixture: true },
+        task: null,
+        summary: "fixture",
+      };
     case "tools.call": {
       const { name, args, context } = params;
       switch (name) {

@@ -559,23 +559,42 @@ describe("transitions on the stage node", () => {
     expect(() => parseCoreMessage({ type: "scene", name: "x", transition_ms: 99_999 })).toThrow();
   });
 
-  it("ObsController sets the transition before switching", async () => {
-    const obs: FakeObs & { setTransition?: Obs["setTransition"] } = new FakeObs("Talk");
-    const transitions: [string, number | null][] = [];
+  it("ObsController sets the transition for this switch only, never OBS's global one", async () => {
+    const obs: FakeObs & {
+      setTransition?: Obs["setTransition"];
+      setSceneTransition?: Obs["setSceneTransition"];
+    } = new FakeObs("Talk");
+    const transitions: [string, string, number | null][] = [];
     let fail = false;
-    obs.setTransition = async (name: string, durationMs: number | null) => {
+    obs.setTransition = async () => {
+      throw new Error("the global transition must not change");
+    };
+    obs.setSceneTransition = async (scene: string, name: string, durationMs: number | null) => {
       if (fail) throw new Error("No transition named Nope");
-      transitions.push([name, durationMs]);
-      obs.state.calls.push(`transition ${name}`);
+      transitions.push([scene, name, durationMs]);
+      obs.state.calls.push(`transition ${scene}=${name}`);
     };
     const controller = new ObsController(obs, ObsConfigSchema.parse({ poll_ms: 100_000 }));
     const abort = new AbortController();
     const running = controller.run(abort.signal);
     for (let i = 0; i < 100 && !controller.state().connected; i++)
       await new Promise((r) => setTimeout(r, 5));
+    // Two switches at once: each one's transition goes with its own scene, in order.
+    await Promise.all([
+      controller.setScene("Game", { name: "Fade", duration_ms: 300 }),
+      controller.setScene("Talk", { name: "Stinger", duration_ms: null }),
+    ]);
+    expect(transitions).toEqual([
+      ["Game", "Fade", 300],
+      ["Talk", "Stinger", null],
+    ]);
+    expect(obs.state.calls.slice(-4)).toEqual([
+      "transition Game=Fade",
+      "scene Game",
+      "transition Talk=Stinger",
+      "scene Talk",
+    ]);
     await controller.setScene("Game", { name: "Fade", duration_ms: 300 });
-    expect(transitions).toEqual([["Fade", 300]]);
-    expect(obs.state.calls.slice(-2)).toEqual(["transition Fade", "scene Game"]);
     // A missing transition does not block the switch.
     fail = true;
     await controller.setScene("Talk", { name: "Nope", duration_ms: null });

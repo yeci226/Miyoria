@@ -21,6 +21,29 @@ export interface SegmenterConfig {
   onsetFrames: number;
   /** Gaps up to this long do not reset `Segmenter.speechRunMs`. */
   runGapMs: number;
+  /** End of turn by a model; `null` (default): low energy for `endSilenceMs` ends the utterance. */
+  turn: TurnTiming | null;
+}
+
+/** How long the segmenter waits around a model that judges whether the speaker is done. */
+export interface TurnTiming {
+  /** Silence after which the model is asked. */
+  stopMs: number;
+  /** Silence that ends the turn whatever the model said. */
+  maxSilenceMs: number;
+  /** The end of the turn's audio the model gets, at most. */
+  audioMs: number;
+}
+
+/** `unknown`: the model did not answer; the silence decides, as if it were not there. */
+export type TurnVerdict = "complete" | "incomplete" | "unknown";
+
+/** A moment to ask the model. */
+export interface TurnCandidate {
+  /** Pass it to `Segmenter.resolve`. */
+  id: number;
+  /** The end of the turn so far. */
+  samples: Int16Array;
 }
 
 export const DEFAULT_SEGMENTER: Readonly<SegmenterConfig> = Object.freeze({
@@ -33,6 +56,7 @@ export const DEFAULT_SEGMENTER: Readonly<SegmenterConfig> = Object.freeze({
   tailMs: 200,
   onsetFrames: 2,
   runGapMs: 250,
+  turn: null,
 });
 
 /** A finished utterance. */
@@ -47,6 +71,14 @@ export interface Utterance {
    * kept in `samples`).
    */
   trailingSilenceMs: number;
+  /**
+   * Why it ended: the end silence (`silence`: the speaker stopped), the length cap (`length`: the
+   * speaker may still be talking), the stream closing (`close`), the model saying the turn is over
+   * (`turn`), or the longest silence after the model said it was not (`timeout`).
+   */
+  endedBy: "silence" | "length" | "close" | "turn" | "timeout";
+  /** The candidate this utterance is exactly the audio of (no speech came after it). */
+  candidate: number | null;
 }
 
 /** A growable `Int16Array`. */
@@ -64,6 +96,16 @@ class SampleBuf {
     }
     this.#data.set(samples, this.length);
     this.length += samples.length;
+  }
+
+  /** A copy of the last `n` samples. */
+  tail(n: number): Int16Array {
+    return this.#data.slice(Math.max(0, this.length - n), this.length);
+  }
+
+  /** A copy of the first `n` samples, the buffer stays. */
+  head(n: number): Int16Array {
+    return this.#data.slice(0, Math.min(n, this.length));
   }
 
   /** A copy of the first `n` samples; clears the buffer. */
@@ -101,6 +143,12 @@ export class Segmenter<V extends Vad = Vad> {
   #silenceMs = 0;
   #runMs = 0;
   #gapMs = 0;
+  /** The candidate of the current silence, 0 before there is one. */
+  #asked = 0;
+  #nextAsk = 1;
+  #verdict: TurnVerdict | null = null;
+  /** Waits for `takeCandidate`. */
+  #candidate: TurnCandidate | null = null;
 
   constructor(vad: V, config: Partial<SegmenterConfig> = {}) {
     this.#vad = vad;
@@ -123,6 +171,36 @@ export class Segmenter<V extends Vad = Vad> {
    */
   speechRunMs(): number {
     return this.#runMs;
+  }
+
+  /** The moment the model should be asked about, once. */
+  takeCandidate(): TurnCandidate | null {
+    const c = this.#candidate;
+    this.#candidate = null;
+    return c;
+  }
+
+  /** The candidate of the current silence; 0 once speech went on or the utterance ended. */
+  askedId(): number {
+    return this.#asked;
+  }
+
+  /**
+   * The model's answer about candidate `id`. Returns the utterance when this ends it. An answer
+   * that comes after the speaker went on is about a moment that passed: it changes nothing.
+   */
+  resolve(id: number, verdict: TurnVerdict): Utterance | null {
+    if (!this.#active || id !== this.#asked) return null;
+    this.#verdict = verdict;
+    if (verdict === "complete") return this.#end("turn");
+    return verdict === "unknown" && this.#silenceMs >= this.#config.endSilenceMs
+      ? this.#end("silence")
+      : null;
+  }
+
+  /** The utterance as it would be if it ended now (for transcribing ahead of the decision). */
+  peek(): Int16Array {
+    return this.#buf.head(this.#keptSamples());
   }
 
   push(samples: Int16Array): Utterance[] {
@@ -149,7 +227,7 @@ export class Segmenter<V extends Vad = Vad> {
     const partial = this.#partial;
     this.#partial = new Int16Array(0);
     if (this.#active && partial.length > 0) this.#buf.push(partial);
-    const out = this.#active ? this.#emit() : null;
+    const out = this.#active ? this.#emit("close") : null;
     this.#reset();
     this.#preRoll = [];
     return out;
@@ -175,16 +253,44 @@ export class Segmenter<V extends Vad = Vad> {
       this.#voicedMs += this.#frameMs;
       this.#silenceMs = 0;
       this.#speechEnd = this.#buf.length;
+      this.#clearTurn();
     } else {
       this.#silenceMs += this.#frameMs;
+      this.#maybeAsk();
     }
-    const lenMs = this.#ms(this.#buf.length);
-    if (this.#silenceMs >= this.#config.endSilenceMs || lenMs >= this.#config.maxUtteranceMs) {
-      const out = this.#emit();
-      this.#reset();
-      return out;
+    const ended = this.#silenceEnd();
+    if (ended !== null) return this.#end(ended);
+    return this.#ms(this.#buf.length) >= this.#config.maxUtteranceMs ? this.#end("length") : null;
+  }
+
+  #maybeAsk(): void {
+    const turn = this.#config.turn;
+    if (turn === null || this.#asked !== 0 || this.#silenceMs < turn.stopMs) return;
+    if (!this.#qualifies()) return;
+    this.#asked = this.#nextAsk++;
+    const n = Math.floor((turn.audioMs * this.#config.sampleRate) / 1000);
+    this.#candidate = { id: this.#asked, samples: this.#buf.tail(n) };
+  }
+
+  /** How the silence so far ends the utterance, if it does. */
+  #silenceEnd(): Utterance["endedBy"] | null {
+    const turn = this.#config.turn;
+    if (turn !== null && this.#asked !== 0 && this.#verdict !== "unknown") {
+      return this.#silenceMs >= turn.maxSilenceMs ? "timeout" : null;
     }
-    return null;
+    return this.#silenceMs >= this.#config.endSilenceMs ? "silence" : null;
+  }
+
+  #clearTurn(): void {
+    this.#asked = 0;
+    this.#verdict = null;
+    this.#candidate = null;
+  }
+
+  #end(endedBy: Utterance["endedBy"]): Utterance | null {
+    const out = this.#emit(endedBy);
+    this.#reset();
+    return out;
   }
 
   #trackRun(speech: boolean): void {
@@ -217,19 +323,30 @@ export class Segmenter<V extends Vad = Vad> {
     this.#silenceMs = 0;
   }
 
-  #emit(): Utterance | null {
+  /** Long and voiced enough to be an utterance. */
+  #qualifies(): boolean {
+    return (
+      this.#ms(this.#speechEnd) >= this.#config.minUtteranceMs &&
+      this.#voicedMs >= this.#config.minVoicedMs
+    );
+  }
+
+  #keptSamples(): number {
+    const tail = Math.floor((this.#config.tailMs * this.#config.sampleRate) / 1000);
+    return Math.min(this.#speechEnd + tail, this.#buf.length);
+  }
+
+  #emit(endedBy: Utterance["endedBy"]): Utterance | null {
     const speechMs = this.#ms(this.#speechEnd);
     const trailing = this.#ms(Math.max(0, this.#buf.length - this.#speechEnd));
-    if (speechMs < this.#config.minUtteranceMs || this.#voicedMs < this.#config.minVoicedMs) {
-      return null;
-    }
-    const tail = Math.floor((this.#config.tailMs * this.#config.sampleRate) / 1000);
-    const end = Math.min(this.#speechEnd + tail, this.#buf.length);
+    if (!this.#qualifies()) return null;
     return {
-      samples: this.#buf.take(end),
+      samples: this.#buf.take(this.#keptSamples()),
       speechMs,
       voicedMs: this.#voicedMs,
       trailingSilenceMs: trailing,
+      endedBy,
+      candidate: this.#asked === 0 ? null : this.#asked,
     };
   }
 
@@ -240,6 +357,7 @@ export class Segmenter<V extends Vad = Vad> {
     this.#speechEnd = 0;
     this.#voicedMs = 0;
     this.#silenceMs = 0;
+    this.#clearTurn();
   }
 
   #ms(samples: number): number {

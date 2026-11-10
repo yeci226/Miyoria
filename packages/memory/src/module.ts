@@ -31,6 +31,9 @@ import {
   isJsonObject,
   type JsonValue,
   MemoryCuratorKey,
+  MemoryRetrievalKey,
+  PersonNoteWriterKey,
+  PinnedMemoryKey,
   type ProfileId,
   type PromptContributors,
   PromptContributorsKey,
@@ -47,6 +50,9 @@ import { CONTRIBUTOR_KEY, MemoryContributor } from "./contributor.js";
 import { Curator } from "./curate.js";
 import { buildEmbedder, type Embedder } from "./embed.js";
 import { MemoryEngine, MemoryEngineKey } from "./engine.js";
+import { PersonNotes } from "./person-note.js";
+import { PinnedReader } from "./pinned.js";
+import { MemoryRetriever } from "./retrieval.js";
 import { RECALL, REMEMBER, RecallTool, RememberTool } from "./tools.js";
 
 /** Delay before the first maintenance check, and the interval of later checks. */
@@ -92,6 +98,7 @@ export class MemoryModule implements Module {
   readonly #embedder: Embedder | undefined;
   readonly #records: MemoryRecordStore | undefined;
   readonly #installer = new Installer();
+  #engine: MemoryEngine | null = null;
   #degraded: string | null = null;
 
   /** `embedding` is the top-level `[memory.embedding]` section. */
@@ -129,9 +136,14 @@ export class MemoryModule implements Module {
       router,
       clock: ctx.clock,
     });
+    this.#engine = engine;
+    engine.attach(services);
     ctx.provide(MemoryEngineKey, engine);
+    ctx.provide(PinnedMemoryKey, new PinnedReader(engine, ctx.clock));
+    ctx.provide(MemoryRetrievalKey, new MemoryRetriever(engine));
     ctx.provide(FollowupSourceKey, engine);
     ctx.provide(MemoryCuratorKey, new Curator(engine));
+    ctx.provide(PersonNoteWriterKey, new PersonNotes(engine));
     this.#installer.install(ctx, engine);
     ctx.log.info({ embedder: embedder.name }, "memory started");
 
@@ -155,7 +167,14 @@ export class MemoryModule implements Module {
   }
 
   async health(): Promise<Health> {
-    return this.#degraded === null ? HEALTHY : { status: "degraded", reason: this.#degraded };
+    if (this.#degraded !== null) return { status: "degraded", reason: this.#degraded };
+    if (this.#engine !== null && this.#engine.events === null) {
+      return {
+        status: "degraded",
+        reason: "no EventLog: evidence falls back to chat lines and `forget` cannot follow events",
+      };
+    }
+    return HEALTHY;
   }
 }
 
@@ -167,6 +186,7 @@ class Installer {
 
   install(ctx: ModuleContext, engine: MemoryEngine): void {
     const services = ctx.services;
+    engine.attach(services);
     const contributors = services.get(PromptContributorsKey);
     if (contributors && contributors !== this.#contributors) {
       this.#contributors?.unregister(CONTRIBUTOR_KEY);

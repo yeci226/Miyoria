@@ -43,39 +43,39 @@ export const MotionConfigSchema = z.object({
   /** Random seed (`null`: a new one every start). */
   seed: z.number().int().nullable().default(null),
   /** Head drift amplitude per axis (degrees). */
-  drift_x: z.number().default(3.5),
-  drift_y: z.number().default(2.2),
-  drift_z: z.number().default(2.2),
+  drift_x: z.number().default(8),
+  drift_y: z.number().default(5),
+  drift_z: z.number().default(5),
   /** Typical drift period (ms). */
-  drift_ms: z.number().positive().default(4_500),
+  drift_ms: z.number().positive().default(3_500),
   /** Head motion multiplier while she speaks. */
-  speech_motion: z.number().nonnegative().default(1.5),
+  speech_motion: z.number().nonnegative().default(1.8),
   /** Mean gap between saccades (ms), and the shortest one. */
   saccade_mean_ms: z.number().positive().default(1_400),
   saccade_min_ms: z.number().nonnegative().default(250),
   /** Saccade size (eye units, -1..1 range). */
   saccade_amount: z.number().nonnegative().default(0.12),
   /** Chance that a saccade is a bigger glance, and its size. */
-  glance_chance: z.number().min(0).max(1).default(0.12),
+  glance_chance: z.number().min(0).max(1).default(0.18),
   glance_amount: z.number().nonnegative().default(0.4),
   /** Saccade travel time constant (ms). */
   saccade_ms: z.number().nonnegative().default(25),
   /** Head degrees per eye unit the head follows a glance with. */
-  head_follow_deg: z.number().default(8),
+  head_follow_deg: z.number().default(12),
   /** Nod size on a syllable onset (degrees, down). */
-  nod_deg: z.number().default(1.6),
+  nod_deg: z.number().default(4),
   /** Opening the mouth must rise past to count as an onset. */
   nod_threshold: z.number().default(0.3),
   /** Least time between two onset nods (ms). */
   nod_gap_ms: z.number().nonnegative().default(380),
   /** Tilt / nod at a sentence start (degrees). */
-  sentence_deg: z.number().default(3),
+  sentence_deg: z.number().default(7),
   /** Body follows this share of the head. */
-  body_follow: z.number().default(0.35),
+  body_follow: z.number().default(0.6),
   /** Body lag behind the head (ms). */
   body_lag_ms: z.number().nonnegative().default(450),
   /** Body drift amplitude (degrees). */
-  body_drift: z.number().default(1.5),
+  body_drift: z.number().default(3.5),
 });
 export type MotionConfig = z.output<typeof MotionConfigSchema>;
 

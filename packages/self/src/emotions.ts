@@ -2,9 +2,14 @@
 // (epoch ms) is passed in.
 //
 // * Stirring saturates: `v + (1 - v) * min(amount * gain, 1)`, so a strong emotion grows
-//   slower and never passes 1; calming subtracts. `gain` and the half-life are her temperament
-//   (code defaults, overridden per profile by `[temperament]`).
-// * Every emotion fades exponentially toward 0; below `floor` it is forgotten.
+//   slower and never passes 1; calming subtracts. `gain`, the half-life and the baseline are
+//   her temperament (code defaults, overridden per profile by `[temperament]`).
+// * Every emotion fades exponentially toward its baseline (0 unless the temperament says
+//   otherwise); below `floor` and without a baseline it is forgotten.
+// * `excite` is the one way to stir: habituation (same cause again within 2 h is worth 0.5ⁿ),
+//   mutual inhibition (the opposite is pushed down by half of the stir) and the stir budget
+//   (all emotions together, per 10 minutes) are in `dynamics.ts`.
+// * `hold` keeps an emotion at least at the level a standing need implies (an unmet drive).
 // * `affect` turns them into mood offsets (valence / arousal / energy) for the `mood` module.
 
 import {
@@ -20,6 +25,14 @@ import {
   toTimestamp,
 } from "@miyoria/types";
 
+import {
+  Habituation,
+  habituationFactor,
+  INHIBITION_SHARE,
+  INHIBITS,
+  StirBudget,
+} from "./dynamics.js";
+
 const MINUTE_MS = 60_000;
 const MAX_CAUSE = 80;
 
@@ -28,6 +41,8 @@ export interface Temper {
   /** Multiplier of every stir (1 = ordinary). */
   gain: number;
   halfLifeMins: number;
+  /** Where it settles without events (0..1, default 0). */
+  baseline?: number;
 }
 
 export type DisplayRules = "open" | "tsundere";
@@ -43,7 +58,14 @@ export interface Temperament {
 /** The profile's `[temperament]` table (see `@miyoria/profile` `TemperamentSchema`). */
 export interface TemperamentInput {
   display?: DisplayRules;
-  emotions?: Record<string, { gain?: number | undefined; half_life_mins?: number | undefined }>;
+  emotions?: Record<
+    string,
+    {
+      gain?: number | undefined;
+      half_life_mins?: number | undefined;
+      baseline?: number | undefined;
+    }
+  >;
 }
 
 /** Ordinary half-lives (minutes): surprise is gone in moments, missing lasts. */
@@ -63,6 +85,17 @@ export const BASE_HALF_LIFE_MINS: Readonly<Record<EmotionName, number>> = {
   guilt: 180,
   frustration: 45,
 };
+
+/**
+ * Where emotions settle by display rules: a tsundere's pride sits a little above nothing (never
+ * enough to show: below the `notice` level), the rest settle at 0. The profile's `[temperament]`
+ * can set `baseline` per emotion.
+ */
+export const BASE_BASELINES: Readonly<Record<DisplayRules, Partial<Record<EmotionName, number>>>> =
+  {
+    open: {},
+    tsundere: { pride: 0.12 },
+  };
 
 /** Ordinary half-lives of emotions toward someone (minutes). */
 export const BASE_TOWARD_HALF_LIFE_MINS: Readonly<Record<PersonEmotionName, number>> = {
@@ -112,8 +145,12 @@ export function temperament(input: TemperamentInput = {}): {
   temperament: Temperament;
   unknown: string[];
 } {
+  const display = input.display ?? "open";
   const emotions = Object.fromEntries(
-    EMOTION_NAMES.map((n) => [n, { gain: 1, halfLifeMins: BASE_HALF_LIFE_MINS[n] }]),
+    EMOTION_NAMES.map((n) => [
+      n,
+      { gain: 1, halfLifeMins: BASE_HALF_LIFE_MINS[n], baseline: BASE_BASELINES[display][n] ?? 0 },
+    ]),
   ) as Record<EmotionName, Temper>;
   const toward = Object.fromEntries(
     PERSON_EMOTION_NAMES.map((n) => [n, { gain: 1, halfLifeMins: BASE_TOWARD_HALF_LIFE_MINS[n] }]),
@@ -133,9 +170,16 @@ export function temperament(input: TemperamentInput = {}): {
       if (t.half_life_mins !== undefined && t.half_life_mins > 0) {
         target.halfLifeMins = t.half_life_mins;
       }
+      if (
+        t.baseline !== undefined &&
+        Number.isFinite(t.baseline) &&
+        target.baseline !== undefined
+      ) {
+        target.baseline = clamp01(t.baseline);
+      }
     }
   }
-  return { temperament: { display: input.display ?? "open", emotions, toward }, unknown };
+  return { temperament: { display, emotions, toward }, unknown };
 }
 
 /** `v` stirred by `amount` (> 0, scaled by `gain`) or calmed (< 0). */
@@ -164,20 +208,72 @@ interface Slot {
   person: PersonId | null;
 }
 
+/** What a standing need holds an emotion at (see `hold`). */
+interface Held {
+  v: number;
+  cause: string;
+  person: PersonId | null;
+}
+
+/** One stir: what, how much (before temperament, habituation and the budget) and why. */
+export interface Excitation {
+  name: EmotionName;
+  /** > 0, the event's own strength (a `APPRAISAL_STRENGTH` or a rule's strength). */
+  base: number;
+  /** Counts as the same cause (for habituation) when equal. */
+  key: string;
+  cause: string;
+  person: PersonId | null;
+}
+
+/** What `excite` did. */
+export interface Excited {
+  /** The emotion's intensity afterwards. */
+  value: number;
+  /** The stir applied (after gain, habituation and the budget). */
+  applied: number;
+  /** `0.5ⁿ` (1 = first time). */
+  habituation: number;
+  /** Her own emotions it pushed down. */
+  inhibited: Partial<Record<EmotionName, number>>;
+  /** Emotions toward the person it should push down (the caller owns those). */
+  inhibitedToward: Partial<Record<PersonEmotionName, number>>;
+}
+
+export interface EmotionOptions {
+  /** Most stir allowed in any 10 minutes, all emotions together (0: unlimited). */
+  budget?: number;
+}
+
 export class EmotionEngine {
   #slots = new Map<EmotionName, Slot>();
+  #held = new Map<EmotionName, Held>();
   #at: number;
+  readonly #habit = new Habituation();
+  readonly #budget: StirBudget;
 
   constructor(
     private readonly temper: Temperament,
     private readonly floor: number,
     now: number,
+    options: EmotionOptions = {},
   ) {
     this.#at = now;
+    this.#budget = new StirBudget(options.budget ?? 0);
   }
 
   get temperament(): Temperament {
     return this.temper;
+  }
+
+  #baseline(name: EmotionName): number {
+    return clamp01(this.temper.emotions[name].baseline ?? 0);
+  }
+
+  /** `v` faded toward the baseline of `name` over `ms`. */
+  #fade(name: EmotionName, v: number, ms: number): number {
+    const base = this.#baseline(name);
+    return base + fade(v - base, ms, this.temper.emotions[name].halfLifeMins);
   }
 
   /** Fades every emotion up to `now`. */
@@ -185,33 +281,120 @@ export class EmotionEngine {
     const dt = now - this.#at;
     if (dt <= 0) return;
     for (const [name, slot] of this.#slots) {
-      slot.v = fade(slot.v, dt, this.temper.emotions[name].halfLifeMins);
-      if (slot.v < this.floor) this.#slots.delete(name);
+      slot.v = this.#fade(name, slot.v, dt);
+      if (slot.v < this.floor && this.#baseline(name) < this.floor) this.#slots.delete(name);
     }
     this.#at = now;
   }
 
-  /** Stirs (or calms) `name` at `now`. Returns the new intensity. */
+  /** The slot's own intensity at `now` (baseline when it has no slot). */
+  #own(name: EmotionName, now: number): number {
+    const slot = this.#slots.get(name);
+    if (!slot) return this.#baseline(name);
+    return this.#fade(name, slot.v, now - this.#at);
+  }
+
+  /**
+   * Stirs `name` by `e.base`: times her gain, times `0.5ⁿ` when the same cause counted `n`
+   * times in the last two hours, limited by what is left of the ten-minute budget; saturating
+   * (never past 1). Pushes the opposites down by half of what it stirred.
+   */
+  excite(e: Excitation, now: number): Excited {
+    this.advance(now);
+    const none: Excited = {
+      value: this.value(e.name, now),
+      applied: 0,
+      habituation: 1,
+      inhibited: {},
+      inhibitedToward: {},
+    };
+    if (!Number.isFinite(e.base) || e.base <= 0) return none;
+    const prior = this.#habit.count(e.key, now);
+    const habituation = habituationFactor(prior);
+    this.#habit.record(e.key, now);
+    const wanted = e.base * this.temper.emotions[e.name].gain * habituation;
+    const applied = Math.min(wanted, this.#budget.room(now), 1);
+    if (applied < 1e-4) return { ...none, habituation };
+    this.#budget.take(now, applied);
+    const slot = this.#slots.get(e.name);
+    const before = slot?.v ?? this.#baseline(e.name);
+    const v = clamp01(before + (1 - before) * applied);
+    this.#slots.set(e.name, { v, at: now, cause: cut(e.cause, MAX_CAUSE), person: e.person });
+    const inhibited: Excited["inhibited"] = {};
+    const inhibitedToward: Excited["inhibitedToward"] = {};
+    const rule = INHIBITS[e.name];
+    if (rule) {
+      const down = applied * INHIBITION_SHARE;
+      for (const other of rule.own) {
+        const cur = this.#slots.get(other);
+        if (!cur) continue;
+        const taken = Math.min(cur.v, down);
+        if (taken <= 0) continue;
+        this.#lower(other, cur, taken);
+        inhibited[other] = taken;
+      }
+      for (const other of rule.toward) inhibitedToward[other] = down;
+    }
+    return { value: this.value(e.name, now), applied, habituation, inhibited, inhibitedToward };
+  }
+
+  /**
+   * Counts `key` as a cause that happened now and returns its `0.5ⁿ` factor (for effects the
+   * engine does not stir itself, like emotions toward a person).
+   */
+  habituate(key: string, now: number): number {
+    const factor = habituationFactor(this.#habit.count(key, now));
+    this.#habit.record(key, now);
+    return factor;
+  }
+
+  /** Pushes `name` down by `amount` directly (inhibition, calming). */
+  #lower(name: EmotionName, slot: Slot, amount: number): void {
+    slot.v = clamp01(slot.v - amount);
+    if (slot.v < this.floor && this.#baseline(name) < this.floor) this.#slots.delete(name);
+  }
+
+  /** Calms `name` by `amount` (> 0) at `now`; returns the new intensity. */
+  calm(name: EmotionName, amount: number, now: number): number {
+    this.advance(now);
+    const slot = this.#slots.get(name);
+    if (slot && Number.isFinite(amount) && amount > 0) this.#lower(name, slot, amount);
+    return this.value(name, now);
+  }
+
+  /**
+   * Something stirs (`amount` > 0) or calms (`amount` < 0) `name`, for callers with only a
+   * number (`SelfState.feel`). It goes through `excite`, so it is habituated, inhibited and
+   * budgeted like everything else. Returns the new intensity.
+   */
   feel(
     name: EmotionName,
     amount: number,
     cause: string,
     person: PersonId | null,
     now: number,
+    key?: string,
   ): number {
+    if (!Number.isFinite(amount) || amount === 0) {
+      this.advance(now);
+      return this.value(name, now);
+    }
+    if (amount < 0) return this.calm(name, -amount, now);
+    return this.excite(
+      { name, base: amount, key: key ?? `${name}|${person ?? ""}|${cause}`, cause, person },
+      now,
+    ).value;
+  }
+
+  /**
+   * Keeps `name` at least at `v` while a standing need lasts (an unmet drive): the emotion
+   * reads at least this, and fades at its own pace only after `hold(name, 0, …)`.
+   */
+  hold(name: EmotionName, v: number, cause: string, person: PersonId | null, now: number): void {
     this.advance(now);
-    const slot = this.#slots.get(name);
-    const v = stir(slot?.v ?? 0, amount, this.temper.emotions[name].gain);
-    if (v < this.floor) {
-      this.#slots.delete(name);
-      return 0;
-    }
-    if (amount > 0 || !slot) {
-      this.#slots.set(name, { v, at: now, cause: cut(cause, MAX_CAUSE), person: person ?? null });
-    } else {
-      slot.v = v;
-    }
-    return v;
+    const level = clamp01(v);
+    if (level < this.floor) this.#held.delete(name);
+    else this.#held.set(name, { v: level, cause: cut(cause, MAX_CAUSE), person });
   }
 
   /**
@@ -230,23 +413,30 @@ export class EmotionEngine {
 
   /** One emotion's intensity at `now` (without changing the engine). */
   value(name: EmotionName, now: number): number {
-    const slot = this.#slots.get(name);
-    if (!slot) return 0;
-    return fade(slot.v, now - this.#at, this.temper.emotions[name].halfLifeMins);
+    return Math.max(this.#own(name, now), this.#held.get(name)?.v ?? 0);
+  }
+
+  /** Stir used in the last ten minutes (of the budget). */
+  stirUsed(now: number): number {
+    return this.#budget.used(now);
   }
 
   /** Emotions at or above `min` at `now`, strongest first (without changing the engine). */
   readings(now: number, min: number): EmotionReading[] {
     const out: EmotionReading[] = [];
-    for (const [name, slot] of this.#slots) {
+    const threshold = Math.max(min, this.floor);
+    for (const name of EMOTION_NAMES) {
       const v = this.value(name, now);
-      if (v < Math.max(min, this.floor)) continue;
+      if (v < threshold) continue;
+      const slot = this.#slots.get(name);
+      const held = this.#held.get(name);
+      const fromHold = held !== undefined && held.v >= this.#own(name, now);
       out.push({
         name,
         intensity: v,
-        cause: slot.cause,
-        at: toTimestamp(slot.at),
-        person: slot.person,
+        cause: (fromHold ? held?.cause : slot?.cause) ?? "",
+        at: toTimestamp(slot?.at ?? now),
+        person: (fromHold ? held?.person : slot?.person) ?? null,
       });
     }
     return out.sort((a, b) => b.intensity - a.intensity || (a.name < b.name ? -1 : 1));
@@ -257,8 +447,9 @@ export class EmotionEngine {
     let valence = 0;
     let arousal = 0;
     let energy = 0;
-    for (const name of this.#slots.keys()) {
+    for (const name of EMOTION_NAMES) {
       const v = this.value(name, now);
+      if (v <= 0) continue;
       const [dv, da, de] = AFFECT[name];
       valence += dv * v;
       arousal += da * v;
@@ -276,12 +467,18 @@ export class EmotionEngine {
     for (const [name, s] of this.#slots) {
       out[name] = { v: s.v, at: toTimestamp(s.at), cause: s.cause, person: s.person };
     }
-    return { at: toTimestamp(this.#at), emotions: out };
+    return {
+      at: toTimestamp(this.#at),
+      emotions: out,
+      habituation: this.#habit.toJson(this.#at),
+      budget: this.#budget.toJson(this.#at),
+    };
   }
 
   /** Restores a `toJson` value (lenient: unknown or malformed emotions are skipped). */
   restore(value: JsonValue | undefined, now: number): void {
     this.#slots.clear();
+    this.#held.clear();
     this.#at = now;
     if (value === undefined || !isJsonObject(value) || !isJsonObject(value.emotions)) return;
     const at = typeof value.at === "string" ? Date.parse(value.at) : Number.NaN;
@@ -296,6 +493,8 @@ export class EmotionEngine {
         person: typeof raw.person === "string" ? raw.person : null,
       });
     }
+    this.#habit.restore(value.habituation, this.#at);
+    this.#budget.restore(value.budget, this.#at);
     this.advance(now);
   }
 }

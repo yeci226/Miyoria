@@ -1,20 +1,59 @@
-import type { ReactNode } from "react";
+import { createContext, type ReactNode, useContext } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 
-/** Page title and actions. No subtitle: the title and the data carry the page. */
+/** The spot in the shell's header where a page puts its tags and actions. */
+export const HeaderSlotContext = createContext<HTMLElement | null>(null);
+
+/**
+ * Names the page for assistive technology (the header already reads `分類 / 頁面`) and hands its
+ * tags and actions to the header.
+ */
 export function PageHeader({ title, actions }: { title: ReactNode; actions?: ReactNode }) {
+  const slot = useContext(HeaderSlotContext);
   return (
-    <header className="flex min-h-9 flex-wrap items-center gap-x-4 gap-y-3">
-      <h1 className="min-w-0 text-2xl font-semibold tracking-tight">{title}</h1>
-      {actions && <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>}
-    </header>
+    <>
+      <h1 className="sr-only">{title}</h1>
+      {actions && (slot ? createPortal(actions, slot) : <div className="flex flex-wrap items-center gap-2">{actions}</div>)}
+    </>
   );
 }
 
-export function Page({ className, children }: { className?: string; children: ReactNode }) {
+/** The frame's right column: things to act on, split by hairlines. */
+function Rail({ children }: { children: ReactNode }) {
   return (
-    <div className={cn("mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-8 sm:py-8", className)}>
+    <aside
+      data-slot="rail"
+      aria-label="操作"
+      className="glass-dock flex min-w-0 flex-col border-t px-4 pb-7 min-[1180px]:border-t-0 min-[1180px]:border-l sm:px-5 [&>*]:border-b [&>*]:py-4 [&>*:last-child]:border-b-0"
+    >
       {children}
+    </aside>
+  );
+}
+
+/**
+ * The content surface, flush to the frame. `rail` adds the right column; give it one only when the
+ * page has real things to act on. The rail is a sibling of the surface, not a child of it, because
+ * a nested backdrop filter would see nothing but its parent.
+ */
+export function Page({ className, rail, children }: { className?: string; rail?: ReactNode; children: ReactNode }) {
+  const stage = (
+    <div
+      data-slot="stage"
+      className={cn(
+        "glass-sheet flex min-w-0 flex-1 flex-col gap-(--stage-gap) px-4 pt-5 pb-9 sm:px-7",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+  if (!rail) return stage;
+  return (
+    <div className="flex min-w-0 flex-1 flex-col min-[1180px]:grid min-[1180px]:grid-cols-[minmax(0,1fr)_19.5rem]">
+      {stage}
+      <Rail>{rail}</Rail>
     </div>
   );
 }

@@ -15,6 +15,7 @@ export type Handler = (
   method: string,
   url: URL,
   body: unknown,
+  headers: Headers,
 ) => { status?: number; body?: unknown; text?: string; headers?: Record<string, string> } | undefined;
 
 /** Stubs `fetch` with a router-like handler; unknown routes answer like the Core's fallback. */
@@ -22,7 +23,7 @@ export function mockFetch(handler: Handler) {
   const fn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://panel.test");
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-    const res = handler(init?.method ?? "GET", url, body) ?? { status: 404, body: { error: "no such endpoint" } };
+    const res = handler(init?.method ?? "GET", url, body, new Headers(init?.headers)) ?? { status: 404, body: { error: "no such endpoint" } };
     const text = res.text ?? (res.body === undefined ? "" : JSON.stringify(res.body));
     const status = res.status ?? 200;
     return new Response(status === 204 ? null : text, {

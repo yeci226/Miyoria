@@ -17,6 +17,26 @@ instruct = """
 """
 sample_text = "ふん、やっと来たのね？べ、別にあなたを待ってたわけじゃないんだから。で、今日は何するの？"
 
+# 情緒參考音庫(workers/tts/design_voice.py bank):每種語言、每種情緒一句,語氣由 [emotion.instruct] 補上。
+# 挑好的檔案放 workers/voices/deepseek-chan/bank/<語言>/<情緒>.wav + .txt,worker 開 TTS_VOICE_BANK=1 才會用
+[design.bank.Japanese]
+neutral     = "今日はちょっと話したいことがあるの。時間、大丈夫？"
+happy       = "やったあ！ほんとに？すっごく嬉しい、ありがとう！"
+smug        = "ふふん、どう？わたしにかかれば、これくらい余裕なんだから。"
+annoyed     = "はあ、もう何回言わせるの？ちゃんと聞いててよね。"
+angry       = "ちょっと、いい加減にして！そんなの絶対に許さないから！"
+embarrassed = "え、えっと、その、そんなに見ないでよ、恥ずかしいってば。"
+sad         = "そっか、もう行っちゃうんだ。なんだか、少し寂しいな。"
+
+[design.bank.Chinese]
+neutral     = "今天有件事想跟你說，你現在方便嗎？"
+happy       = "太好了！真的嗎？我好開心，謝謝你！"
+smug        = "哼哼，怎麼樣？這種事對我來說根本小意思。"
+annoyed     = "唉，到底要我講幾次啦？你有沒有在聽啊。"
+angry       = "喂，你夠了喔！這種事我絕對不會原諒的！"
+embarrassed = "那、那個，不要一直看我啦，很不好意思耶。"
+sad         = "這樣啊，你要走了喔。總覺得，有一點寂寞。"
+
 # 目前的參考音是日文(design 的第 0 個候選),但她講中文:用 ref.txt 的接續模式(ICL)時,
 # 每句的發音和音色會在日文/中文之間亂跳。所以 workers/voices/deepseek-chan/ 只放 ref.wav、
 # 不放 ref.txt(日文原文留在 ref.ja.txt),worker 就只取音色(x-vector),語言跟著文字走。

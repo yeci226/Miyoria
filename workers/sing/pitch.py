@@ -1,12 +1,18 @@
 """Pitch helpers of the song worker (numpy, imported lazily: the mock needs only ``choose_key``): the F0 cleanup before conversion, and the auto
 key that keeps the melody inside her range.
 
-High notes crack for two reasons, and each half of this file handles one:
+Songs break and high notes crack for three reasons; this file handles two of them:
 
 * **Tracking errors.** RMVPE sometimes jumps an octave for a few frames, spikes, or drops out
   for a frame or two at the top of the range; Seed-VC then renders exactly that (a squeak, a
   break). ``clean_f0`` folds short octave excursions back, median-filters spikes and bridges
   short unvoiced gaps inside a phrase.
+* **The harmony hop** (not handled here). A separated vocal often still holds a second voice, and
+  RMVPE, trained on one voice at a time, reads whichever is stronger from frame to frame: the
+  contour hops between a third or a sixth for a few frames and Seed-VC sings the hops as wrong notes.
+  No cleanup of the contour can fix it (the hops are real pitches, and the lead's salience is not
+  there to decode: a Viterbi tracker over it was tried and gained nothing), so it is handled
+  upstream: ``leadsplit.py`` takes the lead voice out of the vocal stem before anything here runs.
 * **Notes she cannot reach.** The model only knows her from speech, so the higher above her
   speaking voice a note is, the worse it sounds. ``choose_key`` picks the octave from the song's
   median *and* its top (95th percentile of voiced F0) against a ceiling, and transposes the

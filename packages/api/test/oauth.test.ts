@@ -5,12 +5,14 @@
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { AuthService, AuthServiceKey } from "@miyoria/auth";
+import { EconomyError, EconomyKey } from "@miyoria/economy";
 import { Supervisor, SupervisorKey } from "@miyoria/kernel";
 import { RequestQueue, RequestQueueKey } from "@miyoria/queue";
 import {
   type AuditEntry,
   AuditLogKey,
   AuthStoreKey,
+  IdentityStoreKey,
   ProfileDataStoreKey,
   SettingsStoreKey,
   SqliteStore,
@@ -18,7 +20,7 @@ import {
 import { type AccountRef, AuthorizerKey, type JsonValue } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActiveProfileKey, ApiClient, ApiModule } from "../src/index.js";
-import { listenFetchable } from "./support/http.js";
+import { listenFetchable, raw } from "./support/http.js";
 import { TestStore } from "./support/stores.js";
 
 const TOKEN = "test-token";
@@ -164,12 +166,19 @@ class Harness {
     path: string,
     cookie: string,
     csrf: boolean,
+    json?: unknown,
   ): Promise<{ status: number; body: Record<string, unknown> }> {
     const headers: Record<string, string> = {
       cookie: `theme=dark; miyoria_session=${cookie}`,
     };
     if (csrf) headers["X-Miyoria-Request"] = "1";
-    const response = await fetch(`${this.base()}${path}`, { method, headers, redirect: "manual" });
+    if (json !== undefined) headers["content-type"] = "application/json";
+    const response = await fetch(`${this.base()}${path}`, {
+      method,
+      headers,
+      redirect: "manual",
+      ...(json !== undefined && { body: JSON.stringify(json) }),
+    });
     const text = await response.text();
     let body: Record<string, unknown> = {};
     try {
@@ -208,7 +217,10 @@ afterEach(async () => {
   }
 });
 
-async function harnessWith(withOauth: boolean): Promise<Harness> {
+async function harnessWith(
+  withOauth: boolean,
+  publicConfig: Record<string, JsonValue> = {},
+): Promise<Harness> {
   const fake = await startFake();
   const sup = new Supervisor();
   const store = new TestStore();
@@ -228,6 +240,7 @@ async function harnessWith(withOauth: boolean): Promise<Harness> {
     bind: "127.0.0.1:0",
     token: TOKEN,
     panel_dir: "",
+    public: publicConfig,
   };
   if (withOauth) {
     config.discord_oauth = {
@@ -253,7 +266,7 @@ describe("oauth", () => {
     const methods = await client.authMethods();
     expect(methods.token && methods.discord).toBe(true);
 
-    const authorize = await h.startLogin("/#/people");
+    const authorize = await h.startLogin("/people");
     expect(authorize.href.split("?")[0]).toBe(`${h.fake.url}/oauth2/authorize`);
     expect(param(authorize, "response_type")).toBe("code");
     expect(param(authorize, "client_id")).toBe("cid");
@@ -268,7 +281,7 @@ describe("oauth", () => {
       ["code", "owner-code"],
       ["state", state],
     ]);
-    expect(done.location).toBe("/#/people");
+    expect(done.location).toBe("/people");
     const setCookie = done.setCookie ?? "";
     for (const attr of ["HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=604800"]) {
       expect(setCookie, `${setCookie} lacks ${attr}`).toContain(attr);
@@ -327,10 +340,10 @@ describe("oauth", () => {
       ["code", "owner-code"],
       ["state", "bogus"],
     ]);
-    expect(bogus.location).toBe("/#/login?error=state");
+    expect(bogus.location).toBe("/login?error=state");
     expect(bogus.setCookie).toBeNull();
     const missing = await h.callback([["code", "owner-code"]]);
-    expect(missing.location).toBe("/#/login?error=state");
+    expect(missing.location).toBe("/login?error=state");
 
     // A state works once.
     let authorize = await h.startLogin();
@@ -339,13 +352,13 @@ describe("oauth", () => {
       ["code", "owner-code"],
       ["state", state],
     ]);
-    expect(first.location, "default next").toBe("/#/");
+    expect(first.location, "default next").toBe("/");
     expect(first.cookie).not.toBeNull();
     const replay = await h.callback([
       ["code", "owner-code"],
       ["state", state],
     ]);
-    expect(replay.location).toBe("/#/login?error=state");
+    expect(replay.location).toBe("/login?error=state");
 
     // The user pressed Cancel on Discord.
     authorize = await h.startLogin();
@@ -354,11 +367,11 @@ describe("oauth", () => {
       ["error", "access_denied"],
       ["state", state],
     ]);
-    expect(cancelled.location).toBe("/#/login?error=cancelled");
+    expect(cancelled.location).toBe("/login?error=cancelled");
 
     // Discord refused the code: no details leak.
     const bad = await h.login("forged-code");
-    expect(bad.location).toBe("/#/login?error=exchange");
+    expect(bad.location).toBe("/login?error=exchange");
     expect(bad.cookie).toBeNull();
 
     for (const evil of [
@@ -368,15 +381,16 @@ describe("oauth", () => {
       "/ok\r\nSet-Cookie: x=1",
     ]) {
       const done = await h.login("owner-code", evil);
-      expect(done.location, JSON.stringify(evil)).toBe("/#/");
+      expect(done.location, JSON.stringify(evil)).toBe("/");
     }
   });
 
   it("denied_and_read_only_users", async () => {
-    const h = await harnessWith(true);
+    // With the public side on, such a login is a member session instead (test/public.test.ts).
+    const h = await harnessWith(true, { enabled: false });
 
     const denied = await h.login("stranger-code");
-    expect(denied.location).toBe("/#/login?error=denied");
+    expect(denied.location).toBe("/login?error=denied");
     expect(denied.setCookie).toBeNull();
     expect(await h.persisted()).toEqual([]);
     const audit = await h.auditBy("discord:222");
@@ -441,6 +455,90 @@ describe("oauth", () => {
     } finally {
       await sqlite.close();
     }
+  });
+
+  it("wallet_adjust_needs_its_node_and_posts_once_per_key", async () => {
+    const h = await harnessWith(true);
+    const person = "01J0000000000000000000000A";
+    const posted = new Map<string, { entry_id: string; balance: number }>();
+    let balance = 10;
+    h.sup.services.provide("identity", IdentityStoreKey, {
+      accountsOf: async (id: string) =>
+        id === person ? [{ account: discord("777"), display_name: "Ann" }] : [],
+    } as never);
+    h.sup.services.provide("economy", EconomyKey, {
+      statement: async () => ({ balance, ledger: [{ ts: "t", delta: 5, label: "管理員調整:x" }] }),
+      adjust: async (_a: AccountRef, amount: number, note: string, by: string, key: string) => {
+        const first = posted.get(key);
+        if (first) return { ...first, duplicate: true };
+        if (balance + amount < 0) throw new EconomyError(402, "只有 10 魚幣");
+        balance += amount;
+        const row = { entry_id: `e${posted.size}`, balance };
+        posted.set(key, row);
+        expect(note).toBe("活動");
+        expect(by).toMatch(/^(api|discord:)/);
+        return { ...row, duplicate: false };
+      },
+    } as never);
+    const path = `/api/people/${person}/wallet/adjust`;
+
+    // Panel access without the node: may look, may not adjust.
+    await h.auth.upsertRole("test", {
+      name: "writer",
+      rank: 50,
+      grants: ["admin.panel.access", "admin.panel.write"],
+      denies: [],
+      builtin: false,
+    });
+    await h.auth.assign("test", discord(VIEWER), "writer", { type: "global" });
+    const writer = await h.loginCookie("viewer-code");
+    const read = await h.withCookie("GET", `/api/people/${person}/wallet`, writer, false);
+    expect(read.status).toBe(200);
+    expect(read.body).toMatchObject({ balance: 10 });
+    const denied = await h.withCookie("POST", path, writer, true, {
+      amount: 5,
+      note: "活動",
+      key: "k",
+    });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error).toContain("admin.economy.adjust");
+
+    // An admin (admin.*) may.
+    await h.auth.assign("test", discord(ADMIN), "admin", { type: "global" });
+    const admin = await h.loginCookie("admin-code");
+    const ok = await h.withCookie("POST", path, admin, true, {
+      amount: 5,
+      note: "活動",
+      key: "k1",
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ balance: 15, entry_id: "e0", duplicate: false });
+    const again = await h.withCookie("POST", path, admin, true, {
+      amount: 5,
+      note: "活動",
+      key: "k1",
+    });
+    expect(again.body).toEqual({ balance: 15, entry_id: "e0", duplicate: true });
+
+    // The token has every right; bad bodies are 400, short coins 402, unknown people 404.
+    const call = (body: unknown, p = path) =>
+      raw(h.base(), "POST", p, { token: TOKEN, json: body });
+    expect((await call({ amount: 0, note: "活動", key: "a" })).status).toBe(400);
+    expect((await call({ amount: 1.5, note: "活動", key: "a" })).status).toBe(400);
+    expect((await call({ amount: 5, note: "", key: "a" })).status).toBe(400);
+    expect((await call({ amount: 5, note: "x".repeat(101), key: "a" })).status).toBe(400);
+    expect((await call({ amount: 5, note: "活動" })).status).toBe(400);
+    expect((await call({ amount: -500, note: "活動", key: "b" })).status).toBe(402);
+    expect(
+      (
+        await call(
+          { amount: 5, note: "活動", key: "c" },
+          "/api/people/01J0000000000000000000000B/wallet/adjust",
+        )
+      ).status,
+    ).toBe(404);
+    const audit = await h.auditBy("discord:444");
+    expect(audit.filter((e) => e.action === "economy.adjust")).toHaveLength(1);
   });
 
   it("logout_and_revocation", async () => {
@@ -514,7 +612,7 @@ describe("oauth", () => {
     expect(methods.token && !methods.discord).toBe(true);
     const response = await fetch(`${h.base()}/api/auth/oauth/login`, { redirect: "manual" });
     await response.arrayBuffer();
-    expect(response.headers.get("location")).toBe("/#/login?error=disabled");
+    expect(response.headers.get("location")).toBe("/login?error=disabled");
     expect((await h.withCookie("GET", "/api/queue", "A".repeat(43), false)).status).toBe(401);
     expect((await client.session()).method).toBe("token");
   });

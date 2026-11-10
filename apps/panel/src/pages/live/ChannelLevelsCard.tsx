@@ -35,7 +35,7 @@ function LevelRow({ c, levels }: { c: ChannelLevelView; levels: ChannelLevelInfo
   // Unmuting goes back to the configured level, or `normal` when that is off too.
   const unmuteTo = c.default !== OFF ? null : (levels.find((l) => l.mode === "normal")?.mode ?? levels[1]?.mode ?? null);
   return (
-    <li className="flex min-h-14 items-center gap-3 px-4 py-2">
+    <li className="flex min-h-14 items-center gap-3 py-(--row-y)">
       <label htmlFor={id} className={cn("min-w-0 flex-1", muted && "text-muted-foreground")}>
         <span className="block truncate text-sm font-medium">{name}</span>
         <span className="block truncate text-xs text-muted-foreground">
@@ -70,7 +70,7 @@ function LevelRow({ c, levels }: { c: ChannelLevelView; levels: ChannelLevelInfo
             aria-label={muted ? `讓她在 ${name} 說話` : `讓她在 ${name} 閉嘴`}
             aria-pressed={muted}
             disabled={set.isPending}
-            className={cn(muted && "bg-destructive/12 text-[oklch(0.78_0.14_25)] hover:bg-destructive/20")}
+            className={cn(muted && "bg-control text-primary hover:bg-control-hover hover:text-primary")}
             onClick={() => apply(muted ? unmuteTo : OFF)}
           >
             {muted ? <VolumeX /> : <Volume2 />}
@@ -85,7 +85,7 @@ function LevelRow({ c, levels }: { c: ChannelLevelView; levels: ChannelLevelInfo
 function LevelsBody({ v }: { v: ChannelLevelsView }) {
   if (v.channels.length === 0) return <EmptyLine>還沒有看過任何文字頻道</EmptyLine>;
   return (
-    <ul className="divide-y" aria-label="各頻道的聊天等級">
+    <ul className="divide-y divide-line-soft" aria-label="各頻道的聊天等級">
       {v.channels.map((c) => (
         <LevelRow key={`${c.context.platform}:${c.context.scope}:${c.context.channel}`} c={c} levels={v.levels} />
       ))}
@@ -97,7 +97,7 @@ function LevelsBody({ v }: { v: ChannelLevelsView }) {
 export function ChannelLevelsCard() {
   const levels = useChannelLevels();
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>聊天等級</CardTitle>
       </CardHeader>

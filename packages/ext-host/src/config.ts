@@ -24,8 +24,13 @@ export const HostConfigSchema = z.object({
   watch_poll_ms: z.number().int().nonnegative().default(1000),
   /** `initialize` handshake. */
   init_timeout_ms: z.number().int().nonnegative().default(10_000),
-  /** `tools.call` and `commands.invoke`. */
+  /** `tools.call`, `commands.invoke` and `task.start` / `task.cancel` / `task.observe`. */
   call_timeout_ms: z.number().int().nonnegative().default(30_000),
+  /**
+   * A task an extension's executor accepted may report its end this long after its `budget_s`;
+   * then the host fails it with `timeout` itself (and sends `task.cancel`).
+   */
+  task_grace_ms: z.number().int().nonnegative().default(5_000),
   /** `prompt.contribute`. */
   prompt_timeout_ms: z.number().int().nonnegative().default(3_000),
   /** Time an extension gets to exit after `shutdown` before it is killed. */

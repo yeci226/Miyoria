@@ -4,7 +4,8 @@ import type { ReactNode } from "react";
 import type { CostReport, ModuleInfo, ModuleStateKind } from "@/api/types";
 import { useCost, useExtensions, useMcpServers, useModules, useSelf } from "@/app/queries";
 import { ChartBlock, type Part, SegmentBar } from "@/components/charts/charts";
-import { EmergencyStop, NowStrip } from "@/components/live-state";
+import { ConsciousnessBlock } from "@/components/consciousness";
+import { NowStrip, useHerNow } from "@/components/live-state";
 import { Page, PageHeader } from "@/components/page";
 import { Dot, STATE_LABEL, type Tone } from "@/components/status";
 import {
@@ -18,8 +19,12 @@ import {
   useRange,
   useTrend,
 } from "@/components/trends";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/misc";
 import { fmtUsd } from "@/lib/format";
+import { SayCard } from "@/pages/live/SayCard";
+import { VoiceCard } from "@/pages/live/VoiceCard";
+import { RulesRail } from "@/pages/rules/RulesRail";
 
 interface Issue {
   key: string;
@@ -80,39 +85,42 @@ function Attention() {
 
   if (modules.isPending || issues.length === 0) return null;
   return (
-    <section aria-label="需要注意" className="overflow-hidden rounded-lg border border-warning/25 bg-warning/[0.04]">
-      <ul className="divide-y divide-warning/15">
+    <Card aria-label="需要注意">
+      <CardHeader>
+        <CardTitle>需要注意</CardTitle>
+      </CardHeader>
+      <ul className="divide-y divide-line-soft">
         {issues.map((i) => (
-          <li key={i.key} className="flex items-center gap-3 px-4 py-2.5">
-            <Dot tone={i.tone} />
-            <p className="min-w-0 flex-1 text-sm">
+          <li key={i.key} className="flex items-start gap-2.5 py-(--row-y)">
+            <Dot tone={i.tone} className="mt-1.5" />
+            <p className="grid min-w-0 flex-1 text-[13px]">
               <span className="font-medium">{i.title}</span>
               {i.detail && (
-                <span className="ml-2 text-[13px] text-muted-foreground" title={i.detail}>
+                <span className="truncate text-xs text-muted-foreground" title={i.detail}>
                   {i.detail}
                 </span>
               )}
             </p>
             {i.to && (
-              <span className="text-muted-foreground [&_a]:flex [&_a]:size-7 [&_a]:items-center [&_a]:justify-center [&_a]:rounded-md hover:[&_a]:bg-accent hover:[&_a]:text-foreground">
+              <span className="text-muted-foreground [&_a]:flex [&_a]:size-7 [&_a]:items-center [&_a]:justify-center [&_a]:rounded-md hover:[&_a]:bg-hover hover:[&_a]:text-foreground">
                 {i.to}
               </span>
             )}
           </li>
         ))}
       </ul>
-    </section>
+    </Card>
   );
 }
 
 const STATE_COLOR: Record<ModuleStateKind, string> = {
-  running: "var(--chart-1)",
-  degraded: "var(--warning)",
-  starting: "var(--chart-4)",
-  stopping: "var(--chart-4)",
-  failed: "var(--destructive)",
+  running: "var(--chart-2)",
+  degraded: "var(--chart-4)",
+  starting: "var(--chart-3)",
+  stopping: "var(--chart-3)",
+  failed: "var(--chart-1)",
   stopped: "var(--chart-quiet)",
-  disabled: "oklch(0.3 0 0)",
+  disabled: "var(--chart-faint)",
 };
 
 const STATE_ORDER: ModuleStateKind[] = ["running", "starting", "stopping", "degraded", "failed", "stopped", "disabled"];
@@ -143,10 +151,10 @@ function ModulesBlock() {
       {modules.isPending ? (
         <Skeleton className="h-16 w-full" />
       ) : (
-        <div className="grid gap-5">
+        <div className="grid gap-4">
           <SegmentBar parts={parts} label="子系統狀態" />
           {restarts.length > 0 && (
-            <ul className="grid gap-2 border-t pt-4 text-[13px]" aria-label="最近重啟">
+            <ul className="grid gap-2 border-t pt-3 text-[13px]" aria-label="最近重啟">
               {restarts.slice(0, 4).map((m) => (
                 <li key={m.id} className="flex items-center justify-between gap-3">
                   <span className="truncate">{m.name}</span>
@@ -161,32 +169,57 @@ function ModulesBlock() {
   );
 }
 
+/** The one opening on the picture: what she is doing, and her live state. */
+function Opening() {
+  const now = useHerNow();
+  return (
+    <div className="opening relative flex min-h-44 flex-col justify-end gap-1.5 border-b px-4 pb-4 [text-shadow:0_1px_2px_rgba(0,0,0,0.7)] sm:px-7 md:-mt-15 md:min-h-58">
+      <p className="relative text-2xl leading-tight font-semibold tracking-[-0.02em]">
+        {now.label}
+        {now.detail && ` · ${now.detail}`}
+      </p>
+      <div className="relative">
+        <NowStrip />
+      </div>
+    </div>
+  );
+}
+
 export function OverviewPage() {
   const [range, setRange] = useRange();
   const trend = useTrend(range);
   const self = useSelf();
   return (
-    <Page>
-      <PageHeader title="總覽" actions={<EmergencyStop />} />
-      <NowStrip />
-      <Attention />
-      <div className="flex items-center justify-between gap-3 pt-2">
-        <h2 className="text-base font-semibold tracking-tight">趨勢</h2>
-        <RangeToggle range={range} onChange={setRange} />
-      </div>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <ActivityBlock trend={trend} />
-        <ThoughtsBlock range={range} />
-      </div>
-      <StateFacets trend={trend} live={self.data} />
-      <div className="grid gap-4 lg:grid-cols-2">
-        <TokensBlock trend={trend} />
-        <LatencyBlock trend={trend} />
-      </div>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <SpendBlock />
-        <ModulesBlock />
-      </div>
-    </Page>
+    <>
+      <Opening />
+      <Page
+        rail={
+          <>
+            <Attention />
+            <RulesRail />
+            <VoiceCard />
+            <SayCard />
+            <SpendBlock />
+            <ModulesBlock />
+          </>
+        }
+      >
+        <PageHeader title="總覽" />
+        <ConsciousnessBlock />
+        <div className="-mb-5 flex min-h-[26px] items-center justify-between gap-3">
+          <h2 className="text-[15px] font-semibold tracking-[-0.01em]">趨勢</h2>
+          <RangeToggle range={range} onChange={setRange} />
+        </div>
+        <div className="grid gap-(--stage-gap) lg:grid-cols-2">
+          <ActivityBlock trend={trend} />
+          <ThoughtsBlock range={range} />
+        </div>
+        <StateFacets trend={trend} live={self.data} />
+        <div className="grid gap-(--stage-gap) lg:grid-cols-2">
+          <TokensBlock trend={trend} />
+          <LatencyBlock trend={trend} />
+        </div>
+      </Page>
+    </>
   );
 }

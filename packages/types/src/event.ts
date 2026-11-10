@@ -83,6 +83,12 @@ export type Event =
          * Stage shows the emotion when the sentence starts playing.
          */
         emotion?: string | null;
+        /** How much of it was audible, in ms (`interrupted`, `finished`). */
+        heard_ms?: number | null;
+        /** How long all of it is, in ms; `null`: it was still being synthesized. */
+        total_ms?: number | null;
+        /** Moderation replaced what she meant (the rule): this is not her line reaching anyone. */
+        blocked?: string | null;
       };
     }
   /** Asks the agent to start a turn on her own initiative (no new input). */

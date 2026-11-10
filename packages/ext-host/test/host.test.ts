@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { GatedToolsKey } from "@miyoria/actions";
 import { CommandRegistry, CommandRegistryKey, Invocation, Permissions } from "@miyoria/commands";
 import {
   Config,
@@ -35,6 +36,7 @@ import {
   newId,
   PromptContributors,
   PromptContributorsKey,
+  TaskExecutorsKey,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import { discover } from "../src/index.js";
@@ -264,9 +266,13 @@ describe("ext host end to end", { timeout: 30_000 }, () => {
     const GAME = "ext.test.game";
     let h = await harness([join(FIXTURES, "game-ext")]);
     await waitState(h, GAME, "running", 5000);
-    // The declared game id reaches the extension in `initialize`.
-    expect(h.tools.names()).toContain("game_fake_id");
-    expect(await call(h, "game_fake_id", {})).toBe("fake");
+    // The declared game id reaches the extension in `initialize`. The adapter's `game_*` tools
+    // are gated: never in the chat turns' tool registry, only in the one capabilities use.
+    expect(h.tools.names()).not.toContain("game_fake_id");
+    const gated = h.sup.services.get(GatedToolsKey);
+    expect(gated?.names()).toContain("game_fake_id");
+    const tool = gated?.get("game_fake_id");
+    expect(await tool?.call(toolCtx(), {})).toBe("fake");
 
     const publish = (topic: string) => call(h, "try_publish", { topic });
     expect(await publish("game.fake.death")).toBe("ok");
@@ -286,6 +292,68 @@ describe("ext host end to end", { timeout: 30_000 }, () => {
     expect(payload(env).ok).toBe(false);
     expect(payload(env).code).toBe(-32001);
     expect(h.tools.isEmpty).toBe(true);
+  });
+
+  it("task_executor_round_trips_and_every_task_ends_with_a_code", async () => {
+    const GAME = "ext.test.game";
+    const extra = 'task_grace_ms = 100\n[extensions."test.game"]\nexecutor = true';
+    const h = await harness([join(FIXTURES, "game-ext")], extra, "game.fake.task.*");
+    await waitState(h, GAME, "running", 5000);
+    const exec = h.sup.services.get(TaskExecutorsKey)?.get("game.fake");
+    if (!exec) throw new Error("no executor registered for game.fake");
+    expect(exec.info).toMatchObject({
+      owner: "game.fake",
+      name: "Fixture",
+      guide: "just a fixture",
+    });
+    expect(exec.info.goals).toEqual([
+      { name: "echo", description: "Ends at once", parameters: null, budget_s: 5 },
+      { name: "hang", description: "Never ends", parameters: null, budget_s: null },
+      { name: "crash", description: "Exits the process", parameters: null, budget_s: null },
+    ]);
+    expect(await exec.observe()).toMatchObject({ state: { fixture: true }, task: null });
+    const sub = h.sub as Subscription;
+    const next = async (): Promise<{ topic: string; payload: JsonObject }> => {
+      const env = await recvWithin(sub, 3000);
+      if (env?.event.type !== "custom") throw new Error("no task event");
+      return { topic: env.event.data.topic, payload: env.event.data.payload as JsonObject };
+    };
+
+    // Done, published on `game.fake.task.*`; the extension's late `failed` is dropped.
+    await exec.start({ id: "t1", goal: "echo", args: { n: 1 }, budget_s: 5 });
+    expect((await next()).topic).toBe("game.fake.task.started");
+    expect(await next()).toMatchObject({
+      topic: "game.fake.task.progress",
+      payload: { progress: 0.5 },
+    });
+    expect(await next()).toMatchObject({
+      topic: "game.fake.task.done",
+      payload: { type: "done", task: "t1", detail: 'echo {"n":1}', data: { n: 1 } },
+    });
+
+    // Never reported: the host fails it at budget + grace, with `timeout`.
+    await exec.start({ id: "t2", goal: "hang", args: {}, budget_s: 0.2 });
+    expect((await next()).payload).toMatchObject({ type: "started", task: "t2" });
+    expect(await next()).toMatchObject({
+      topic: "game.fake.task.failed",
+      payload: { task: "t2", code: "timeout" },
+    });
+
+    // Cancelled: the extension says so (the late cancel of t2 is dropped).
+    await exec.start({ id: "t3", goal: "hang", args: {}, budget_s: 30 });
+    expect((await next()).payload).toMatchObject({ type: "started", task: "t3" });
+    await exec.cancel("t3");
+    expect((await next()).payload).toMatchObject({ type: "failed", task: "t3", code: "cancelled" });
+
+    // The process dies mid-task: `crashed`, and the executor is gone with it.
+    await exec.start({ id: "t4", goal: "crash", args: {}, budget_s: 30 });
+    expect((await next()).payload).toMatchObject({ type: "started", task: "t4" });
+    expect((await next()).payload).toMatchObject({ type: "failed", task: "t4", code: "crashed" });
+    await waitState(h, GAME, "failed", 5000);
+    expect(h.sup.services.get(TaskExecutorsKey)?.get("game.fake")).toBeUndefined();
+    await expect(
+      exec.start({ id: "t5", goal: "echo", args: {}, budget_s: 5 }),
+    ).rejects.toMatchObject({ code: "disconnected" });
   });
 
   it("crash_fails_module_then_restarts", async () => {

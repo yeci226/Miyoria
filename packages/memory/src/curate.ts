@@ -4,7 +4,8 @@
 
 import type { MemoryRecord } from "@miyoria/store";
 import type { CuratedNote, InsightInput, MemoryCurator, Timestamp } from "@miyoria/types";
-import { type MemoryEngine, MemoryError, memoryFilter, storedId } from "./engine.js";
+import { type MemoryEngine, MemoryError, memoryFilter, storedId, weakerOrigin } from "./engine.js";
+import { mergeRefs } from "./evidence.js";
 import { isPrivate, scopeEquals, scopeLabel } from "./scope.js";
 
 const ms = (t: Timestamp) => Date.parse(t);
@@ -65,6 +66,16 @@ export class Curator implements MemoryCurator {
       throw new MemoryError("memories of different privacy scopes are never merged");
     }
     const subjects = [...new Set(from.flatMap((r) => r.subjects))];
+    // An insight claims no more provenance than its weakest source, and keeps all the evidence.
+    const origin = from.reduce(
+      (o, r) => weakerOrigin(o, r.origin ?? "unknown"),
+      first.origin ?? "unknown",
+    );
+    const sameSource = from.every(
+      (r) =>
+        r.source?.account.platform === first.source?.account.platform &&
+        r.source?.account.id === first.source?.account.id,
+    );
     const stored = await this.engine.store(
       {
         kind: input.kind,
@@ -74,6 +85,12 @@ export class Curator implements MemoryCurator {
         importance: Math.max(input.importance, ...from.map((r) => r.importance)),
         confidence: Math.max(...from.map((r) => r.confidence)),
         source_context: first.source_context,
+        source: sameSource ? first.source : null,
+        origin,
+        source_events: mergeRefs(
+          this.engine.config.evidence.max_events,
+          ...from.map((r) => r.source_events),
+        ),
         due: null,
       },
       now,

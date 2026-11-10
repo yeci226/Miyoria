@@ -13,6 +13,7 @@ import {
   PromptContributorsKey,
   SpeechPauseKey,
   serviceKey,
+  TaskSteerKey,
   VoiceFloorKey,
 } from "@miyoria/types";
 import { singCapabilities } from "./actions.js";
@@ -31,6 +32,8 @@ interface Running {
   commands: CommandMount;
   prompts: PromptContributors | null;
   capabilities: (() => void)[];
+  /** Removes the steer route again. */
+  unroute: (() => void) | null;
 }
 
 /**
@@ -50,7 +53,7 @@ export class SingModule implements Module {
   static readonly ID = "sing";
   readonly manifest = defineManifest(SingModule.ID, "Singing", {
     description: "Song requests: AI covers in her voice, sung in voice with lyrics",
-    optional: ["voice.link", "mind", "queue", "commands", "actions", "agent"],
+    optional: ["voice.link", "mind", "queue", "commands", "actions", "agent", "activity"],
     configSchema: SingConfigSchema,
   });
   readonly #worker: ((url: string, timeoutMs: number) => SingWorker) | null;
@@ -110,7 +113,22 @@ export class SingModule implements Module {
     });
     await singer.restore();
     ctx.spawn("worker", (signal) => singer.run(signal));
-    this.#running = { singer, worker, commands, prompts, capabilities };
+    // The main line changes a song that has not started through the ActivityManager's steer.
+    const unroute =
+      ctx.services.get(TaskSteerKey)?.registerRoute("sing", {
+        capability: "sing.steer",
+        live: (task) => singer.steerable(task),
+        args: (steer) => ({
+          steer: {
+            id: steer.id,
+            task: steer.task,
+            patch: steer.patch,
+            why: steer.why,
+            cause: steer.cause,
+          },
+        }),
+      }) ?? null;
+    this.#running = { singer, worker, commands, prompts, capabilities, unroute };
   }
 
   async health(): Promise<Health> {
@@ -128,6 +146,7 @@ export class SingModule implements Module {
     running.singer.close();
     running.commands.detach();
     running.prompts?.unregister(PROMPT_KEY);
+    running.unroute?.();
     for (const unregister of running.capabilities) unregister();
   }
 }

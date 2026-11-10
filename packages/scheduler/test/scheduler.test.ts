@@ -1,14 +1,21 @@
 import { EventBus, ServiceRegistry, type Subscription, Supervisor } from "@miyoria/kernel";
 import {
+  ACTION_SETTLED_TOPIC,
   type Action,
+  type ActionSettled,
   type ActionSink,
   ActionSinkKey,
   type ActuatorExecutor,
   ActuatorExecutorKey,
   actLane,
   type ContextKey,
+  customEvent,
   type JsonObject,
+  type JsonValue,
   type MessageRef,
+  MouthKey,
+  MUTED,
+  NOT_MAIN_LINE,
   newAction,
   newId,
   type OutgoingMessage,
@@ -307,6 +314,51 @@ describe("scheduler (TS specifics)", () => {
     await h.sup.stopAll();
   });
 
+  it("says which line of hers an action was once it settled", async () => {
+    const h = await harness();
+    const settled = h.sup.bus.subscribe(ACTION_SETTLED_TOPIC);
+    const turn = newId();
+    const action = send("hi", "direct", { turn });
+    await h.actions.submit(action);
+    const env = await settled.recv();
+    expect(env?.correlation).toBe(turn);
+    const payload: ActionSettled = {
+      action: action.id,
+      turn,
+      type: "send_message",
+      context: context("fake"),
+      text: "hi",
+      ok: true,
+      error: null,
+      message: { context: context("fake"), id: "m" },
+    };
+    expect(env?.event).toEqual(customEvent(ACTION_SETTLED_TOPIC, payload as unknown as JsonValue));
+    await h.sup.stopAll();
+  });
+
+  it("says when a line never went out, and nothing about what is no line", async () => {
+    const h = await harness();
+    const settled = h.sup.bus.subscribe(ACTION_SETTLED_TOPIC);
+    const ctx = context("fake");
+    const speak = newAction("voice:fake:g", "direct", {
+      type: "speak",
+      context: ctx,
+      text: "沒有聲音",
+      emotion: null,
+    });
+    const message: MessageRef = { context: ctx, id: "42" };
+    await h.actions.submit(newAction("text:x", "direct", { type: "react", message, emoji: "👍" }));
+    await h.actions.submit(speak);
+    const env = await settled.recv();
+    expect(env?.event).toMatchObject({
+      data: {
+        payload: { type: "speak", text: "沒有聲音", ok: false, error: "no voice sink" },
+      },
+    });
+    expect(settled.tryRecv()).toBeNull();
+    await h.sup.stopAll();
+  });
+
   it("reacts_are_executed_on_the_platform_of_the_message", async () => {
     const h = await harness();
     const message: MessageRef = { context: context("fake"), id: "42" };
@@ -438,6 +490,165 @@ describe("scheduler voice", () => {
     expect(h.completed.tryRecv()).toBeNull();
     await vi.advanceTimersByTimeAsync(4000);
     expect(await nextDone(h.completed)).toMatchObject({ ok: false, error: "timed out" });
+    await h.sup.stopAll();
+  });
+});
+
+describe("the main line (pipeline v3)", () => {
+  function mouthOf(h: Harness, owned: Set<string>): void {
+    h.sup.services.provide("app", MouthKey, {
+      owns: (turn) => turn !== null && owned.has(turn),
+      say: async () => undefined,
+    });
+  }
+
+  it("a line the main line does not own never goes out", async () => {
+    vi.useRealTimers();
+    const h = await harness();
+    mouthOf(h, new Set(["mine"]));
+    const stray = send("繞過主線", "direct", { turn: "other" });
+    await h.actions.submit(stray);
+    const done = await nextDone(h.completed);
+    expect(done).toMatchObject({ action: stray.id, ok: false, error: NOT_MAIN_LINE });
+    await h.actions.submit(send("沒有回合的", "direct"));
+    expect(await nextDone(h.completed)).toMatchObject({ ok: false, error: NOT_MAIN_LINE });
+    await h.actions.submit(send("她說的", "direct", { turn: "mine" }));
+    expect(await nextDone(h.completed)).toMatchObject({ ok: true });
+    await h.sup.stopAll();
+  });
+
+  it("what is not a line passes: typing, reactions, the gate's actions", async () => {
+    vi.useRealTimers();
+    const h = await harness();
+    mouthOf(h, new Set());
+    const ctx = context("fake");
+    await h.actions.submit(
+      newAction(textLane(ctx), "direct", {
+        type: "react",
+        message: { context: ctx, id: "m" },
+        emoji: "ok",
+      }),
+    );
+    expect(await nextDone(h.completed)).toMatchObject({ ok: true });
+    await h.sup.stopAll();
+  });
+
+  it("without a mouth (v2) nothing changes", async () => {
+    vi.useRealTimers();
+    const h = await harness();
+    await h.actions.submit(send("v2", "direct"));
+    expect(await nextDone(h.completed)).toMatchObject({ ok: true });
+    await h.sup.stopAll();
+  });
+
+  it("interruptTurn stops what is playing, not only what is queued", async () => {
+    vi.useRealTimers();
+    const h = await harness();
+    let stopped = false;
+    const voice: VoiceSink = {
+      speak: (_c, _t, _e, _turn, signal) =>
+        new Promise<SpeakOutcome>((resolve) => {
+          signal?.addEventListener("abort", () => {
+            stopped = true;
+            resolve("interrupted");
+          });
+        }),
+    };
+    h.sup.services.provide("app", VoiceSinkKey, voice);
+    const context: ContextKey = { platform: "fake", scope: "g", channel: "v", kind: "voice" };
+    const speak = newAction(
+      voiceLane("fake", "g"),
+      "direct",
+      { type: "speak", context, text: "一句很長的話", emotion: null },
+      { turn: "t1" },
+    );
+    await h.actions.submit(speak);
+    await new Promise((r) => setTimeout(r, 5));
+    const scheduler = h.actions as Scheduler;
+    await scheduler.interruptTurn("t1");
+    const done = await nextDone(h.completed);
+    expect(stopped).toBe(true);
+    expect(done).toMatchObject({ action: speak.id, ok: false, error: "cancelled" });
+    await h.sup.stopAll();
+  });
+});
+
+describe("the emergency stop", () => {
+  const settledOf = (sub: Subscription): ActionSettled[] => {
+    const out: ActionSettled[] = [];
+    for (let e = sub.tryRecv(); e !== null; e = sub.tryRecv()) {
+      if (e.event.type === "custom") out.push(e.event.data.payload as unknown as ActionSettled);
+    }
+    return out;
+  };
+
+  it("drops everything queued and stops what is going out, whoever it belongs to", async () => {
+    const h = await harness();
+    const stopped: string[] = [];
+    const voice: VoiceSink = {
+      speak: (_context, text, _emotion, _turn, signal) =>
+        new Promise((resolve) => {
+          signal?.addEventListener("abort", () => {
+            stopped.push(text);
+            resolve("interrupted");
+          });
+        }),
+    };
+    h.sup.services.provide("app", VoiceSinkKey, voice);
+    const ctx: ContextKey = { ...context("fake"), kind: "voice" };
+    const lane = voiceLane("fake", "g");
+    const speak = (text: string) =>
+      newAction(lane, "direct", { type: "speak", context: ctx, text, emotion: null });
+    await h.actions.submit(speak("說到一半(沒有回合)"));
+    await h.actions.submit(speak("排隊中"));
+    await holdLane(h);
+    await h.actions.submit(send("文字排隊中", "direct"));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await h.actions.silence?.()).toBeGreaterThanOrEqual(2);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(stopped).toEqual(["說到一半(沒有回合)"]);
+    expect(h.sink.ops).not.toContain("send:文字排隊中");
+    await h.sup.stopAll();
+  });
+
+  it("while she is stopped a line meets `muted`; an action of the panel still runs", async () => {
+    const h = await harness();
+    const ran: string[] = [];
+    const executor: ActuatorExecutor = {
+      paused: true,
+      run: async (ticket) => {
+        ran.push(ticket);
+        return "";
+      },
+      dropped: () => undefined,
+    };
+    h.sup.services.provide("app", ActuatorExecutorKey, executor);
+    const settled = h.sup.bus.subscribe(ACTION_SETTLED_TOPIC);
+    await h.actions.submit(send("還在講", "direct"));
+    await h.actions.submit(
+      newAction(actLane("x"), "system", {
+        type: "actuate",
+        capability: "voice.leave",
+        ticket: "t",
+        context: null,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    expect(h.sink.ops).toEqual([]);
+    expect(ran).toEqual(["t"]);
+    expect(settledOf(settled)).toMatchObject([{ ok: false, error: MUTED }]);
+    await h.sup.stopAll();
+  });
+
+  it("says when moderation replaced a line, from the turn or from the sink", async () => {
+    const h = await harness();
+    const settled = h.sup.bus.subscribe(ACTION_SETTLED_TOPIC);
+    await h.actions.submit(send("Filtered.", "direct", { blocked: "test.word" }));
+    await vi.advanceTimersByTimeAsync(20);
+    h.sink.send = async (ctx) => ({ context: ctx, id: "m", blocked: "sink.rule" });
+    await h.actions.submit(send("hello", "direct"));
+    await vi.advanceTimersByTimeAsync(20);
+    expect(settledOf(settled).map((s) => s.blocked)).toEqual(["test.word", "sink.rule"]);
     await h.sup.stopAll();
   });
 });

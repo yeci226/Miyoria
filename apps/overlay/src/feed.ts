@@ -12,6 +12,9 @@
 //   {"type":"activity","kind":"thinking"|"synthesizing"|"song_prepare"|"singing"|null,
 //    "label":"…","detail":"…"|null,"progress":0..1|null,"elapsed_ms":n|null,"duration_ms":n|null}
 //                                               what she is doing; kind null hides it
+//   {"type":"gift","text":"Owen 餵了她一碗白飯"}  the gift line (the Stage merges gifts); "" hides it
+//   {"type":"screen","kind":"message"|"dedication","name":"Owen","text":"加油","song":null|"春日影"}
+//                                               a paid message or song dedication; not merged, queued here
 
 export interface Subtitle {
   turn: string;
@@ -56,6 +59,18 @@ export interface QueueItem {
   by: string | null;
 }
 
+/** A paid message or dedication waiting for, or on, the screen. */
+export interface ScreenCard {
+  /** Counts up per card; a repeated message is still a new card. */
+  id: number;
+  kind: "message" | "dedication";
+  /** Who paid. */
+  name: string;
+  text: string;
+  /** A dedication's song title. */
+  song: string | null;
+}
+
 export interface OverlayState {
   /** The WebSocket to the Stage is up. */
   connected: boolean;
@@ -71,6 +86,12 @@ export interface OverlayState {
   /** A status line such as 「準備歌曲中…」 from an older Core, or null. Shown in the activity capsule when there is no activity. */
   notice: string | null;
   activity: Activity | null;
+  /** The gift line, or null. */
+  gift: string | null;
+  /** Screen cards in order; the first one is on the screen (or about to be), the rest wait. */
+  screens: ScreenCard[];
+  /** The id the next card gets. */
+  screenSeq: number;
 }
 
 export type FeedMessage =
@@ -84,12 +105,23 @@ export type FeedMessage =
 
   | { type: "notice"; text: string }
   /** `null` hides the activity capsule. */
-  | { type: "activity"; activity: Activity | null };
+  | { type: "activity"; activity: Activity | null }
+  /** The gift line (already merged by the Stage); `null` hides it. */
+  | { type: "gift"; text: string | null }
+  /** A paid message or dedication; the reducer queues it. */
+  | { type: "screen"; kind: "message" | "dedication"; name: string; text: string; song: string | null };
 
-/** Everything the reducer accepts: feed messages plus the connection state, which the transport reports. */
-export type Action = FeedMessage | { type: "connection"; connected: boolean };
+/**
+ * Everything the reducer accepts: feed messages, the connection state (reported by the transport)
+ * and `screen_done` (from the view: the card with this id has been shown long enough).
+ */
+export type Action = FeedMessage | { type: "connection"; connected: boolean } | { type: "screen_done"; id: number };
 
 export const MAX_QUEUE_ITEMS = 12;
+/** Cards on the screen plus waiting; past this the oldest waiting one is dropped. */
+export const MAX_SCREEN_CARDS = 5;
+const MAX_NAME = 32;
+const MAX_SCREEN_TEXT = 200;
 const MAX_TEXT = 2000;
 const MAX_TITLE = 160;
 const MAX_LABEL = 40;
@@ -106,6 +138,9 @@ export function initialState(): OverlayState {
     queue: [],
     notice: null,
     activity: null,
+    gift: null,
+    screens: [],
+    screenSeq: 0,
   };
 }
 
@@ -221,6 +256,26 @@ export function parseMessage(text: string): FeedMessage | null {
     }
     case "activity":
       return parseActivity(raw);
+    case "gift": {
+      const body = nonEmpty(raw.text);
+      return { type: "gift", text: body ? body.slice(0, MAX_TITLE) : null };
+    }
+    case "screen": {
+      const kind = raw.kind === "dedication" ? "dedication" : raw.kind === "message" ? "message" : null;
+      const name = nonEmpty(raw.name);
+      const text = nonEmpty(raw.text);
+      if (kind === null || !name || !text) return null;
+      const song = nonEmpty(raw.song)?.slice(0, MAX_TITLE) ?? null;
+      // A dedication is about a song; without one it is a plain message.
+      const dedication = kind === "dedication" && song !== null;
+      return {
+        type: "screen",
+        kind: dedication ? "dedication" : "message",
+        name: name.slice(0, MAX_NAME),
+        text: text.slice(0, MAX_SCREEN_TEXT),
+        song: dedication ? song : null,
+      };
+    }
     default:
       return null;
   }
@@ -273,7 +328,7 @@ export function reduce(state: OverlayState, action: Action): OverlayState {
       // A dropped feed means nobody is driving the overlay: stop claiming she is talking.
       return action.connected
         ? { ...state, connected: true }
-        : { ...state, connected: false, speaking: false, activity: null };
+        : { ...state, connected: false, speaking: false, activity: null, gift: null, screens: [] };
     case "speaking":
       return { ...state, speaking: action.state === "started" };
     case "emotion":
@@ -288,11 +343,29 @@ export function reduce(state: OverlayState, action: Action): OverlayState {
     }
     case "activity":
       return sameActivity(state.activity, action.activity) ? state : { ...state, activity: action.activity };
+    case "gift":
+      return action.text === state.gift ? state : { ...state, gift: action.text };
+    case "screen":
+      return reduceScreen(state, action);
+    case "screen_done": {
+      // Only the card on the screen can be done; a late or repeated ack is nothing.
+      const [head, ...rest] = state.screens;
+      return head !== undefined && head.id === action.id ? { ...state, screens: rest } : state;
+    }
     case "subtitle":
       return reduceSubtitle(state, action);
     case "levels":
       return state;
   }
+}
+
+/** Queues the card; over the cap the oldest one that is only waiting goes (never the one on screen). */
+function reduceScreen(state: OverlayState, m: Extract<FeedMessage, { type: "screen" }>): OverlayState {
+  const id = state.screenSeq + 1;
+  const card: ScreenCard = { id, kind: m.kind, name: m.name, text: m.text, song: m.song };
+  const screens = [...state.screens, card];
+  if (screens.length > MAX_SCREEN_CARDS) screens.splice(1, 1);
+  return { ...state, screens, screenSeq: id };
 }
 
 function reduceSubtitle(state: OverlayState, m: Extract<FeedMessage, { type: "subtitle" }>): OverlayState {

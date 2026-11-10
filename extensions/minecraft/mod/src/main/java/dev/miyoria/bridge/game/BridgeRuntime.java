@@ -53,6 +53,8 @@ public final class BridgeRuntime implements ActionHandler {
     private final EventDetector detector;
     private final SnapshotSummarizer.Options snapshotOptions;
     private final Reflexes reflexes;
+    /** Lifecycle of work requests that carry a task id (PROTOCOL.md §6.1). */
+    private final TaskTracker tasks;
     private BaritoneBridge baritone; // null when Baritone is not installed
     /** Requests that move her body; they wait while a reflex has it (see {@link #dispatch}). */
     private static final Set<String> BODY_REQUESTS = Set.of(Protocol.T_BARITONE, Protocol.T_ALTOCLEF, Protocol.T_LOOK,
@@ -71,6 +73,7 @@ public final class BridgeRuntime implements ActionHandler {
     public BridgeRuntime(BridgeConfig cfg) {
         this.cfg = cfg;
         this.server = new BridgeServer(cfg.port, cfg.token, this);
+        this.tasks = new TaskTracker(server::emitEvent);
         this.observer = new GameObserver(cfg);
         this.screenshots = new ScreenshotService(cfg.screenshotMaxWidth);
         this.detector = new EventDetector(new EventDetector.Config(cfg.lowHealthThreshold, cfg.hostileRadius, 100, 10));
@@ -119,7 +122,9 @@ public final class BridgeRuntime implements ActionHandler {
     }
 
     public void emit(String name, JsonObject data) {
+        tasks.stamp(name, data);
         server.emitEvent(name, data);
+        tasks.onEvent(name, data);
     }
 
     public BridgeServer server() {
@@ -137,6 +142,8 @@ public final class BridgeRuntime implements ActionHandler {
         caps.addProperty("baritone", baritone != null);
         caps.addProperty("altoclef", alto.available());
         caps.addProperty("screenshot", true);
+        // Work requests may carry a task id; its task_* lifecycle events follow (PROTOCOL.md §6.1).
+        caps.addProperty("tasks", true);
         o.add("capabilities", caps);
         return o;
     }
@@ -200,6 +207,7 @@ public final class BridgeRuntime implements ActionHandler {
         if (mc.player == null || mc.world == null) {
             throw new ProtocolException(Protocol.E_NOT_IN_GAME, "no world loaded (main menu / loading)");
         }
+        String task = taskId(req);
         if (BODY_REQUESTS.contains(req.type())) {
             // Escaping lava or fighting comes first; a pickup or a meal gives way to her request.
             if (reflexes.blocksRequests()) {
@@ -218,9 +226,19 @@ public final class BridgeRuntime implements ActionHandler {
                 if (baritone == null) {
                     throw new ProtocolException(Protocol.E_BARITONE_UNAVAILABLE, "Baritone is not installed");
                 }
-                out.ok(baritone.execute(req));
+                JsonObject started = baritone.execute(req);
+                out.ok(started);
+                String command = req.str("command").toLowerCase();
+                if (command.equals("stop") || command.equals("cancel")) tasks.stopped();
+                else tasks.begin(task, command);
             }
-            case Protocol.T_ALTOCLEF -> out.ok(alto.execute(req.str("command")));
+            case Protocol.T_ALTOCLEF -> {
+                String command = req.str("command");
+                out.ok(alto.execute(command));
+                String bare = command.trim().replaceFirst("^@", "").toLowerCase();
+                if (bare.equals("stop")) tasks.stopped();
+                else tasks.begin(task, "altoclef");
+            }
             case Protocol.T_CHAT -> out.ok(actions.chat(mc, req));
             case Protocol.T_LOOK -> out.ok(actions.look(mc, req));
             case Protocol.T_USE -> out.ok(actions.use(mc, req));
@@ -231,17 +249,34 @@ public final class BridgeRuntime implements ActionHandler {
                 JsonObject started = workbench.craft(mc, req);
                 standStill();
                 out.ok(started);
+                tasks.begin(task, "craft");
             }
             case Protocol.T_SMELT -> {
                 JsonObject started = workbench.smelt(mc, req);
                 standStill();
                 out.ok(started);
+                tasks.begin(task, "smelt");
             }
             case Protocol.T_RESPAWN -> out.ok(actions.respawn(mc));
-            case Protocol.T_STOP -> out.ok(stopAll());
+            case Protocol.T_STOP -> {
+                out.ok(stopAll());
+                tasks.stopped();
+            }
             case Protocol.T_SCREENSHOT -> screenshots.capture(mc, req, out);
             default -> throw new ProtocolException(Protocol.E_UNKNOWN_TYPE, "unknown request type \"" + req.type() + "\"");
         }
+    }
+
+    /**
+     * The optional {@code task} id of a work request (1-64 chars); checked before the work starts
+     * so a bad id never leaves untracked work running.
+     */
+    private static String taskId(Request req) throws ProtocolException {
+        String task = req.optStr("task", null);
+        if (task != null && (task.isEmpty() || task.length() > 64)) {
+            throw new ProtocolException(Protocol.E_INVALID_ARGS, "\"task\" must be 1-64 chars");
+        }
+        return task;
     }
 
     /** A person stops walking to craft: cancel Baritone and let go of held keys. */
@@ -279,6 +314,14 @@ public final class BridgeRuntime implements ActionHandler {
                 baritone.tick();
             } catch (Throwable t) {
                 if (tickCount % 200 == 0) LOG.debug("baritone tick failed", t);
+            }
+        }
+        // An AltoClef task ends when AltoClef itself is idle (Baritone idles between its sub-tasks).
+        if (inWorld && "altoclef".equals(tasks.kind())) {
+            try {
+                tasks.altoTick(alto.state().busy());
+            } catch (Throwable t) {
+                if (tickCount % 200 == 0) LOG.debug("altoclef task tick failed", t);
             }
         }
 

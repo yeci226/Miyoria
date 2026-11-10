@@ -22,8 +22,31 @@ import {
   tokenize,
   tokenOverlap,
   visibleScopes,
+  visibleToSelf,
 } from "../src/index.js";
 import { acct, DAY, dmCtx, guildCtx, HOUR, MINUTE, profile, SECOND, T0_MS, t0 } from "./helpers.js";
+
+describe("visibleToSelf", () => {
+  const me = { platform: "discord", id: "1" };
+  const them = { platform: "discord", id: "2" };
+  const place = { platform: "discord", scope: "g", channel: "c", kind: "channel" } as const;
+
+  it("shows what is theirs, and what was said in the open", () => {
+    expect(visibleToSelf({ type: "global" }, me, "p1")).toBe(true);
+    expect(visibleToSelf({ type: "guild", platform: "discord", guild: "g" }, me, "p1")).toBe(true);
+    expect(visibleToSelf({ type: "channel", context: place }, me, "p1")).toBe(true);
+    expect(visibleToSelf({ type: "dm", account: me }, me, "p1")).toBe(true);
+    expect(visibleToSelf({ type: "person", person: "p1" }, me, "p1")).toBe(true);
+  });
+
+  it("hides another account's DM and private channels, even when about them", () => {
+    expect(visibleToSelf({ type: "dm", account: them }, me, "p1")).toBe(false);
+    const dm = { ...place, scope: null, kind: "dm" } as const;
+    expect(visibleToSelf({ type: "channel", context: dm }, me, "p1")).toBe(false);
+    expect(visibleToSelf({ type: "person", person: "p2" }, me, "p1")).toBe(false);
+    expect(visibleToSelf({ type: "person", person: "p2" }, me, null)).toBe(false);
+  });
+});
 
 describe("units", () => {
   it("tokenizes_chinese_with_jieba_and_drops_stop_words", () => {
@@ -111,6 +134,26 @@ describe("units", () => {
     const empty = parseExtraction(`{"episode": null, "facts": "nope"}`);
     expect(empty.episode).toBeNull();
     expect(empty.facts).toEqual([]);
+  });
+
+  it("parses_trailing_commas_arrays_and_embedded_objects", () => {
+    const comma = parseExtraction(
+      `{"facts": [{"subject_name": "Owen", "statement": "Owen 喜歡 a,}", "importance": 0.8,},],}`,
+    );
+    expect(comma.facts).toHaveLength(1);
+    expect(comma.facts[0]?.statement).toBe("Owen 喜歡 a,}");
+
+    // A bare array of fact-like items is read as `facts`.
+    const arr = parseExtraction(`結果:[{"subject_name": "Owen", "statement": "Owen 養貓"}]`);
+    expect(arr.facts.map((f) => f.statement)).toEqual(["Owen 養貓"]);
+
+    // Stray JSON in prose is skipped for the real object; stray JSON alone is refused.
+    const prose = parseExtraction(`範例 {"a": 1} 這是答案 {"facts": [], "episode": null} 完`);
+    expect(prose.facts).toEqual([]);
+    expect(() => parseExtraction(`只有 {"a": 1} 這個`)).toThrow();
+    expect(() => parseExtraction(`[{"x": 1}]`)).toThrow();
+    expect(() => parseExtraction("[]")).toThrow();
+    expect(() => parseExtraction(`{"facts": [1,, 2]}`)).toThrow();
   });
 
   it("weighted_score", () => {

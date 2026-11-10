@@ -36,6 +36,25 @@ export const DedupeConfigSchema = z.object({
 });
 export type DedupeConfig = z.output<typeof DedupeConfigSchema>;
 
+/**
+ * Down-weighting of a gag she keeps recalling: when memories saying (nearly) the same thing
+ * were recalled more than `allowed` times in the last `window` recalled items, the next one
+ * scores `penalty` less per extra time (never below `floor` of its score).
+ */
+export const RepeatConfigSchema = z.object({
+  /** Recalled items remembered (0 turns the down-weighting off). */
+  window: uint().default(40),
+  /** Times the same thing may appear in the window before it is down-weighted. */
+  allowed: uint().default(3),
+  /** Score lost per extra appearance (fraction of the score). */
+  penalty: z.number().min(0).max(1).default(0.15),
+  /** Lowest factor applied. */
+  floor: z.number().min(0).max(1).default(0.4),
+  /** Share of the smaller token set that two memories must have in common to be the same thing. */
+  similarity: z.number().min(0).max(1).default(0.6),
+});
+export type RepeatConfig = z.output<typeof RepeatConfigSchema>;
+
 /** Daily maintenance: pruning episodes and decaying unreinforced facts. */
 export const ForgettingConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -54,6 +73,51 @@ export const ForgettingConfigSchema = z.object({
   forget_below_confidence: z.number().default(0.1),
 });
 export type ForgettingConfig = z.output<typeof ForgettingConfigSchema>;
+
+/**
+ * The pinned layer: what is in every prompt without being looked up. Each section is cut to its
+ * own cap, and `max_chars` caps the whole; a source that is too long is truncated, never
+ * allowed to push the others out.
+ */
+export const PinnedConfigSchema = z.object({
+  /** Characters over every pinned line. */
+  max_chars: uint().default(1200),
+  /**
+   * Characters of the persona section; 0 leaves it out (the default). Only the main line reads the
+   * pinned layer, and its prompt already holds the whole persona, so a pinned copy only took up to
+   * 500 of the `max_chars` from the rules, the open commitments and the people.
+   */
+  persona_chars: uint().default(0),
+  /** Characters of the rules section. */
+  rules_chars: uint().default(400),
+  /** Open commitments listed (the soonest first). */
+  max_commitments: uint().default(4),
+  /** Characters of one commitment line. */
+  commitment_chars: uint().default(80),
+  /** People with a line (the ones listed first in the request). */
+  max_people: uint().default(6),
+  /** Characters of one person's line. */
+  person_chars: uint().default(120),
+  /** Facts joined into one person's line, the most reliable first. */
+  person_facts: uint().default(3),
+  /** Seconds a person's line is reused before it is composed again (writes and forgets reset it). */
+  cache_secs: uint().default(30),
+});
+export type PinnedConfig = z.output<typeof PinnedConfigSchema>;
+
+/**
+ * Evidence for person facts: a fact is stored only when a line that was really said backs it.
+ * The check is lexical (no model): the fact has to share words with the line.
+ */
+export const EvidenceConfigSchema = z.object({
+  /** Share of the fact's content words one supporting line must contain (0..1). */
+  min_overlap: z.number().min(0).max(1).default(0.25),
+  /** Evidence ids kept on one memory. */
+  max_events: uint().default(24),
+  /** Seconds either side of a chat line's time within which its EventLog event is looked for. */
+  match_window_secs: uint().default(10),
+});
+export type EvidenceConfig = z.output<typeof EvidenceConfigSchema>;
 
 /**
  * `[modules.memory]`.
@@ -93,11 +157,36 @@ export const MemoryConfigSchema = z.object({
   recall_limit: uint().default(8),
   /** Candidates fetched from the store per kind of match before ranking. */
   candidate_limit: uint().default(32),
-  /** Records scoring below this are never recalled. */
-  min_score: z.number().default(0.05),
+  /**
+   * Records scoring below this are never recalled. Was 0.05, which let almost anything in and
+   * kept the same old memories on top; about 0.25 needs a real match or real importance.
+   */
+  min_score: z.number().default(0.25),
+  /**
+   * A memory has to be about what is being said: a word in common with the query, or an
+   * embedding at least this similar. Being about someone who is present, or being one of the
+   * nearest neighbours of a query it has nothing to do with, is not enough.
+   */
+  min_vector: z.number().default(0.3),
   weights: WeightsSchema.prefault({}),
   /** Recency decay time constant (days): `exp(-age / tau)`. */
   recency_tau_days: z.number().default(14),
+  /**
+   * The same for episodes ("what happened last night"): hours to days, not weeks. 1.5 days
+   * halves an episode's recency weight in about a day.
+   */
+  episode_recency_tau_days: z.number().default(1.5),
+  /**
+   * How long a present-tense state or commitment note ("已經開台", "正在下載") stays true when
+   * the summarizer gave no lifetime (hours; 0 = no expiry). Expired notes are not recalled.
+   */
+  state_note_hours: z.number().min(0).default(12),
+  /**
+   * Followups nobody brought up within this many hours of their time are closed and no longer
+   * offered (0 = never).
+   */
+  followup_max_age_hours: z.number().min(0).default(6),
+  repeat: RepeatConfigSchema.prefault({}),
   guild_scope: GuildScopeSchema.default("guild"),
   /**
    * Lets facts marked `global` in a DM become person-wide. Off by default: nothing learned in
@@ -108,6 +197,13 @@ export const MemoryConfigSchema = z.object({
   min_importance: z.number().default(0.1),
   dedupe: DedupeConfigSchema.prefault({}),
   forgetting: ForgettingConfigSchema.prefault({}),
+  pinned: PinnedConfigSchema.prefault({}),
+  evidence: EvidenceConfigSchema.prefault({}),
+  /**
+   * Weight (0..1) of a memory of unknown provenance (written before origins were recorded)
+   * against one with evidence. They stay usable, just never as sure as a memory with a source.
+   */
+  unknown_origin_factor: z.number().min(0).max(1).default(0.8),
 });
 export type MemoryConfig = z.output<typeof MemoryConfigSchema>;
 

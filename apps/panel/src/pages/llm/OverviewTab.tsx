@@ -26,9 +26,9 @@ const SERIES_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "va
 
 function Kpi({ label, value, aside, tone }: { label: string; value: ReactNode; aside?: ReactNode; tone?: "danger" | "warning" }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1 bg-card px-4 py-3.5">
+    <div className="flex min-w-0 flex-col gap-1">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className={cn("text-xl font-semibold tracking-tight", tone === "danger" && "text-[oklch(0.78_0.14_25)]", tone === "warning" && "text-warning")}>{value}</dd>
+      <dd className={cn("text-[15px] font-semibold", tone === "danger" && "text-primary", tone === "warning" && "text-primary")}>{value}</dd>
       {aside && <dd className="truncate text-xs text-muted-foreground">{aside}</dd>}
     </div>
   );
@@ -38,7 +38,7 @@ function Kpis({ s }: { s: LlmCallStats }) {
   const t = s.total;
   const errorRate = t.calls > 0 ? t.errors / t.calls : 0;
   return (
-    <dl aria-label="LLM 概況" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-3 xl:grid-cols-6">
+    <dl aria-label="LLM 概況" className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3 xl:grid-cols-6">
       <Kpi label="呼叫" value={fmtInt(t.calls)} aside={s.since ? `${fmtTime(s.since)} 以來` : `最早 ${s.oldest ? fmtTime(s.oldest) : "—"}`} />
       <Kpi label="花費" value={fmtCost(t.cost_usd)} aside={t.calls > 0 ? `平均每次 ${fmtCost(t.cost_usd / t.calls)}` : undefined} />
       <Kpi label="token" value={fmtCompact(t.prompt_tokens + t.completion_tokens)} aside={`輸入 ${fmtCompact(t.prompt_tokens)} · 輸出 ${fmtCompact(t.completion_tokens)}${t.reasoning_tokens ? ` · 推理 ${fmtCompact(t.reasoning_tokens)}` : ""}`} />
@@ -93,7 +93,7 @@ function GroupTable({ title, rows, name, prices }: { title: string; rows: LlmGro
   const total = rows.reduce((n, g) => n + g.cost_usd, 0);
   const r = "text-right tabular-nums";
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
@@ -121,7 +121,7 @@ function GroupTable({ title, rows, name, prices }: { title: string; rows: LlmGro
               <TableRow key={g.key}>
                 <TableCell className="max-w-56">{name(g.key)}</TableCell>
                 <TableCell className={r}>{fmtInt(g.calls)}</TableCell>
-                <TableCell className={cn(r, "hidden sm:table-cell", g.errors > 0 ? "text-[oklch(0.78_0.14_25)]" : "text-muted-foreground")}>{g.errors}</TableCell>
+                <TableCell className={cn(r, "hidden sm:table-cell", g.errors > 0 ? "text-primary" : "text-muted-foreground")}>{g.errors}</TableCell>
                 <TableCell className={r}>{fmtCompact(g.prompt_tokens)}</TableCell>
                 <TableCell className={cn(r, "hidden text-muted-foreground md:table-cell")}>{Math.round(hitRate(g.prompt_tokens, g.cached_prompt_tokens) * 100)}%</TableCell>
                 <TableCell className={r}>{fmtCompact(g.completion_tokens)}</TableCell>
@@ -129,14 +129,14 @@ function GroupTable({ title, rows, name, prices }: { title: string; rows: LlmGro
                   {fmtMs(g.p50_ms)} <span className="text-muted-foreground">/ {fmtMs(g.p95_ms)}</span>
                 </TableCell>
                 {prices && (
-                  <TableCell className={cn(r, "hidden font-mono text-[12px] xl:table-cell", !p && "text-[oklch(0.78_0.14_25)]")}>
+                  <TableCell className={cn(r, "hidden font-mono text-[12px] xl:table-cell", !p && "text-primary")}>
                     {p ? `${fmtPerMtok(p.input_per_mtok)} / ${fmtPerMtok(p.output_per_mtok)}` : g.key === "—" ? "—" : "沒有價格"}
                   </TableCell>
                 )}
                 <TableCell className={cn(r, "font-mono text-[12px]")}>{fmtCost(g.cost_usd)}</TableCell>
                 <TableCell className="hidden md:table-cell">
-                  <span className="block h-1.5 rounded-full bg-muted">
-                    <span className="block h-full rounded-full bg-chart-1" style={{ width: `${total > 0 ? Math.max(2, (g.cost_usd / total) * 100) : 0}%` }} />
+                  <span className="block h-1 rounded-[2px] bg-muted">
+                    <span className="block h-full rounded-[2px] bg-secondary-line" style={{ width: `${total > 0 ? Math.max(2, (g.cost_usd / total) * 100) : 0}%` }} />
                   </span>
                 </TableCell>
               </TableRow>
@@ -151,20 +151,20 @@ function GroupTable({ title, rows, name, prices }: { title: string; rows: LlmGro
 function CallList({ title, calls, value }: { title: string; calls: LlmCallRecord[]; value: (c: LlmCallRecord) => string }) {
   const navigate = useNavigate();
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       {calls.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">沒有呼叫</p>
+        <p className="py-3 text-[13px] text-muted-foreground">沒有呼叫</p>
       ) : (
-        <ol className="divide-y">
+        <ol className="divide-y divide-line-soft">
           {calls.map((c, i) => (
             <li key={c.id}>
               <button
                 type="button"
                 onClick={() => void navigate({ to: "/llm", search: (s: LlmSearch) => ({ ...s, call: c.id }) })}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm outline-none hover:bg-accent/50 focus-visible:bg-accent/60"
+                className="flex w-full items-center gap-3 py-(--row-y) text-left text-sm outline-none hover:bg-hover focus-visible:bg-hover"
               >
                 <span className="w-4 text-xs text-muted-foreground tabular-nums">{i + 1}</span>
                 <Dot tone={STATUS_TONE[c.status]} />
@@ -208,7 +208,7 @@ function OutcomesBlock({ s }: { s: LlmCallStats }) {
       <div className="grid gap-6">
         <BarList label="結束方式" items={s.finish_reasons.map((r) => ({ key: r.reason, label: FINISH_LABEL[r.reason] ?? r.reason, value: r.count }))} format={fmtInt} />
         {s.errors.length > 0 && (
-          <BarList label="錯誤種類" color="var(--destructive)" items={s.errors.map((e) => ({ key: e.kind, label: ERROR_LABEL[e.kind] ?? e.kind, value: e.count }))} format={fmtInt} />
+          <BarList label="錯誤種類" color="var(--primary)" items={s.errors.map((e) => ({ key: e.kind, label: ERROR_LABEL[e.kind] ?? e.kind, value: e.count }))} format={fmtInt} />
         )}
       </div>
     </ChartBlock>
@@ -223,7 +223,7 @@ export function OverviewTab() {
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-semibold tracking-tight">呼叫概況</h2>
+        <h2 className="text-[15px] font-semibold tracking-[-0.01em]">呼叫概況</h2>
         <Segmented label="時間範圍" value={range} onChange={setRange} options={RANGES.map((r) => ({ value: r.value, label: r.label }))} />
       </div>
       {stats.isPending ? (
@@ -233,20 +233,20 @@ export function OverviewTab() {
           <ErrorLine error={stats.error} onRetry={() => void stats.refetch()} />
         </Card>
       ) : s ? (
-        <div className={cn("grid gap-4 transition-opacity", stats.isPlaceholderData && "opacity-60")}>
+        <div className={cn("grid gap-(--stage-gap) transition-opacity", stats.isPlaceholderData && "opacity-60")}>
           <Kpis s={s} />
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-(--stage-gap) lg:grid-cols-2">
             <CostByHour s={s} />
             <TokensByHour s={s} />
           </div>
           <GroupTable title="依用途" rows={s.by_purpose} name={(k) => (<><span className="font-medium">{purposeLabel(k)}</span> <code className="text-xs text-muted-foreground">{k}</code></>)} />
           <GroupTable title="依模型" rows={s.by_model} prices={s.prices} name={(k) => <code className="break-all text-[13px]">{k}</code>} />
           <GroupTable title="依模組" rows={s.by_module} name={(k) => moduleLabel(k)} />
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-(--stage-gap) lg:grid-cols-2">
             <LatencyBlock s={s} />
             <OutcomesBlock s={s} />
           </div>
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-(--stage-gap) lg:grid-cols-2">
             <CallList title="最貴的呼叫" calls={s.expensive} value={(c) => fmtCost(c.cost_usd)} />
             <CallList title="最慢的呼叫" calls={s.slowest} value={(c) => fmtMs(c.total_ms)} />
           </div>

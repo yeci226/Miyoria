@@ -20,7 +20,7 @@
     "allowImportingTsExtensions": false,
     "noEmit": true,
     "baseUrl": ".",
-    "paths": { "@/*": ["./src/*"] }
+    "paths": { "@/*": ["./src/*"], "@miyoria/card-face": ["../../packages/card-face/src/index.tsx"] }
   },
-  "include": ["src"]
+  "include": ["src", "../../packages/card-face/src"]
 }

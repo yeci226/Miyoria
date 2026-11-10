@@ -22,6 +22,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@miyoria/actions": "workspace:*",
     "@miyoria/commands": "workspace:*",
     "@miyoria/kernel": "workspace:*",
     "@miyoria/store": "workspace:*",

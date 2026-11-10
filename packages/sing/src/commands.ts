@@ -22,7 +22,13 @@ import {
 } from "@miyoria/commands";
 import { type JsonObject, Principals } from "@miyoria/types";
 import type { SingPermissions } from "./config.js";
-import { type SongEntry, songLabel } from "./setlist.js";
+import {
+  BACKING_LABELS,
+  BACKING_MODES,
+  type BackingMode,
+  type SongEntry,
+  songLabel,
+} from "./setlist.js";
 import type { Singer } from "./singer.js";
 
 const R = {
@@ -134,8 +140,25 @@ export function registerCommands(
   add(
     commandSpec("queue song request", "點一首歌給她唱（用她的聲音翻唱，準備好她就唱）", {
       args: [
-        argSpec("song", "歌名（加上歌手更準）或 YouTube 連結", ArgKind.string),
+        argSpec("song", "歌名（加上歌手更準）或 YouTube / bilibili 連結", ArgKind.string),
         argSpec("key", "整首升降幾個半音（-6 到 6）", ArgKind.integer, { required: false }),
+        argSpec(
+          "backing",
+          "伴唱怎麼處理（預設保留原曲伴唱）",
+          ArgKind.choice(BACKING_MODES.map((m) => BACKING_LABELS[m])),
+          { required: false },
+        ),
+        argSpec(
+          "ticket",
+          "同時點歌數到上限時，用點歌加點券多點一首（沒到上限不收費）",
+          ArgKind.boolean,
+          {
+            required: false,
+          },
+        ),
+        argSpec("dedication", "獻詞（40 字內，要付費；過審查、不能點名別人）", ArgKind.string, {
+          required: false,
+        }),
       ],
       permission: perms.request,
     }),
@@ -145,6 +168,11 @@ export function registerCommands(
       const key = inv.int("key");
       const args: JsonObject = { query, by: inv.invoker_display_name };
       if (key !== null && key !== undefined) args.key = key;
+      const backing = backingOf(inv.str("backing"));
+      if (backing !== "keep") args.backing = backing;
+      if (inv.bool("ticket") === true) args.ticket = true;
+      const dedication = (inv.str("dedication") ?? "").trim();
+      if (dedication !== "") args.dedication = dedication;
       return ask(actuators, inv, "sing.request", args);
     },
   );
@@ -196,4 +224,10 @@ export function registerCommands(
   );
 
   return paths;
+}
+
+/** The backing mode a command picked (by its label or its own name); `keep` when none. */
+export function backingOf(choice: string | null | undefined): BackingMode {
+  const c = (choice ?? "").trim();
+  return BACKING_MODES.find((m) => m === c || BACKING_LABELS[m] === c) ?? "keep";
 }

@@ -32,7 +32,7 @@ describe("failure guard", () => {
   it("tells her what is withheld and for how long", () => {
     const guard = guardAfter(cfg, "附近看不到鐵礦", 0);
     expect(guardNote(guard, 10_000)).toBe(
-      "暫時不能用 goto、mine、look、attack(還有 35 秒):上一個動作失敗了(附近看不到鐵礦)。換個方法(例如 obtain、explore、craft 缺的東西)或換個目標,不要重試同一件事。",
+      "暫時不能用 goto、mine、look、attack(還有 35 秒):上一個動作失敗了(附近看不到鐵礦)。換個方法(例如 obtain 缺的東西、explore)或換個目標,不要重試同一件事。",
     );
     expect(guardNote(guard, 60_000)).toBeNull();
     expect(guardNote(null, 0)).toBeNull();

@@ -6,7 +6,7 @@ import {
   type ModuleContext,
 } from "@miyoria/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
-import { type JsonValue, serviceKey } from "@miyoria/types";
+import { type JsonValue, REASONING_LEVELS, serviceKey } from "@miyoria/types";
 import { z } from "zod";
 import { LlmCallLog } from "./calls.js";
 import { BudgetConfigSchema, PricingSchema } from "./cost.js";
@@ -58,8 +58,12 @@ export const ProviderConfigSchema = z
  * [llm.budget]
  * daily_usd = 2.0
  *
- * [llm.thinking]   # reasoning before answering, per purpose; unlisted purposes: off
- * chat = true
+ * [llm.reasoning]  # off | low | medium | high, per reasoning purpose (defaults: §3.10)
+ * chat_text = "off"
+ * plan = "medium"
+ *
+ * [llm.thinking]   # legacy on / off per purpose, for purposes [llm.reasoning] does not list
+ * mind = true
  *
  * [llm.image_input]   # which models take images; unlisted: yes
  * "ollama" = false
@@ -76,6 +80,14 @@ export const LlmConfigSchema = z.object({
    * thinking adds seconds before the first word, which matters more for her than depth.
    */
   thinking: z.record(z.string(), z.boolean()).default({}),
+  /**
+   * How deeply reasoning models think, per reasoning purpose (`chat_voice`, `chat_text`,
+   * `chat_intent`, `fast`, `appraise`, `plan`, `plan_daily`, `reflect`, `review`,
+   * `summarizer`, or any model purpose). Unlisted ones use `[llm.thinking]`, then the defaults
+   * (`DEFAULT_REASONING`: chat off, `chat_intent` / `appraise` low, `plan` / `review` medium,
+   * `plan_daily` / `reflect` high).
+   */
+  reasoning: z.record(z.string(), z.enum(REASONING_LEVELS)).default({}),
   /**
    * Whether a model takes image parts, keyed by `provider:model` or `provider` (the model entry
    * wins). Unlisted models do; a model that refuses them gets text from then on anyway.
@@ -136,6 +148,7 @@ export class LlmModule implements Module {
       pricing: new Map(Object.entries(this.#config.pricing)),
       budget: this.#config.budget,
       thinking: new Map(Object.entries(this.#config.thinking)),
+      reasoning: new Map(Object.entries(this.#config.reasoning)),
       imageInput: new Map(Object.entries(this.#config.image_input)),
       calls: this.#calls,
     });

@@ -68,11 +68,14 @@ describe("actions module", () => {
     expect(refused.text).toContain("admin.autonomy.toggle");
     expect(a.registry.paused).toBe(false);
 
+    // Without the ActivityManager the broadcast can not be confirmed over: it says so.
     const paused = await a.run("admin autonomy pause", "1");
-    expect(paused.tone).toBe("success");
+    expect(paused.tone).toBe("warn");
+    expect(paused.text).toContain("✗ 直播：活動管理沒有啟用");
+    expect(paused.text).toContain("✓ 閉嘴");
     expect(a.registry.paused).toBe(true);
     expect(await a.settings.get(PRIVACY_PROFILE, PAUSED_KEY)).toBe(true);
-    expect((await a.run("admin autonomy status", "1")).text).toContain("已暫停");
+    expect((await a.run("admin autonomy status", "1")).text).toContain("已緊急停止");
     await a.run("admin autonomy resume", "1");
     expect(a.registry.paused).toBe(false);
     await a.sup.stopAll();

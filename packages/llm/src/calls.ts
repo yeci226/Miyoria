@@ -4,6 +4,7 @@
 // response with secrets redacted. Records and details live in memory only (they start over
 // when the process restarts); the cost tracker keeps the persisted totals.
 
+import type { ReasoningLevel } from "@miyoria/types";
 import type { Pricing } from "./cost.js";
 import type { LlmCallTag } from "./trace.js";
 import { type ChatMessage, contentText, type ToolCall, type Usage } from "./types.js";
@@ -51,6 +52,8 @@ export interface LlmCallRecord {
   /** HTTP retries of the answering request (`429`, `503`, network). */
   retries: string[];
   thinking: boolean;
+  /** Reasoning level the request was sent with (`off` when it did not think). */
+  reasoning: ReasoningLevel;
   json_mode: boolean;
   tools: string[];
   max_tokens: number | null;
@@ -318,6 +321,7 @@ export class LlmCallLog {
     },
     thinking: boolean,
     tag: LlmCallTag | undefined,
+    reasoning: ReasoningLevel = thinking ? "medium" : "off",
   ): LlmCallRecord {
     const images = request.messages.reduce(
       (n, m) =>
@@ -338,6 +342,7 @@ export class LlmCallLog {
       fallbacks: [],
       retries: [],
       thinking,
+      reasoning,
       json_mode: request.json_mode ?? false,
       tools: (request.tools ?? []).map((t) => t.name),
       max_tokens: request.max_tokens ?? null,

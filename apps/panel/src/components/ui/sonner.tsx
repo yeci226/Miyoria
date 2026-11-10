@@ -9,13 +9,13 @@ function Toaster(props: ToasterProps) {
       className="toaster group"
       style={
         {
-          "--normal-bg": "var(--popover)",
+          "--normal-bg": "var(--float)",
           "--normal-text": "var(--popover-foreground)",
-          "--normal-border": "var(--border)",
+          "--normal-border": "var(--line-strong)",
           "--border-radius": "var(--radius)",
         } as React.CSSProperties
       }
-      toastOptions={{ classNames: { toast: "font-sans text-sm" } }}
+      toastOptions={{ classNames: { toast: "glass-float font-sans text-sm" } }}
       {...props}
     />
   );

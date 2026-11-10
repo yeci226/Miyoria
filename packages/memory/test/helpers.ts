@@ -181,6 +181,8 @@ export class Env {
         confidence: 0.8,
         source_context: null,
         source: null,
+        origin: "experienced",
+        source_events: kind === "fact" ? ["01TESTEVIDENCE0000000000"] : [],
         due: null,
       },
       at,

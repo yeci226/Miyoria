@@ -308,7 +308,11 @@ function register(registry: CommandRegistry, handle: AgentHandle, persona: Perso
     const guild = inv.context.scope;
     const ctx = guild === null ? null : handle.voiceContext(inv.context.platform, guild);
     if (ctx === null) {
-      return notice("warn", "她目前不在這個伺服器的語音頻道中。", "請先使用 /voice join。");
+      return notice(
+        "warn",
+        "她目前不在這個伺服器的語音頻道中。",
+        "請先用 /miyo 的「加入我的語音頻道」。",
+      );
     }
     return { s: voiceMode, ctx };
   };
@@ -324,7 +328,6 @@ function register(registry: CommandRegistry, handle: AgentHandle, persona: Perso
         ),
       ],
       permission: NODES.modeView,
-      ephemeral: true,
     }),
     settingCommand(here(channelMode), "mode"),
     { components: [settingRoute(R.mode, NODES.modeSet, here(channelMode))] },
@@ -341,7 +344,6 @@ function register(registry: CommandRegistry, handle: AgentHandle, persona: Perso
         ),
       ],
       permission: NODES.activenessView,
-      ephemeral: true,
     }),
     settingCommand(here(activeness), "level"),
     { components: [settingRoute(R.activeness, NODES.activenessSet, here(activeness))] },
@@ -358,7 +360,6 @@ function register(registry: CommandRegistry, handle: AgentHandle, persona: Perso
         ),
       ],
       permission: NODES.voiceView,
-      ephemeral: true,
     }),
     settingCommand(inVoice, "mode"),
     { components: [settingRoute(R.voice, NODES.voiceSet, inVoice)] },

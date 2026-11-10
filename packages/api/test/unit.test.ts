@@ -88,7 +88,7 @@ describe("session", () => {
   it("expired_sessions_are_gone_and_checks_are_cached", async () => {
     const clock = { now: () => Date.now() };
     const sessions = new Sessions(86_400_000, 60_000, clock);
-    const token = await sessions.create(undefined, account(), "A", null);
+    const token = await sessions.create(undefined, account(), "A", null, "admin");
     const found = await sessions.lookup(undefined, new Allow(true, false), token);
     expect(found?.access).toEqual({ panel: true, write: false });
     // Cached: a changed authorizer is not consulted until `recheck` passes.
@@ -96,7 +96,7 @@ describe("session", () => {
     expect(again?.access.panel).toBe(true);
 
     const expired = new Sessions(-1000, 0, clock);
-    const stale = await expired.create(undefined, account(), "A", null);
+    const stale = await expired.create(undefined, account(), "A", null, "admin");
     expect(await expired.lookup(undefined, new Allow(true, true), stale)).toBeNull();
     expect(expired.size).toBe(0);
   });
@@ -111,7 +111,7 @@ describe("session", () => {
 // ---- oauth.rs -----------------------------------------------------------------------------
 
 function login(at: number): PendingLogin {
-  return { verifier: "v", next: "/", at };
+  return { verifier: "v", next: "/", redirect: new URL("http://127.0.0.1/cb"), at };
 }
 
 describe("oauth", () => {
@@ -135,7 +135,8 @@ describe("oauth", () => {
   });
 
   it("next_must_be_a_local_path", () => {
-    for (const ok of ["/", "/#/", "/#/people?q=1", "/#/login"]) expect(safeNext(ok), ok).toBe(ok);
+    for (const ok of ["/", "/people?q=1", "/card/MYR-AB12-CD34-EF56", "/#/people"])
+      expect(safeNext(ok), ok).toBe(ok);
     for (const bad of [
       "",
       "//evil.example",
@@ -259,6 +260,48 @@ describe("monitor", () => {
     expect(m.voiceContext()).toBeNull();
   });
 
+  it("reads p50 and p90 per end-to-end segment, counting incomplete replies apart", () => {
+    const m = new Monitor();
+    const context: ContextKey = { platform: "discord", scope: "g", channel: "vc", kind: "voice" };
+    m.handle(newEnvelope("voice", { type: "voice_joined", data: { context, participants: [] } }));
+    const e2e = (payload: Record<string, unknown>) =>
+      m.handle(
+        newEnvelope("voice", {
+          type: "custom",
+          data: {
+            topic: "voice.latency",
+            payload: { stage: "e2e", context: { ...context }, ...payload } as never,
+          },
+        }),
+      );
+    for (let i = 1; i <= 10; i++) {
+      e2e({
+        complete: true,
+        reason: null,
+        total_ms: i * 600,
+        segments: {
+          endpoint: i * 100,
+          asr: i * 100,
+          llm_first: i * 100,
+          tts_queue: i * 100,
+          tts_first: i * 100,
+          playback: i * 100,
+        },
+      });
+    }
+    // A barged-in reply and a TTS failure only count; their partial segments feed nothing.
+    e2e({ complete: false, reason: "barge_in", total_ms: null, segments: { endpoint: 9_999 } });
+    e2e({ complete: false, reason: "tts_failed", total_ms: null, segments: { endpoint: 9_999 } });
+    e2e({ complete: false, reason: "tts_failed", total_ms: null, segments: { endpoint: 9_999 } });
+    const l = m.voice(Date.now()).sessions[0]?.latency.e2e;
+    expect(l?.complete).toBe(10);
+    expect(l?.incomplete).toBe(3);
+    expect(l?.incomplete_by_reason).toEqual({ barge_in: 1, tts_failed: 2 });
+    expect(l?.total).toEqual({ p50_ms: 3_000, p90_ms: 5_400, samples: 10 });
+    expect(l?.segments.endpoint).toEqual({ p50_ms: 500, p90_ms: 900, samples: 10 });
+    expect(l?.segments.playback.samples).toBe(10);
+  });
+
   it("drops latency samples outside the 15 minute window", () => {
     const m = new Monitor();
     const context: ContextKey = { platform: "discord", scope: "g", channel: "vc", kind: "voice" };
@@ -345,12 +388,21 @@ describe("config and helpers", () => {
         client_id: "",
         client_secret: "",
         redirect_uri: "",
+        redirect_uris: [],
         session_days: 7,
         cookie_secure: null,
         recheck_secs: 5,
         discord_url: "https://discord.com",
       },
       metrics_public: false,
+      public: {
+        enabled: true,
+        song_requests: true,
+        cache_secs: 10,
+        rate_per_minute: 60,
+        rate_total_per_minute: 3000,
+        utc_offset_minutes: 480,
+      },
     });
   });
 

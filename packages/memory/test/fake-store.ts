@@ -3,6 +3,7 @@
 
 import type {
   Account,
+  AuthoredEntry,
   LogEntry,
   MemoryFilter,
   MemoryHit,
@@ -61,6 +62,28 @@ export class FakeStore implements MessageLog, PeopleStore, MemoryRecordStore {
   async recent(profile: ProfileId, context: ContextKey, limit: number): Promise<LogEntry[]> {
     const list = this.#messages.get(`${profile}\u0001${contextKey(context)}`) ?? [];
     return structuredClone(list.slice(Math.max(0, list.length - limit)));
+  }
+
+  async authoredSince(
+    profile: ProfileId,
+    authors: readonly AccountRef[],
+    since: Timestamp,
+    limit: number,
+  ): Promise<AuthoredEntry[]> {
+    const from = Date.parse(since);
+    const all = [...this.#messages.values()]
+      .flat()
+      .filter(
+        (e) =>
+          e.profile === profile &&
+          !e.is_self &&
+          Date.parse(e.ts) >= from &&
+          authors.some((a) => a.platform === e.author.platform && a.id === e.author.id),
+      )
+      .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+    return all
+      .slice(Math.max(all.length - limit, 0))
+      .map((e) => ({ ts: e.ts, kind: e.context.kind }));
   }
 
   async purge(profile: ProfileId): Promise<number> {
@@ -213,7 +236,11 @@ export class FakeStore implements MessageLog, PeopleStore, MemoryRecordStore {
     }
   }
 
-  async dueFollowups(profile: ProfileId, now: Timestamp): Promise<MemoryRecord[]> {
+  async dueFollowups(
+    profile: ProfileId,
+    now: Timestamp,
+    maxAgeMs: number | null = null,
+  ): Promise<MemoryRecord[]> {
     return [...this.#memories.values()]
       .filter(
         (r) =>
@@ -222,10 +249,28 @@ export class FakeStore implements MessageLog, PeopleStore, MemoryRecordStore {
           !r.done &&
           r.superseded_by === null &&
           r.due !== null &&
-          ms(r.due) <= ms(now),
+          ms(r.due) <= ms(now) &&
+          (maxAgeMs === null || ms(r.due) >= ms(now) - maxAgeMs),
       )
-      .sort((a, b) => ms(a.due as string) - ms(b.due as string) || (a.id < b.id ? -1 : 1))
+      .sort((a, b) => ms(b.due as string) - ms(a.due as string) || (a.id < b.id ? 1 : -1))
       .map((r) => structuredClone(r));
+  }
+
+  async expireFollowups(profile: ProfileId, dueBefore: Timestamp): Promise<number> {
+    let n = 0;
+    for (const r of this.#memories.values()) {
+      if (
+        r.profile === profile &&
+        r.kind === "followup" &&
+        !r.done &&
+        r.due !== null &&
+        ms(r.due) < ms(dueBefore)
+      ) {
+        r.done = true;
+        n += 1;
+      }
+    }
+    return n;
   }
 
   async prune(profile: ProfileId, policy: PrunePolicy): Promise<number> {

@@ -1,13 +1,16 @@
 // @miyoria/game: the game director (module `game`).
 //
-// A game adapter extension exposes the tools `game_<id>_observe` / `game_<id>_act` and
-// publishes `game.<id>.*` events. While a session runs (`game start`) the director observes the
-// game every `decide_secs` (sooner on trigger events), asks the LLM purpose `game` (JSON mode)
-// for `{goal, goal_status, action, commentary, mood_nudge}` and runs the action through the act
-// tool (after a failure it withholds the low-level move / mine actions for a while, so she
-// changes method or goal); consumes `queue.item_activated` items of kind `game_goal` as locked goals; requests live
-// commentary with `agent.initiative` (reason `game`); nudges the mood on deaths and
-// achievements; and contributes a `game` prompt section.
+// A game adapter extension registers the task executor of `game.<id>` (v2 §3.8) and publishes
+// `game.<id>.*` events. While a session runs (`game start`) the director observes the game
+// through the executor every `decide_secs` (sooner on trigger events), asks the LLM purpose
+// `game` (JSON mode) for `{goal, goal_status, action, commentary, mood_nudge}` and starts the
+// action as a task with an id and a budget (`game.act`, through the gate); the task's
+// `game.<id>.task.done|failed` event (with a failure code) ends it, and every goal that ends is
+// published on `game.director.goal` with its code. After a failure it withholds the low-level
+// move / mine actions for a while, so she changes method or goal. It consumes
+// `queue.item_activated` items of kind `game_goal` as locked goals; requests live commentary
+// with `agent.initiative` (reason `game`); nudges the mood on deaths and achievements; and
+// contributes a `game` prompt section. The one timeout policy is in `timeouts.ts`.
 
 export { GAME_ACT, safeActCall } from "./actions.js";
 export {
@@ -47,7 +50,6 @@ export {
   parseDecision,
   prompts,
   type ReportedStatus,
-  splitObservation,
   type Verdict,
   verdictDebug,
 } from "./decision.js";
@@ -58,6 +60,9 @@ export {
   GameChatKey,
   GameError,
   type GameStatus,
+  GOAL_TOPIC,
+  type GoalEnd,
+  type GoalEndCode,
   type GoalView,
   INITIATIVE_REASON,
   type Persona,
@@ -83,3 +88,22 @@ export {
   GameModule,
   PROMPT_KEY,
 } from "./module.js";
+export {
+  budgetFor,
+  codeOf,
+  GameTaskError,
+  gameExecutor,
+  goalCatalog,
+  observationText,
+  observeWithin,
+  offersGoal,
+  runTask,
+  type TaskEnd,
+} from "./tasks.js";
+export {
+  type GameTimeoutConfig,
+  OUTER_DEFAULTS,
+  type TimeoutValues,
+  timeoutValues,
+  timeoutViolations,
+} from "./timeouts.js";

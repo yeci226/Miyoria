@@ -6,8 +6,9 @@
 //   Either way it reverts on its own (at most a day), and the channel's level caps it.
 // * `chat.start` / `chat.dm`: she starts talking on her own (an intent of her mind loop): in
 //   the context of the request (a text channel or the voice channel she is in), or in a DM.
-//   Medium risk, so her own rate limits apply; consent (`/me privacy approach` / `dm`) applies
-//   to the person it is about.
+//   Consent (`/me privacy approach` / `dm`) applies to the person it is about. How often she
+//   may start talking is the Arbiter's one rule set (`[modules.arbiter]`: daily caps, per
+//   person, the gaps); the gate's limits on `chat.start` are only a safety net against a loop.
 
 import { type Capability, CapabilityError, defineCapability, recipient } from "@miyoria/actions";
 import {
@@ -147,7 +148,8 @@ export function chatCapabilities(agent: Agent, intents: AgentIntents): Capabilit
     risk: "medium",
     args: NoArgs,
     permission: null,
-    limits: { per_day: 24, per_person_per_day: 4, cooldown_ms: 60_000 },
+    // The real limits are the Arbiter's (`max_per_day`, `max_per_person_per_day`, `min_gap_secs`).
+    limits: { per_day: 200, per_person_per_day: 50, cooldown_ms: 0 },
     scope: (_args, principal) => principal.context?.scope ?? null,
     check: (_args, principal) => {
       const context = principal.context;

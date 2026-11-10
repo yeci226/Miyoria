@@ -76,6 +76,28 @@ export const CommandSpecSchema = z.object({
   ephemeral: z.boolean(),
 }) satisfies z.ZodType<CommandSpec>;
 
+/** `tasks.register` params and `contributions.executor`: the extension's task executor. */
+export const ExecutorDeclSchema = z.object({
+  /** Display name (`Minecraft`). */
+  name: z.string().min(1).max(64),
+  goals: z
+    .array(
+      z.object({
+        name: z.string().regex(/^[a-z0-9_-]{1,40}$/),
+        description: z.string().max(2000),
+        parameters: JsonValueSchema.nullable().default(null),
+        budget_s: z.number().positive().max(86_400).nullable().default(null),
+      }),
+    )
+    .max(64)
+    .default([]),
+  guide: z.string().max(8000).nullable().default(null),
+  /** The executor implements `task.steer`. Absent (an older extension) means it does not. */
+  steer: z.boolean().default(false),
+});
+
+export type ExecutorDecl = z.output<typeof ExecutorDeclSchema>;
+
 /** Everything registered during activation, applied by the host at once. */
 export const ContributionsSchema = z.object({
   tools: z.array(ToolDeclSchema).default([]),
@@ -84,6 +106,8 @@ export const ContributionsSchema = z.object({
   prompts: z.array(z.string()).default([]),
   /** Topic patterns to receive as `event` notifications. */
   subscriptions: z.array(z.string()).default([]),
+  /** The extension's task executor, if it has one (`tasks.register`). */
+  executor: ExecutorDeclSchema.nullable().default(null),
 });
 
 export type Contributions = z.output<typeof ContributionsSchema>;

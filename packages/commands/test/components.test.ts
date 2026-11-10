@@ -161,7 +161,7 @@ describe("component router", () => {
     expect((await reg.dispatchComponent(click("mi:me:own:8", "8")))?.result.type).toBe("update");
   });
 
-  it("reply_visibility_follows_the_route_and_the_tone", async () => {
+  it("reply_visibility_follows_the_command_the_route_and_the_tone", async () => {
     const reg = registry();
     reg.register(commandSpec("queue list", "x"), ok, {
       components: [
@@ -175,12 +175,40 @@ describe("component router", () => {
           ephemeral: false,
           handle: () => ComponentResult.reply(notice("warn", "沒有人在排隊。")),
         },
+        // No `ephemeral`: the command is public, so the answer is too.
         { route: "queue:mine", handle: () => ComponentResult.reply(CommandReply.text("x")) },
+        {
+          route: "queue:quiet",
+          ephemeral: true,
+          handle: () => ComponentResult.reply(CommandReply.text("x")),
+        },
       ],
     });
     expect((await reg.dispatchComponent(click("mi:queue:announce", "5")))?.ephemeral).toBe(false);
     expect((await reg.dispatchComponent(click("mi:queue:oops", "5")))?.ephemeral).toBe(true);
-    expect((await reg.dispatchComponent(click("mi:queue:mine", "5")))?.ephemeral).toBe(true);
+    expect((await reg.dispatchComponent(click("mi:queue:mine", "5")))?.ephemeral).toBe(false);
+    expect((await reg.dispatchComponent(click("mi:queue:quiet", "5")))?.ephemeral).toBe(true);
+  });
+
+  it("a_private_command_keeps_its_answers_private_whatever_the_route_says", async () => {
+    const reg = registry();
+    reg.register(commandSpec("me profile", "x", { ephemeral: true }), ok, {
+      components: [
+        {
+          route: "me:show",
+          ephemeral: false,
+          handle: () => ComponentResult.reply(CommandReply.text("x")),
+        },
+        { route: "me:plain", handle: () => ComponentResult.reply(CommandReply.text("x")) },
+      ],
+    });
+    expect((await reg.dispatchComponent(click("mi:me:show", "5")))?.ephemeral).toBe(true);
+    expect((await reg.dispatchComponent(click("mi:me:plain", "5")))?.ephemeral).toBe(true);
+    // The configuration can open it up, or close a public command.
+    reg.setVisibility({ "me profile": "public" });
+    expect((await reg.dispatchComponent(click("mi:me:plain", "5")))?.ephemeral).toBe(false);
+    reg.setVisibility({ me: "private" });
+    expect((await reg.dispatchComponent(click("mi:me:show", "5")))?.ephemeral).toBe(true);
   });
 
   it("duplicate_routes_fail_at_registration_and_routes_go_with_their_command", () => {

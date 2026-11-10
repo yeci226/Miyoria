@@ -41,7 +41,9 @@ interface FetchedList {
 /** The parts of a text-based channel's `MessageManager` used here. */
 export interface MessageManagerLike {
   /** A message id fetches one message; options fetch a list (newest first). */
-  fetch(options: string | { limit: number; before?: string }): Promise<FetchedLike | FetchedList>;
+  fetch(
+    options: string | { limit: number; before?: string; after?: string },
+  ): Promise<FetchedLike | FetchedList>;
   cache: { get(id: string): FetchedLike | undefined };
 }
 
@@ -78,7 +80,11 @@ export class DiscordHistory implements PlatformHistory {
     signal?.throwIfAborted();
     if (manager === null) return [];
     const result = await manager.fetch(
-      query.before === null ? { limit } : { limit, before: query.before },
+      query.after != null
+        ? { limit, after: query.after }
+        : query.before === null
+          ? { limit }
+          : { limit, before: query.before },
     );
     signal?.throwIfAborted();
     if (!isList(result)) return [];

@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 /** One plain line where there is nothing to show. */
 export function EmptyLine({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <p className={cn("px-4 py-10 text-center text-sm text-muted-foreground", className)}>
+    <p className={cn("py-3 text-[13px] text-muted-foreground", className)}>
       {children}
     </p>
   );
@@ -24,8 +24,8 @@ const ERROR_TITLE: Record<string, string> = {
 export function ErrorLine({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const kind = isApiError(error) ? error.kind : "http";
   return (
-    <div role="alert" className="flex flex-col items-center gap-3 px-4 py-10 text-center">
-      <p className="text-sm">
+    <div role="alert" className="flex flex-col items-start gap-2 py-3">
+      <p className="text-[13px]">
         <span className="font-medium">{ERROR_TITLE[kind] ?? "讀取失敗"}</span>
         <span className="text-muted-foreground"> · {describeError(error)}</span>
       </p>
@@ -44,7 +44,7 @@ export function SkeletonRows({ count = 4, className }: { count?: number; classNa
   return (
     <div className={cn("flex flex-col", className)} aria-busy="true" aria-label="載入中">
       {Array.from({ length: count }, (_, i) => (
-        <div key={i} className="flex h-12 items-center gap-4 border-b px-4 last:border-0">
+        <div key={i} className="flex h-10 items-center gap-4 border-b border-line-soft last:border-0">
           <Skeleton className="h-3.5 w-1/4" />
           <Skeleton className="h-3.5 w-1/3" />
           <Skeleton className="ml-auto h-3.5 w-16" />

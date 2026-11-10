@@ -1,23 +1,24 @@
-import { ActuatorRegistryKey, defineCapability } from "@miyoria/actions";
-import { LlmRouterKey, MockProvider } from "@miyoria/llm";
+import { MockProvider } from "@miyoria/llm";
 import { MemorySettingsStore } from "@miyoria/store";
 import {
-  ConversationStatesKey,
+  AffectStateKey,
   customEvent,
+  DIRECTIVE_CHANGED_TOPIC,
+  type Directive,
+  type DirectiveGoal,
+  type Directives,
+  DirectivesKey,
+  type Event,
+  GoalAgendaKey,
   type JsonValue,
-  KnowledgeKey,
-  LessonsKey,
-  PromptContributors,
-  PromptContributorsKey,
   SelfStateKey,
   type Thought,
   toTimestamp,
-  type VoiceParticipant,
 } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
-import { MAX_QUIET_MINUTES, MIN_SELF_TALK, THOUGHT_PREFIX } from "../src/index.js";
-import { HER, OWEN, rig, salient, stopRigs, TEXT, VOICE, wait } from "./helpers.js";
+import { GOAL_PREFIX, type MindLoop, THOUGHT_PREFIX } from "../src/index.js";
+import { callKind, ScriptedProvider, texts } from "./fakes.js";
+import { OWEN, type Rig, rig, salient, stopRigs, TEXT, VOICE, wait } from "./helpers.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -29,562 +30,389 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-const TURN = "01JCTURN000000000000000000";
+const MIN = 60_000;
+const VOICE_REF = "discord:g1:voice:v1";
 
-const FULL_REPLY = JSON.stringify({
-  thought: "Owen 進語音了耶……主動跑去好像很在意他,就說我剛好路過。",
-  feelings: [{ person: "u1", note: "有點在意他", affinity_hint: "+" }],
-  drives: { social: -0.1 },
-  policy: {
-    talkativeness: [{ scope: "p2", level: 0.8, for_min: 30, why: "大家很熱鬧" }],
+const PLAN = JSON.stringify({
+  thought: "Owen 進語音了耶……就說我剛好路過。",
+  goals: {
+    add: [
+      {
+        what: "問 Owen 報告的結果",
+        why: "好幾天沒聊了",
+        trigger: { kind: "when_online", person: "Owen" },
+        expires_in_hours: 24,
+      },
+    ],
   },
-  agenda: { add: [{ text: "問 Owen 報告的結果", person: "u1" }] },
-  intents: [
-    { action: "voice.join", place: "p1", person: "u1", why: "想找 Owen", opening: "假裝路過" },
-    { action: "speak", place: "p1", why: "x" },
+  impulses: [
+    {
+      kind: "act",
+      capability: "voice.join",
+      place: VOICE_REF,
+      person: "Owen",
+      why: "想找 Owen",
+      hint: "假裝路過",
+    },
+    { kind: "act", capability: "speak", place: VOICE_REF, why: "x" },
   ],
 });
 
-function systemText(provider: MockProvider, n = 0): string {
-  const request = provider.requests()[n];
-  return (request?.messages ?? [])
-    .filter((m) => m.role === "system")
-    .map((m) => m.content)
-    .join("\n");
+function message(text: string, addressed: boolean): Event {
+  return {
+    type: "platform_message_created",
+    data: {
+      id: { context: TEXT, id: `m${Date.now()}` },
+      author: { account: OWEN, display_name: "Owen", is_bot: false },
+      text,
+      mentions_self: addressed,
+      reply_to_self: false,
+      attachments: [],
+      ts: toTimestamp(Date.now()),
+    },
+  };
 }
 
-function dataText(provider: MockProvider, n = 0): string {
-  const request = provider.requests()[n];
-  return (request?.messages ?? [])
-    .filter((m) => m.role === "user")
-    .map((m) => m.content)
-    .join("\n");
-}
-
-describe("mind module", () => {
-  const watchStart = defineCapability({
-    name: "watch.start",
-    summary: "看直播",
-    risk: "medium",
-    args: z.looseObject({}),
-    permission: null,
-    execute: async () => "ok",
-  });
-
-  it("the person she picks to watch becomes the `user` of watch.start", async () => {
-    const provider = new MockProvider("p").reply(
-      JSON.stringify({
-        thought: "想看 Owen 打遊戲",
-        intents: [{ action: "watch.start", person: "u1", why: "好奇" }],
-      }),
-    );
-    const r = await rig(provider, {
-      extra: (sup) => sup.services.require(ActuatorRegistryKey).register(watchStart),
-    });
-    r.publish(salient("Owen 開了直播"));
-    await wait(4100);
-    expect(r.intents.intents.map((i) => i.args)).toEqual([{ user: OWEN.id }]);
-  });
-
-  it("a `user` she wrote herself stays", async () => {
-    const provider = new MockProvider("p").reply(
-      JSON.stringify({
-        thought: "想看阿德",
-        intents: [{ action: "watch.start", person: "u1", args: { user: "阿德" }, why: "好奇" }],
-      }),
-    );
-    const r = await rig(provider, {
-      extra: (sup) => sup.services.require(ActuatorRegistryKey).register(watchStart),
-    });
-    r.publish(salient("Owen 開了直播"));
-    await wait(4100);
-    expect(r.intents.intents.map((i) => i.args)).toEqual([{ user: "阿德" }]);
-  });
-
-  const voiceLeave = defineCapability({
-    name: "voice.leave",
-    summary: "離開語音",
-    risk: "medium",
-    args: z.looseObject({}),
-    permission: null,
-    execute: async () => "ok",
-  });
-
-  it("leaves voice where she is, whatever she wrote as the server", async () => {
-    const provider = new MockProvider("p").reply(
-      JSON.stringify({
-        thought: "想休息",
-        intents: [{ action: "voice.leave", args: { guild: "p1" }, why: "累了" }],
-      }),
-    );
-    const r = await rig(provider, {
-      extra: (sup) => sup.services.require(ActuatorRegistryKey).register(voiceLeave),
-    });
-    const there = { ...VOICE, scope: "g2" };
-    r.world.herVoice = there;
-    r.publish(salient("大家都走了"));
-    await wait(4100);
-    expect(r.intents.intents.map((i) => [i.args, i.context])).toEqual([[{ guild: "g2" }, there]]);
-  });
-
-  it("does not try to leave voice when she is not in it", async () => {
-    const provider = new MockProvider("p").reply(
-      JSON.stringify({
-        thought: "想休息",
-        intents: [{ action: "voice.leave", why: "累了" }],
-      }),
-    );
-    const r = await rig(provider, {
-      extra: (sup) => sup.services.require(ActuatorRegistryKey).register(voiceLeave),
-    });
-    r.publish(salient("大家都走了"));
-    await wait(4100);
-    expect(r.intents.intents).toEqual([]);
-    expect(
-      r
-        .mind()
-        .thoughts()[0]
-        ?.intents.map((i) => [i.status, i.detail]),
-    ).toEqual([["dropped", "she is not in voice"]]);
-  });
-
-  it("thinks with reasoning only when [llm.thinking] mind is on", async () => {
-    const provider = new MockProvider("p").reply(FULL_REPLY);
-    await rig(provider, { thinking: { mind: true } }).then((r) =>
-      r.publish(salient("Owen 進了語音頻道「聊天室」")),
-    );
-    await wait(4000);
-    expect(provider.requests()[0]?.thinking).toBe(true);
-  });
-
-  it("thinks about a salient change and acts on it, within bounds", async () => {
-    const provider = new MockProvider("p").reply(FULL_REPLY);
+describe("mind module: Plan", () => {
+  it("plans about a salient change: short system, data blocks, reasoning `plan`", async () => {
+    const provider = new ScriptedProvider(() => PLAN);
     const r = await rig(provider);
+    const goals = r.sup.bus.subscribe("plan.goal");
     r.publish(salient("Owen 進了語音頻道「聊天室」"));
     await wait(2000);
     expect(provider.requests().length, "coalescing").toBe(0);
     await wait(2000);
-    expect(provider.requests().length).toBe(1);
+    expect(provider.requests().map(callKind)).toEqual(["plan"]);
     const request = provider.requests()[0];
     expect(request?.json_mode).toBe(true);
-    // Not forced on: `[llm.thinking] mind` decides, and this rig sets none.
-    expect(request?.thinking).toBe(false);
+    expect(request?.reasoning).toBe("medium");
     expect(request?.model).toBe("mind");
-    // Names, the world summary and what happened are data; the system role has none of it.
-    for (const derived of ["Owen", "Minecraft", "聊天室", "海豚"]) {
-      expect(systemText(provider), derived).not.toContain(derived);
-    }
-    expect(dataText(provider)).toContain("⟦資料 來源=world");
-    expect(dataText(provider)).toContain("Owen 進了語音頻道");
-    expect(systemText(provider)).toContain("你是住在深海的鯨魚娘。");
+    const { system, data } = texts(request);
+    expect(system.startsWith("你是住在深海的鯨魚娘。\n\n# 計畫")).toBe(true);
+    for (const derived of ["Owen", "聊天室", "海豚"])
+      expect(system, derived).not.toContain(derived);
+    expect(data).toContain("⟦資料 來源=world");
+    expect(data).toContain("Owen 進了語音頻道");
+    expect(data).toContain(`${VOICE_REF}:語音頻道 v1`);
 
-    await wait(100);
-    // The intent, resolved against the snapshot; `speak` is not hers to start.
-    expect(r.intents.intents).toEqual([
-      expect.objectContaining({
-        capability: "voice.join",
-        args: { channel: "v1", guild: "g1" },
-        context: VOICE,
-        about: OWEN,
-        opening: "假裝路過",
-      }),
-    ]);
-    const self = r.sup.services.require(SelfStateKey);
-    expect(self.feeling("person-owen")?.text).toBe("有點在意他");
-    expect(r.social.events).toEqual([["person-owen", [["mind", "warm", 0.3]]]]);
-    expect(self.talkativeness(TEXT)).toMatchObject({ level: 0.8, scope: "discord:g1:c1" });
-    expect(self.agenda().map((a) => [a.text, a.person])).toEqual([
-      ["問 Owen 報告的結果", "person-owen"],
-    ]);
-
-    const [thought] = r.mind().thoughts();
-    expect(thought?.thought).toContain("就說我剛好路過");
-    expect(thought?.triggers.map((t) => t.kind)).toEqual(["salient"]);
-    expect(thought?.changes).toContain("對 Owen 的感覺");
-    expect(thought?.intents.map((i) => [i.capability, i.status, i.detail])).toEqual([
-      ["voice.join", "started", "her turn is queued"],
-      ["speak", "dropped", "not something she can do"],
-    ]);
-
-    // What became of it: the gate decision and what she said in her turn.
-    r.publish(
-      customEvent("gate.decision", {
-        turn: TURN,
-        capability: "voice.join",
-        allowed: true,
-        stage: "rate",
-        reason: "within limits",
-        at: toTimestamp(Date.now()),
-      }),
-    );
-    r.publish({
-      type: "agent_turn_completed",
-      data: { turn: TURN, context: VOICE, text: "我只是剛好路過喔。" },
-    });
     await wait(10);
-    const [after] = r.mind().thoughts();
-    expect(after?.intents[0]).toMatchObject({
-      status: "done",
-      said: "我只是剛好路過喔。",
-      turn: TURN,
-      decisions: [expect.objectContaining({ capability: "voice.join", allowed: true })],
-    });
-    // The whole lifecycle of the intent, what she saw and what each part of her reply changed.
-    expect(after?.intents[0]?.history?.map((h) => h.status)).toEqual([
-      "pending",
-      "started",
-      "done",
+    // voice.join went to the agent (no Arbiter here) with the channel from the place.
+    expect(r.intents.intents.map((i) => [i.capability, i.args, i.opening])).toEqual([
+      ["voice.join", { channel: "v1", guild: "g1" }, "假裝路過"],
     ]);
-    expect(after?.intents[1]?.history).toEqual([
-      expect.objectContaining({ status: "dropped", detail: "not something she can do" }),
-    ]);
-    expect(after?.input?.world).toContain("Minecraft");
-    expect(after?.input?.people.map((p) => p.name)).toContain("Owen");
-    expect(after?.effects).toMatchObject({
-      drives: { social: -0.1 },
-      feelings: [{ name: "Owen", note: "有點在意他", hint: "+" }],
-      talkativeness: [{ scope: "discord:g1:c1", level: 0.8, minutes: 30 }],
-      agenda_added: [{ text: "問 Owen 報告的結果" }],
-    });
-    expect(after?.attempts).toBe(1);
-    // Linked to the call inspector both ways.
-    const router = r.sup.services.require(LlmRouterKey);
-    expect(after?.calls).toHaveLength(1);
-    expect(router.calls.list({ thought: after?.id ?? "" }).items[0]).toMatchObject({
-      id: after?.calls?.[0],
-      module: "mind",
-      label: "thought",
-      purpose: "mind",
-      status: "ok",
-    });
-    const published = r.thoughts() as unknown as Thought[];
-    expect(published.length).toBeGreaterThanOrEqual(3);
-    expect(published.at(-1)?.intents[0]?.said).toBe("我只是剛好路過喔。");
-    expect(r.mind().stats()).toMatchObject({ calls_last_hour: 1, calls_total: 1 });
-  });
-
-  it("nudges her emotions, her own and toward someone, from her reply", async () => {
-    const provider = new MockProvider("p").reply(
-      JSON.stringify({
-        thought: "Owen 進語音了……才、才沒有很開心。",
-        emotions: { joy: 0.3, shy: 0.2 },
-        feelings: [{ person: "u1", emotions: { gratitude: 0.25 } }],
-      }),
-    );
-    const r = await rig(provider);
-    r.publish(salient("Owen 進了語音頻道「聊天室」"));
-    await wait(4100);
-    expect(provider.requests().length).toBe(1);
-    const self = r.sup.services.require(SelfStateKey);
-    const felt = Object.fromEntries(self.emotions(0).map((e) => [e.name, e.intensity]));
-    expect(felt.joy).toBeCloseTo(0.3, 2);
-    expect(felt.shy).toBeCloseTo(0.2, 2);
-    expect(self.heart("person-owen")?.emotions.gratitude).toBeCloseTo(0.25, 2);
     const [thought] = r.mind().thoughts();
-    expect(thought?.effects?.emotions).toEqual({ joy: 0.3, shy: 0.2 });
-    expect(thought?.changes).toContain("情緒 喜 +0.30、害羞 +0.20");
+    expect(thought?.intents.map((i) => [i.capability, i.status])).toEqual([
+      ["voice.join", "started"],
+      ["speak", "dropped"],
+    ]);
+    expect(thought?.changes).toEqual(["目標 +「問 Owen 報告的結果」(Owen 上線時)"]);
+    const agenda = r.sup.services.require(GoalAgendaKey);
+    expect(agenda.goals().map((g) => [g.what, g.trigger])).toEqual([
+      ["問 Owen 報告的結果", { kind: "when_online", person: "Owen" }],
+    ]);
+    expect(goals.tryRecv()?.event).toMatchObject({ data: { topic: "plan.goal" } });
+    // She does not write emotions, drives or talkativeness from a plan.
+    const self = r.sup.services.require(SelfStateKey);
+    expect(Object.keys(self.snapshot().policy.talkativeness)).toEqual([]);
   });
 
-  it("adapts the heartbeat and keeps to the hourly cap", async () => {
-    const provider = new MockProvider("p").reply('{"thought": "沒什麼事。"}');
-    const r = await rig(provider, { config: { max_calls_per_hour: 3, min_interval_secs: 30 } });
-    await wait(11 * 60_000);
-    expect(provider.requests().length).toBe(0);
-    await wait(60_000);
-    expect(provider.requests().length, "first heartbeat after 12 min").toBe(1);
-    expect(
-      r
-        .mind()
-        .thoughts()[0]
-        ?.triggers.map((t) => t.kind),
-    ).toEqual(["heartbeat"]);
-    // Nothing came of it: the next one is 1.5× sparser.
-    await wait(17 * 60_000);
-    expect(provider.requests().length).toBe(1);
-    await wait(60_000);
-    expect(provider.requests().length).toBe(2);
-    // Lots happening, but at most three thoughts in the hour.
-    for (let i = 0; i < 6; i++) {
-      r.publish(salient(`事件 ${i}`));
-      await wait(40_000);
-    }
-    expect(provider.requests().length).toBe(3);
-    expect(r.mind().stats().calls_last_hour).toBe(3);
-  });
-
-  it("does not think while autonomy is paused", async () => {
-    const provider = new MockProvider("p").reply('{"thought": "嗯"}');
+  it("does not plan while autonomy is paused", async () => {
+    const provider = new ScriptedProvider(() => "{}");
     const r = await rig(provider);
     await r.registry.setPaused(true);
-    expect(r.mind().accepting).toBe(false);
+    r.publish(salient("Owen 進了語音頻道"));
+    await wait(30 * MIN);
+    expect(provider.requests()).toHaveLength(0);
     expect(r.mind().stats().idle_reason).toBe("paused");
-    expect(
-      r.mind().suggest({
-        source: "initiative",
-        reason: "greeting",
-        context: TEXT,
-        hint: "打招呼",
-        about: [],
-      }),
-    ).toBe(false);
-    r.publish(salient("Owen 上線了"));
-    await wait(30 * 60_000);
-    expect(provider.requests().length).toBe(0);
     await r.registry.setPaused(false);
-    r.publish(salient("Owen 上線了"));
-    await wait(40_000);
-    expect(provider.requests().length).toBe(1);
+    await wait(40 * MIN);
+    expect(provider.requests().length).toBeGreaterThan(0);
   });
 
-  it("takes initiative's suggestions as reasons to think (followups go on her agenda)", async () => {
-    const provider = new MockProvider("p").reply(
-      JSON.stringify({
-        thought: "對了,要問他考試的事。",
-        intents: [{ action: "chat.start", place: "p1", person: "u1", opening: "考得怎樣?" }],
-      }),
+  it("writes her day plan on the first Plan of the day (reasoning `plan_daily`), once", async () => {
+    const provider = new ScriptedProvider((req) =>
+      callKind(req) === "plan_daily"
+        ? JSON.stringify({ thought: "今天想等 Owen。", day_plan: "Owen 通常晚上來,等他再開台。" })
+        : "{}",
     );
-    const r = await rig(provider);
-    const accepted = r.mind().suggest({
-      source: "initiative",
-      reason: "followup",
-      context: TEXT,
-      hint: "問他考試考得怎樣",
-      about: [OWEN],
-    });
-    expect(accepted).toBe(true);
-    const self = r.sup.services.require(SelfStateKey);
-    expect(self.agenda().map((a) => a.text)).toEqual(["問他考試考得怎樣"]);
+    const r = await rig(provider, { config: { daily_hour: 6 } });
     await wait(5000);
-    expect(dataText(provider)).toContain("可能的契機");
-    expect(dataText(provider)).toContain("問他考試考得怎樣(p1 u1)");
-    await wait(10);
-    expect(r.intents.intents.map((i) => [i.capability, i.context, i.about])).toEqual([
-      ["chat.start", TEXT, OWEN],
-    ]);
+    expect(provider.requests().map(callKind)).toEqual(["plan_daily"]);
+    expect(provider.requests()[0]?.reasoning).toBe("high");
+    const loop = r.mind() as unknown as MindLoop;
+    expect(loop.dayPlan()).toBe("Owen 通常晚上來,等他再開台。");
+    r.publish(salient("Owen 上線了"));
+    await wait(50_000);
+    expect(provider.requests().map(callKind)).toEqual(["plan_daily", "plan"]);
+    expect(texts(provider.requests()[1]).data).toContain("Owen 通常晚上來,等他再開台。");
+    expect(await r.store.get("p", "mind:plan:state")).toMatchObject({ last_daily: "2026-11-02" });
   });
 
-  it("thinks when her voice channel goes quiet after a conversation", async () => {
-    const provider = new MockProvider("p").reply('{"thought": "大家怎麼都不說話了。"}');
+  it("lengthens the heartbeat after empty runs and skips one when nothing changed", async () => {
+    const provider = new ScriptedProvider(() => '{"thought": "沒事。"}');
+    const r = await rig(provider, { config: { min_interval_secs: 0 } });
+    const loop = r.mind() as unknown as MindLoop;
+    const next = () => Date.parse(r.mind().stats().next_heartbeat_at ?? "") - Date.now();
+    await wait(1000);
+    const first = next();
+    expect(first).toBeGreaterThanOrEqual(10 * MIN);
+    expect(first).toBeLessThanOrEqual(20 * MIN);
+    await wait(first + 1000);
+    expect(provider.requests()).toHaveLength(1);
+    expect(loop.planStats()).toMatchObject({ runs: 1, empty: 1, empty_streak: 1 });
+    expect(next()).toBeGreaterThan(first);
+    // Nothing changed since that empty plan: the next heartbeat does not ask the model.
+    await wait(next() + 1000);
+    expect(provider.requests()).toHaveLength(1);
+    expect(loop.planStats().empty_streak).toBe(2);
+    // Something happens: she plans again.
+    r.publish(salient("Owen 進了語音頻道"));
+    await wait(5000);
+    expect(provider.requests()).toHaveLength(2);
+  });
+
+  it("is woken when an activity ends, and fires `after_activity` goals", async () => {
+    const provider = new ScriptedProvider(() => "{}");
     const r = await rig(provider);
-    const member = (id: string, self: boolean): VoiceParticipant => ({
-      account: { platform: "discord", id },
-      display_name: id,
-      is_self: self,
-      muted: false,
-      deafened: false,
+    await wait(10);
+    const agenda = r.sup.services.require(GoalAgendaKey);
+    const g = agenda.add({
+      what: "玩完就收台聊天",
+      why: "",
+      trigger: { kind: "after_activity", activity: "game" },
+      expires: toTimestamp(Date.now() + 6 * 60 * MIN),
+      source: "plan",
     });
-    r.publish({ type: "platform_ready", data: { platform: "discord", self_account: HER } });
-    r.publish({
-      type: "voice_joined",
-      data: { context: VOICE, participants: [member(OWEN.id, false), member(HER.id, true)] },
+    const snapshot = (activity: JsonValue) => ({
+      version: 1,
+      at: toTimestamp(Date.now()),
+      presence: { type: "none" },
+      broadcast: { type: "off" },
+      activity,
+      override: null,
+      scene: null,
     });
-    for (let i = 0; i < 3; i++) {
-      r.publish({
-        type: "voice_utterance",
-        data: {
-          id: `u${i}`,
-          context: VOICE,
-          speaker: { account: OWEN, display_name: "Owen", is_bot: false },
-          text: "然後呢",
-          language: "zh",
-          emotion: null,
-          audio_events: [],
-          started_at: toTimestamp(Date.now()),
-          ended_at: toTimestamp(Date.now()),
-          asr_ms: 100,
-        },
-      });
-      await wait(5000);
-    }
-    expect(provider.requests().length).toBe(0);
-    await wait(45_000);
-    expect(provider.requests().length).toBe(1);
-    expect(
-      r
-        .mind()
-        .thoughts()[0]
-        ?.triggers.map((t) => [t.kind, t.context]),
-    ).toEqual([["voice_quiet", VOICE]]);
+    r.publish(
+      customEvent(
+        "activity.changed",
+        snapshot({
+          type: "game",
+          target: "minecraft",
+          phase: "running",
+          task: null,
+          failure: null,
+          since: toTimestamp(Date.now()),
+        }),
+      ),
+    );
+    await wait(1000);
+    expect(provider.requests()).toHaveLength(0);
+    r.publish(
+      customEvent("activity.changed", snapshot({ type: "idle", since: toTimestamp(Date.now()) })),
+    );
+    await wait(5000);
+    expect(provider.requests()).toHaveLength(1);
+    const { data } = texts(provider.requests()[0]);
+    expect(data).toContain("剛剛的活動結束了:game(minecraft) 結束了");
+    expect(data).toContain("你之前定的目標,觸發條件到了");
+    expect(data).toContain("玩完就收台聊天;觸發:game 結束之後(到了)");
+    expect(agenda.goal(g.id)?.status).toBe("active");
+  });
+
+  it("is woken when her mood drops", async () => {
+    const provider = new ScriptedProvider(() => "{}");
+    const r = await rig(provider, { config: { min_interval_secs: 0 } });
+    r.publish(salient("Owen 上線了"));
+    await wait(5000);
+    expect(provider.requests()).toHaveLength(1);
+    const mood = r.sup.services.require(AffectStateKey).snapshot().mood;
+    r.publish(customEvent("affect.changed", { mood: { ...mood, valence: mood.valence - 0.1 } }));
+    await wait(5000);
+    expect(provider.requests()).toHaveLength(1);
+    r.publish(customEvent("affect.changed", { mood: { ...mood, valence: mood.valence - 0.4 } }));
+    await wait(5000);
+    expect(provider.requests()).toHaveLength(2);
+    expect(texts(provider.requests()[1]).data).toContain("你的心情變了");
   });
 
   it("falls back to the chat chain and records failures in the journal", async () => {
-    const provider = new MockProvider("p").reply("我不想用 JSON");
+    const provider = new MockProvider("p").fail("upstream down");
     const r = await rig(provider, { chatOnly: true });
-    r.publish(salient("Owen 上線了"));
+    r.publish(salient("Owen 進了語音頻道"));
     await wait(5000);
     expect(provider.requests()[0]?.model).toBe("chat");
     const [thought] = r.mind().thoughts();
-    expect(thought?.error).toContain("no JSON object");
-    expect(thought?.intents).toEqual([]);
-  });
-
-  it("keeps the quiet she chooses herself above a floor and short", async () => {
-    const provider = new MockProvider("p").reply(
-      JSON.stringify({
-        thought: "整排請勿打擾,那我也躺平",
-        policy: {
-          talkativeness: [{ scope: "p2", level: 0.05, for_min: 120, why: "躺平" }],
-          initiative: { level: 0.01, why: "躺平" },
-        },
-      }),
-    );
-    const r = await rig(provider);
-    r.publish(salient("頻道安靜下來了"));
-    await wait(5000);
-    const self = r.sup.services.require(SelfStateKey);
-    const talk = self.talkativeness(TEXT);
-    expect(talk?.level).toBe(MIN_SELF_TALK);
-    expect(Date.parse(talk?.until ?? "") - Date.now()).toBeLessThanOrEqual(
-      MAX_QUIET_MINUTES * 60_000,
-    );
-    expect(self.snapshot().policy.initiative).toBe(MIN_SELF_TALK);
-  });
-
-  it("tells her when she has done nothing for several thoughts in a row", async () => {
-    const provider = new MockProvider("p");
-    for (let i = 0; i < 4; i++) provider.reply('{"thought": "繼續窩著"}');
-    const r = await rig(provider, { config: { min_interval_secs: 0 } });
-    for (const what of ["a", "b", "c", "d"]) {
-      r.publish(salient(what));
-      await wait(5000);
-    }
-    expect(provider.requests().length).toBe(4);
-    expect(systemText(provider, 2)).not.toContain("# 你已經發呆一陣子了");
-    expect(systemText(provider, 3)).toContain("連續想了 3 次都沒做任何事");
-  });
-
-  it("keeps her journal across restarts, the newest `journal_keep`", async () => {
-    const store = new MemorySettingsStore();
-    const provider = new MockProvider("p").reply('{"thought": "一"}').reply('{"thought": "二"}');
-    const r = await rig(provider, {
-      store,
-      config: { journal_keep: 1, digest_batch: 1, min_interval_secs: 0 },
-    });
-    r.publish(salient("a"));
-    await wait(5000);
-    r.publish(salient("b"));
-    await wait(5000);
-    const keys = [...(await store.list("p", THOUGHT_PREFIX)).keys()];
-    expect(keys.length).toBe(1);
-    await r.sup.restart("mind");
-    expect(
-      r
-        .mind()
-        .thoughts()
-        .map((t) => t.thought),
-    ).toEqual(["二"]);
-    const saved = (await store.list("p", THOUGHT_PREFIX)).values().next().value as JsonValue;
-    expect((saved as unknown as Thought).thought).toBe("二");
-  });
-
-  it("sees the stream she watches, and none of it reaches the store", async () => {
-    const store = new MemorySettingsStore();
-    const provider = new MockProvider("p").reply('{"thought": "嗯"}');
-    const contributors = new PromptContributors();
-    const section = (key: string, title: string, body: string) => ({
-      key,
-      contribute: async () => [{ key, title, body, order: 1 }],
-    });
-    contributors.register(section("memory", "你記得的事", "Owen 喜歡拉麵"));
-    contributors.register(section("watch", "你正在看的直播", "你正在看 Owen 的直播,他在打王"));
-    const r = await rig(provider, {
-      store,
-      extra: (sup) => sup.services.provide("app", PromptContributorsKey, contributors),
-    });
-    r.publish(salient("Owen 進語音了"));
-    await wait(5000);
-    expect(dataText(provider)).toContain("Owen 喜歡拉麵");
-    expect(dataText(provider)).toContain("他在打王");
-
-    const saved = JSON.stringify([...(await store.list("p", THOUGHT_PREFIX)).values()]);
-    expect(saved).toContain("Owen 喜歡拉麵");
-    expect(saved).not.toContain("你正在看");
-    expect(saved).not.toContain("他在打王");
-    expect(JSON.stringify(r.mind().thoughts())).not.toContain("他在打王");
-    expect(JSON.stringify(r.thoughts())).not.toContain("他在打王");
-  });
-
-  it("sees her documents, lessons and the recap, and changes documents as herself", async () => {
-    const applied: [unknown, unknown][] = [];
-    const reply = JSON.stringify({
-      thought: "Owen 好像很喜歡拉麵,記一下。",
-      documents: [
-        {
-          type: "create",
-          subject: "u1",
-          kind: "人物卡",
-          title: "Owen",
-          content: { 喜歡: ["拉麵"] },
-        },
-        { type: "explode", doc: "#x" },
-      ],
-    });
-    const provider = new MockProvider("p").reply(reply);
-    const r = await rig(provider, {
-      extra: (sup) => {
-        sup.services.provide("app", KnowledgeKey, {
-          docs: () => [],
-          get: () => null,
-          render: () => "#abc123 人物卡「Owen」\n  - 喜歡: 拉麵",
-          apply: async (change: unknown, writer: unknown) => {
-            applied.push([change, writer]);
-            return { ok: true, doc: null };
-          },
-        });
-        sup.services.provide("app", LessonsKey, {
-          all: () => [],
-          applicable: () => [
-            {
-              id: "l1",
-              text: "Owen 講話時不要插嘴",
-              person: "person-owen",
-              scope: null,
-              talk: -0.5,
-              created_at: "",
-              expires_at: null,
-              source: "daily",
-            },
-          ],
-          talkShift: () => -0.1,
-        });
-        sup.services.provide("app", ConversationStatesKey, {
-          get: () => ({
-            context: VOICE,
-            updated_at: "",
-            folded_up_to: null,
-            folds: 1,
-            lines: 3,
-            recap: "大家在聊拉麵",
-            notes: {},
-          }),
-          list: () => [],
-        });
-      },
-    });
-    r.publish(salient("Owen 進語音了"));
-    await wait(5000);
-    const data = dataText(provider);
-    expect(data).toContain("你整理的資料");
-    expect(data).toContain("#abc123 人物卡「Owen」");
-    expect(data).toContain("Owen 講話時不要插嘴");
-    expect(data).toContain("大家在聊拉麵");
-    expect(systemText(provider)).not.toContain("拉麵");
-    expect(applied).toHaveLength(1);
-    expect(applied[0]?.[0]).toMatchObject({
-      type: "create",
-      subject: { type: "person", person: "person-owen" },
-    });
-    expect(applied[0]?.[1]).toMatchObject({ kind: "self" });
+    expect(thought?.error).toContain("upstream down");
   });
 
   it("asks once more when her reply has no JSON, then uses the fixed one", async () => {
-    const provider = new MockProvider("p")
-      .reply("我在想事情……")
-      .reply('好:\n```json\n{"thought": "還是想一下好了"}\n```');
+    const provider = new MockProvider("p").reply("嗯……我想想").reply('{"thought": "好。"}');
     const r = await rig(provider);
-    r.publish(salient("Owen 上線了"));
+    r.publish(salient("Owen 進了語音頻道"));
     await wait(5000);
     expect(provider.requests()).toHaveLength(2);
-    expect(r.mind().thoughts()[0]?.thought).toBe("還是想一下好了");
+    expect(texts(provider.requests()[1]).data).toContain("上面的回覆不能用");
+    expect(r.mind().thoughts()[0]).toMatchObject({ thought: "好。", attempts: 2, error: null });
+  });
+
+  it("keeps her journal and goals across restarts, and migrates the old agenda once", async () => {
+    const store = new MemorySettingsStore();
+    const provider = new ScriptedProvider(() => '{"thought": "嗯。"}');
+    const r = await rig(provider, { store });
+    r.publish(salient("Owen 進了語音頻道"));
+    await wait(5000);
+    expect((await store.list("p", THOUGHT_PREFIX)).size).toBe(1);
+    const self = r.sup.services.require(SelfStateKey);
+    self.addAgenda({ text: "等 Owen 上線問他報告結果", why: "說好的" });
+    await r.sup.restart("mind");
+    await wait(100);
+    const agenda = () => r.sup.services.require(GoalAgendaKey).goals();
+    expect(agenda().map((g) => [g.what, g.trigger.kind, g.source])).toEqual([
+      ["等 Owen 上線問他報告結果", "whenever", "plan"],
+    ]);
+    await r.sup.restart("mind");
+    await wait(100);
+    expect(agenda()).toHaveLength(1);
+    expect((await store.list("p", GOAL_PREFIX)).size).toBe(1);
+    expect(r.mind().thoughts()).toHaveLength(1);
+  });
+
+  it("turns a followup suggestion into a goal that waits for the person", async () => {
+    const provider = new ScriptedProvider(() => "{}");
+    const r = await rig(provider);
+    await wait(10);
+    expect(
+      r.mind().suggest({
+        source: "memory",
+        reason: "followup",
+        context: TEXT,
+        hint: "問 Owen 面試結果",
+        about: [OWEN],
+      }),
+    ).toBe(true);
+    const [g] = r.sup.services.require(GoalAgendaKey).goals();
+    expect(g).toMatchObject({ what: "問 Owen 面試結果", why: "之前說好要問的", context: TEXT });
+  });
+});
+
+describe("mind module: one agenda", () => {
+  it("closes the old free-text agenda items that became goals", async () => {
+    const r = await rig(new ScriptedProvider(() => "{}"));
+    const self = r.sup.services.require(SelfStateKey);
+    const item = self.addAgenda({ text: "等 Owen 上線問他報告結果" });
+    // The next start migrates it (as the first start after an upgrade does).
+    await r.sup.restart("mind");
+    const goals = r.sup.services.require(GoalAgendaKey).goals();
+    expect(goals.map((g) => [g.id, g.what])).toEqual([[`agenda-${item.id}`, item.text]]);
+    expect(self.agenda()).toEqual([]);
+    // Restarting again changes nothing.
+    await r.sup.restart("mind");
+    expect(r.sup.services.require(GoalAgendaKey).goals()).toHaveLength(1);
+  });
+});
+
+describe("mind module: Appraise", () => {
+  it("appraises a segment once it ended (reasoning `appraise`), into her affect", async () => {
+    const provider = new ScriptedProvider((req) =>
+      callKind(req) === "appraise"
+        ? JSON.stringify({
+            appraisals: [
+              { emotion: "joy", strength: "strong", toward: null, cause: "Owen 誇我唱得好" },
+            ],
+          })
+        : "{}",
+    );
+    const r = await rig(provider);
+    await wait(10);
+    r.publish(message("你今天唱得超好聽", true));
+    await wait(2000);
+    r.publish({
+      type: "agent_turn_completed",
+      data: { turn: "R1", context: TEXT, text: "哼,那當然" },
+    });
+    await wait(2000);
+    r.publish(message("真的啦", false));
+    r.publish(message("再唱一首", true));
+    await wait(60_000);
+    expect(provider.requests()).toHaveLength(0);
+    // Her turn ending is not a reason to plan; the segment ends after two quiet minutes.
+    await wait(70_000);
+    expect(provider.requests().map(callKind)).toEqual(["appraise"]);
+    expect(provider.requests()[0]?.reasoning).toBe("low");
+    const { system, data } = texts(provider.requests()[0]);
+    expect(system.startsWith("你是住在深海的鯨魚娘。\n\n# 感受")).toBe(true);
+    expect(system).not.toContain("Owen");
+    expect(data).toContain("Owen(對你說):你今天唱得超好聽");
+    expect(data).toContain("你:哼,那當然");
+    const joy = r.sup.services
+      .require(AffectStateKey)
+      .emotions(0)
+      .find((e) => e.name === "joy");
+    expect(joy?.intensity ?? 0).toBeGreaterThan(0.2);
+    const [thought] = r.mind().thoughts() as Thought[];
+    expect(thought?.triggers[0]?.kind).toBe("turn");
+    expect(thought?.thought).toContain("感受 喜(強)");
+  });
+
+  it("does not appraise conversations she was not part of", async () => {
+    const provider = new ScriptedProvider(() => "{}");
+    const r = await rig(provider);
+    await wait(10);
+    for (let i = 0; i < 6; i++) r.publish(message(`閒聊 ${i}`, false));
+    await wait(5 * MIN);
+    expect(provider.requests().filter((q) => callKind(q) === "appraise")).toHaveLength(0);
+    void VOICE;
+  });
+});
+
+describe("a rule on her goals (§9)", () => {
+  const goals = (r: Rig) => r.sup.services.require(GoalAgendaKey);
+  const later = {
+    trigger: { kind: "whenever" },
+    expires: toTimestamp(Date.now() + 86_400_000),
+    source: "plan",
+  } as const;
+
+  async function ruled(forbids: (goal: DirectiveGoal) => Directive | null) {
+    return rig(new MockProvider("p").reply("{}"), {
+      extra: (sup) =>
+        sup.services.provide("app", DirectivesKey, { forbids } as unknown as Directives),
+    });
+  }
+
+  const added = (effect: string, text = "不要玩 Minecraft") =>
+    customEvent(DIRECTIVE_CHANGED_TOPIC, {
+      op: "add",
+      text,
+      directive: { effect, text },
+      by: "discord:1",
+    });
+
+  it("a deny drops what it forbids and nothing else, with why", async () => {
+    const r = await ruled((goal) =>
+      goal.what.includes("Minecraft") ? ({ text: "不要玩 Minecraft" } as Directive) : null,
+    );
+    const book = goals(r);
+    const mc = book.add({ what: "玩 Minecraft", why: "想玩", ...later });
+    book.add({ what: "找 Owen 聊天", why: "想他", ...later });
+    r.publish(added("deny"));
+    await wait(10);
+    expect(book.goals().map((g) => g.what)).toEqual(["找 Owen 聊天"]);
+    expect(book.goal(mc.id)).toMatchObject({
+      status: "dropped",
+      close_reason: "規則:不要玩 Minecraft",
+    });
+  });
+
+  it("anything but a new deny leaves her goals alone", async () => {
+    const r = await ruled(() => ({ text: "x" }) as Directive);
+    const book = goals(r);
+    book.add({ what: "玩 Minecraft", why: "想玩", ...later });
+    r.publish(added("avoid"));
+    r.publish(
+      customEvent(DIRECTIVE_CHANGED_TOPIC, { op: "remove", text: "", directive: null, by: "x" }),
+    );
+    await wait(10);
+    expect(book.goals()).toHaveLength(1);
   });
 });

@@ -16,6 +16,7 @@ import {
   encodeNodeMessage,
   FRAME_LEVELS,
   FRAME_PLAYBACK,
+  NODE_CAPABILITIES,
   type NodeMessage,
   parseCoreMessage,
   PROTOCOL_VERSION,
@@ -166,6 +167,7 @@ export class CoreLink extends EventEmitter<CoreLinkEvents> implements LinkSink {
           token: this.o.token,
           node: "voice-node",
           self_account: { platform: "discord", id: this.o.selfAccountId },
+          capabilities: [...NODE_CAPABILITIES],
         }),
       );
       this.helloTimer = setTimeout(() => {

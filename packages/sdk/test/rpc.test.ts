@@ -1,9 +1,9 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { RpcError, RpcPeer } from "../src/rpc.js";
+import { CANCEL_METHOD, RpcError, RpcPeer } from "../src/rpc.js";
 import { ErrorCode } from "../src/types.js";
 
-function pair(onRequest: (method: string, params: unknown) => unknown) {
+function pair(onRequest: (method: string, params: unknown, signal: AbortSignal) => unknown) {
   const ab = new PassThrough();
   const ba = new PassThrough();
   const notes: Array<[string, unknown]> = [];
@@ -35,6 +35,21 @@ describe("RpcPeer", () => {
       a.request("echo", { k: [1] }),
     ]);
     expect([slow, fast, echo]).toEqual([60, 5, { k: [1] }]);
+  });
+
+  it("aborts a handler when the caller sends $/cancelRequest", async () => {
+    let seen: AbortSignal | null = null;
+    const { a } = pair(async (_method, _params, signal) => {
+      seen = signal;
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+      return "stopped";
+    });
+    const running = a.request("work", null, 2_000);
+    await sleep(10);
+    expect(seen).not.toBeNull();
+    a.notify(CANCEL_METHOD, { id: 1 });
+    await expect(running).resolves.toBe("stopped");
+    expect((seen as AbortSignal | null)?.aborted).toBe(true);
   });
 
   it("maps thrown errors to error responses", async () => {

@@ -60,6 +60,28 @@ export type ActionPayload =
   | { type: "actuate"; capability: string; ticket: string; context: ContextKey | null };
 
 /** Platform the payload goes to (`core` for an `actuate` without a context). */
+/**
+ * Payload of `ACTION_SETTLED_TOPIC`: how a line of hers left the scheduler. `action_completed`
+ * says an action ended; this says which line it was, so "sent" can be told from a dropped typing
+ * indicator (`error`: `expired`, `cancelled` and `coalesced` mean it never went out).
+ */
+export interface ActionSettled {
+  action: ActionId;
+  turn: TurnId | null;
+  type: "send_message" | "speak";
+  context: ContextKey;
+  text: string;
+  ok: boolean;
+  error: string | null;
+  /** The message a successful `send_message` created. */
+  message: MessageRef | null;
+  /** Moderation replaced the line (the rule): what she meant did not reach anyone. */
+  blocked?: string | null;
+}
+
+/** Published next to `action_completed` for every `send_message` and `speak` action. */
+export const ACTION_SETTLED_TOPIC = "action.settled";
+
 export function actionPlatform(payload: ActionPayload): string {
   if (payload.type === "react") return payload.message.context.platform;
   if (payload.type === "actuate") return payload.context?.platform ?? "core";
@@ -82,9 +104,14 @@ export interface Action {
   coalesce_key: string | null;
   turn: TurnId | null;
   payload: ActionPayload;
+  /** The text is the filtered line: moderation blocked what she meant (the rule). */
+  blocked?: string;
 }
 
 export const DEFAULT_ACTION_TTL_MS = 120_000;
+
+/** The error of a line that met the emergency stop in the scheduler. */
+export const MUTED = "muted";
 
 export interface NewActionOptions {
   /** Milliseconds; default `DEFAULT_ACTION_TTL_MS`. */
@@ -93,6 +120,8 @@ export interface NewActionOptions {
   coalesce_key?: string | null;
   /** Epoch ms for `created_at`; defaults to `Date.now()`. */
   now?: number;
+  /** See `Action.blocked`. */
+  blocked?: string | null;
 }
 
 export function newAction(
@@ -110,6 +139,7 @@ export function newAction(
     coalesce_key: options.coalesce_key ?? null,
     turn: options.turn ?? null,
     payload,
+    ...(options.blocked == null ? {} : { blocked: options.blocked }),
   };
 }
 
@@ -130,6 +160,13 @@ export interface ActionSink {
    * because new messages arrived.
    */
   cancelTurn(turn: TurnId): Promise<void>;
+  /** Stops what of `turn` is running right now too (§7.3 `cut_short`, `interrupt`). */
+  interruptTurn?(turn: TurnId): Promise<void>;
+  /**
+   * The emergency stop: everything queued is dropped and every line going out is stopped, whoever
+   * it belongs to. Returns how many actions that was.
+   */
+  silence?(): Promise<number>;
 }
 
 export const ActionSinkKey = serviceKey<ActionSink>("ActionSink");

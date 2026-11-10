@@ -6,16 +6,21 @@ import {
   useMutation,
   useQueries,
   useQuery,
+  skipToken,
   useQueryClient,
 } from "@tanstack/react-query";
 import { isApiError } from "@/api/http";
 import type {
+  AddDirectiveRequest,
   AdjustPersonRequest,
+  ArbiterVerdict,
   AssignRoleRequest,
   ChannelLevelsView,
   ContextKey,
   DataCategoryId,
   DecisionsQuery,
+  E2eRecord,
+  FactEventsQuery,
   GameStartRequest,
   LlmCallsQuery,
   MemoryQuery,
@@ -31,10 +36,16 @@ import type {
   SongsState,
   StageState,
   StreamAction,
+  Timestamp,
+  TurnOutcomeKind,
   UpdateMemoryRequest,
   UpdatePersonRequest,
   UpsertRoleRequest,
+  WalletAdjustRequest,
 } from "@/api/types";
+import { type EvalData, loadEvalData } from "@/lib/eval-data";
+import { startOfDay } from "@/lib/rules";
+import { fetchTurnEvents } from "@/lib/turn-events";
 import { useApi } from "./connection";
 
 export const queryKeys = {
@@ -48,6 +59,7 @@ export const queryKeys = {
   personaHistory: (key: string) => ["persona", key, "history"] as const,
   people: (q: PeopleQuery) => ["people", q] as const,
   person: (id: string) => ["people", "detail", id] as const,
+  personWallet: (id: string) => ["people", "wallet", id] as const,
   memory: (q: Omit<MemoryQuery, "before">) => ["memory", q] as const,
   roles: ["auth", "roles"] as const,
   assignments: ["auth", "assignments"] as const,
@@ -71,6 +83,25 @@ export const queryKeys = {
   reflection: ["reflection"] as const,
   songs: ["songs"] as const,
   telemetry: (minutes: number) => ["telemetry", minutes] as const,
+  activity: ["activity"] as const,
+  activityTasks: ["activity", "tasks"] as const,
+  arbiter: ["arbiter"] as const,
+  ledger: (context: ContextKey | undefined) => ["arbiter", "ledger", context ?? null] as const,
+  arbiterDecisions: (q: object) => ["arbiter", "decisions", q] as const,
+  affect: ["affect"] as const,
+  affectPeople: ["affect", "people"] as const,
+  goals: ["mind", "goals"] as const,
+  dayPlan: ["mind", "plan"] as const,
+  prompts: ["prompts"] as const,
+  turnOutcomes: (q: object) => ["turns", "outcomes", q] as const,
+  turnsAll: ["turns"] as const,
+  turnE2e: (turn: string) => ["e2e", turn] as const,
+  factEvents: (q: FactEventsQuery) => ["facts", "events", q] as const,
+  factChain: (id: string) => ["facts", "chain", id] as const,
+  factEffects: (id: string) => ["facts", "effects", id] as const,
+  directives: (history: boolean) => ["directives", history] as const,
+  directivesAll: ["directives"] as const,
+  evalData: (windowMs: number) => ["facts", "eval", windowMs] as const,
 };
 
 /** Errors that retrying cannot fix. */
@@ -85,7 +116,7 @@ const poll =
   };
 
 export function createQueryClient(onError?: (error: Error) => void): QueryClient {
-  return new QueryClient({
+  const client = new QueryClient({
     queryCache: new QueryCache({ onError: (error) => onError?.(error) }),
     defaultOptions: {
       queries: {
@@ -96,6 +127,9 @@ export function createQueryClient(onError?: (error: Error) => void): QueryClient
       mutations: { retry: false },
     },
   });
+  // Voice measurements written from the event stream have no fetcher to bring them back.
+  client.setQueryDefaults(["e2e"], { gcTime: Number.POSITIVE_INFINITY, staleTime: Number.POSITIVE_INFINITY });
+  return client;
 }
 
 // --- system ------------------------------------------------------------------
@@ -215,6 +249,24 @@ export function useUpdatePerson(id: string) {
   return useMutation({
     mutationFn: (req: UpdatePersonRequest) => api.updatePerson(id, req),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["people"] }),
+  });
+}
+
+export function usePersonWallet(id: string) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.personWallet(id),
+    queryFn: ({ signal }) => api.personWallet(id, { signal }),
+    retry: false,
+  });
+}
+
+export function useAdjustWallet(id: string) {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: WalletAdjustRequest) => api.adjustWallet(id, req),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.personWallet(id) }),
   });
 }
 
@@ -613,3 +665,207 @@ export function usePeopleDetails(ids: string[]) {
   });
 }
 
+
+// --- body, arbiter, affect, plan, prompts -----------------------------------------
+// Older Cores answer 404 and a stopped module 503: `poll` then stops asking.
+
+/** Presence, broadcast, activity and scene. Kept fresh by `activity.changed`. */
+export function useActivity() {
+  const api = useApi();
+  return useQuery({ queryKey: queryKeys.activity, queryFn: ({ signal }) => api.activity({ signal }), refetchInterval: poll(10_000) });
+}
+
+export function useActivityTasks(limit = 20) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.activityTasks,
+    queryFn: ({ signal }) => api.activityTasks(limit, { signal }),
+    refetchInterval: poll(10_000),
+  });
+}
+
+export function useLedger(context?: ContextKey, limit = 50) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.ledger(context),
+    queryFn: ({ signal }) => api.ledger(context, limit, { signal }),
+    refetchInterval: poll(10_000),
+  });
+}
+
+export function useArbiterDecisions(q: { limit?: number; verdict?: ArbiterVerdict; context?: ContextKey }) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.arbiterDecisions(q),
+    queryFn: ({ signal }) => api.arbiterDecisions(q, { signal }),
+    refetchInterval: poll(15_000),
+  });
+}
+
+export function useAffect() {
+  const api = useApi();
+  return useQuery({ queryKey: queryKeys.affect, queryFn: ({ signal }) => api.affect({ signal }), refetchInterval: poll(10_000) });
+}
+
+export function useAffectPeople() {
+  const api = useApi();
+  return useQuery({ queryKey: queryKeys.affectPeople, queryFn: ({ signal }) => api.affectPeople({ signal }), refetchInterval: poll(30_000) });
+}
+
+export function useGoals(closed: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: [...queryKeys.goals, closed],
+    queryFn: ({ signal }) => api.goals(closed, { signal }),
+    refetchInterval: poll(15_000),
+  });
+}
+
+export function useDayPlan() {
+  const api = useApi();
+  return useQuery({ queryKey: queryKeys.dayPlan, queryFn: ({ signal }) => api.dayPlan({ signal }), refetchInterval: poll(60_000) });
+}
+
+export function usePrompts(limit = 30) {
+  const api = useApi();
+  return useQuery({
+    queryKey: [...queryKeys.prompts, "list", limit],
+    queryFn: ({ signal }) => api.prompts(limit, undefined, { signal }),
+    refetchInterval: poll(15_000),
+  });
+}
+
+/** The saved prompt of one turn; `404` when it is too old or was not kept. */
+export function usePrompt(turn: string | undefined) {
+  const api = useApi();
+  return useQuery({
+    queryKey: [...queryKeys.prompts, "one", turn ?? ""],
+    queryFn: ({ signal }) => api.prompt(turn ?? "", { signal }),
+    enabled: Boolean(turn),
+    retry: false,
+  });
+}
+
+export function useTurnOutcomes(q: { limit?: number; outcome?: TurnOutcomeKind; context?: ContextKey } = {}) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.turnOutcomes(q),
+    queryFn: ({ signal }) => api.turnOutcomes(q, { signal }),
+    refetchInterval: poll(15_000),
+  });
+}
+
+// --- fact layer ----------------------------------------------------------------
+
+/** EventLog lines (`GET /api/facts/events`); `every` re-reads on that interval, `false` once. */
+export function useFactEvents(q: FactEventsQuery, every: number | false = false, enabled = true) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.factEvents(q),
+    queryFn: ({ signal }) => api.factEvents(q, { signal }),
+    refetchInterval: every === false ? false : poll(every),
+    placeholderData: (prev) => prev,
+    enabled,
+    retry: false,
+  });
+}
+
+/** The causes of one event, oldest first. */
+export function useFactChain(id: string | null) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.factChain(id ?? ""),
+    queryFn: ({ signal }) => api.factChain(id ?? "", { signal }),
+    enabled: id !== null,
+    retry: false,
+  });
+}
+
+/** What one event caused, oldest first. */
+export function useFactEffects(id: string | null) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.factEffects(id ?? ""),
+    queryFn: ({ signal }) => api.factEffects(id ?? "", 200, { signal }),
+    enabled: id !== null,
+    retry: false,
+  });
+}
+
+/** The newest EventLog lines of the last `ms`, re-read every 10 s. The window moves with the clock. */
+export function useFactWindow(ms: number, limit: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["facts", "window", ms, limit] as const,
+    queryFn: ({ signal }) => api.factEvents({ since: new Date(Date.now() - ms).toISOString(), order: "desc", limit }, { signal }),
+    refetchInterval: poll(10_000),
+    placeholderData: (prev) => prev,
+    retry: false,
+  });
+}
+
+/**
+ * The log's lines of one turn (see `fetchTurnEvents`); `window` is what an older Core is read by.
+ */
+export function useTurnEvents(turn: string, window: { since: Timestamp; until: Timestamp } | null, limit: number, enabled = true) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["facts", "turn", turn, window, limit] as const,
+    queryFn: ({ signal }) => fetchTurnEvents(api, turn, window, limit, signal),
+    placeholderData: (prev) => prev,
+    enabled,
+    retry: false,
+  });
+}
+
+/** The voice measurement of a turn the log does not have (yet): what this panel saw live. */
+export function useTurnE2e(turn: string | undefined) {
+  return useQuery<E2eRecord | null>({
+    queryKey: queryKeys.turnE2e(turn ?? ""),
+    queryFn: skipToken,
+    enabled: Boolean(turn),
+  });
+}
+
+// --- the owner's rules ------------------------------------------------------------
+
+/** The rules in force, or with `history` every rule including the ended ones. */
+export function useDirectives(history = false) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.directives(history),
+    queryFn: ({ signal }) => api.directives(history, { signal }),
+    refetchInterval: poll(15_000),
+    retry: false,
+  });
+}
+
+export function useDirectiveMutations() {
+  const api = useApi();
+  const qc = useQueryClient();
+  const changed = () => void qc.invalidateQueries({ queryKey: queryKeys.directivesAll });
+  return {
+    add: useMutation({ mutationFn: (r: AddDirectiveRequest) => api.addDirective(r), onSuccess: changed }),
+    remove: useMutation({ mutationFn: (id: string) => api.removeDirective(id), onSuccess: changed }),
+  };
+}
+
+// --- evaluation ----------------------------------------------------------------
+
+/** What §18's measures are computed from, over the last `windowMs`; re-read every minute. */
+export function useEvalData(windowMs: number) {
+  const api = useApi();
+  return useQuery<EvalData>({
+    queryKey: queryKeys.evalData(windowMs),
+    queryFn: ({ signal }) => loadEvalData(api, Date.now(), windowMs, signal),
+    refetchInterval: poll(60_000),
+    placeholderData: (prev) => prev,
+    retry: false,
+  });
+}
+
+/** What the rules and the gate stopped since local midnight, newest first (`gate` results and dropped proposals). */
+export function useBlocksToday() {
+  const since = new Date(startOfDay(Date.now())).toISOString();
+  return useFactEvents({ kind: ["result", "directive"], source: ["gate", "directive"], since, order: "desc", limit: 500 }, 15_000);
+}

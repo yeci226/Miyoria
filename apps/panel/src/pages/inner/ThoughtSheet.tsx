@@ -54,7 +54,7 @@ function InputView({ input }: { input: ThoughtInput }) {
                 <dd><Meter value={s.mood.arousal} label={`興奮 ${s.mood.arousal.toFixed(2)}`} /></dd>
                 <dd className="text-right font-mono text-xs">{s.mood.arousal.toFixed(2)}</dd>
                 <dt className="text-muted-foreground">精神</dt>
-                <dd><Meter value={s.mood.energy} tone="success" label={`精神 ${s.mood.energy.toFixed(2)}`} /></dd>
+                <dd><Meter value={s.mood.energy} tone="brand" label={`精神 ${s.mood.energy.toFixed(2)}`} /></dd>
                 <dd className="text-right font-mono text-xs">{s.mood.energy.toFixed(2)}</dd>
               </>
             )}
@@ -83,7 +83,7 @@ function InputView({ input }: { input: ThoughtInput }) {
       {input.places.length > 0 && (
         <div className="grid gap-1.5">
           <p className="text-xs text-muted-foreground">地點</p>
-          <ul className="divide-y rounded-md border text-[13px]">
+          <ul className="divide-y divide-line-soft rounded-md border text-[13px]">
             {input.places.map((p) => (
               <li key={p.ref} className="flex gap-3 px-3 py-1.5">
                 <code className="w-8 shrink-0 text-xs text-muted-foreground">{p.ref}</code>
@@ -100,7 +100,7 @@ function InputView({ input }: { input: ThoughtInput }) {
       {input.people.length > 0 && (
         <div className="grid gap-1.5">
           <p className="text-xs text-muted-foreground">人</p>
-          <ul className="divide-y rounded-md border text-[13px]">
+          <ul className="divide-y divide-line-soft rounded-md border text-[13px]">
             {input.people.map((p) => (
               <li key={p.ref} className="grid gap-0.5 px-3 py-1.5">
                 <span className="flex gap-3">
@@ -130,7 +130,7 @@ function InputView({ input }: { input: ThoughtInput }) {
                 <span className="min-w-0 flex-1">
                   {a.text}
                   {a.due && <span className="text-muted-foreground"> · {fmtDateTime(a.due)} 之後</span>}
-                  {a.blocked && <span className="text-warning"> · 暫時做不到:{a.blocked}</span>}
+                  {a.blocked && <span className="text-primary"> · 暫時做不到:{a.blocked}</span>}
                 </span>
               </li>
             ))}
@@ -226,18 +226,18 @@ function EffectsView({ e, changes }: { e: ThoughtEffects | null | undefined; cha
   for (const a of e.agenda_done) rows.push(<li key={`a✓${a}`}><Badge variant="success" className="mr-1.5">完成</Badge>{a}</li>);
   for (const a of e.agenda_dropped) rows.push(<li key={`a✗${a}`}><Badge variant="outline" className="mr-1.5">放棄</Badge>{a}</li>);
   for (const [i, d] of e.documents.entries()) {
-    rows.push(<li key={`d${i}`}><Badge variant={d.ok ? "brand" : "destructive"} className="mr-1.5">資料 {d.type}</Badge>{d.title ?? "—"}{!d.ok && <span className="text-[oklch(0.74_0.16_25)]"> · 沒有成功:{d.error}</span>}</li>);
+    rows.push(<li key={`d${i}`}><Badge variant={d.ok ? "brand" : "destructive"} className="mr-1.5">資料 {d.type}</Badge>{d.title ?? "—"}{!d.ok && <span className="text-primary"> · 沒有成功:{d.error}</span>}</li>);
   }
   return rows.length === 0 ? <Quiet>沒有改變什麼</Quiet> : <ul className="grid gap-2 text-sm">{rows}</ul>;
 }
 
 const STEP_TONE: Record<IntentStatus, string> = {
   pending: "bg-muted-foreground/50",
-  started: "bg-brand",
-  done: "bg-success",
-  denied: "bg-destructive",
+  started: "bg-primary",
+  done: "bg-foreground/85",
+  denied: "bg-primary",
   dropped: "bg-muted-foreground/40",
-  failed: "bg-warning",
+  failed: "ring-[1.5px] ring-inset ring-primary",
 };
 
 function IntentView({ i }: { i: ThoughtIntent }) {
@@ -253,7 +253,7 @@ function IntentView({ i }: { i: ThoughtIntent }) {
       {i.why && <p className="text-sm">{i.why}</p>}
       {i.opening && <p className="text-[13px] text-muted-foreground">想這樣開場:{i.opening}</p>}
       {i.args !== null && typeof i.args === "object" && Object.keys(i.args as object).length > 0 && (
-        <code className="block overflow-x-auto rounded bg-background/70 px-2 py-1 text-[11px] text-muted-foreground">{JSON.stringify(i.args)}</code>
+        <code className="block overflow-x-auto rounded bg-well px-2 py-1 text-[11px] text-muted-foreground">{JSON.stringify(i.args)}</code>
       )}
       <ol className="grid gap-1.5 border-l pl-4" aria-label="經過">
         {history.map((h, k) => (
@@ -277,8 +277,8 @@ function IntentView({ i }: { i: ThoughtIntent }) {
         </ul>
       )}
       {i.said && (
-        <p className="rounded-md bg-brand/[0.07] px-3 py-2 text-sm leading-relaxed">
-          <span className="mr-1.5 font-medium text-brand">她說</span>
+        <p className="rounded-md bg-control px-3 py-2 text-sm leading-relaxed">
+          <span className="mr-1.5 font-medium text-primary">她說</span>
           {i.said}
         </p>
       )}
@@ -294,11 +294,11 @@ function Calls({ thought }: { thought: Thought }) {
     return <Quiet>{(thought.calls?.length ?? 0) > 0 ? "這些呼叫已經不在記憶體裡" : "沒有記錄到呼叫(Core 重新啟動前的想法)"}</Quiet>;
   }
   return (
-    <ul className="divide-y rounded-md border">
+    <ul className="divide-y divide-line-soft rounded-md border">
       {items.map((c) => (
         <li key={c.id}>
-          <Link to="/llm" search={{ tab: "calls", thought: thought.id, call: c.id }} className="flex items-center gap-3 px-3 py-2 text-[13px] outline-none hover:bg-accent/50 focus-visible:bg-accent/60">
-            <span className={cn("size-2 rounded-full", STATUS_TONE[c.status] === "success" ? "bg-success" : STATUS_TONE[c.status] === "danger" ? "bg-destructive" : "bg-warning")} />
+          <Link to="/llm" search={{ tab: "calls", thought: thought.id, call: c.id }} className="flex items-center gap-3 px-3 py-2 text-[13px] outline-none hover:bg-hover focus-visible:bg-hover">
+            <span className={cn("size-2 rounded-full", STATUS_TONE[c.status] === "success" ? "bg-foreground/85" : STATUS_TONE[c.status] === "danger" ? "bg-primary" : "ring-[1.5px] ring-inset ring-primary")} />
             <span className="min-w-0 flex-1 truncate">
               {purposeLabel(c.purpose)} · {moduleLabel(c.module)}
               {c.repair !== null && ` · 修正 ${c.repair}`}
@@ -319,7 +319,7 @@ function ThoughtBody({ t }: { t: Thought }) {
   const kinds = [...new Set(t.triggers.map((x) => x.kind))];
   return (
     <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-7">
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-5">
         {(
           [
             ["時間", fmtTime(t.at)],
@@ -329,7 +329,7 @@ function ThoughtBody({ t }: { t: Thought }) {
             ["呼叫", t.attempts && t.attempts > 1 ? `${t.attempts} 次(修正過)` : `${t.calls?.length ?? 1} 次`],
           ] as const
         ).map(([k, v]) => (
-          <div key={k} className="bg-popover px-3 py-2.5">
+          <div key={k}>
             <p className="text-xs text-muted-foreground">{k}</p>
             <p className="text-sm font-medium tabular-nums">{v}</p>
           </div>
@@ -354,14 +354,14 @@ function ThoughtBody({ t }: { t: Thought }) {
           ))}
         </ul>
         {t.idle && t.idle.thoughts > 0 && (
-          <p className="rounded-md border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[13px]">
+          <p className="rounded-md bg-control px-3 py-2 text-[13px]">
             想這則之前,她已經連續 <span className="font-medium tabular-nums">{t.idle.thoughts}</span> 次想了沒做事(大約 {t.idle.minutes} 分鐘)
           </p>
         )}
       </Section>
 
       <Section title="她想的">
-        {t.error ? <p className="font-mono text-sm text-[oklch(0.74_0.16_25)]">{t.error}</p> : <p className="text-[15px] leading-relaxed">{t.thought || "—"}</p>}
+        {t.error ? <p className="font-mono text-sm text-primary">{t.error}</p> : <p className="text-[15px] leading-relaxed">{t.thought || "—"}</p>}
       </Section>
 
       {t.reasoning && (
@@ -398,7 +398,7 @@ export function ThoughtSheet({ id, onClose }: { id: string | undefined; onClose:
       <SheetContent className="sm:max-w-3xl">
         <SheetHeader>
           <SheetTitle className="flex flex-wrap items-center gap-2 pr-8">
-            <Brain className="size-4 text-brand" aria-hidden />
+            <Brain className="size-4 text-primary" aria-hidden />
             她的想法
             {t && <span className="font-mono text-sm font-normal text-muted-foreground">{fmtDateTime(t.at)}</span>}
             {t?.intents.some((i) => i.status === "done") && (

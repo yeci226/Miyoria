@@ -1,34 +1,36 @@
+import { actuatorsFor } from "@miyoria/actions";
 import { defineManifest, type Module, type ModuleContext } from "@miyoria/kernel";
-import { ToolRegistryKey } from "@miyoria/tools";
 import { WebConfigSchema } from "./config.js";
-import { WEB_FETCH, WEB_SEARCH, WebFetchTool, WebSearchTool } from "./tools.js";
+import { webCapabilities } from "./tools.js";
+import { WebService } from "./web.js";
 
-/** Module `web`: registers `web_search` and `web_fetch`. Off without a `token`. */
+/**
+ * Module `web`: her `web_search` (DuckDuckGo's HTML endpoint) and `web_read` (one public page as
+ * text) as capabilities `web.search` / `web.read`, permission `tools.web`. Page fetches go through
+ * the SSRF guard (net.ts); results reach her as untrusted data (web.ts). Enabled unless
+ * `[modules.web] enabled = false`. Registers in the `ActuatorRegistry`; nothing else needs it.
+ */
 export class WebModule implements Module {
   static readonly ID = "web";
-  readonly manifest = defineManifest(WebModule.ID, "Web search", {
-    description: "She searches the web and reads pages through DeepSeek's Search and Fetch API",
+  readonly manifest = defineManifest(WebModule.ID, "Web", {
+    description: "Web search and a page reader for her; results are untrusted data",
+    optional: ["actions"],
     configSchema: WebConfigSchema,
   });
-  #cleanup: (() => void) | null = null;
+  #unregister: (() => void) | null = null;
 
   async start(ctx: ModuleContext): Promise<void> {
-    const cfg = ctx.config(WebConfigSchema);
-    const tools = ctx.services.get(ToolRegistryKey);
-    if (!tools) {
-      ctx.log.warn("no tool registry: she cannot use the web");
-      return;
-    }
-    tools.register(new WebSearchTool(cfg));
-    tools.register(new WebFetchTool(cfg));
-    this.#cleanup = () => {
-      tools.unregister(WEB_SEARCH);
-      tools.unregister(WEB_FETCH);
+    const config = ctx.config(WebConfigSchema);
+    const web = new WebService({ config, clock: ctx.clock });
+    const actuators = actuatorsFor(ctx);
+    const off = webCapabilities(web).map((capability) => actuators.register(capability));
+    this.#unregister = () => {
+      for (const f of off) f();
     };
   }
 
   async stop(): Promise<void> {
-    this.#cleanup?.();
-    this.#cleanup = null;
+    this.#unregister?.();
+    this.#unregister = null;
   }
 }

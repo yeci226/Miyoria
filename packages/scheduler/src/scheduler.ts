@@ -1,17 +1,24 @@
 import { errorMessage, type ModuleContext } from "@miyoria/kernel";
 import {
+  ACTION_SETTLED_TOPIC,
   type Action,
   type ActionPayload,
+  type ActionSettled,
   type ActionSink,
   type ActuatorExecutor,
   ActuatorExecutorKey,
   actionPlatform,
+  customEvent,
   isActionExpired,
+  type JsonValue,
   type LaneKey,
-  type MessageRef,
+  MouthKey,
+  MUTED,
+  NOT_MAIN_LINE,
   type PlatformSink,
   PlatformSinksKey,
   PRIORITY_RANK,
+  type SentMessage,
   type TurnId,
   timestampMs,
   type VoiceSink,
@@ -73,11 +80,11 @@ type Target =
   | { kind: "actuator"; executor: ActuatorExecutor };
 
 interface Outcome {
-  message: MessageRef | null;
+  message: SentMessage | null;
   interrupted: boolean;
 }
 
-type Completion = { ok: true; message: MessageRef | null } | { ok: false; error: string };
+type Completion = { ok: true; message: SentMessage | null } | { ok: false; error: string };
 
 type Bounded<T> = { kind: "done"; value: T } | { kind: "timeout" } | { kind: "cancelled" };
 
@@ -133,6 +140,10 @@ export class Scheduler implements ActionSink {
   readonly #config: SchedulerConfig;
   /** A lane is present exactly while its worker is alive. */
   readonly #lanes = new Map<LaneKey, Lane>();
+  /** What runs right now, by turn: what `interruptTurn` stops. */
+  readonly #running = new Map<TurnId, AbortController>();
+  /** Everything running that is hers to say or show: what `silence` stops. */
+  readonly #going = new Set<AbortController>();
   #seq = 0;
 
   constructor(ctx: ModuleContext, config: SchedulerConfig) {
@@ -153,6 +164,14 @@ export class Scheduler implements ActionSink {
 
   async submit(action: Action): Promise<void> {
     if (this.#ctx.signal.aborted) throw new SchedulerStoppedError();
+    if (this.#notTheMainLine(action)) {
+      this.#ctx.log.warn(
+        { action: action.id, turn: action.turn },
+        "a line went around the main line",
+      );
+      this.#complete(action, { ok: false, error: NOT_MAIN_LINE });
+      return;
+    }
     const queued: Queued = {
       seq: this.#seq++,
       createdMs: timestampMs(action.created_at),
@@ -178,6 +197,36 @@ export class Scheduler implements ActionSink {
       this.#ctx.spawn("lane", (signal) => this.#runLane(laneKey, wake, signal));
     }
     if (replaced) this.#complete(replaced, { ok: false, error: "coalesced" });
+  }
+
+  /** V3: only the main line opens her mouth. `MouthKey` is only there under V3. */
+  #notTheMainLine(action: Action): boolean {
+    const type = action.payload.type;
+    if (type !== "speak" && type !== "send_message") return false;
+    const mouth = this.#ctx.services.get(MouthKey);
+    return mouth !== undefined && !mouth.owns(action.turn);
+  }
+
+  async interruptTurn(turn: TurnId): Promise<void> {
+    this.#running.get(turn)?.abort();
+  }
+
+  async silence(): Promise<number> {
+    const removed: Action[] = [];
+    for (const lane of this.#lanes.values()) {
+      removed.push(...lane.queue.map((q) => q.action));
+      lane.queue = [];
+    }
+    for (const action of removed) this.#complete(action, { ok: false, error: MUTED });
+    const going = [...this.#going];
+    for (const stop of going) stop.abort();
+    return removed.length + going.length;
+  }
+
+  /** The emergency stop: nothing of hers goes out. */
+  #muted(action: Action): boolean {
+    if (action.payload.type === "actuate") return false;
+    return this.#ctx.services.get(ActuatorExecutorKey)?.paused === true;
   }
 
   async cancelTurn(turn: TurnId): Promise<void> {
@@ -231,6 +280,10 @@ export class Scheduler implements ActionSink {
       this.#complete(action, { ok: false, error: "expired" });
       return;
     }
+    if (this.#muted(action)) {
+      this.#complete(action, { ok: false, error: MUTED });
+      return;
+    }
     const target = this.#targetFor(action.payload);
     if (typeof target === "string") {
       this.#complete(action, { ok: false, error: target });
@@ -240,8 +293,17 @@ export class Scheduler implements ActionSink {
     const timeoutMs =
       target.kind === "voice" ? this.#config.speak_timeout_ms : this.#config.execute_timeout_ms;
     let completion: Completion;
+    const stop = new AbortController();
+    const turn = action.turn;
+    if (turn !== null) this.#running.set(turn, stop);
+    const hers = action.payload.type !== "actuate";
+    if (hers) this.#going.add(stop);
     try {
-      const bounded = await runBounded((s) => run(target, action, s), timeoutMs, signal);
+      const bounded = await runBounded(
+        (s) => run(target, action, s),
+        timeoutMs,
+        AbortSignal.any([signal, stop.signal]),
+      );
       if (bounded.kind === "done") {
         const { message, interrupted } = bounded.value;
         if (interrupted && action.turn !== null) {
@@ -258,6 +320,8 @@ export class Scheduler implements ActionSink {
     } catch (error) {
       completion = { ok: false, error: errorMessage(error) };
     }
+    if (turn !== null && this.#running.get(turn) === stop) this.#running.delete(turn);
+    if (hers) this.#going.delete(stop);
     this.#complete(action, completion);
   }
 
@@ -291,7 +355,7 @@ export class Scheduler implements ActionSink {
     }
     if (!result.ok) {
       const fields = { action: action.id, lane: action.lane, error: result.error };
-      if (["expired", "cancelled", "coalesced"].includes(result.error)) {
+      if (["expired", "cancelled", "coalesced", MUTED].includes(result.error)) {
         this.#ctx.log.debug(fields, "action dropped");
       } else {
         this.#ctx.log.warn(fields, "action failed");
@@ -310,6 +374,31 @@ export class Scheduler implements ActionSink {
       },
       { turn: action.turn },
     );
+    this.#publishSettled(action, result);
+  }
+
+  /** Which line of hers this was: `action_completed` only says that an action ended. */
+  #publishSettled(action: Action, result: Completion): void {
+    const { payload } = action;
+    let text: string;
+    if (payload.type === "send_message") text = payload.message.text;
+    else if (payload.type === "speak") text = payload.text;
+    else return;
+    const blocked = action.blocked ?? (result.ok ? result.message?.blocked : undefined) ?? null;
+    const settled: ActionSettled = {
+      action: action.id,
+      turn: action.turn,
+      type: payload.type,
+      context: payload.context,
+      text,
+      ok: result.ok,
+      error: result.ok ? null : result.error,
+      message: result.ok ? result.message : null,
+      ...(blocked === null ? {} : { blocked }),
+    };
+    this.#ctx.publish(customEvent(ACTION_SETTLED_TOPIC, settled as unknown as JsonValue), {
+      turn: action.turn,
+    });
   }
 }
 

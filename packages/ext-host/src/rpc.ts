@@ -28,6 +28,12 @@ export const UNAVAILABLE = -32004;
 /** The connection is closed (local to the caller, never sent). */
 export const CLOSED = -32005;
 
+/**
+ * Notification (`{id}`) a caller sends when it stops waiting for its request (aborted or timed
+ * out); the other side may abort the handler. LSP's name for the same thing.
+ */
+export const CANCEL_METHOD = "$/cancelRequest";
+
 /** Bytes queued on the writer beyond which `tryNotify` drops the notification. */
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 
@@ -191,12 +197,19 @@ export class Peer {
         signal?.removeEventListener("abort", onAbort);
         this.#pending.delete(id);
       };
+      // A caller that gives up tells the other side, so stale work stops there too (a late
+      // game action never lands after she was told it failed).
+      const cancel = () => {
+        if (!this.#closed) this.tryNotify(CANCEL_METHOD, { id });
+      };
       const timer = setTimeout(() => {
         done();
+        cancel();
         reject(new RpcError(TIMEOUT, `\`${method}\` timed out after ${timeoutMs} ms`));
       }, timeoutMs);
       const onAbort = () => {
         done();
+        cancel();
         reject(signal?.reason);
       };
       signal?.addEventListener("abort", onAbort, { once: true });

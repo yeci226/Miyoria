@@ -120,3 +120,65 @@ export function activityText(a: PresenceActivity): string | null {
     }
   }
 }
+
+/** Her emotions (`EMOTION_LABELS` of `packages/types/src/self.ts`). */
+export const EMOTION_LABEL: Record<string, string> = {
+  joy: "喜",
+  anger: "怒",
+  sorrow: "哀",
+  fear: "懼",
+  surprise: "驚",
+  disgust: "厭",
+  shy: "害羞",
+  pride: "得意",
+  jealousy: "嫉妒",
+  lonely: "寂寞",
+  missing: "想念",
+  gratitude: "感激",
+  guilt: "愧疚",
+  frustration: "不甘心",
+  resentment: "不爽",
+};
+
+/** All drives, including the newer ones the `self` card does not show. */
+export const AFFECT_DRIVE_LABEL: Record<string, string> = {
+  ...DRIVE_LABEL,
+  esteem: "想被肯定",
+  hunger: "想吃白飯",
+  longing: "想靠近在意的人",
+};
+
+export const AFFECT_DRIVE_ORDER: string[] = [...DRIVE_ORDER, "esteem", "hunger", "longing"];
+
+/** What the bias table calls the things she may want to do (`AffectBiases.wants`). */
+export const WANT_LABEL: Record<string, string> = {
+  chat_with: "找人聊天",
+  find_person: "去找某個人",
+  play: "玩遊戲",
+  stream: "開台",
+  rest: "休息",
+  sing: "唱歌",
+  explore: "找點新鮮事",
+  goal: "做目標裡的事",
+};
+
+export const GOAL_STATUS_LABEL: Record<string, string> = {
+  pending: "等待",
+  active: "進行中",
+  done: "完成",
+  dropped: "放棄",
+};
+
+export const GOAL_STATUS_TONE: Record<string, Tone> = {
+  pending: "neutral",
+  active: "brand",
+  done: "success",
+  dropped: "neutral",
+};
+
+export const GOAL_SOURCE_LABEL: Record<string, string> = {
+  plan: "她的計畫",
+  plan_daily: "今日計畫",
+  reflect: "反思",
+  panel: "面板",
+};

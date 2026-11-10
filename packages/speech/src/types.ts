@@ -63,7 +63,14 @@ export interface TtsRequest {
   instruct: string | null;
   /** Voice / speaker id understood by the provider (e.g. a cloned voice). */
   voice: string | null;
+  /**
+   * `now`: she says it next; `ahead`: synthesized in advance, it gives way to a `now` line on a
+   * worker that queues requests. Left out means `now`.
+   */
+  priority?: TtsPriority;
 }
+
+export type TtsPriority = "now" | "ahead";
 
 /** A `TtsRequest` with every optional field `null`. */
 export function ttsRequest(
@@ -84,9 +91,10 @@ export type AudioChunk = AudioBuf;
 
 /**
  * Synthesized audio as it is produced. Stop early with `break` (or `return()` on the
- * iterator); that releases the underlying connection.
+ * iterator); that releases the underlying connection. `queueMs`: what a worker reports having
+ * waited for its GPU before it started on this request.
  */
-export type AudioStream = AsyncIterable<AudioChunk>;
+export type AudioStream = AsyncIterable<AudioChunk> & { queueMs?: number };
 
 export interface TtsProvider {
   readonly name: string;

@@ -5,8 +5,8 @@
 //   prompt section, `/me profile | call | link` and `/admin person ...`. Provides `SocialSignalsKey` and
 //   `SocialKey`.
 // * Module `MoodModule` (`mood`): her global mood (valence / arousal / energy) drifting back to
-//   the profile baseline. Provides `MoodSignalsKey`, `MoodStateKey` and the `mood` prompt
-//   section.
+//   the profile baseline, for when the Affect module (`self`) does not run; idle when it does.
+//   Provides `MoodSignalsKey`, `MoodStateKey` and the `mood` prompt section.
 //
 // Only these modules change relationship numbers; LLM tools cannot.
 
@@ -37,17 +37,14 @@ export {
   stripTags,
   TOPIC,
 } from "./engine.js";
-export { SocialError, SocialModule } from "./module.js";
+export { applyBond, SocialError, SocialModule } from "./module.js";
 export {
-  describe,
-  emotionNudge,
   eventNudge,
   type MoodConfig,
   MoodConfigSchema,
   MoodEngine,
   MoodModule,
   type MoodNudge,
-  MoodPrompt,
   MoodState,
   MoodStateKey,
   moodConfig,
@@ -55,7 +52,6 @@ export {
   SETTINGS_KEY,
   TOPIC_CHANGED,
 } from "./mood.js";
-export { SocialPrompt } from "./prompt.js";
 export {
   apply,
   BLOCKED_TAG,
@@ -76,6 +72,7 @@ export {
   isPositiveKind,
   type LocalDay,
   label,
+  lineDepth,
   localDay,
   normalize,
   OWNER_TAG,

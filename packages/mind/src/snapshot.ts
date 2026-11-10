@@ -1,17 +1,19 @@
-// The compact snapshot one thought sees: the relevant server's world summary, places and people
-// with short refs, her own state, agenda, recent thoughts and what she remembers about the
-// people and place involved. No long chat transcripts.
+// The compact snapshot Plan sees: the relevant server's world summary, places (named by their
+// context string) and people (named by their stable handle), and what she remembers about the
+// people and place involved. No long chat transcripts, no per-call codes.
 
 import type { ActuatorRegistry } from "@miyoria/actions";
 import { errorMessage, getLogger, type ServiceLookup, withTimeout } from "@miyoria/kernel";
 import {
   type AccountRef,
+  AffectStateKey,
   CHAT_DM,
   CHAT_START,
   type ContextKey,
   ConversationStatesKey,
   contextKeyString,
   dataBlock,
+  HandleDirectoryKey,
   IntentSinkKey,
   KnowledgeKey,
   type KnowledgeSubject,
@@ -30,6 +32,7 @@ import {
   SelfStateKey,
   SocialSignalsKey,
   SpeechPauseKey,
+  safeName,
   sameAccount,
   type ThoughtTrigger,
   toTimestamp,
@@ -38,7 +41,7 @@ import {
   type WorldSnapshot,
   WorldStateKey,
 } from "@miyoria/types";
-import type { AgendaRef, CapabilityInfo, PersonRef, PlaceRef } from "./prompt.js";
+import type { CapabilityInfo, PersonRef, PlaceRef } from "./prompt.js";
 
 const log = getLogger("mind.snapshot");
 
@@ -51,10 +54,16 @@ export const NOT_FOR_HER: readonly string[] = [
   "watch.look",
 ];
 
+/** Without a handle table: the person's name, with `#2` for a second one of the same name. */
+function nameRef(name: string, taken: readonly string[]): string {
+  const base = safeName(name) || "?";
+  if (!taken.includes(base)) return base;
+  for (let n = 2; ; n++) if (!taken.includes(`${base}#${n}`)) return `${base}#${n}`;
+}
+
 const MAX_PLACES = 8;
 const MAX_PEOPLE = 10;
 const MAX_CHANNELS = 5;
-const MAX_AGENDA = 8;
 const CONTRIBUTOR_TIMEOUT_MS = 1500;
 const LABEL_TIMEOUT_MS = 500;
 const MAX_MEMORY_CHARS = 2500;
@@ -68,7 +77,6 @@ export interface Gathered {
   world: string;
   places: PlaceRef[];
   people: PersonRef[];
-  agenda: AgendaRef[];
   memories: string | null;
   /** The stream she watches (rendered section). Goes into the prompt and nowhere else. */
   watch: string | null;
@@ -93,7 +101,38 @@ export interface GatherInput {
   signal?: AbortSignal;
 }
 
-/** The context the thought is mostly about. */
+/**
+ * The person a reply's `person` refers to: the handle shown in the snapshot, else a name that
+ * is exactly one of theirs, else a legacy `u<N>` meaning the N-th person listed in this very
+ * snapshot (a reply may still use the old codes; they are resolved here and never stored).
+ */
+export function personByRef(people: readonly PersonRef[], ref: string): PersonRef | undefined {
+  const r = ref.trim();
+  if (r === "") return undefined;
+  const exact = people.find((p) => p.ref === r);
+  if (exact) return exact;
+  const named = people.filter((p) => p.name === r);
+  if (named.length === 1) return named[0];
+  const legacy = /^u([0-9]{1,4})$/.exec(r)?.[1];
+  return legacy === undefined ? undefined : people[Number(legacy) - 1];
+}
+
+/**
+ * The place a reply's `place` refers to: its context string as shown, else a label that is
+ * exactly one place's, else a legacy `p<N>` of this very snapshot (never stored).
+ */
+export function placeByRef(places: readonly PlaceRef[], ref: string): PlaceRef | undefined {
+  const r = ref.trim();
+  if (r === "") return undefined;
+  const exact = places.find((p) => p.ref === r);
+  if (exact) return exact;
+  const labelled = places.filter((p) => p.label === r);
+  if (labelled.length === 1) return labelled[0];
+  const legacy = /^p([0-9]{1,4})$/.exec(r)?.[1];
+  return legacy === undefined ? undefined : places[Number(legacy) - 1];
+}
+
+/** The context the snapshot is mostly about. */
 export function focusOf(
   triggers: readonly ThoughtTrigger[],
   suggestions: readonly MindSuggestion[],
@@ -164,6 +203,9 @@ export function singing(
     if (now) lines.push("你正在唱歌:語音裡安靜是大家在聽,不是沒人。");
     const left = (floor.pending?.(guild) ?? 0) - (now ? 1 : 0);
     if (left > 0) lines.push(`歌單還有 ${left} 首在準備或等著唱,還沒唱完。`);
+    for (const song of floor.setlist?.(guild) ?? []) {
+      lines.push(`#${song.no} ${song.label}:${song.ready ? "好了,可以唱" : "還在準備"}`);
+    }
   }
   if (deaf) {
     lines.push(
@@ -215,7 +257,7 @@ export async function gather(input: GatherInput): Promise<Gathered> {
       world?.her.voice?.channel === context.channel &&
       world.her.voice.scope === context.scope;
     places.push({
-      ref: `p${places.length + 1}`,
+      ref: key,
       context,
       label: await label(services, input.labels, context, fallback),
       note,
@@ -283,7 +325,9 @@ export async function gather(input: GatherInput): Promise<Gathered> {
   // ---- people
   const social = services.get(SocialSignalsKey);
   const self: SelfState | undefined = services.get(SelfStateKey);
+  const affect = services.get(AffectStateKey);
   const people: PersonRef[] = [];
+  const handles = services.get(HandleDirectoryKey);
   const addPerson = (account: AccountRef, name: string | null) => {
     if (people.length >= MAX_PEOPLE || people.some((p) => sameAccount(p.account, account))) return;
     const presence = worldState?.person(account) ?? null;
@@ -291,16 +335,32 @@ export async function gather(input: GatherInput): Promise<Gathered> {
     if (attitude?.blocked) return;
     const person = attitude?.person ?? presence?.person ?? null;
     const activity = presence?.activities.find((a) => a.type !== "custom") ?? null;
+    // Her stable name for the person (the same in every snapshot), never a per-call `u1`:
+    // what she writes down about them (agenda, thoughts) must still mean them later.
+    const shown = name ?? presence?.display_name ?? account.id;
+    const handle =
+      handles?.ofAccount(account, shown, person) ??
+      nameRef(
+        shown,
+        people.map((p) => p.ref),
+      );
+    const card = person === null ? null : (affect?.card(person) ?? null);
     people.push({
-      ref: `u${people.length + 1}`,
+      ref: handle,
       account,
       person,
       name: name ?? presence?.display_name ?? account.id,
-      relation:
-        attitude === null
+      relation: card
+        ? `${card.label},在意 ${card.attachment.toFixed(1)}`
+        : attitude === null
           ? null
           : `${attitude.label || "認識的人"},好感 ${Math.round(attitude.affinity)}、熟悉 ${Math.round(attitude.familiarity)}`,
-      feeling: person === null ? null : (self?.feeling(person)?.text ?? null),
+      feeling:
+        card && card.feeling.trim() !== ""
+          ? card.feeling
+          : person === null
+            ? null
+            : (self?.feeling(person)?.text ?? null),
       heart: person === null ? null : heartLine(self, person),
       doing:
         activity === null
@@ -316,11 +376,6 @@ export async function gather(input: GatherInput): Promise<Gathered> {
     if (guild !== null && v.guild !== guild) continue;
     for (const m of v.members) if (!m.is_self) addPerson(m.account, m.display_name);
   }
-
-  // ---- agenda
-  const agenda: AgendaRef[] = (self?.agenda() ?? [])
-    .slice(0, MAX_AGENDA)
-    .map((item, i) => ({ ref: `g${i + 1}`, item }));
 
   // ---- memories
   let memories: string | null = null;
@@ -401,13 +456,32 @@ export async function gather(input: GatherInput): Promise<Gathered> {
     world: summary,
     places,
     people,
-    agenda,
     memories,
     watch,
     documents,
     lessons,
     recap: recap === null || recap.trim() === "" ? null : recap,
   };
+}
+
+const TYPE_NAMES: Readonly<Record<string, string>> = {
+  integer: "整數",
+  number: "數字",
+  boolean: "true/false",
+};
+
+/**
+ * One argument for the Plan prompt: `where=auto|voice`, `song(整數:歌單編號)`, or the bare name
+ * for free text.
+ */
+function paramHint(name: string, schema: unknown): string {
+  const s = (schema ?? {}) as { enum?: unknown; type?: unknown; description?: unknown };
+  if (Array.isArray(s.enum) && s.enum.length > 0) return `${name}=${s.enum.join("|")}`;
+  const kind = typeof s.type === "string" ? TYPE_NAMES[s.type] : undefined;
+  if (kind === undefined) return name;
+  return typeof s.description === "string"
+    ? `${name}(${kind}:${s.description})`
+    : `${name}(${kind})`;
 }
 
 /** The capabilities she may start, besides `chat.start` / `chat.dm` (described separately). */
@@ -424,7 +498,7 @@ export function capabilityInfo(registry: ActuatorRegistry | undefined): Capabili
           name: c.name,
           summary: c.summary,
           risk: c.risk,
-          params: Object.keys(c.tool?.properties ?? {}),
+          params: Object.entries(c.tool?.properties ?? {}).map(([k, v]) => paramHint(k, v)),
         },
       ];
     });

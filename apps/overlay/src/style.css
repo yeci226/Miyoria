@@ -32,6 +32,7 @@
 
   /* Motion timings (motion.ts reads --t-exit to know when an exit is over). */
   --t-enter: 260ms;
+  --t-subtitle-enter: 90ms;
   --t-exit: 200ms;
   --t-change: 240ms;
   --t-move: 280ms;
@@ -56,6 +57,7 @@
 @media (prefers-reduced-motion: reduce) {
   :root {
     --t-enter: 1ms;
+    --t-subtitle-enter: 1ms;
     --t-exit: 1ms;
     --t-change: 1ms;
     --t-move: 1ms;
@@ -171,9 +173,10 @@ body {
   border-radius: var(--radius);
   box-shadow: var(--plate-shadow);
   transform: translateX(-50%);
+  /* Faster than the other panels: the words arrive with her voice, so they are readable at once. */
   transition:
-    opacity var(--t-enter) var(--ease-out),
-    transform var(--t-enter) var(--ease-out);
+    opacity var(--t-subtitle-enter) var(--ease-out),
+    transform var(--t-subtitle-enter) var(--ease-out);
 }
 
 .subtitle.is-hidden {
@@ -199,6 +202,132 @@ body {
 /* The not-yet-typed part keeps its place in the layout but cannot be seen. */
 .subtitle__rest {
   color: transparent;
+}
+
+/* ── gift line (top centre) ───────────────────────────────────────────── */
+
+.gift {
+  position: absolute;
+  left: 50%;
+  top: 2.5rem;
+  box-sizing: border-box;
+  display: grid;
+  max-width: min(60rem, 92%);
+  padding: 0.55rem 1.4rem 0.65rem;
+  background: var(--plate);
+  border: 1px solid var(--plate-edge);
+  border-radius: 999px;
+  box-shadow: 0 0.4rem 1.2rem oklch(0 0 0 / 0.3);
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.3;
+  text-align: center;
+  overflow-wrap: anywhere;
+  opacity: 1;
+  transform: translateX(-50%);
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.gift.is-out {
+  opacity: 0;
+  transform: translate(-50%, calc(var(--shift) * -1));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+/* ── paid screen messages (top centre, under the gift line) ───────────── */
+
+.shout {
+  position: absolute;
+  left: 50%;
+  top: 6.75rem;
+  box-sizing: border-box;
+  display: grid;
+  width: max-content;
+  max-width: min(46rem, 92%);
+  padding: 0.7rem 1.4rem 0.8rem;
+  background: var(--plate);
+  border: 1px solid var(--plate-edge);
+  border-radius: var(--radius);
+  box-shadow: var(--plate-shadow);
+  opacity: 1;
+  transform: translateX(-50%);
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.shout.is-out {
+  opacity: 0;
+  transform: translate(-50%, calc(var(--shift) * -1));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+.shout__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The swap cell wraps text here (its default is one clipped line). */
+.shout__card {
+  display: grid;
+  gap: 0.2rem;
+  overflow: visible;
+  white-space: normal;
+}
+
+.shout__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.shout__tag {
+  flex: none;
+  padding: 0.05rem 0.55rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+}
+
+.shout__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-dim);
+  font-size: 1.3rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shout__text {
+  font-size: 1.9rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
+  line-break: strict;
+  text-wrap: pretty;
+}
+
+.shout__song {
+  color: var(--ink-dim);
+  font-size: 1.3rem;
+  letter-spacing: 0.03em;
+  overflow-wrap: anywhere;
+}
+
+/* Over the song video's top edge, centred on it. */
+[data-layout="sing"] .shout {
+  left: calc(var(--pad) + var(--video-w) / 2);
+  top: calc(var(--pad) + 1.25rem);
 }
 
 /* ── voice waveform (left edge) ───────────────────────────────────────── */

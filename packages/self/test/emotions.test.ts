@@ -267,13 +267,10 @@ describe("drives and emotions", () => {
     for (let h = 1; h <= 6; h++) e.advance(T0 + h * HOUR, IDLE);
     expect(e.emotions.value("lonely", T0 + 6 * HOUR)).toBeGreaterThan(0.4);
     expect(e.emotions.value("frustration", T0 + 6 * HOUR)).toBeGreaterThan(0.2);
-    // Once met, it fades at its own pace instead of vanishing.
+    // 寂寞 is a function of the social gap: once the need is met it is gone (no second clock).
     e.adjust({ social: -1 });
     e.advance(T0 + 7 * HOUR, IDLE);
-    const lonely = e.emotions.value("lonely", T0 + 7 * HOUR);
-    expect(lonely).toBeGreaterThan(0.3);
-    e.advance(T0 + 15 * HOUR, IDLE);
-    expect(e.emotions.value("lonely", T0 + 15 * HOUR)).toBeCloseTo(lonely / 4, 2);
+    expect(e.emotions.value("lonely", T0 + 7 * HOUR)).toBeLessThan(0.05);
   });
 
   it("saves and restores emotions, hearts and the new drives", () => {

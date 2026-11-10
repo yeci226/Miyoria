@@ -1,8 +1,10 @@
-import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { LogOut, Search } from "lucide-react";
+import { Link, Outlet, useRouter, useRouterState } from "@tanstack/react-router";
+import { IdCard, LogOut, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { CommandPalette } from "@/app/CommandPalette";
+import { EmergencyStop, HER_NAME, useHerNow } from "@/components/live-state";
 import { Logo } from "@/components/logo";
+import { HeaderSlotContext } from "@/components/page";
 import { Dot, type Tone } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,9 +24,11 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { AppearancePopover } from "./AppearancePopover";
 import { useConnection } from "./connection";
 import { useEvents } from "./events-store";
-import { NAV, titleFor } from "./nav";
+import { groupFor, isActive, NAV, NAV_GROUPS, titleFor } from "./nav";
 import { useHealth, useMind, useStage, useWorld } from "./queries";
 import { READ_ONLY_HINT, useSession } from "./session";
 
@@ -59,7 +63,7 @@ function ConnectionDot() {
         <button
           type="button"
           aria-label={`${label}:${core},${sse}`}
-          className="flex h-8 min-w-0 items-center gap-2.5 rounded-md px-2 text-sm text-muted-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          className="flex h-7 min-w-0 items-center gap-2.5 rounded-md px-2 text-xs text-muted-foreground outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring"
         >
           <span className="flex size-4 shrink-0 items-center justify-center">
             <Dot tone={tone} pulse={tone === "warning"} />
@@ -80,12 +84,13 @@ function ConnectionDot() {
 
 function SessionFooter() {
   const value = useSession();
+  const router = useRouter();
   const { signOut } = useConnection();
-  const { state } = useSidebar();
+  const { state, isMobile } = useSidebar();
   const user = value?.session.method === "discord" ? value.session.user : null;
   const readOnly = value ? !value.session.permissions.write : false;
   const logout = value?.logout ?? signOut;
-  const expanded = state === "expanded";
+  const expanded = state === "expanded" && !isMobile;
   return (
     <div className="flex items-center gap-1">
       {user && expanded && (
@@ -102,7 +107,7 @@ function SessionFooter() {
           ) : (
             <span aria-hidden className="size-5 shrink-0 rounded-full bg-muted" />
           )}
-          <span className="truncate text-sm" title={`Discord · ${user.name}`}>
+          <span className="truncate text-xs" title={`Discord · ${user.name}`}>
             {user.name}
           </span>
           {readOnly && (
@@ -112,7 +117,23 @@ function SessionFooter() {
           )}
         </div>
       )}
-      {!user && expanded && <span className="flex-1 truncate px-2 text-sm text-muted-foreground">Admin token</span>}
+      {!user && expanded && <span className="flex-1 truncate px-2 text-xs text-muted-foreground">Admin token</span>}
+      {user && (
+        <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground" title="我的頁面">
+          <a
+            href="/me"
+            aria-label="我的頁面"
+            onClick={(e) => {
+              // Their own page is outside the admin routes; App switches to it on the new address.
+              if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+              e.preventDefault();
+              router.history.push("/me");
+            }}
+          >
+            <IdCard />
+          </a>
+        </Button>
+      )}
       <Button
         variant="ghost"
         size="icon-sm"
@@ -135,7 +156,7 @@ function NavHint({ to }: { to: string }) {
   if (to === "/live" && (stage.data?.streaming || world.data?.her.golive === "live")) {
     return (
       <span className="ml-auto flex items-center group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:top-1 group-data-[collapsible=icon]:right-1" title="直播中">
-        <Dot tone="danger" pulse className="size-1.5 [&>span]:size-1.5" />
+        <Dot tone="brand" pulse className="size-1.5 [&>span]:size-1.5" />
         <span className="sr-only">直播中</span>
       </span>
     );
@@ -143,7 +164,7 @@ function NavHint({ to }: { to: string }) {
   const n = mind.data?.pending_approvals ?? 0;
   if (to === "/inner" && n > 0) {
     return (
-      <span className="ml-auto rounded-full bg-warning/15 px-1.5 text-[11px] font-medium text-warning tabular-nums group-data-[collapsible=icon]:hidden" title={`${n} 件等待確認`}>
+      <span className="ml-auto font-mono text-[11px] font-medium text-primary group-data-[collapsible=icon]:hidden" title={`${n} 件等待確認`}>
         {n}
       </span>
     );
@@ -159,65 +180,170 @@ function PausedPill() {
     <Link
       to="/inner"
       search={{ tab: "thoughts" }}
-      className="flex h-7 items-center gap-2 rounded-full border border-warning/30 bg-warning/10 px-2.5 text-xs font-medium text-warning outline-none hover:bg-warning/15 focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="flex h-6 shrink-0 items-center gap-2 rounded-md border border-primary/50 bg-black/40 px-2 text-xs font-medium text-primary outline-none [text-shadow:none] hover:bg-black/60 focus-visible:ring-2 focus-visible:ring-ring"
     >
       <Dot tone="warning" />
-      自主行動已暫停
+      已緊急停止
     </Link>
   );
 }
 
-function AppSidebar({ pathname }: { pathname: string }) {
-  const { setOpenMobile } = useSidebar();
+/** Her name and what she is doing, at the top of the sidebar. */
+function HerCard() {
+  const now = useHerNow();
+  return (
+    <Link
+      to="/"
+      aria-label={`${HER_NAME}:${now.label}${now.detail ? ` ${now.detail}` : ""}`}
+      className="mx-2.5 flex items-center gap-2.5 rounded-lg bg-control p-2 outline-none transition-colors hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:mx-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-1"
+    >
+      <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-[13px] font-semibold text-primary-foreground [text-shadow:none]">
+        {HER_NAME.slice(0, 1)}
+      </span>
+      <span className="grid min-w-0 group-data-[collapsible=icon]:hidden">
+        <span className="truncate text-[13px] leading-tight font-medium">{HER_NAME}</span>
+        <span className="flex min-w-0 items-center gap-1.5 text-xs leading-tight text-sidebar-foreground">
+          <Dot tone={now.tone} className="size-1.5 [&>span]:size-1.5" />
+          <span className="truncate">{now.label}</span>
+        </span>
+      </span>
+    </Link>
+  );
+}
+
+function SearchButton({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label="搜尋與跳轉"
+      className="mx-2.5 flex h-8 items-center gap-2 rounded-md border bg-well px-2.5 text-[13px] text-sidebar-foreground outline-none transition-colors hover:border-line-strong hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:mx-2.5 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
+    >
+      <Search className="size-3.5 shrink-0" aria-hidden />
+      <span className="group-data-[collapsible=icon]:hidden">搜尋</span>
+      <Kbd className="ml-auto group-data-[collapsible=icon]:hidden">{MOD_KEY} K</Kbd>
+    </button>
+  );
+}
+
+function AppSidebar({ pathname, onSearch }: { pathname: string; onSearch: () => void }) {
+  const { isMobile } = useSidebar();
+
+  if (isMobile) {
+    return (
+      <Sidebar aria-label="主選單">
+        <div className="flex h-11 items-center gap-1 pr-2">
+          <Link to="/" className="mr-auto flex h-full items-center gap-2 px-4 text-sm font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sidebar-ring">
+            <Logo className="size-4 shrink-0 text-primary" />
+            Miyoria
+          </Link>
+          <ConnectionDot />
+          <SessionFooter />
+        </div>
+        <nav aria-label="頁面" className="flex gap-px overflow-x-auto px-2 pb-2">
+          {NAV.map((item) => (
+            <SidebarMenuButton key={item.to} asChild className="w-auto shrink-0">
+              <Link to={item.to} aria-current={isActive(item.to, pathname) ? "page" : undefined}>
+                <item.icon aria-hidden />
+                <span>{item.label}</span>
+                <NavHint to={item.to} />
+              </Link>
+            </SidebarMenuButton>
+          ))}
+        </nav>
+      </Sidebar>
+    );
+  }
+
   return (
     <Sidebar aria-label="主選單">
-      <SidebarHeader>
+      <SidebarHeader className="pb-1">
         <Link
           to="/"
-          className="flex h-10 items-center gap-2.5 rounded-md px-2 font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-          onClick={() => setOpenMobile(false)}
+          className="flex h-15 items-center gap-2.5 px-[18px] text-sm font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
         >
-          <Logo className="size-5 shrink-0 text-brand" />
+          <Logo className="size-[18px] shrink-0 text-primary" />
           <span className="truncate group-data-[collapsible=icon]:hidden">Miyoria</span>
         </Link>
+        <HerCard />
+        <SearchButton onOpen={onSearch} />
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <nav aria-label="頁面">
-            <SidebarMenu>
-              {NAV.map((item) => {
-                const active = item.to === "/" ? pathname === "/" : pathname === item.to || pathname.startsWith(`${item.to}/`);
-                return (
+        <nav aria-label="頁面">
+          {NAV_GROUPS.map((group) => (
+            <SidebarGroup key={group.label}>
+              <h2 className="mt-2.5 mb-1 px-2.5 text-[11px] font-medium text-muted-foreground group-data-[collapsible=icon]:hidden">{group.label}</h2>
+              <SidebarMenu>
+                {group.items.map((item) => (
                   <SidebarMenuItem key={item.to}>
                     <SidebarMenuButton asChild tooltip={item.label}>
-                      <Link
-                        to={item.to}
-                        aria-current={active ? "page" : undefined}
-                        onClick={() => setOpenMobile(false)}
-                      >
+                      <Link to={item.to} aria-current={isActive(item.to, pathname) ? "page" : undefined}>
                         <item.icon aria-hidden />
                         <span>{item.label}</span>
                         <NavHint to={item.to} />
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </nav>
-        </SidebarGroup>
+                ))}
+              </SidebarMenu>
+            </SidebarGroup>
+          ))}
+        </nav>
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border">
-        <ConnectionDot />
+        <div className="flex items-center justify-between gap-1 group-data-[collapsible=icon]:flex-col">
+          <ConnectionDot />
+          <SidebarTrigger />
+        </div>
         <SessionFooter />
       </SidebarFooter>
     </Sidebar>
   );
 }
 
+function AppHeader({ pathname, onSearch, onSlot }: { pathname: string; onSearch: () => void; onSlot: (el: HTMLElement | null) => void }) {
+  const [scrolled, setScrolled] = useState(false);
+  const group = groupFor(pathname);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 40);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // 總覽 opens on the picture: the header only gains its surface once content slides under it.
+  const stuck = pathname !== "/" || scrolled;
+
+  return (
+    <header
+      data-slot="app-header"
+      data-stuck={stuck || undefined}
+      className={cn(
+        "glass-dock z-30 flex min-h-13 flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b px-4 py-2 transition-[background-color,border-color] duration-150",
+        "md:sticky md:top-0 md:h-15 md:flex-nowrap md:py-0 md:pr-4 md:pl-7",
+      )}
+    >
+      <p className="truncate whitespace-nowrap text-sm text-foreground [text-shadow:0_1px_3px_rgba(0,0,0,0.6)]">
+        {group && <span>{group} / </span>}
+        <span className="font-medium">{titleFor(pathname)}</span>
+      </p>
+      <PausedPill />
+      <div ref={onSlot} className="order-last flex w-full min-w-0 flex-wrap items-center gap-2 empty:hidden md:order-none md:w-auto md:flex-nowrap" />
+      <span className="flex-1" />
+      <Button variant="outline" size="icon" className="md:hidden" aria-label="搜尋" onClick={onSearch}>
+        <Search />
+      </Button>
+      <AppearancePopover />
+      <EmergencyStop />
+    </header>
+  );
+}
+
 export function Shell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     document.title = `${titleFor(pathname)} · Miyoria`;
@@ -234,32 +360,23 @@ export function Shell() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const openPalette = () => setPaletteOpen(true);
+
   return (
     <SidebarProvider>
       <a
         href="#main"
-        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-popover focus:px-3 focus:py-2"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-black focus:px-3 focus:py-2"
       >
         跳到主要內容
       </a>
-      <AppSidebar pathname={pathname} />
+      <AppSidebar pathname={pathname} onSearch={openPalette} />
       <SidebarInset>
-        <header className="sticky top-0 z-10 flex h-12 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:px-4">
-          <SidebarTrigger />
-          <PausedPill />
-          <button
-            type="button"
-            onClick={() => setPaletteOpen(true)}
-            className="ml-auto flex h-8 w-9 items-center justify-center gap-2 rounded-md border border-input bg-input/20 text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:w-60 sm:justify-start sm:px-2.5"
-            aria-label="搜尋與跳轉"
-          >
-            <Search className="size-4 shrink-0" />
-            <span className="hidden sm:inline">搜尋…</span>
-            <Kbd className="ml-auto hidden sm:inline-flex">{MOD_KEY} K</Kbd>
-          </button>
-        </header>
-        <main id="main" tabIndex={-1} className="flex-1 outline-none">
-          <Outlet />
+        <AppHeader pathname={pathname} onSearch={openPalette} onSlot={setHeaderSlot} />
+        <main id="main" tabIndex={-1} className="flex min-w-0 flex-1 flex-col outline-none">
+          <HeaderSlotContext.Provider value={headerSlot}>
+            <Outlet />
+          </HeaderSlotContext.Provider>
         </main>
       </SidebarInset>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />

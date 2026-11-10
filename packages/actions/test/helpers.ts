@@ -86,7 +86,14 @@ export class FakeRouter {
 export class FakeReplySink implements ReplySink {
   readonly platform = "discord";
   readonly sent: [AccountRef, CommandReply][] = [];
+  /** Cards posted into a channel (receipts). */
+  readonly cards: [ContextKey, CommandReply][] = [];
   fail = false;
+
+  async sendCard(context: ContextKey, reply: CommandReply): Promise<MessageRef> {
+    this.cards.push([context, reply]);
+    return { context, id: "card1" };
+  }
 
   async sendDirect(account: AccountRef, reply: CommandReply): Promise<MessageRef> {
     if (this.fail) throw new Error("cannot DM");

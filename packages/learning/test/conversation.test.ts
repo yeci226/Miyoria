@@ -38,14 +38,14 @@ const FIRST = JSON.stringify({
   documents: [
     {
       type: "create",
-      subject: "u1",
+      subject: "Owen",
       kind: "人物卡",
       title: "Owen",
       content: { 最近在忙: "週三考數學" },
-      said_by: "u1",
+      said_by: "Owen",
     },
   ],
-  feedback: [{ by: "u2", tone: "positive", quote: "小鯨好可愛" }],
+  feedback: [{ by: "Amy", tone: "positive", quote: "小鯨好可愛" }],
 });
 
 const SECOND = `好的,以下是更新:\n\`\`\`json\n${JSON.stringify({

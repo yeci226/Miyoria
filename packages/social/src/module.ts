@@ -5,6 +5,7 @@ import {
   interval,
   type Module,
   type ModuleContext,
+  presentKeys,
 } from "@miyoria/kernel";
 import { LlmRouterKey } from "@miyoria/llm";
 import type { Profile } from "@miyoria/profile";
@@ -16,23 +17,25 @@ import {
   StoreKey,
 } from "@miyoria/store";
 import {
+  AFFECT_BOND_TOPIC,
   AuthorizerKey,
   type ContextKey,
   contextKeyString,
   EMOTION_LABELS,
+  isJsonObject,
+  type JsonValue,
+  MindKey,
   type PersonId,
   type ProfileId,
-  type PromptContributors,
-  PromptContributorsKey,
+  RelationshipEffectsKey,
   type SelfState,
   SelfStateKey,
   SocialSignalsKey,
   safeName,
 } from "@miyoria/types";
 import { registerCommands, unregisterCommands } from "./commands.js";
-import { SocialConfigSchema } from "./config.js";
+import { DEPRECATED_SOCIAL_KEYS, SocialConfigSchema } from "./config.js";
 import { type Observed, Social, SocialKey, type SocialStores } from "./engine.js";
-import { SocialPrompt } from "./prompt.js";
 
 /** Thrown by `start` when a required store is missing. */
 export class SocialError extends Error {
@@ -42,7 +45,6 @@ export class SocialError extends Error {
 interface Running {
   social: Social;
   commands: CommandMount;
-  contributors: PromptContributors | undefined;
 }
 
 /** Liked this much counts as someone she cares about, for the appraisal. */
@@ -96,7 +98,7 @@ function stores(ctx: ModuleContext): SocialStores {
  * Services used: `RelationshipStoreKey` (required), `PeopleStoreKey` (or the `StoreKey`
  * bundle), `IdentityStoreKey` (optional, for `/me link`), `MemoryRecordStoreKey` (optional, so
  * `/me link` moves memories too), `PromptContributorsKey`, `CommandRegistryKey` and
- * `AuthorizerKey` (optional). Provides `SocialSignalsKey` and `SocialKey`.
+ * `AuthorizerKey` (optional). Provides `SocialSignalsKey`, `SocialKey` and `RelationshipEffectsKey`.
  */
 export class SocialModule implements Module {
   static readonly ID = "social";
@@ -124,6 +126,13 @@ export class SocialModule implements Module {
 
   async start(ctx: ModuleContext): Promise<void> {
     const config = ctx.config(SocialConfigSchema);
+    const gone = presentKeys(ctx.rawConfig, DEPRECATED_SOCIAL_KEYS);
+    if (gone.length > 0) {
+      ctx.log.warn(
+        { keys: gone },
+        "[modules.social] keys are deprecated and ignored: the agent renders the people present itself",
+      );
+    }
     const social = new Social(
       this.#profile,
       this.#herName,
@@ -136,8 +145,10 @@ export class SocialModule implements Module {
       ctx.clock,
     );
     social.setAuthorizer(ctx.services.get(AuthorizerKey) ?? null);
-    // With her emotions (the `self` module), the appraisal also reads how she feels.
+    // Appraise (the `mind` module) is the one reader of what a conversation meant to her. Only
+    // without it, and with her emotions (the `self` module), this pass reads how she feels too.
     social.setConcerns(() => {
+      if (ctx.services.get(MindKey)) return null;
       const self = ctx.services.get(SelfStateKey);
       return self ? concerns(social, self) : null;
     });
@@ -145,16 +156,15 @@ export class SocialModule implements Module {
 
     ctx.provide(SocialSignalsKey, social);
     ctx.provide(SocialKey, social);
+    ctx.provide(RelationshipEffectsKey, social);
 
-    const contributors = ctx.services.get(PromptContributorsKey);
-    contributors?.register(new SocialPrompt(social));
     const commands = new CommandMount(
       "social",
       (registry) => registerCommands(registry, social),
       unregisterCommands,
     );
     commands.attach(ctx);
-    this.#running = { social, commands, contributors };
+    this.#running = { social, commands };
 
     // Subscribe before returning so no event published after start is missed.
     const sub = ctx.subscribe([
@@ -162,6 +172,7 @@ export class SocialModule implements Module {
       "platform.message.created",
       "voice.utterance",
       "agent.turn.completed",
+      AFFECT_BOND_TOPIC,
     ]);
     ctx.spawn("events", async () => {
       for await (const env of sub) {
@@ -205,6 +216,14 @@ export class SocialModule implements Module {
           case "agent_turn_completed":
             social.observeSelf(event.data.context, event.data.text, now);
             break;
+          case "custom":
+            // A bond change Reflect proposed through the affect service (small, already capped).
+            if (event.data.topic === AFFECT_BOND_TOPIC) {
+              await applyBond(social, event.data.payload, now).catch((error: unknown) => {
+                ctx.log.warn({ err: errorMessage(error) }, "cannot apply a proposed bond change");
+              });
+            }
+            break;
           default:
             break;
         }
@@ -243,9 +262,26 @@ export class SocialModule implements Module {
     this.#running = null;
     if (!running) return;
     running.commands.detach();
-    running.contributors?.unregister(SocialPrompt.KEY);
     await running.social.flush();
   }
+}
+
+/** Applies an `affect.bond` payload (`AffectBondPayload`) to the relationship. */
+export async function applyBond(social: Social, payload: JsonValue, now: number): Promise<void> {
+  if (!isJsonObject(payload) || typeof payload.person !== "string") return;
+  const num = (v: JsonValue | undefined) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const [affinity, trust, familiarity] = [
+    num(payload.affinity),
+    num(payload.trust),
+    num(payload.familiarity),
+  ];
+  if (affinity === 0 && trust === 0 && familiarity === 0) return;
+  const why = typeof payload.why === "string" ? payload.why.slice(0, 80) : "";
+  await social.modify(payload.person, `reflect: ${why}`, now, (r) => {
+    r.affinity += affinity;
+    r.trust += trust;
+    r.familiarity += familiarity;
+  });
 }
 
 function spawnAppraisal(ctx: ModuleContext, social: Social, key: ContextKey): void {

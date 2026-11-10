@@ -9,7 +9,8 @@ export interface HelloAck {
   protocol: number;
   mod_version?: string;
   minecraft?: string;
-  capabilities?: { baritone?: boolean; altoclef?: boolean; screenshot?: boolean };
+  /** `tasks`: the mod reports task lifecycle (PROTOCOL.md §6.1). */
+  capabilities?: { baritone?: boolean; altoclef?: boolean; screenshot?: boolean; tasks?: boolean };
 }
 
 /** A failed request: a mod error code (`not_in_game`, ...) or `not_connected` / `timeout`. */

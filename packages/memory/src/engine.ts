@@ -1,11 +1,14 @@
 // `MemoryEngine`: storing with dedupe, hybrid recall, consolidation, forgetting and followups.
 // Provided as the service `MemoryEngineKey` (and as `FollowupSourceKey`).
 
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/kernel";
 import {
+  assistantMessage,
   type ChatRequest,
+  type ChatResponse,
   contextHash,
   type LlmRouter,
+  ProviderHttpError,
   sessionId,
   systemMessage,
   userMessage,
@@ -28,14 +31,20 @@ import {
   type Clock,
   type ContextKey,
   contextKeyString,
+  EventLogKey,
   type Followup,
   type FollowupSource,
+  type HandleDirectory,
+  HandleDirectoryKey,
   isJsonObject,
   isUlid,
   type JsonValue,
+  type LogEvent,
+  type MemoryOrigin,
   newId,
   type PersonId,
   type ProfileId,
+  repairHandleText,
   sameAccount,
   serviceKey,
   systemClock,
@@ -45,9 +54,33 @@ import {
 } from "@miyoria/types";
 import type { MemoryConfig } from "./config.js";
 import { cosine, type Embedder, NoEmbedder } from "./embed.js";
-import { type Extraction, parseExtraction, systemPrompt, transcript } from "./extract.js";
+import {
+  type EventReader,
+  type EvidenceLine,
+  isEventRef,
+  linkLines,
+  mergeRefs,
+  nameWords,
+  summaryOf,
+  supporting,
+} from "./evidence.js";
+import { expired, expiryOf, isPresentState, isStateLifetime, wordingTtlHours } from "./expiry.js";
+import {
+  type Extraction,
+  ExtractionError,
+  parseExtraction,
+  systemPrompt,
+  transcript,
+} from "./extract.js";
+import { RepeatDamper } from "./repeat.js";
 import { hasScope, isPrivate, scopeEquals, scopeForNew } from "./scope.js";
-import { finalScore, signals, tokenOverlap } from "./score.js";
+import {
+  effectiveConfidence,
+  fadedConfidence,
+  finalScore,
+  signals,
+  tokenOverlap,
+} from "./score.js";
 import { textSimilarity, tokenize, tokenString } from "./tokenize.js";
 
 const log = getLogger("memory");
@@ -82,9 +115,25 @@ export interface NewMemory {
   confidence: number;
   source_context: ContextKey | null;
   due: Timestamp | null;
-  /** Who told her (`remember`); omitted for memories she extracted herself. */
+  /** Who told her (`remember`, or the speaker a fact was heard from). */
   source?: MemorySource | null;
+  /**
+   * Whether she lived it or was told it. `unknown` is only for memories whose provenance was
+   * lost (migrated records, and merges of them): a writer that knows says which.
+   */
+  origin: MemoryOrigin;
+  /** EventLog ids (or `msg:<id>` of a chat line) the memory comes from. */
+  source_events?: readonly string[];
 }
+
+/** Why a memory was not stored. */
+export type Refusal =
+  /** Nothing to store. */
+  | "empty"
+  /** It says what is happening right now: the state machine answers that, not memory. */
+  | "present_state"
+  /** A fact that nothing said backs: it is not part of her past. */
+  | "no_evidence";
 
 /** What `MemoryEngine.store` did. */
 export type Stored =
@@ -92,11 +141,27 @@ export type Stored =
   /** A near-identical record was updated in place (confidence raised). */
   | { type: "reinforced"; id: string }
   /** A similar record was replaced by a new one. */
-  | { type: "superseded"; old: string; new: string };
+  | { type: "superseded"; old: string; new: string }
+  /** Nothing was written. */
+  | { type: "refused"; reason: Refusal };
 
-/** The id of the record that now holds the memory. */
+/** The id of the record that now holds the memory (throws for a refused one). */
 export function storedId(stored: Stored): string {
+  if (stored.type === "refused") throw new MemoryError(`memory refused: ${stored.reason}`);
   return stored.type === "superseded" ? stored.new : stored.id;
+}
+
+/** Ordered by how sure a claim of having been there is. */
+const ORIGIN_RANK: Record<MemoryOrigin, number> = { experienced: 2, told: 1, unknown: 0 };
+
+/** The surer of two origins (the same thing learned again keeps the better provenance). */
+export function strongerOrigin(a: MemoryOrigin, b: MemoryOrigin): MemoryOrigin {
+  return ORIGIN_RANK[a] >= ORIGIN_RANK[b] ? a : b;
+}
+
+/** The less sure of two origins (notes merged into one claim no more than the weakest says). */
+export function weakerOrigin(a: MemoryOrigin, b: MemoryOrigin): MemoryOrigin {
+  return ORIGIN_RANK[a] <= ORIGIN_RANK[b] ? a : b;
 }
 
 /** A recalled record with its final score. */
@@ -119,6 +184,12 @@ interface RankOptions {
   includeDone: boolean;
   /** Drop records scoring below this; `null` keeps every candidate. */
   minScore: number | null;
+  /**
+   * Recall for a turn (not browsing): records expired by their own lifetime are left out, a
+   * memory found only through a present person needs a real match, and a gag recalled too
+   * often is down-weighted.
+   */
+  forTurn: boolean;
 }
 
 export interface ConsolidationReport {
@@ -129,14 +200,32 @@ export interface ConsolidationReport {
   superseded: number;
   /** Extracted items dropped (malformed or trivial). */
   skipped: number;
+  /** Items left out because they say what is happening right now. */
+  refusedState: number;
+  /** Facts and notes left out because no line said to back them. */
+  refusedEvidence: number;
   /** The summarizer's answer was not usable JSON (lines are skipped). */
   malformed: boolean;
+}
+
+/** What `MemoryEngine.forget` removed. */
+export interface ForgetReport {
+  /** Records deleted, `about` and `derived` together. */
+  deleted: number;
+  /** About the person: their subject, their person scope, their DM. */
+  about: number;
+  /** Told by their account, or resting on an EventLog event of theirs. */
+  derived: number;
+  /** Records resting on events the log no longer holds, so nothing tied them to the person. */
+  unverified: number;
 }
 
 export interface MaintenanceReport {
   pruned: number;
   decayed: number;
   forgotten: number;
+  /** Notes that went stale (present-tense states past their lifetime) and were deleted. */
+  expired: number;
 }
 
 /** Someone who spoke in the lines being consolidated. */
@@ -152,6 +241,10 @@ export interface MemoryEngineOptions {
   messages?: MessageLog | null;
   settings?: SettingsStore | null;
   router?: LlmRouter | null;
+  /** The EventLog: where evidence is checked and found. `attach` fills it in later. */
+  events?: EventReader | null;
+  /** Stable names of people, to tell whose events are whose. `attach` fills it in later. */
+  handles?: HandleDirectory | null;
   /** Source of "now" for writes without an explicit time (`markDone`). */
   clock?: Clock;
 }
@@ -172,12 +265,41 @@ export function memoryFilter(limit: number, fields: Partial<MemoryFilter> = {}):
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 const ms = timestampMs;
 
+/**
+ * A fact or note written before present-tense states were kept out of memory (`正在下載`):
+ * not brought up, whether or not maintenance has got to it yet.
+ */
+function staleState(record: MemoryRecord): boolean {
+  return (record.kind === "fact" || record.kind === "self_note") && isPresentState(record.content);
+}
+
 function sortedUnique(ids: readonly PersonId[]): PersonId[] {
   return [...new Set(ids)].sort();
 }
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/** Statuses a provider answers with when it does not support `json_mode`. */
+const JSON_MODE_REJECTED: ReadonlySet<number> = new Set([400, 415, 422]);
+
+/** The extraction request again with the unusable reply and a short corrective instruction. */
+function retryRequest(request: ChatRequest, response: ChatResponse): ChatRequest {
+  const cut = response.finish_reason === "length";
+  const note = cut
+    ? "上一個回覆太長,寫到一半被截斷了。請寫得精簡一點,只回傳一個完整的 JSON 物件。"
+    : "上一個回覆不是可用的 JSON。請只回傳一個 JSON 物件,不要加其他文字或程式碼區塊。";
+  return {
+    ...request,
+    max_tokens:
+      cut && typeof request.max_tokens === "number" ? request.max_tokens * 2 : request.max_tokens,
+    messages: [
+      ...request.messages,
+      assistantMessage([...response.text].slice(0, 2000).join("")),
+      userMessage(note),
+    ],
+  };
 }
 
 /** Long-term memory of one profile. */
@@ -190,9 +312,15 @@ export class MemoryEngine implements FollowupSource {
   readonly #messages: MessageLog | null;
   readonly #settings: SettingsStore | null;
   readonly #router: LlmRouter | null;
+  #events: EventReader | null;
+  #handles: HandleDirectory | null;
   readonly #clock: Clock;
   readonly #watermarks = new Map<string, Watermark>();
+  /** Contexts whose last batch was unusable and is being carried over once (key → true). */
+  readonly #carried = new Set<string>();
+  readonly #repeats: RepeatDamper;
   #lastMaintenance: Timestamp | null = null;
+  #version = 0;
 
   constructor(
     profile: ProfileId,
@@ -208,7 +336,91 @@ export class MemoryEngine implements FollowupSource {
     this.#messages = options.messages ?? null;
     this.#settings = options.settings ?? null;
     this.#router = options.router ?? null;
+    this.#events = options.events ?? null;
+    this.#handles = options.handles ?? null;
     this.#clock = options.clock ?? systemClock;
+    this.#repeats = new RepeatDamper(config.repeat);
+  }
+
+  /**
+   * Picks up the EventLog and the handle directory from `services` if the engine has none yet
+   * (modules start in an order the engine must not depend on). Cheap: called on every tick.
+   */
+  attach(services: ServiceLookup): void {
+    this.#events ??= services.get(EventLogKey) ?? null;
+    this.#handles ??= services.get(HandleDirectoryKey) ?? null;
+  }
+
+  /** The EventLog evidence is checked against, when there is one. */
+  get events(): EventReader | null {
+    return this.#events;
+  }
+
+  /** Bumped by every write that can change what is pinned, so cached lines know to go stale. */
+  get version(): number {
+    return this.#version;
+  }
+
+  /** The name she uses for a person (their handle), when she has seen one of their accounts. */
+  async nameOfPerson(person: PersonId): Promise<string | null> {
+    const handle = this.#handles?.ofPerson(person);
+    if (handle) return handle;
+    if (!this.#people) return null;
+    try {
+      return (await this.#people.all()).find((p) => p.id === person)?.display_name ?? null;
+    } catch (error) {
+      log.warn({ error: errorMessage(error) }, "person lookup failed");
+      return null;
+    }
+  }
+
+  /**
+   * Followups still open that may be shown in `scopes`, soonest first: her open commitments. One
+   * that became due longer than `followup_max_age_hours` ago was dropped by the same rule as
+   * `due`, so it is not listed either.
+   */
+  async openCommitments(
+    scopes: readonly MemoryScope[],
+    now: Timestamp,
+    limit: number,
+  ): Promise<MemoryRecord[]> {
+    if (limit === 0) return [];
+    const hours = this.config.followup_max_age_hours;
+    const oldest = hours > 0 ? ms(now) - hours * 3_600_000 : null;
+    const open = await this.records.list(this.profile, memoryFilter(500, { kind: "followup" }));
+    return open
+      .filter(
+        (r) =>
+          !r.done &&
+          hasScope(scopes, r.scope) &&
+          (oldest === null || r.due === null || ms(r.due) >= oldest),
+      )
+      .sort((a, b) => ms(a.due ?? a.created_at) - ms(b.due ?? b.created_at))
+      .slice(0, limit);
+  }
+
+  /**
+   * What she holds about a person that may be shown in `scopes`, the most reliable first
+   * (confidence after fading, then importance). Present-tense states and expired notes are not
+   * among them. One indexed read: nothing is searched.
+   */
+  async factsAbout(
+    person: PersonId,
+    scopes: readonly MemoryScope[],
+    now: Timestamp,
+    limit: number,
+  ): Promise<MemoryRecord[]> {
+    if (limit === 0) return [];
+    const rows = await this.records.list(
+      this.profile,
+      memoryFilter(200, { subject: person, kind: "fact" }),
+    );
+    const rank = (r: MemoryRecord) =>
+      effectiveConfidence(this.config, r, now) * (0.5 + r.importance);
+    return rows
+      .filter((r) => hasScope(scopes, r.scope) && !expired(r, now) && !staleState(r))
+      .sort((a, b) => rank(b) - rank(a))
+      .slice(0, limit);
   }
 
   /** Whether consolidation can run (message log and LLM router present). */
@@ -261,8 +473,20 @@ export class MemoryEngine implements FollowupSource {
    * same kind, scope and subjects.
    */
   async store(memory: NewMemory, now: Timestamp, signal?: AbortSignal): Promise<Stored> {
-    const content = memory.content.trim();
+    // Memories are kept for good: a per-call code (`u7`) in one would point at someone else
+    // later. Resolved from the text itself where it can be, otherwise the sentence is dropped.
+    const content = repairHandleText(memory.content.trim())?.trim() ?? "";
     if (content === "") throw new MemoryError("empty memory");
+    this.#version += 1;
+    // What is happening right now is the state machine's to answer, never long-term memory.
+    if ((memory.kind === "fact" || memory.kind === "self_note") && isPresentState(content)) {
+      return { type: "refused", reason: "present_state" };
+    }
+    // A fact nothing said backs is not part of her past (`unknown` is a migrated record).
+    const evidence = mergeRefs(this.config.evidence.max_events, memory.source_events);
+    if (memory.kind === "fact" && memory.origin !== "unknown" && evidence.length === 0) {
+      return { type: "refused", reason: "no_evidence" };
+    }
     const tokens = tokenString(content);
     const embedding = await this.#embedOne(content, signal);
     const subjects = sortedUnique(memory.subjects);
@@ -313,7 +537,13 @@ export class MemoryEngine implements FollowupSource {
         old.confidence = clamp01(Math.max(old.confidence, memory.confidence) + dedupe.reinforce);
       }
       old.importance = clamp01(Math.max(old.importance, memory.importance));
+      // Said again with a source: the better provenance wins and the evidence adds up.
+      old.origin = strongerOrigin(old.origin ?? "unknown", memory.origin);
+      old.source_events = mergeRefs(this.config.evidence.max_events, old.source_events, evidence);
+      old.source = old.source ?? memory.source ?? null;
       old.updated_at = now;
+      // Said again: a state note is true again from now on.
+      if (old.kind !== "followup" && memory.due !== null) old.due = memory.due;
       await this.records.upsert(old);
       return { type: "reinforced", id: old.id };
     }
@@ -335,6 +565,8 @@ export class MemoryEngine implements FollowupSource {
       access_count: 0,
       source_context: memory.source_context,
       source: memory.source ?? null,
+      origin: memory.origin,
+      source_events: evidence,
       due: memory.due,
       done: false,
       superseded_by: null,
@@ -374,9 +606,10 @@ export class MemoryEngine implements FollowupSource {
       kinds,
       limit,
       now,
-      { includeDone: false, minScore: this.config.min_score },
+      { includeDone: false, minScore: this.config.min_score, forTurn: true },
       signal,
     );
+    this.#repeats.note(ranked.map((r) => r.record.tokens));
     if (ranked.length > 0) {
       try {
         await this.records.touch(
@@ -410,7 +643,7 @@ export class MemoryEngine implements FollowupSource {
       kinds,
       limit,
       now,
-      { includeDone: true, minScore: null },
+      { includeDone: true, minScore: null, forTurn: false },
       signal,
     );
   }
@@ -432,7 +665,8 @@ export class MemoryEngine implements FollowupSource {
       hasScope(scopes, r.scope) &&
       kinds.includes(r.kind) &&
       r.superseded_by === null &&
-      (options.includeDone || !r.done);
+      (options.includeDone || !r.done) &&
+      !(options.forTurn && (expired(r, now) || staleState(r)));
     const fetch = Math.max(this.config.candidate_limit, limit);
 
     // id -> (record, backend text score, vector score)
@@ -475,8 +709,13 @@ export class MemoryEngine implements FollowupSource {
           : null);
       const backend = maxText > 0 ? text / maxText : 0;
       const t = Math.max(backend, tokenOverlap(tokens, record.tokens));
+      // Being about someone who is here is not a reason to bring a memory up (and the nearest
+      // neighbour of an unrelated query is no match): it has to be about what is being said,
+      // by a shared word or a close embedding.
+      if (options.forTurn && t <= 0 && (vector ?? 0) < this.config.min_vector) continue;
       const s = signals(this.config, record, vector, t, present, now);
-      const score = finalScore(this.config, record, s);
+      let score = finalScore(this.config, record, s, now);
+      if (options.forTurn) score *= this.#repeats.factor(record.tokens);
       if (options.minScore === null || score >= options.minScore) {
         ranked.push({ record, score, text_score: text, vector_score: vector });
       }
@@ -540,8 +779,9 @@ export class MemoryEngine implements FollowupSource {
   /**
    * Consolidates the lines of `context` written after its watermark.
    *
-   * LLM failures are thrown (the watermark stays, so it is retried); malformed answers are
-   * logged and the lines skipped.
+   * LLM failures are thrown (the watermark stays, so it is retried). An unusable answer is
+   * asked again once with a corrective note; if that fails too, the lines are carried over to
+   * the next pass (watermark stays), and skipped only if that pass fails as well.
    */
   async consolidate(
     context: ContextKey,
@@ -559,6 +799,8 @@ export class MemoryEngine implements FollowupSource {
       reinforced: 0,
       superseded: 0,
       skipped: 0,
+      refusedState: 0,
+      refusedEvidence: 0,
       malformed: false,
     };
     const mark = await this.watermark(context);
@@ -575,6 +817,7 @@ export class MemoryEngine implements FollowupSource {
     }
 
     const speakers = await this.#speakers(lines);
+    const evidence = await linkLines(this.#events, lines, this.config.evidence);
     const priv = isPrivate(context);
     const request: ChatRequest = {
       messages: [
@@ -588,24 +831,54 @@ export class MemoryEngine implements FollowupSource {
       json_mode: true,
       session: sessionId(this.profile, `memory-${contextHash(context)}`),
     };
-    const response = await withLlmTag({ module: "memory", label: "extract" }, () =>
-      router.complete(this.config.purpose, request, signal),
-    );
+    const ask = (req: ChatRequest) =>
+      withLlmTag({ module: "memory", label: "extract" }, async () => {
+        try {
+          return await router.complete(this.config.purpose, req, signal);
+        } catch (error) {
+          // JSON mode is only a hint: a provider that rejects it gets the request without it.
+          if (
+            req.json_mode &&
+            error instanceof ProviderHttpError &&
+            JSON_MODE_REJECTED.has(error.status)
+          ) {
+            return router.complete(this.config.purpose, { ...req, json_mode: false }, signal);
+          }
+          throw error;
+        }
+      });
+    const response = await ask(request);
     let extraction: Extraction;
     try {
       extraction = parseExtraction(response.text);
-    } catch (error) {
-      log.warn(
-        { context: contextKeyString(context), error: errorMessage(error) },
-        "unusable consolidation output, skipping lines",
-      );
-      report.malformed = true;
-      await this.#setWatermark(nextMark);
-      return report;
+    } catch {
+      // One corrective retry; a reply cut off at the token limit gets a bigger budget instead.
+      try {
+        extraction = parseExtraction((await ask(retryRequest(request, response))).text);
+      } catch (second) {
+        if (!(second instanceof ExtractionError)) throw second;
+        const key = contextKeyString(context);
+        const carry = !this.#carried.has(key);
+        log.warn(
+          { context: key, error: errorMessage(second), carried: carry },
+          carry
+            ? "unusable consolidation output, keeping lines for the next pass"
+            : "unusable consolidation output again, skipping lines",
+        );
+        report.malformed = true;
+        if (carry) {
+          this.#carried.add(key);
+        } else {
+          this.#carried.delete(key);
+          await this.#setWatermark(nextMark);
+        }
+        return report;
+      }
     }
+    this.#carried.delete(contextKeyString(context));
     const first = speakers[0];
     const dmPartner = priv && speakers.length === 1 && first ? first.account : null;
-    await this.#apply(extraction, context, dmPartner, speakers, now, report, signal);
+    await this.#apply(extraction, context, dmPartner, speakers, evidence, now, report, signal);
     await this.#setWatermark(nextMark);
     log.debug({ context: contextKeyString(context), report }, "consolidated");
     return report;
@@ -645,30 +918,55 @@ export class MemoryEngine implements FollowupSource {
     context: ContextKey,
     dmPartner: AccountRef | null,
     speakers: readonly Speaker[],
+    lines: readonly EvidenceLine[],
     now: Timestamp,
     report: ConsolidationReport,
     signal?: AbortSignal,
   ): Promise<void> {
     const min = this.config.min_importance;
+    const evidence = this.config.evidence;
     report.skipped += x.skipped;
     const everyone = speakers.flatMap((s) => (s.person !== null ? [s.person] : []));
     const scope = (kind: MemoryKind, global: PersonId | null) =>
       scopeForNew(this.config, context, dmPartner, kind, global);
     const items: NewMemory[] = [];
     const base = { source_context: context, due: null };
+    const names = nameWords(speakers.flatMap((s) => s.names));
+    const others = lines.filter((l) => !l.self);
+
+    // The lines backing a statement: among the ones the summarizer cited (else any line in
+    // `from`), those sharing enough of its words. Empty: nothing said it.
+    const backing = (
+      statement: string,
+      cited: readonly number[],
+      from: readonly EvidenceLine[],
+    ) => {
+      const picked = cited
+        .map((n) => lines[n - 1])
+        .filter((l): l is EvidenceLine => l !== undefined && from.includes(l));
+      const hit = supporting(statement, picked, evidence, names);
+      return hit.length > 0 ? hit : supporting(statement, from, evidence, names);
+    };
+    const refsOf = (found: readonly EvidenceLine[]) => found.map((l) => l.ref);
 
     if (x.episode) {
       const ep = x.episode;
-      if (ep.importance >= min) {
+      if (ep.importance >= min && repairHandleText(ep.summary) !== null) {
         const emotion = ep.emotion?.trim() ?? "";
         items.push({
           ...base,
           kind: "episode",
           scope: scope("episode", null),
           subjects: [...everyone],
-          content: emotion !== "" ? `${ep.summary}(當時我的心情:${emotion})` : ep.summary,
+          content:
+            emotion !== ""
+              ? `${repairHandleText(ep.summary)}(當時我的心情:${emotion})`
+              : (repairHandleText(ep.summary) ?? ep.summary),
           importance: ep.importance,
           confidence: 1,
+          // She was in the conversation: the lines of this stretch are what she lived.
+          origin: "experienced",
+          source_events: refsOf(lines),
         });
       } else {
         report.skipped += 1;
@@ -676,8 +974,12 @@ export class MemoryEngine implements FollowupSource {
     }
 
     for (const fact of x.facts) {
-      if (fact.importance < min) {
+      if (fact.importance < min || repairHandleText(fact.statement) === null) {
         report.skipped += 1;
+        continue;
+      }
+      if (isStateLifetime(fact.valid_hours, this.config)) {
+        report.refusedState += 1;
         continue;
       }
       let kind: MemoryKind = "fact";
@@ -694,6 +996,14 @@ export class MemoryEngine implements FollowupSource {
           subjects = mentioned(fact.statement, speakers);
           break;
       }
+      // A fact about someone rests on what others said (her own lines prove nothing about
+      // them); something about herself rests on any line, her own included.
+      const found = backing(fact.statement, fact.lines, kind === "fact" ? others : lines);
+      const first = found[0];
+      if (!first) {
+        report.refusedEvidence += 1;
+        continue;
+      }
       const global = fact.subject.type === "named" && fact.global ? (subjects[0] ?? null) : null;
       items.push({
         ...base,
@@ -703,12 +1013,26 @@ export class MemoryEngine implements FollowupSource {
         content: fact.statement,
         importance: fact.importance,
         confidence: fact.confidence,
+        due: expiryOf(kind, fact.statement, fact.valid_hours, this.config, now),
+        // What someone said about a person is what they said; what she says of herself she lived.
+        origin: kind === "fact" ? "told" : "experienced",
+        source: kind === "fact" ? { account: { ...first.author }, name: first.name } : null,
+        source_events: refsOf(found),
       });
     }
 
     for (const note of x.self_notes) {
-      if (note.importance < min) {
+      if (note.importance < min || repairHandleText(note.note) === null) {
         report.skipped += 1;
+        continue;
+      }
+      if (isStateLifetime(note.valid_hours, this.config)) {
+        report.refusedState += 1;
+        continue;
+      }
+      const found = backing(note.note, note.lines, lines);
+      if (found.length === 0) {
+        report.refusedEvidence += 1;
         continue;
       }
       items.push({
@@ -719,10 +1043,17 @@ export class MemoryEngine implements FollowupSource {
         content: note.note,
         importance: note.importance,
         confidence: 1,
+        due: expiryOf("self_note", note.note, note.valid_hours, this.config, now),
+        origin: "experienced",
+        source_events: refsOf(found),
       });
     }
 
     for (const f of x.followups) {
+      if (repairHandleText(f.about) === null) {
+        report.skipped += 1;
+        continue;
+      }
       let subjects: PersonId[];
       switch (f.subject.type) {
         case "named":
@@ -745,6 +1076,8 @@ export class MemoryEngine implements FollowupSource {
         confidence: 1,
         source_context: context,
         due: toTimestamp(ms(now) + minutes * MINUTE_MS),
+        origin: "experienced",
+        source_events: refsOf(supporting(f.about, lines, evidence, names)),
       });
     }
 
@@ -752,13 +1085,15 @@ export class MemoryEngine implements FollowupSource {
       const stored = await this.store(item, now, signal);
       if (stored.type === "inserted") report.inserted += 1;
       else if (stored.type === "reinforced") report.reinforced += 1;
-      else report.superseded += 1;
+      else if (stored.type === "superseded") report.superseded += 1;
+      else if (stored.reason === "present_state") report.refusedState += 1;
+      else report.refusedEvidence += 1;
     }
   }
 
   /**
-   * Daily forgetting: prunes stale unimportant episodes and decays the confidence of facts not
-   * reinforced recently (deleting the faintest).
+   * Daily forgetting: prunes stale unimportant episodes and deletes facts that faded away
+   * (`decayed` counts the ones still fading: decay itself happens on read).
    */
   async maintain(now: Timestamp): Promise<MaintenanceReport> {
     const f = this.config.forgetting;
@@ -771,13 +1106,12 @@ export class MemoryEngine implements FollowupSource {
       }),
       decayed: 0,
       forgotten: 0,
+      expired: await this.#expireStates(now),
     };
 
-    const last = await this.lastMaintenanceRun();
-    const elapsedDays =
-      last === null ? 1 : Math.min(30, Math.max(0, Math.trunc((nowMs - ms(last)) / 1000)) / 86_400);
-    const factor = Math.min(1, Math.max(0, f.decay_per_day)) ** elapsedDays;
-    const staleBefore = nowMs - f.decay_after_days * DAY_MS;
+    this.#version += 1;
+    // Confidence fades when it is read (`fadedConfidence`); the stored value is left alone, so
+    // reinforcing a fact starts it over. All that is left to do is to delete what faded away.
     let before: Timestamp | null = null;
     for (;;) {
       const page = await this.records.list(
@@ -789,12 +1123,10 @@ export class MemoryEngine implements FollowupSource {
       const nextBefore = oldest.created_at;
       const full = page.length === 500;
       for (const record of page) {
-        if (ms(record.updated_at) >= staleBefore) continue;
-        const confidence = record.confidence * factor;
+        const confidence = fadedConfidence(this.config, record, now);
         if (confidence < f.forget_below_confidence) {
           if (await this.records.delete(record.id)) report.forgotten += 1;
         } else if (confidence < record.confidence) {
-          await this.records.upsert({ ...record, confidence });
           report.decayed += 1;
         }
       }
@@ -803,6 +1135,45 @@ export class MemoryEngine implements FollowupSource {
     }
     await this.#setLastMaintenance(now);
     return report;
+  }
+
+  /**
+   * Gives notes written before lifetimes existed ("已經開台", "正在下載") the one their wording
+   * implies, counted from when they were last written, and deletes notes that went stale more
+   * than a week ago. Returns how many were deleted.
+   */
+  async #expireStates(now: Timestamp): Promise<number> {
+    const nowMs = ms(now);
+    let deleted = 0;
+    for (const kind of ["fact", "self_note"] as const) {
+      let before: Timestamp | null = null;
+      for (;;) {
+        const page = await this.records.list(this.profile, memoryFilter(500, { kind, before }));
+        const oldest = page[page.length - 1];
+        if (!oldest) break;
+        for (const record of page) {
+          let due = record.due;
+          if (due === null) {
+            const hours = wordingTtlHours(record.content, this.config);
+            if (hours === null) continue;
+            due = toTimestamp(ms(record.updated_at) + hours * 3_600_000);
+            if (ms(due) > nowMs) {
+              await this.records.upsert({ ...record, due });
+              continue;
+            }
+          }
+          if (nowMs - ms(due) >= 7 * DAY_MS) {
+            if (await this.records.delete(record.id)) deleted += 1;
+          } else if (due !== record.due) {
+            await this.records.upsert({ ...record, due });
+          }
+        }
+        const full = page.length === 500;
+        if (!full || (before !== null && ms(before) === ms(oldest.created_at))) break;
+        before = oldest.created_at;
+      }
+    }
+    return deleted;
   }
 
   /** When maintenance last ran (memory first, then settings). */
@@ -868,30 +1239,197 @@ export class MemoryEngine implements FollowupSource {
   }
 
   /**
-   * Forgets this person's memories: those matching `keyword`, or all of them (`null`).
-   * Returns how many records were deleted.
+   * What this person just said in `context`, from the EventLog (newest last): the lines a note
+   * they ask her to keep must rest on. `null` when there is no EventLog to ask.
+   */
+  async heard(
+    context: ContextKey,
+    account: AccountRef,
+    now: Timestamp,
+    limit = 60,
+  ): Promise<EvidenceLine[] | null> {
+    const events = this.#events;
+    if (!events) return null;
+    const identities = await this.#identities(await this.personOf(account), account);
+    if (identities.size === 0) return [];
+    let found: LogEvent[] = [];
+    try {
+      found = await events.query({
+        kinds: ["observation"],
+        context,
+        since: toTimestamp(ms(now) - 6 * 3_600_000),
+        order: "desc",
+        limit,
+      });
+    } catch (error) {
+      log.warn({ error: errorMessage(error) }, "reading recent speech failed");
+      return [];
+    }
+    const name = (await this.nameOf(account)) ?? account.id;
+    return found
+      .filter((e) => e.person !== null && identities.has(e.person))
+      .reverse()
+      .flatMap((e) => {
+        const summary = summaryOf(e);
+        if (summary === null) return [];
+        return [
+          {
+            ref: e.id,
+            text: summary.replace(/^[^:：]*[:：]/, ""),
+            author: account,
+            name,
+            self: false,
+          },
+        ];
+      });
+  }
+
+  /**
+   * Who a person is in the EventLog: their handles (and, with no handle directory, the names
+   * they went by). An event is theirs when its `person` is one of these.
+   */
+  async #identities(person: PersonId | null, account: AccountRef): Promise<Set<string>> {
+    const out = new Set<string>();
+    let accounts: AccountRef[] = [account];
+    let names: string[] = [];
+    if (this.#people) {
+      try {
+        const found = await this.#people.personByAccount(account);
+        if (found) {
+          accounts = [account, ...found.accounts.map((a) => a.account)];
+          names = [found.display_name, ...found.accounts.map((a) => a.display_name)];
+        }
+      } catch (error) {
+        log.warn({ error: errorMessage(error) }, "person lookup failed");
+      }
+    }
+    const handles = this.#handles;
+    if (handles) {
+      for (const entry of handles.list()) {
+        const owner = entry.account;
+        const mine =
+          (person !== null && entry.person === person) ||
+          (owner !== null && accounts.some((a) => sameAccount(a, owner)));
+        if (mine) out.add(entry.handle);
+      }
+      const own = person === null ? null : handles.ofPerson(person);
+      if (own !== null) out.add(own);
+    }
+    // Without a handle the log names people by display name (`BusFacts`).
+    if (out.size === 0) for (const name of names) if (name !== "") out.add(name);
+    return out;
+  }
+
+  /**
+   * Records derived from what this person said: told by their account, or resting on an
+   * EventLog event of theirs. Those about them (`memoriesOf`) are not repeated. `unverified`
+   * counts records resting on events the log no longer holds (compacted away): nothing ties
+   * those to anyone any more.
+   */
+  async derivedFrom(
+    person: PersonId | null,
+    account: AccountRef,
+    skip: ReadonlySet<string>,
+  ): Promise<{ records: MemoryRecord[]; unverified: number }> {
+    const identities = await this.#identities(person, account);
+    const events = this.#events;
+    const cache = new Map<string, boolean | null>();
+    const theirs = async (ref: string): Promise<boolean | null> => {
+      if (!events || !isEventRef(ref) || identities.size === 0) return null;
+      if (cache.has(ref)) return cache.get(ref) ?? null;
+      let result: boolean | null = null;
+      try {
+        const event = await events.get(ref);
+        if (event) result = event.person !== null && identities.has(event.person);
+      } catch (error) {
+        log.warn({ error: errorMessage(error) }, "event lookup failed");
+      }
+      cache.set(ref, result);
+      return result;
+    };
+    const out: MemoryRecord[] = [];
+    let unverified = 0;
+    let before: Timestamp | null = null;
+    for (;;) {
+      const page = await this.records.list(
+        this.profile,
+        memoryFilter(500, { before, include_superseded: true }),
+      );
+      const oldest = page[page.length - 1];
+      if (!oldest) break;
+      for (const record of page) {
+        if (skip.has(record.id)) continue;
+        if (record.source && sameAccount(record.source.account, account)) {
+          out.push(record);
+          continue;
+        }
+        let hit = false;
+        let lost = false;
+        for (const ref of record.source_events ?? []) {
+          const mine = await theirs(ref);
+          if (mine === true) {
+            hit = true;
+            break;
+          }
+          if (mine === null && isEventRef(ref)) lost = true;
+        }
+        if (hit) out.push(record);
+        else if (lost) unverified += 1;
+      }
+      if (page.length < 500 || (before !== null && ms(before) === ms(oldest.created_at))) break;
+      before = oldest.created_at;
+    }
+    return { records: out, unverified };
+  }
+
+  /**
+   * Forgets what she has of this person: the memories about them, the ones told by their
+   * account and the ones derived from their events; with a `keyword` only those matching it.
+   * The EventLog and the chat history stay: they are the evidence, wiped on their own.
    */
   async forget(
     person: PersonId | null,
     account: AccountRef,
     keyword: string | null,
-  ): Promise<number> {
-    let deleted = 0;
-    const records = await this.memoriesOf(person, account, true);
-    for (const record of records) {
-      if (keyword !== null && !matchesKeyword(record, keyword)) continue;
-      if (await this.records.delete(record.id)) deleted += 1;
+  ): Promise<ForgetReport> {
+    const report: ForgetReport = { deleted: 0, about: 0, derived: 0, unverified: 0 };
+    this.#version += 1;
+    const own = await this.memoriesOf(person, account, true);
+    const ownIds = new Set(own.map((r) => r.id));
+    const derived = await this.derivedFrom(person, account, ownIds);
+    report.unverified = derived.unverified;
+    const wanted = (r: MemoryRecord) => keyword === null || matchesKeyword(r, keyword);
+    for (const record of own) {
+      if (wanted(record) && (await this.records.delete(record.id))) report.about += 1;
+    }
+    for (const record of derived.records) {
+      if (wanted(record) && (await this.records.delete(record.id))) report.derived += 1;
     }
     if (keyword === null && person !== null) {
-      deleted += await this.records.deleteBySubject(this.profile, person);
+      report.about += await this.records.deleteBySubject(this.profile, person);
     }
-    return deleted;
+    report.deleted = report.about + report.derived;
+    return report;
   }
 
   // ---- FollowupSource ------------------------------------------------------------------
 
+  /**
+   * Followups due now, newest first. One nobody brought up within `followup_max_age_hours` of
+   * its time is closed instead of offered (a question about "tomorrow's exam" a week later is
+   * noise, and 181 of them were still open).
+   */
   async due(profile: ProfileId, now: Timestamp): Promise<Followup[]> {
-    return (await this.records.dueFollowups(profile, now)).map(toFollowup);
+    const hours = this.config.followup_max_age_hours;
+    const maxAgeMs = hours > 0 ? hours * 3_600_000 : null;
+    if (maxAgeMs !== null) {
+      try {
+        await this.records.expireFollowups(profile, toTimestamp(ms(now) - maxAgeMs));
+      } catch (error) {
+        log.warn({ error: errorMessage(error) }, "closing stale followups failed");
+      }
+    }
+    return (await this.records.dueFollowups(profile, now, maxAgeMs)).map(toFollowup);
   }
 
   async markDone(id: string): Promise<void> {

@@ -467,3 +467,327 @@ def test_an_offload_nobody_ends_reloads_by_itself(run):
         time.sleep(0.05)
     assert client.get("/health").json()["offloaded"] is False
     assert len(fake.state.instances) == 2
+
+
+# ── the GPU lock is served in order ──────────────────────────────────────────
+
+
+def test_the_gpu_lock_serves_the_next_line_first(load_server):
+    server = load_server({"faster_qwen3_tts": make_fake_faster()})
+    lock = server.GpuLock()
+    order: list[str] = []
+    lock.acquire()
+
+    def wait(name: str, rank: int) -> None:
+        with lock.hold(rank):
+            order.append(name)
+
+    threads = []
+    for name, rank in (("ahead-1", server.RANK_AHEAD), ("ahead-2", server.RANK_AHEAD), ("now", server.RANK_NOW)):
+        t = threading.Thread(target=wait, args=(name, rank))
+        t.start()
+        threads.append(t)
+        time.sleep(0.03)  # they queue in this order
+    lock.release()
+    for t in threads:
+        t.join(5)
+    assert order == ["now", "ahead-1", "ahead-2"]
+
+
+def test_a_gpu_lock_timeout_leaves_the_queue(load_server):
+    server = load_server({"faster_qwen3_tts": make_fake_faster()})
+    lock = server.GpuLock()
+    assert lock.acquire(timeout=1)
+    assert lock.acquire(timeout=0.02) is False
+    lock.release()
+    assert lock.acquire(timeout=1)
+
+
+def test_a_line_reports_its_queue_time_and_priority_is_accepted(run):
+    client, _, _ = run()
+    res = client.post("/tts", json={"text": S1, "priority": "ahead"})
+    assert res.status_code == 200
+    assert float(res.headers["x-tts-queue-ms"]) >= 0
+    assert res.headers["x-tts-reference"] == "ref"
+
+
+def test_busy_counts_utterances_under_way(load_server):
+    server = load_server({"faster_qwen3_tts": make_fake_faster()})
+    release = threading.Event()
+
+    class Slow:
+        lock = threading.Lock()
+
+        def stream(self, text, language, voice, instruct):
+            release.wait(5)
+            yield np.zeros(4, dtype=np.float32), 24000
+
+    async def go():
+        pool = ThreadPoolExecutor(max_workers=1)
+        pump = server.ChunkPump(Slow(), ["a。"], "Chinese", None, "", pool, asyncio.get_running_loop())
+        pump.start()
+        assert (await server.busy()) == {"busy": 1}
+        release.set()
+        await asyncio.wait_for(pump.future, timeout=5)
+        pool.shutdown()
+        assert (await server.busy()) == {"busy": 0}
+
+    asyncio.run(go())
+
+
+# ── an offload lets her finish her sentence ──────────────────────────────────
+
+
+def test_an_offload_waits_for_the_running_utterance(load_server):
+    server = load_server({"faster_qwen3_tts": make_fake_faster()})
+
+    async def go():
+        server.activity.begin()
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.05, server.activity.end)
+        t0 = time.perf_counter()
+        assert await server._drain(5) is True
+        assert 0.03 < time.perf_counter() - t0 < 2
+
+    asyncio.run(go())
+
+
+def test_an_utterance_that_never_ends_only_delays_the_offload(load_server):
+    server = load_server({"faster_qwen3_tts": make_fake_faster()})
+
+    async def go():
+        server.activity.begin()
+        try:
+            assert await server._drain(0.05) is False
+        finally:
+            server.activity.end()
+
+    asyncio.run(go())
+
+
+def test_offload_during_a_line_lets_the_line_finish(run):
+    release = threading.Event()
+    sentence = "這一句要講完。"
+    client, faster, _ = run()
+    model = faster.state.instances[-1]
+    original = model._stream
+
+    def stream(method, kw):
+        if kw["text"] == sentence:
+            release.wait(5)
+        return original(method, kw)
+
+    model._stream = stream
+    results: dict = {}
+
+    def speak():
+        results["tts"] = client.post("/tts", json={"text": sentence})
+
+    t = threading.Thread(target=speak)
+    t.start()
+    deadline = time.time() + 5
+    while client.get("/busy").json()["busy"] == 0 and time.time() < deadline:
+        time.sleep(0.01)
+
+    def offload():
+        results["offload"] = client.post("/offload", json={"max_s": 0}).json()
+
+    o = threading.Thread(target=offload)
+    o.start()
+    time.sleep(0.1)
+    assert client.post("/tts", json={"text": "新的一句。"}).status_code == 503  # nothing new starts
+    release.set()
+    t.join(5)
+    o.join(5)
+    assert results["tts"].status_code == 200 and len(results["tts"].content) > 0
+    assert results["offload"]["state"] == "offloaded" and results["offload"]["drained"] is True
+
+
+# ── ICL and the emotion voice bank ───────────────────────────────────────────
+
+
+def clone_calls(faster) -> list[dict]:
+    return [kw for name, kw in faster.state.instances[-1].calls if name == "clone_stream"]
+
+
+def request_call(faster, text: str) -> dict:
+    return [kw for kw in clone_calls(faster) if kw["text"] == text][-1]
+
+
+@pytest.fixture
+def voice_dir(tmp_path):
+    """voices/v: a Japanese ref.wav whose transcript sits in ref.ja.txt, as her real voice has it."""
+    d = tmp_path / "voices" / "v"
+    d.mkdir(parents=True)
+    (d / "ref.wav").write_bytes(make_wav(0.5))
+    (d / "ref.ja.txt").write_text("こんにちは", encoding="utf-8")
+    return d
+
+
+def bank(d, lang: str, emotion: str, text: str) -> None:
+    (d / "bank" / lang).mkdir(parents=True, exist_ok=True)
+    (d / "bank" / lang / f"{emotion}.wav").write_bytes(make_wav(0.5))
+    (d / "bank" / lang / f"{emotion}.txt").write_text(text, encoding="utf-8")
+
+
+@pytest.fixture
+def boot_voice(load_server, voice_dir):
+    def boot(scripts: dict | None = None, **env: str):
+        faster = make_fake_faster(scripts)
+        server = load_server({"faster_qwen3_tts": faster}, VOICES_DIR=str(voice_dir.parent),
+                             TTS_DEFAULT_VOICE="v", **env)
+        return TestClient(server.app, raise_server_exceptions=False), faster
+
+    return boot
+
+
+def test_by_default_ref_lang_txt_is_ignored_and_she_stays_on_the_x_vector(boot_voice, voice_dir):
+    client, faster = boot_voice()
+    with client:
+        client.post("/tts", json={"text": S1, "language": "Japanese"})
+        kw = request_call(faster, S1)
+        assert kw["xvec_only"] is True and kw["ref_text"] == ""
+        assert client.get("/health").json()["clone_mode"] == "auto"
+
+
+def test_icl_is_used_in_the_language_of_the_reference_only(boot_voice, voice_dir):
+    client, faster = boot_voice(TTS_CLONE_MODE="icl")
+    with client:
+        r = client.post("/tts", json={"text": S1, "language": "Japanese"})
+        assert r.headers["x-tts-reference"] == "ref.ja"
+        kw = request_call(faster, S1)
+        assert kw["xvec_only"] is False and kw["ref_text"] == "こんにちは"
+        # A Chinese line never continues a Japanese clip: that is what made her voice jump.
+        r = client.post("/tts", json={"text": S2, "language": "Chinese"})
+        assert r.headers["x-tts-reference"] == "ref"
+        kw = request_call(faster, S2)
+        assert kw["xvec_only"] is True and kw["ref_text"] == ""
+
+
+def test_xvec_mode_ignores_every_transcript(boot_voice, voice_dir):
+    (voice_dir / "ref.txt").write_text("文字稿", encoding="utf-8")
+    client, faster = boot_voice(TTS_CLONE_MODE="xvec")
+    with client:
+        client.post("/tts", json={"text": S1, "language": "Chinese"})
+        assert request_call(faster, S1)["xvec_only"] is True
+
+
+def test_a_bad_clone_mode_is_refused_at_start(boot_voice, voice_dir):
+    client, _ = boot_voice(TTS_CLONE_MODE="nonsense")
+    with pytest.raises(RuntimeError, match="TTS_CLONE_MODE"):
+        with client:
+            pass
+
+
+def test_the_bank_picks_by_language_and_emotion(boot_voice, voice_dir):
+    bank(voice_dir, "ja", "happy", "やった")
+    bank(voice_dir, "ja", "neutral", "ふつう")
+    client, faster = boot_voice(TTS_VOICE_BANK="1", TTS_CLONE_MODE="icl")
+    with client:
+        r = client.post("/tts", json={"text": S1, "language": "Japanese", "emotion": "Happy"})
+        assert r.headers["x-tts-reference"] == "bank/ja/happy"
+        kw = request_call(faster, S1)
+        assert kw["ref_text"] == "やった" and kw["ref_audio"].endswith("happy.wav") and kw["xvec_only"] is False
+        # An emotion without a clip: the language's neutral one.
+        r = client.post("/tts", json={"text": S2, "language": "Japanese", "emotion": "sad"})
+        assert r.headers["x-tts-reference"] == "bank/ja/neutral"
+        # A language without clips: as if there were no bank.
+        r = client.post("/tts", json={"text": "第三句話在這裡。", "language": "Chinese", "emotion": "happy"})
+        assert r.headers["x-tts-reference"] == "ref"
+        listed = client.get("/voices").json()["voices"][0]["references"]
+        assert set(listed) == {"ref", "ref.ja", "bank/ja/happy", "bank/ja/neutral"}
+
+
+def test_the_bank_is_off_by_default(boot_voice, voice_dir):
+    bank(voice_dir, "ja", "happy", "やった")
+    client, faster = boot_voice()
+    with client:
+        r = client.post("/tts", json={"text": S1, "language": "Japanese", "emotion": "happy"})
+        assert r.headers["x-tts-reference"] == "ref"
+        assert request_call(faster, S1)["ref_audio"].endswith("ref.wav")
+
+
+def test_a_bank_clip_without_a_transcript_is_skipped(boot_voice, voice_dir):
+    bank(voice_dir, "ja", "happy", "やった")
+    (voice_dir / "bank" / "ja" / "happy.txt").unlink()
+    client, _ = boot_voice(TTS_VOICE_BANK="1")
+    with client:
+        r = client.post("/tts", json={"text": S1, "language": "Japanese", "emotion": "happy"})
+        assert r.status_code == 200 and r.headers["x-tts-reference"] == "ref"
+
+
+def test_a_failing_clip_costs_that_clip_not_her_voice(boot_voice, voice_dir):
+    bank(voice_dir, "ja", "happy", "やった")
+    client, faster = boot_voice(TTS_VOICE_BANK="1")
+    with client:
+        model = faster.state.instances[-1]
+        original = model._stream
+
+        def stream(method, kw):
+            if kw["ref_text"] == "やった" and kw["text"] == S1:
+                raise RuntimeError("bad prompt")
+            return original(method, kw)
+
+        model._stream = stream
+        r = client.post("/tts", json={"text": S1, "language": "Japanese", "emotion": "happy"})
+        assert r.status_code == 200 and len(r.content) > 0
+        assert request_call(faster, S1)["ref_audio"].endswith("ref.wav")
+        # It stays out until the voices are reloaded.
+        r = client.post("/tts", json={"text": S2, "language": "Japanese", "emotion": "happy"})
+        assert r.headers["x-tts-reference"] == "ref"
+
+
+def test_a_clip_that_fails_at_priming_is_skipped_at_start(boot_voice, voice_dir):
+    bank(voice_dir, "ja", "angry", "こら")
+    client, _ = boot_voice({PRIME: [RuntimeError("cannot prime")]}, TTS_VOICE_BANK="1")
+    with client:
+        r = client.post("/tts", json={"text": S1, "language": "Japanese", "emotion": "angry"})
+        assert r.status_code == 200 and r.headers["x-tts-reference"] == "ref"
+
+
+def test_a_failure_of_the_plain_reference_still_fails(boot_voice, voice_dir):
+    client, _ = boot_voice({S1: [RuntimeError("the model is gone")]})
+    with client:
+        r = client.post("/tts", json={"text": S1, "language": "Japanese"})
+        assert r.status_code == 500
+
+
+def test_audio_already_sent_is_not_said_again_with_another_clip(boot_voice, voice_dir):
+    bank(voice_dir, "ja", "happy", "やった")
+    client, faster = boot_voice({S1: [np.zeros(240, dtype=np.float32), RuntimeError("mid-sentence")]},
+                                TTS_VOICE_BANK="1")
+    with client:
+        try:
+            client.post("/tts", json={"text": S1, "language": "Japanese", "emotion": "happy"})
+        except Exception:  # noqa: BLE001 - the stream is cut, how that surfaces is the client's
+            pass
+        assert len([kw for kw in clone_calls(faster) if kw["text"] == S1]) == 1
+
+
+def test_the_qwen_tts_backend_uses_the_same_references(load_server, voice_dir):
+    bank(voice_dir, "ja", "happy", "やった")
+    torch = types.ModuleType("torch")
+    torch.bfloat16 = "bf16"
+    used = []
+
+    class Model:
+        @classmethod
+        def from_pretrained(cls, name, **kw):
+            return cls()
+
+        def create_voice_clone_prompt(self, ref_audio, ref_text, x_vector_only_mode):
+            return {"audio": ref_audio, "text": ref_text, "xvec": x_vector_only_mode}
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt, **kw):
+            used.append(voice_clone_prompt)
+            return [np.zeros(240, dtype=np.float32)], 24000
+
+    qwen = types.ModuleType("qwen_tts")
+    qwen.Qwen3TTSModel = Model
+    server = load_server({"torch": torch, "qwen_tts": qwen, "faster_qwen3_tts": None},
+                         VOICES_DIR=str(voice_dir.parent), TTS_DEFAULT_VOICE="v", TTS_BACKEND="qwen-tts",
+                         TTS_VOICE_BANK="1")
+    with TestClient(server.app) as client:
+        r = client.post("/tts", json={"text": S1, "language": "Japanese", "emotion": "happy"})
+        assert r.status_code == 200 and r.headers["x-tts-reference"] == "bank/ja/happy"
+    assert used[-1]["text"] == "やった" and used[-1]["xvec"] is False

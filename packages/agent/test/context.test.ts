@@ -145,6 +145,7 @@ describe("backfill", () => {
     const asked: number[] = [];
     const log: MessageLog = {
       append: async () => undefined,
+      authoredSince: async () => [],
       recent: async (_p, _c, limit) => {
         asked.push(limit);
         return entries;
@@ -194,13 +195,14 @@ describe("reply chains", () => {
     h.say({ ...mention(c, "Owen", "妳覺得呢"), reply_to: ref("p3") });
     await wait(2000);
     expect(history.fetched).toEqual(["p3", "p2", "p1"]);
+    // Each quoted line says how long before the reply it was.
     expect(historyText(mock)).toBe(
-      "> 乙: 第一層\n> 丙: 第二層\n> 丁: 第三層\nOwen(回覆 丁): 妳覺得呢",
+      "> (29 分鐘前) 乙: 第一層\n> (28 分鐘前) 丙: 第二層\n> (27 分鐘前) 丁: 第三層\nOwen(回覆 丁): 妳覺得呢",
     );
     // The quotes stay with the message in later turns.
     h.say(mention(c, "Owen", "還有"));
     await wait(2000);
-    expect(historyText(mock, 1)).toContain("> 丁: 第三層\nOwen(回覆 丁): 妳覺得呢");
+    expect(historyText(mock, 1)).toContain("> (27 分鐘前) 丁: 第三層\nOwen(回覆 丁): 妳覺得呢");
     expect(history.fetched).toHaveLength(3);
   });
 
@@ -222,7 +224,28 @@ describe("reply chains", () => {
       },
     });
     await wait(2000);
-    expect(historyText(mock)).toBe("> 你: 才不要\nOwen(回覆 你): 妳上次說的");
+    // Only what came with the reply: its time is unknown.
+    expect(historyText(mock)).toBe("> (較早) 你: 才不要\nOwen(回覆 你): 妳上次說的");
+  });
+
+  it("a_failed_or_slow_fetch_still_quotes_the_parent_that_came_with_the_reply", async () => {
+    // 2026-11-08 14:22: the fetch failed, so the reply reached her with nothing about 「麥克風忘記關」.
+    const c = channel("c");
+    const history = new FakeHistory();
+    history.fetch = async () => {
+      throw new Error("discord 500");
+    };
+    const mock = new MockProvider("chat").reply("是那句。");
+    const h = await Harness.build("mention-only", noCheck(), mock, null, withHistory(history));
+    h.say({
+      ...mention(c, "Owen", "我回覆的訊息是什麼?"),
+      reply_to: { context: c, id: "mic" },
+      referenced: { author: account("小v"), author_name: "小v", text: "麥克風忘記關" },
+    });
+    await wait(2000);
+    expect(historyText(mock)).toBe(
+      "> (較早) 小v: 麥克風忘記關\nOwen(回覆 小v): 我回覆的訊息是什麼?",
+    );
   });
 
   it("a_parent_already_in_the_session_is_not_fetched", async () => {
@@ -235,7 +258,7 @@ describe("reply chains", () => {
     h.say({ ...incoming(c, "Owen", "我同意"), reply_to: first.id });
     await wait(5000);
     expect(history.fetched).toEqual([]);
-    expect(historyText(mock)).toBe("阿明: 我先說\nOwen(回覆 阿明): 我同意");
+    expect(historyText(mock)).toBe("阿明: 我先說\nOwen(回覆 阿明「我先說」): 我同意");
   });
 });
 

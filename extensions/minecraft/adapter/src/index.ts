@@ -1,6 +1,7 @@
 // Minecraft game adapter extension: connects to the miyoria-bridge mod and
-// exposes it as `game.minecraft.observe` / `game.minecraft.act` tools and
-// `game.minecraft.*` events (docs/ARCHITECTURE.md §12.3–§12.4).
+// exposes it as the task executor of `game.minecraft` (goals started as tasks,
+// `game.minecraft.task.*` events with failure codes) and `game.minecraft.*`
+// events (docs/ARCHITECTURE.md §12.3–§12.4, docs/design/v2-architecture.md §3.8).
 
 import { defineExtension } from "@miyoria/sdk";
 import { MinecraftAdapter } from "./adapter.js";
@@ -8,9 +9,9 @@ import { BridgeClient } from "./bridge.js";
 import { type AdapterConfig, bridgeConfigPath, resolveEndpoint } from "./config.js";
 import { Launcher } from "./launcher.js";
 
-export { MinecraftAdapter, GAME_ID } from "./adapter.js";
+export { MinecraftAdapter, GAME_ID, OBTAIN_STRATEGIES, jobEnd, modFailureCode } from "./adapter.js";
 export { BridgeClient, BridgeError } from "./bridge.js";
-export { ACTIONS, toRequests } from "./actions.js";
+export { ACTIONS, HIDDEN_ACTIONS, failureCode, toRequests } from "./actions.js";
 export { mapEvent } from "./events.js";
 export { compactState, summarize } from "./summary.js";
 export { bridgeConfigPath, defaultMinecraftDir, resolveEndpoint } from "./config.js";

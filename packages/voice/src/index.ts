@@ -8,10 +8,24 @@
 //   playback, with barge-in). It registers `join`, `leave` and `voice consent <on|off>`.
 //
 // Latency measurements are published as `custom` events on `voice.latency` with `stage` =
-// `asr` (`asr_ms`, `transcribe_ms`) or `tts` (`first_audio_ms`); the agent adds `llm`
-// (`first_token_ms`).
+// `asr` (`asr_ms`, `transcribe_ms`), `tts` (`first_audio_ms`) or `e2e` (`speech_end →
+// first_audio_played`, split into `endpoint`, `asr`, `llm_first`, `tts_queue`, `tts_first` and
+// `playback`); the agent adds `llm` (`first_token_ms`).
 
-export { BargeIn } from "./barge.js";
+export {
+  type BargeDecision,
+  type BargeFacts,
+  BargeIn,
+  type BargeOptions,
+  type BargeTarget,
+  type BargeThresholds,
+  type BargeVerdict,
+  type BargeWho,
+  DEFAULT_BARGE_OPTIONS,
+  decideBargeIn,
+  type PlaybackInfo,
+  type SpeakerRole,
+} from "./barge.js";
 export { joinAnnouncement, PATHS, registerCommands, unregisterCommands } from "./commands.js";
 export {
   type BargeInMode,
@@ -29,6 +43,16 @@ export {
   consentKey,
   defaultAllowed,
 } from "./consent.js";
+export {
+  E2E_SEGMENTS,
+  E2eLatency,
+  type E2eMeasure,
+  type E2eReason,
+  type E2eRecord,
+  type E2eSegment,
+  e2eJson,
+} from "./e2e.js";
+export { containment, looksLikeHintEcho, matchCore, SelfEchoGuard } from "./echo.js";
 export { Hearing, type HearingDeps, type StreamHearing, StreamHearingKey } from "./hearing.js";
 export {
   type GoLiveState,
@@ -51,8 +75,22 @@ export {
   WATCH_TOPIC,
 } from "./link/link.js";
 export { VOICE_LINK_PATH, VoiceLinkModule } from "./link/module.js";
-export { Playback, type Stoppable } from "./link/playback.js";
+export {
+  CAP_DUCK,
+  CAP_PAUSE,
+  Playback,
+  type PlaybackControl,
+  type Stoppable,
+} from "./link/playback.js";
 export { VoiceModule } from "./module.js";
+export {
+  BufferedAudio,
+  LinePrefetch,
+  type PrefetchOptions,
+  type PreparedLine,
+  type Producer,
+  type Production,
+} from "./prefetch.js";
 export {
   CLOSE,
   type CoreMessage,
@@ -76,21 +114,29 @@ export {
   WireWatchStateSchema,
 } from "./protocol.js";
 export { DEFAULT_SEGMENTER, Segmenter, type SegmenterConfig, type Utterance } from "./segment.js";
+export { SileroVad, sileroVad } from "./silero.js";
 export {
+  applyAliases,
   cleanTranscript,
+  compileAliases,
   echoesHint,
   isHallucination,
   isPunctuationOnly,
   stripTags,
   toTraditional,
 } from "./text.js";
-export { LATENCY_TOPIC } from "./topics.js";
+export { LATENCY_TOPIC, VOICE_BARGE_IN_TOPIC } from "./topics.js";
+export { HttpTurnJudge, type TurnAnswer, TurnGate, type TurnJudge } from "./turn.js";
 export { BoundedQueue, Semaphore, Watch } from "./util.js";
 export {
+  createVad,
   DEFAULT_ENERGY_VAD,
   EnergyVad,
   type EnergyVadConfig,
   energyDb,
+  registerVadEngine,
   type Vad,
+  type VadFactory,
+  type VadSettings,
   zeroCrossingRate,
 } from "./vad.js";

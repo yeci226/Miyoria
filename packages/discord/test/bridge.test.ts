@@ -78,7 +78,7 @@ afterEach(async () => {
   rig = undefined;
 });
 
-async function boot(selfIds: string[] = []): Promise<Rig> {
+async function boot(selfIds: string[] = [], config: Record<string, unknown> = {}): Promise<Rig> {
   const bus = new EventBus();
   const sup = new Supervisor({ bus });
   const probe = new Probe();
@@ -86,9 +86,15 @@ async function boot(selfIds: string[] = []): Promise<Rig> {
   await sup.startAll();
   const registry = new CommandRegistry();
   const sinks = new PlatformSinks();
-  const config = DiscordConfigSchema.parse({ token: "t", command_guilds: ["77"] });
+  // The gate has its own tests below; the rest of this file is about mapping.
+  const parsed = DiscordConfigSchema.parse({
+    token: "t",
+    command_guilds: ["77"],
+    ambient_text: "tiers",
+    ...config,
+  });
   const histories = new PlatformHistories();
-  const shared = new Shared(config, selfIds, registry, sinks, histories);
+  const shared = new Shared(parsed, selfIds, registry, sinks, histories);
   const fake = fakeClient();
   new GatewayBridge(probe.ctx as ModuleContext, shared).attach(fake.client as unknown as Client);
   const events = bus.subscribe("platform.*");
@@ -363,6 +369,47 @@ describe("GatewayBridge", () => {
         account: { platform: "discord", id: "42" },
       },
     });
+  });
+
+  test("the_default_gate_drops_ambient_chat_but_not_mentions_or_dms", async () => {
+    const r = await boot(["100"], { ambient_text: "allowlist", ambient_channels: ["201"] });
+    r.fake.client.emit(Events.MessageCreate, guildMessage({ id: "ambient" }));
+    r.fake.client.emit(Events.MessageCreate, guildMessage({ id: "listed", channelId: "201" }));
+    r.fake.client.emit(
+      Events.MessageCreate,
+      guildMessage({ id: "mention", mentions: { users: new Map([["100", {}]]) } }),
+    );
+    r.fake.client.emit(
+      Events.MessageCreate,
+      guildMessage({
+        id: "dm",
+        guildId: null,
+        channel: { type: ChannelType.DM, messages: { cache: new Map() } },
+      }),
+    );
+    const seen: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const event = await next(r);
+      if (event.type === "platform_message_created") seen.push(event.data.id.id);
+    }
+    // `ambient` never arrives; the other three do, in order.
+    expect(seen).toEqual(["listed", "mention", "dm"]);
+  });
+
+  test("typing_in_a_channel_she_may_not_follow_is_not_published", async () => {
+    const r = await boot([], { ambient_text: "allowlist", ambient_channels: ["201"] });
+    r.fake.client.emit(Events.TypingStart, {
+      guild: { id: "300" },
+      channel: { id: "200", type: ChannelType.GuildText },
+      user: { id: "42" },
+    });
+    r.fake.client.emit(Events.TypingStart, {
+      guild: { id: "300" },
+      channel: { id: "201", type: ChannelType.GuildText },
+      user: { id: "42" },
+    });
+    const event = await next(r);
+    expect(event.type === "platform_typing" && event.data.context.channel).toBe("201");
   });
 
   test("chat_input_interactions_run_commands", async () => {

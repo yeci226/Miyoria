@@ -82,7 +82,7 @@ export function JsonTree({
           {value.map((v, i) => (
             <li
               key={`${path}/${i}`}
-              className={scalars ? "rounded-md border bg-background px-2 py-0.5 text-[13px]" : undefined}
+              className={scalars ? "rounded-md border bg-well px-2 py-0.5 text-[13px]" : undefined}
             >
               <JsonTree value={v} path={`${path}/${i}`} sources={sources} parent={here} />
             </li>
@@ -116,7 +116,7 @@ export function JsonTree({
 function DocCard({ doc }: { doc: KnowledgeDoc }) {
   const root = doc.sources[""];
   return (
-    <article className="grid gap-3 px-4 py-4" aria-label={`${doc.kind}「${doc.title}」`}>
+    <article className="grid gap-3 py-3" aria-label={`${doc.kind}「${doc.title}」`}>
       <header className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <h4 className="font-medium">{doc.title}</h4>
         <Badge variant="outline">{doc.kind}</Badge>
@@ -169,7 +169,7 @@ function groups(docs: KnowledgeDoc[]): Group[] {
 function DocumentsCard() {
   const knowledge = useKnowledge();
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>
           她整理的資料
@@ -181,16 +181,16 @@ function DocumentsCard() {
       <QueryView query={knowledge} skeleton={<SkeletonRows count={3} />}>
         {(k) =>
           k.documents.length === 0 ? (
-            <EmptyLine className="py-8">她還沒有整理任何資料</EmptyLine>
+            <EmptyLine>她還沒有整理任何資料</EmptyLine>
           ) : (
-            <div className="divide-y">
+            <div className="divide-y divide-line-soft">
               {groups(k.documents).map((g) => (
                 <section key={g.key} aria-label={g.label}>
-                  <h3 className="flex items-baseline gap-2 bg-muted/40 px-4 py-2 text-sm font-medium">
+                  <h3 className="flex items-baseline gap-2 pt-3 pb-1 text-[13px] font-medium">
                     {g.label}
                     <span className="text-xs font-normal text-muted-foreground">{g.kind}</span>
                   </h3>
-                  <div className="divide-y">
+                  <div className="divide-y divide-line-soft">
                     {g.docs.map((d) => (
                       <DocCard key={d.id} doc={d} />
                     ))}
@@ -207,7 +207,7 @@ function DocumentsCard() {
 
 function NoteItem({ n }: { n: ConversationNote }) {
   return (
-    <li className="grid gap-x-6 gap-y-2 px-4 py-4 sm:grid-cols-[10rem_minmax(0,1fr)]">
+    <li className="grid gap-x-6 gap-y-2 py-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px] text-muted-foreground sm:flex-col sm:gap-1">
         <span className="font-medium text-foreground">{n.label ?? contextShort(n.context)}</span>
         <When at={n.updated_at} />
@@ -226,16 +226,16 @@ function NoteItem({ n }: { n: ConversationNote }) {
 function ConversationsCard() {
   const notes = useConversationNotes();
   return (
-    <Card className="overflow-hidden">
+    <Card>
       <CardHeader>
         <CardTitle>對話筆記</CardTitle>
       </CardHeader>
       <QueryView query={notes} skeleton={<SkeletonRows count={2} />}>
         {(list) =>
           list.length === 0 ? (
-            <EmptyLine className="py-6">還沒有整理過任何對話</EmptyLine>
+            <EmptyLine>還沒有整理過任何對話</EmptyLine>
           ) : (
-            <ol className="divide-y" aria-label="對話筆記">
+            <ol className="divide-y divide-line-soft" aria-label="對話筆記">
               {list.map((n) => (
                 <NoteItem key={`${n.context.platform}:${n.context.scope}:${n.context.kind}:${n.context.channel}`} n={n} />
               ))}
@@ -249,7 +249,7 @@ function ConversationsCard() {
 
 export function KnowledgeTab() {
   return (
-    <div className="grid gap-6">
+    <div className="grid gap-(--stage-gap)">
       <DocumentsCard />
       <ConversationsCard />
     </div>

@@ -136,11 +136,11 @@ function HistoryCard({ section, onRestore }: { section: PersonaSectionInfo; onRe
           const sorted = [...list].sort((a, b) => b.version - a.version);
           const latest = sorted[0]?.version;
           return (
-            <ul className="divide-y">
+            <ul className="divide-y divide-line-soft">
               {sorted.map((v) => {
                 const isCurrent = v.version === latest && v.body.trim() === current;
                 return (
-                  <li key={v.version} className="flex items-center gap-3 px-4 py-2.5">
+                  <li key={v.version} className="flex items-center gap-3 py-(--row-y)">
                     <span className="w-10 font-mono text-sm tabular-nums">v{v.version}</span>
                     {isCurrent && <Badge variant="brand">目前</Badge>}
                     <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
@@ -209,7 +209,7 @@ export function PersonaTab() {
     <QueryView query={persona} isEmpty={(d) => d.length === 0} empty="Persona 沒有任何段落">
       {() =>
         current ? (
-          <div className="grid items-start gap-6 md:grid-cols-[13rem_minmax(0,1fr)]">
+          <div className="grid items-start gap-(--stage-gap) md:grid-cols-[13rem_minmax(0,1fr)]">
             <nav aria-label="Persona 段落" className="grid gap-0.5 max-md:grid-cols-2">
               {sections.map((s) => (
                 <button
@@ -218,7 +218,7 @@ export function PersonaTab() {
                   aria-current={s.key === current.key ? "true" : undefined}
                   onClick={() => setSelected(s.key)}
                   className={cn(
-                    "flex h-8 items-center gap-2 rounded-md px-2.5 text-left font-mono text-[13px] text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
+                    "flex h-8 items-center gap-2 rounded-md px-2.5 text-left font-mono text-[13px] text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
                     s.key === current.key && "bg-accent text-foreground",
                   )}
                 >
@@ -227,7 +227,7 @@ export function PersonaTab() {
                 </button>
               ))}
             </nav>
-            <div className="grid min-w-0 gap-6">
+            <div className="grid min-w-0 gap-(--stage-gap)">
               <Card>
                 <CardHeader>
                   <CardTitle>
@@ -248,7 +248,7 @@ export function PersonaTab() {
                       {current.body}
                     </pre>
                   ) : (
-                    <EmptyLine className="py-4">空白</EmptyLine>
+                    <EmptyLine>空白</EmptyLine>
                   )}
                 </CardContent>
               </Card>

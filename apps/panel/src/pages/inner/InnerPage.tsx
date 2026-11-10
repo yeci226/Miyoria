@@ -6,7 +6,9 @@ import { QueryView, SkeletonRows } from "@/components/query-state";
 import { StatusBadge } from "@/components/status";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AffectTab } from "./AffectTab";
 import { FeelingsTab } from "./FeelingsTab";
+import { GoalsTab } from "./GoalsTab";
 import { KnowledgeTab } from "./KnowledgeTab";
 import { ReflectionTab } from "./ReflectionTab";
 import { StateTab } from "./StateTab";
@@ -26,11 +28,12 @@ function HerBadges() {
   return (
     <>
       {live && (
-        <StatusBadge tone="danger" pulse>
+        <StatusBadge tone="brand" pulse>
           直播中
         </StatusBadge>
       )}
       {her.game && <StatusBadge tone="brand">玩 {her.game}</StatusBadge>}
+      {her.singing && <StatusBadge tone="brand">唱 {her.singing}</StatusBadge>}
       {her.voice && <StatusBadge tone="success">在語音「{her.voice_name ?? her.voice.channel}」</StatusBadge>}
       <span className="text-[13px] text-muted-foreground tabular-nums">
         星期{WEEKDAY[w.time.weekday]} {w.time.part_of_day} {w.time.local.slice(11)}
@@ -55,20 +58,26 @@ export function InnerPage() {
   const self = useSelf();
   const world = useWorld();
   return (
-    <Page>
-      <PageHeader title="內心" actions={<HerBadges />} />
-      <Tabs value={tab} onValueChange={(t) => void navigate({ to: "/inner", search: { tab: t as InnerTab }, replace: true })}>
-        <TabsList>
-          {INNER_TABS.map((t) => (
-            <TabsTrigger key={t.tab} value={t.tab}>
-              {t.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+    <Tabs value={tab} onValueChange={(t) => void navigate({ to: "/inner", search: { tab: t as InnerTab }, replace: true })}>
+      <TabsList>
+        {INNER_TABS.map((t) => (
+          <TabsTrigger key={t.tab} value={t.tab}>
+            {t.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      <Page>
+        <PageHeader title="內心" actions={<HerBadges />} />
         <TabsContent value="state">
           <QueryView query={self} skeleton={<Loading />}>
             {(s) => <StateTab self={s} />}
           </QueryView>
+        </TabsContent>
+        <TabsContent value="affect">
+          <AffectTab />
+        </TabsContent>
+        <TabsContent value="goals">
+          <GoalsTab />
         </TabsContent>
         <TabsContent value="feelings">
           <QueryView query={self} skeleton={<Loading />}>
@@ -92,7 +101,7 @@ export function InnerPage() {
             {(w) => <WorldTab world={w} />}
           </QueryView>
         </TabsContent>
-      </Tabs>
-    </Page>
+      </Page>
+    </Tabs>
   );
 }

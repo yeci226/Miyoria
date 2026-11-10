@@ -133,7 +133,12 @@ describe("slash commands", () => {
       ok,
       { autocomplete: { name: () => [] } },
     );
-    const json = toCreateCommands(buildTree(registry.specs(), (p) => registry.groupInfo(p)));
+    // The mapper still honours a Manage Server gate when a group declares one.
+    const groups = (p: readonly string[]) =>
+      p[0] === "admin"
+        ? { description: "admin", guild_only: true, member_permission: "manage_guild" as const }
+        : registry.groupInfo(p);
+    const json = toCreateCommands(buildTree(registry.specs(), groups));
     const byName = new Map(json.map((c) => [c.name, c]));
     expect(byName.get("admin")?.default_member_permissions).toBe("32"); // Manage Server
     expect(byName.get("admin")?.contexts).toEqual([InteractionContextType.Guild]);

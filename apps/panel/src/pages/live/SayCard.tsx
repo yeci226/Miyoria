@@ -113,7 +113,7 @@ export function SayCard() {
         {reason ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <div tabIndex={0} aria-label={reason} className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+              <div tabIndex={0} aria-label={reason} className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 {form}
               </div>
             </TooltipTrigger>

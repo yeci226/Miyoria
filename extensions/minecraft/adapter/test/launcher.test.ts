@@ -180,5 +180,47 @@ describe("launch and quit actions", () => {
     expect(result.ok).toBe(false);
     expect(result.message).toContain("找不到 Prism Launcher");
     expect((await adapter.observe()).state).toMatchObject({ launch: { available: false } });
+    // As a task: refused with `precondition`.
+    const events: Array<{ type: string; code?: string }> = [];
+    void (async () => {
+      for await (const e of adapter.tasks.events()) events.push(e as { type: string; code?: string });
+    })();
+    await adapter.tasks.start({ id: "l1", goal: "launch", args: {}, budget_s: 5 });
+    await waitFor(() => events.some((e) => e.type === "failed"));
+    expect(events.at(-1)).toMatchObject({ type: "failed", code: "precondition" });
+  });
+
+  it("the launch task ends once the game connected and the world it joins loaded", async () => {
+    const { launcher } = setup();
+    let up = false;
+    let inWorld = false;
+    const m = await FakeMod.start();
+    mod = m;
+    m.respond = (req) =>
+      req.type === "observe" && !inWorld ? { ok: false, code: "not_in_game", message: "loading" } : { ok: true, data: {} };
+    bridge = new BridgeClient({
+      endpoint: () => ({ url: up ? m.url : "ws://127.0.0.1:1", token: m.token }),
+      reconnectMinMs: 10,
+      reconnectMaxMs: 20,
+      requestTimeoutMs: 500,
+    });
+    const adapter = new MinecraftAdapter(bridge, { launcher, launchPollMs: 20 });
+    bridge.start();
+    const events: Array<{ type: string; detail?: string }> = [];
+    void (async () => {
+      for await (const e of adapter.tasks.events()) events.push(e as { type: string; detail?: string });
+    })();
+    await adapter.tasks.start({ id: "l1", goal: "launch", args: {}, budget_s: 30 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(events.map((e) => e.type)).toEqual(["started"]);
+    // Connected, still loading the world it asked for: keep waiting.
+    up = true;
+    const b = bridge;
+    await waitFor(() => b.ready);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(events.map((e) => e.type)).toEqual(["started"]);
+    inWorld = true;
+    await waitFor(() => events.some((e) => e.type === "done"));
+    expect(events.at(-1)).toMatchObject({ type: "done", detail: "連上 Minecraft 了" });
   });
 });

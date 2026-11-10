@@ -5,6 +5,8 @@ import type { Config } from "@miyoria/kernel";
 
 /** Every module the core knows about, for `miyoria module list`. */
 export const MODULE_IDS: readonly string[] = [
+  "facts",
+  "moderation",
   "llm",
   "speech",
   "voice.link",
@@ -14,12 +16,14 @@ export const MODULE_IDS: readonly string[] = [
   "commands",
   "auth",
   "actions",
+  "directive",
+  "activity",
   "social",
   "mood",
   "world",
   "self",
   "memory",
-  "initiative",
+  "arbiter",
   "mind",
   "knowledge",
   "conversation",
@@ -33,10 +37,12 @@ export const MODULE_IDS: readonly string[] = [
   "web",
   "mcp",
   "stage.link",
+  "web",
   "sandbox",
   "extensions",
   "platform.discord.bot",
   "recorder",
+  "replay",
   "api",
 ];
 

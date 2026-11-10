@@ -107,7 +107,8 @@ export class ComponentInvocation extends Invocation {
  * What a component handler answers:
  *
  * - `update`: replace the message the control is on (keeps its visibility).
- * - `reply`: send a new message (ephemeral unless the route says otherwise).
+ * - `reply`: send a new message (visible like the command's replies, or ephemeral when the
+ *   route or the reply asks for it).
  * - `modal`: open a modal (only as the first answer).
  */
 export type ComponentResult =
@@ -126,7 +127,10 @@ export interface ComponentRoute<P = readonly string[]> {
   route: string;
   /** Extra node besides the owning command's (e.g. changing a setting the command shows). */
   permission?: string;
-  /** Visibility of `reply` answers. Default `true`. */
+  /**
+   * `true` makes `reply` answers ephemeral even when the command is public. Default: follow the
+   * command's visibility (a private command stays private whatever the route says).
+   */
   ephemeral?: boolean;
   /** The message must still have a live session (else: expired panel). Default `false`. */
   requiresSession?: boolean;

@@ -1,13 +1,19 @@
 // Gateway event handling: messages, typing, readiness, interactions, and presence / voice state /
 // member changes for the `world` module (presence.ts).
 
-import { type CommandRegistry, PanelSessions, ReplySinkKey } from "@miyoria/commands";
+import {
+  type CommandRegistry,
+  PanelSessions,
+  ReplySinkKey,
+  UserResolverKey,
+} from "@miyoria/commands";
 import { errorMessage, getLogger, type ModuleContext } from "@miyoria/kernel";
 import {
   type AccountRef,
   type ContextKind,
   customEvent,
   type JsonValue,
+  ModerationKey,
   type PlatformHistories,
   type PlatformSinks,
   PresencePrivacyKey,
@@ -26,6 +32,7 @@ import {
   Routes,
 } from "discord.js";
 import type { DiscordConfig } from "./config.js";
+import { ambientChannel, messageAllowed } from "./gate.js";
 import { DiscordHistory, type HistoryClientLike } from "./history.js";
 import {
   handleAutocomplete,
@@ -54,8 +61,9 @@ import {
   voiceStateEvent,
   voiceStateUpdate,
 } from "./presence.js";
+import { DiscordUserResolver, type ResolverClientLike } from "./resolver.js";
 import { DiscordSink } from "./sink.js";
-import { runSyncLoop, syncCommands } from "./sync.js";
+import { runSyncLoop, syncRunner } from "./sync.js";
 
 const log = getLogger("discord.handler");
 
@@ -133,6 +141,14 @@ export class GatewayBridge {
     );
     client.on(Events.TypingStart, (typing) =>
       this.guard("typing", async () => {
+        const parent = (typing.channel as { parentId?: string | null }).parentId ?? null;
+        // Typing in a channel she may not follow is not published either.
+        if (
+          typing.guild &&
+          !ambientChannel(this.shared.config, { channel: typing.channel.id, parent })
+        ) {
+          return;
+        }
         const kind = await this.channelKind(
           client,
           typing.guild?.id ?? null,
@@ -311,13 +327,18 @@ export class GatewayBridge {
         data: { platform: PLATFORM, self_account: account(id) },
       });
     }
-    const sink = new DiscordSink(client.rest);
+    const sink = new DiscordSink(client.rest, () => this.ctx.services.get(ModerationKey));
     this.shared.sinks?.register(sink);
     this.shared.histories?.register(
       new DiscordHistory(client as unknown as HistoryClientLike, this.shared.selfIds),
     );
     // Cards outside interactions (the gate's approval requests to the owners).
     this.ctx.provide(ReplySinkKey, sink);
+    // Roles of people named in panel controls (see `resolver.ts`).
+    this.ctx.provide(
+      UserResolverKey,
+      new DiscordUserResolver(client as unknown as ResolverClientLike),
+    );
     this.shared.ready = true;
     for (const guild of client.guilds.cache.values()) {
       this.guard("guild snapshot", () => this.snapshotGuild(guild as unknown as GuildLike));
@@ -329,12 +350,15 @@ export class GatewayBridge {
         runSyncLoop({
           registry,
           signal,
-          sync: (first) =>
-            syncCommands(client.rest, client.application.id, registry, config.command_guilds, {
-              signal,
-              // Once per run: clear the scope not in use (stale duplicates in the list).
-              cleanup: first ? { guilds: [...client.guilds.cache.keys()] } : null,
-            }),
+          sync: syncRunner({
+            rest: client.rest,
+            applicationId: client.application.id,
+            registry,
+            commandGuilds: config.command_guilds,
+            // Once per run the sync clears the scope not in use (stale duplicates).
+            guilds: () => [...client.guilds.cache.keys()],
+            signal,
+          }),
         }),
       );
     }
@@ -346,16 +370,20 @@ export class GatewayBridge {
     if (!hasContent(msg as unknown as MessageLike)) return;
     const kind = await this.channelKind(client, msg.guildId, msg.channelId, msg.channel?.type);
     const parent = await repliedMessage(msg);
-    this.ctx.publish({
-      type: "platform_message_created",
-      data: incomingMessage(
-        msg as unknown as MessageLike,
-        kind,
-        this.shared.selfIds,
-        parent?.author?.id ?? null,
-        quoted(parent),
-      ),
-    });
+    const data = incomingMessage(
+      msg as unknown as MessageLike,
+      kind,
+      this.shared.selfIds,
+      parent?.author?.id ?? null,
+      quoted(parent),
+    );
+    const ids = {
+      channel: msg.channelId,
+      parent: (msg.channel as { parentId?: string | null } | null)?.parentId ?? null,
+    };
+    // Ambient chat in channels she was not given never reaches her (see `gate.ts`).
+    if (!messageAllowed(this.shared.config, data, msg.guildId, ids, this.shared.selfIds)) return;
+    this.ctx.publish({ type: "platform_message_created", data });
   }
 
   /** Channel / thread / DM, from the event itself, a memo, the gateway cache or REST. */

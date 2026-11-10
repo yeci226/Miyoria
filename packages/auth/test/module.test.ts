@@ -184,7 +184,7 @@ describe("auth module", () => {
     });
     const h = await boot(store);
     h.registry().register(
-      commandSpec("probe", "Needs a trusted node", { permission: "tools.web" }),
+      commandSpec("probe", "Needs a trusted node", { permission: "tools.probe" }),
       () => CommandReply.public("ok"),
     );
 

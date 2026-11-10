@@ -88,7 +88,14 @@ describe("tool registry", () => {
     // before start.
     expect(h.sup.services.require(ToolRegistryKey)).toBe(appTools);
     // `channel_activeness` is her capability tool (the gate decides when it is called).
-    expect(appTools.names()).toEqual(["app_tool", "channel_activeness", "early", "react"]);
+    expect(appTools.names()).toEqual([
+      "app_tool",
+      "channel_activeness",
+      "drop_note",
+      "early",
+      "keep_note",
+      "react",
+    ]);
 
     // Tools registered on the app's registry later are offered too.
     appTools.register(new Probe("later"));
@@ -97,7 +104,9 @@ describe("tool registry", () => {
     expect(mock.requests()[0]?.tools?.map((t) => t.name)).toEqual([
       "app_tool",
       "channel_activeness",
+      "drop_note",
       "early",
+      "keep_note",
       "later",
       "react",
     ]);
@@ -110,7 +119,11 @@ describe("tool registry", () => {
 
   it("provides_its_own_registry_without_one_from_the_app", async () => {
     const h = await Harness.create("always", noCheck(), new MockProvider("chat").reply("好"));
-    expect(h.sup.services.require(ToolRegistryKey).names()).toEqual(["react"]);
+    expect(h.sup.services.require(ToolRegistryKey).names()).toEqual([
+      "drop_note",
+      "keep_note",
+      "react",
+    ]);
   });
 });
 
@@ -153,9 +166,10 @@ describe("prompt contributors", () => {
       section("memory", "你記得的事", "Owen 明天要考數學", 10),
     ]);
     const social = new Contributor("social", [section("social", "關係", "Owen 是你的朋友", 0)]);
+    const world = new Contributor("world", [section("world", "周遭", "大家都在線", 0)]);
     const slow = new Contributor("slow", [section("slow", "太慢", "不該出現", 5)], 60_000);
     const broken = new Contributor("broken", [section("broken", "壞掉", "不該出現", 5)], 0, true);
-    for (const c of [memory, social, slow, broken]) registry.register(c);
+    for (const c of [memory, social, world, slow, broken]) registry.register(c);
 
     const c = channel("c");
     h.say(incoming(c, "阿明", "安安"));
@@ -163,28 +177,31 @@ describe("prompt contributors", () => {
     h.drain();
     const before = mock.requests().length;
     h.say(incoming(c, "Owen", "妳還記得我明天要幹嘛嗎"));
-    // Debounce (1.5 s) plus at most the contributor timeout (0.8 s).
-    await wait(1500 + 700);
+    // Debounce (0.8 s) plus at most the contributor timeout (0.8 s).
+    await wait(800 + 700);
     expect(mock.requests().length, "waited for the contributors").toBe(before);
     await wait(200);
     expect(mock.requests().length, "slow contributor skipped").toBe(before + 1);
     await wait(1000);
 
-    // Contributed sections are data blocks in the user-role data message, never system text.
+    // Contributed sections are data blocks in the user-role data message, never system text;
+    // the people present have one renderer, the agent's own (`social` is not repeated).
     const d = data(mock, before);
     expect(
       d.endsWith(
-        "⟦資料 來源=social 標題=關係⟧\nOwen 是你的朋友\n⟦/資料⟧\n\n" +
+        "⟦資料 來源=world 標題=周遭⟧\n大家都在線\n⟦/資料⟧\n\n" +
           "⟦資料 來源=memory 標題=你記得的事⟧\nOwen 明天要考數學\n⟦/資料⟧",
       ),
       d,
     ).toBe(true);
     expect(d).not.toContain("不該出現");
+    expect(d).not.toContain("Owen 是你的朋友");
     expect(situation(mock, before)).not.toContain("Owen 明天要考數學");
 
     const trace = lastTrace(h);
     expect(trace.respond).toBe(true);
-    expect(trace.reasons).toContain("context from: memory, social");
+    expect(trace.reasons).toContain("context from: memory, social, world");
+    expect(trace.reasons).toContain("rendered by the agent: social");
     expect(trace.reasons).toContain("context skipped: broken (failed), slow (timed out)");
 
     // What the contributors saw.
@@ -285,28 +302,29 @@ describe("social signals", () => {
     h.say(mention(c, "rude", "喂"));
     await wait(3000);
     expect(mock.requests().length).toBe(1);
-    expect(data(mock, 0)).toContain("你對 rude 的態度:冷淡");
+    // One line per person, one relationship scale.
+    expect(data(mock, 0)).toContain("⟦資料 來源=people 標題=在場的人⟧\n- rude:很討厭\n⟦/資料⟧");
     let trace = lastTrace(h);
     expect(trace.respond).toBe(true);
-    expect(hasReason(trace, "affinity -50"), trace.reasons.join("; ")).toBe(true);
 
-    // Very low affinity: direct address may be ignored (p 0.4 < roll 0.5).
+    // Affinity no longer multiplies attention (v2 §3.3): very low affinity shapes her tone, not
+    // whether she answers someone who addressed her (blocking someone is the social module's).
     h.say(mention(channel("c2"), "hater", "喂"));
     await wait(3000);
-    expect(mock.requests().length).toBe(1);
+    expect(mock.requests().length).toBe(2);
     trace = lastTrace(h);
-    expect(trace.respond).toBe(false);
-    expect(hasReason(trace, "very low affinity"), trace.reasons.join("; ")).toBe(true);
+    expect(trace.respond, trace.reasons.join("; ")).toBe(true);
+    expect(hasReason(trace, "very low affinity")).toBe(false);
 
     // Friends get a warm tone and their call name.
     h.say(mention(channel("c3"), "Owen", "早"));
     await wait(3000);
-    expect(data(mock, 1)).toContain("你對 Owen 的態度:親近,你都叫對方「歐文」");
+    expect(data(mock, 2)).toContain("- Owen:摯友;你叫他「歐文」");
   });
 
-  it("affinity_scales_ambient_probability", async () => {
-    const mock = new MockProvider("chat").reply("鯨魚最大");
-    const config = { attention: { llm_check: false, cooldown_ms: 0, keywords: ["鯨魚"] } };
+  it("affinity no longer scales the ambient probability (her talkativeness does)", async () => {
+    const mock = new MockProvider("chat").reply("鯨魚最大").reply("鯨魚最大");
+    const config = { attention: { llm_check: false, keywords: ["鯨魚"] } };
     const h = await Harness.build("ambient", config, mock, null, { roll: 0.45 });
     const social = provideSocial(h);
     social.set("friend", 100, false);
@@ -318,9 +336,10 @@ describe("social signals", () => {
     await wait(3000);
     const traces = h.traces();
     expect(traces.length).toBe(2);
-    expect(traces[0]?.respond, traces[0]?.reasons.join("; ")).toBe(false);
+    expect(traces[0]?.respond, traces[0]?.reasons.join("; ")).toBe(true);
     expect(traces[1]?.respond, traces[1]?.reasons.join("; ")).toBe(true);
-    expect(mock.requests().length).toBe(1);
+    expect(traces[0]?.reasons.some((r) => r.startsWith("affinity"))).toBe(false);
+    expect(mock.requests().length).toBe(2);
   });
 });
 
@@ -335,7 +354,7 @@ describe("mood signals", () => {
     });
     h.say(incoming(channel("c"), "Owen", "嗨"));
     await wait(3000);
-    expect(situation(mock, 0)).toContain("- 你現在的狀態:心情不錯、平靜、有點累");
+    expect(situation(mock, 0)).toContain("- 你現在的心情:心情很好、很睏、很平靜");
   });
 });
 
@@ -400,7 +419,7 @@ describe("initiative", () => {
     expect(s).toContain("你想到可以聊的事在參考資料「你想聊的事」裡。");
     expect(data(mock, 0)).toContain("標題=你想聊的事⟧\n問 Owen 考試考得怎樣\n⟦/資料⟧");
     expect(s).not.toContain("問 Owen 考試考得怎樣");
-    expect(data(mock, 0)).toContain("你對 Owen 的態度:親近");
+    expect(data(mock, 0)).toContain("- Owen:好朋友");
     expect(h.sink.sent()).toEqual([["欸,Owen,考試考得怎樣?", "initiative"]]);
     const trace = lastTrace(h);
     expect(trace.respond).toBe(true);

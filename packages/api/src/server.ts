@@ -4,21 +4,35 @@ import { errorMessage, getLogger } from "@miyoria/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
 import { AuthorizerKey } from "@miyoria/types";
 import { Hono } from "hono";
+import { affectRoutes } from "./affect.js";
+import { agencyRoutes } from "./agency.js";
+import { boardRoutes } from "./board.js";
+import { bodyRoutes } from "./body.js";
+import { cardCheckRoutes } from "./card.js";
 import { channelRoutes } from "./channels.js";
 import { controlRoutes } from "./control.js";
 import { coreRoutes } from "./core.js";
 import { dataRoutes } from "./data.js";
+import { directiveRoutes } from "./directives.js";
 import { ApiError, NO_SUCH_ENDPOINT } from "./errors.js";
+import { factRoutes } from "./facts.js";
+import { fortuneRoutes } from "./fortune-routes.js";
 import { innerRoutes } from "./inner.js";
 import { learningRoutes } from "./learning.js";
 import { llmCallRoutes } from "./llmcalls.js";
+import { memberRoutes } from "./member.js";
 import { memoryRoutes } from "./memory.js";
 import { metricsRoutes } from "./metrics.js";
 import { mindRoutes } from "./mind.js";
 import * as oauth from "./oauth.js";
+import { ogRoutes, rewriteHtml } from "./og.js";
 import { opsRoutes } from "./ops.js";
 import { servePanel } from "./panel.js";
 import { peopleRoutes } from "./people.js";
+import { personWalletRoutes } from "./people-wallet.js";
+import { planRoutes } from "./plan.js";
+import { promptRoutes } from "./prompts.js";
+import { clientKey, publicViewRoutes, tooMany } from "./public.js";
 import { roleRoutes } from "./roles.js";
 import { json, type Route } from "./route.js";
 import { sandboxRoutes } from "./sandbox.js";
@@ -29,10 +43,12 @@ import {
   isSafeMethod,
   PANEL_WRITE,
   type Principal,
+  type SessionRecord,
   tokenMatches,
 } from "./session.js";
 import type { ApiContext, ApiEnv, ApiState } from "./state.js";
 import { telemetryRoutes } from "./telemetry.js";
+import { walletRoutes } from "./wallet.js";
 
 const log = getLogger("api.server");
 
@@ -61,7 +77,10 @@ async function authenticate(state: ApiState, c: ApiContext): Promise<Principal> 
     token,
   );
   if (!found) throw unauthorized("session expired or invalid");
-  if (!found.access.panel) throw unauthorized("this account no longer has panel access");
+  // Both have to hold: the session was opened as admin, and the account still has the permission.
+  if (found.record.tier !== "admin" || !found.access.panel) {
+    throw unauthorized("this account no longer has panel access");
+  }
   if (!isSafeMethod(c.req.method)) {
     if (!hasCsrfHeader(c.req.header(CSRF_HEADER))) {
       throw new ApiError(403, `cookie-authenticated changes need the \`${CSRF_HEADER}: 1\` header`);
@@ -73,10 +92,37 @@ async function authenticate(state: ApiState, c: ApiContext): Promise<Principal> 
   return { kind: "session", record: found.record, write: found.access.write };
 }
 
+/**
+ * A member route's caller: any live session, by cookie only. The bearer token is nobody, so it
+ * opens nothing here. Who the session belongs to is all a member route ever learns.
+ */
+async function authenticateMember(state: ApiState, c: ApiContext): Promise<SessionRecord> {
+  const auth = state.auth;
+  const token = auth.oauth ? cookieToken(oauth.requestCookies(c)) : null;
+  if (token === null) throw unauthorized("not logged in");
+  const found = await auth.sessions.lookup(
+    state.optional(SettingsStoreKey),
+    state.optional(AuthorizerKey),
+    token,
+  );
+  if (!found) throw unauthorized("session expired or invalid");
+  if (!isSafeMethod(c.req.method) && !hasCsrfHeader(c.req.header(CSRF_HEADER))) {
+    throw new ApiError(403, `cookie-authenticated changes need the \`${CSRF_HEADER}: 1\` header`);
+  }
+  return found.record;
+}
+
 function publicRoutes(state: ApiState): Route[] {
   const routes: Route[] = [
     { method: "GET", path: "/api/auth/methods", handler: () => json(oauth.methods(state)) },
-    { method: "GET", path: "/api/auth/oauth/login", handler: (c) => oauth.login(state, c) },
+    {
+      method: "GET",
+      path: "/api/auth/oauth/login",
+      handler: (c) => {
+        const wait = state.publicSide.admitLogin(clientKey(c));
+        return wait !== null ? tooMany(wait) : oauth.login(state, c);
+      },
+    },
     { method: "GET", path: "/api/auth/oauth/callback", handler: (c) => oauth.callback(state, c) },
     { method: "POST", path: "/api/auth/logout", handler: (c) => oauth.logout(state, c) },
   ];
@@ -97,16 +143,31 @@ export function routes(state: ApiState, options: AppOptions = {}): Route[] {
   return [
     ...coreRoutes(state),
     ...publicRoutes(state),
+    ...publicViewRoutes(state),
+    ...cardCheckRoutes(state),
+    ...ogRoutes(state),
+    ...boardRoutes(state),
+    ...memberRoutes(state),
+    ...walletRoutes(state),
+    ...fortuneRoutes(state),
+    ...agencyRoutes(state),
     ...sessionRoutes(),
     ...peopleRoutes(state),
+    ...personWalletRoutes(state),
     ...memoryRoutes(state),
     ...roleRoutes(state),
     ...opsRoutes(state),
     ...innerRoutes(state),
+    ...factRoutes(state),
     ...channelRoutes(state),
     ...dataRoutes(state),
     ...sandboxRoutes(state),
     ...mindRoutes(state),
+    ...directiveRoutes(state),
+    ...planRoutes(state),
+    ...bodyRoutes(state),
+    ...affectRoutes(state),
+    ...promptRoutes(state),
     ...learningRoutes(state),
     ...controlRoutes(state),
     ...llmCallRoutes(state),
@@ -122,6 +183,24 @@ function toResponse(error: unknown): Response {
   return ApiError.internal(error).toResponse();
 }
 
+/** A member route's answer: never kept by a cache, and no internal error text in it. */
+async function memberResponse(run: () => Promise<Response>): Promise<Response> {
+  let response: Response;
+  try {
+    response = await run();
+  } catch (error) {
+    if (error instanceof ApiError) response = error.toResponse();
+    else {
+      log.warn({ error: errorMessage(error) }, "member request failed");
+      response = new ApiError(500, "something went wrong").toResponse();
+    }
+  }
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-store");
+  headers.set("x-content-type-options", "nosniff");
+  return new Response(response.body, { status: response.status, headers });
+}
+
 /** Builds the API app for a running `api` module. */
 export function createApp(state: ApiState, options: AppOptions = {}): Hono<ApiEnv> {
   const app = new Hono<ApiEnv>();
@@ -135,6 +214,12 @@ export function createApp(state: ApiState, options: AppOptions = {}): Hono<ApiEn
   for (const [path, list] of byPath) {
     for (const route of list) {
       app.on(route.method, path, async (c) => {
+        if (route.member) {
+          return memberResponse(async () => {
+            c.set("member", await authenticateMember(state, c));
+            return route.handler(c);
+          });
+        }
         try {
           if (!route.public) c.set("principal", await authenticate(state, c));
           return await route.handler(c);
@@ -148,9 +233,11 @@ export function createApp(state: ApiState, options: AppOptions = {}): Hono<ApiEn
       ...new Set(list.flatMap((r) => (r.method === "GET" ? ["GET", "HEAD"] : [r.method]))),
     ];
     const isPublic = list.every((r) => r.public);
+    const isMember = list.every((r) => r.member);
     app.all(path, async (c) => {
       try {
-        if (!isPublic) await authenticate(state, c);
+        if (isMember) await authenticateMember(state, c);
+        else if (!isPublic) await authenticate(state, c);
       } catch (error) {
         return toResponse(error);
       }
@@ -163,7 +250,11 @@ export function createApp(state: ApiState, options: AppOptions = {}): Hono<ApiEn
   app.notFound((c) => {
     const path = new URL(c.req.url).pathname;
     const isApi = path === "/api" || path.startsWith("/api/");
-    if (state.panelDir !== null && !isApi) return servePanel(state.panelDir, c.req.raw);
+    if (state.panelDir !== null && !isApi) {
+      return servePanel(state.panelDir, c.req.raw, (html, request) =>
+        rewriteHtml(state, html, request),
+      );
+    }
     return ApiError.notFound(NO_SUCH_ENDPOINT).toResponse();
   });
   app.onError((error) => toResponse(error));

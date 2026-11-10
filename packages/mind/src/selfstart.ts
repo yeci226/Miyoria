@@ -9,6 +9,9 @@
 //   self-start about the same thing is dropped.
 // * Blocks: an action that failed (`game.start` while the game is not running) is not tried
 //   again until the situation it depends on changes, or `blocked_retry_mins` passed.
+//
+// With the Arbiter running, its ledger is the floor and these are only her own record (the
+// topics nobody picked up); without it they are the fallback floor Plan is shown as limits.
 
 import { type ContextKey, contextKeyString, type RaisedTopic, toTimestamp } from "@miyoria/types";
 
@@ -188,6 +191,32 @@ export class SelfStarts {
     return { ms: Math.max(p.last + gap - now, 0), misses: p.misses };
   }
 
+  /** Places where she has to wait before starting again (`ms` > 0), the longest first. */
+  waits(now: number): { key: string; kind: PlaceKind; ms: number; misses: number }[] {
+    this.resolve(now);
+    const out: { key: string; kind: PlaceKind; ms: number; misses: number }[] = [];
+    for (const [key, p] of this.#places) {
+      const w = this.wait(key, p.kind, now);
+      if (w.ms > 0) out.push({ key, kind: p.kind, ...w });
+    }
+    return out.sort((a, b) => b.ms - a.ms);
+  }
+
+  /** Self-starts since `since` (epoch ms), everywhere. */
+  startsSince(since: number): number {
+    let n = 0;
+    for (const p of this.#places.values()) for (const s of p.starts) if (s.at >= since) n++;
+    return n;
+  }
+
+  /** The most ignored self-starts in a row at any one place. */
+  maxMisses(now: number): number {
+    this.resolve(now);
+    let max = 0;
+    for (const p of this.#places.values()) max = Math.max(max, p.misses);
+    return max;
+  }
+
   /** What she raised at `key` (or anywhere, for `null`) recently that nobody picked up. */
   unanswered(key: string | null, now: number): RaisedTopic[] {
     this.resolve(now);
@@ -243,7 +272,7 @@ export interface Block {
 export interface Situation {
   /** The game she is playing (`null`: none). */
   game: string | null;
-  /** Last time a game adapter published anything (the game is running), or `null`. */
+  /** Last time she saw the game running (the activity snapshot), or `null`. */
   gameSeenAt: number | null;
   /** Her voice channel (`null`: none). */
   voice: string | null;
@@ -277,6 +306,6 @@ export function conditionOf(capability: string, s: Situation): string {
 export function blockLifted(b: Block, s: Situation, now: number, retryMs: number): boolean {
   if (now - b.at >= retryMs) return true;
   if (conditionOf(b.capability, s) !== b.condition) return true;
-  // The game adapter publishes while the game runs: it is available now.
+  // The game came up after it failed: it is available now.
   return b.capability.startsWith("game.") && s.gameSeenAt !== null && s.gameSeenAt > b.at;
 }
