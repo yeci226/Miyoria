@@ -17,6 +17,7 @@ import {
   type JsonValue,
   ModerationKey,
   NOTICE_TOPIC,
+  ParticipationKey,
   type PersonId,
   Principals,
   RelationshipEffectsKey,
@@ -35,6 +36,7 @@ import { EconomyModule } from "../src/module.js";
 import { songPayments } from "../src/songs.js";
 import { giveCapability } from "../src/tools.js";
 import { EconomyError, EconomyKey, GIFT_TOPIC, SCREEN_TOPIC } from "../src/types.js";
+import { Economy2Key } from "../src/v2-types.js";
 
 const DAY = 86_400_000;
 /** 2026-11-08 12:00 local (UTC+8). */
@@ -166,7 +168,8 @@ async function rig(config: Record<string, JsonValue> = {}): Promise<Rig> {
     }),
   );
   const economy = new EconomyService({
-    config: EconomyConfigSchema.parse(config),
+    // Achievement coins are tested in achievements.test.ts; off here so these sums stay exact.
+    config: EconomyConfigSchema.parse({ achievement_cap: 0, ...config }),
     services,
     profile: "p",
     clock: { now: () => clock.at },
@@ -887,6 +890,21 @@ describe("the module", () => {
       expect(registry.get("economy.make_deal")?.tool?.name).toBe("make_deal");
       expect(registry.get("economy.deal_done")?.tool?.name).toBe("deal_done");
       expect(registry.get("economy.cancel_deal")?.tool?.name).toBe("cancel_deal");
+      // Economy 2.0: her tools, and the two services others call.
+      for (const name of [
+        "economy.quests",
+        "economy.draw",
+        "economy.place_bet",
+        "economy.open_prediction",
+        "economy.commission",
+        "economy.deliver_commission",
+        "economy.fund_room",
+        "economy.buy_from_shop",
+      ]) {
+        expect(registry.get(name), name).toBeDefined();
+      }
+      expect(s.require(Economy2Key).currency).toBe("魚幣");
+      expect(s.require(ParticipationKey)).toBeDefined();
       sup.bus.publish("test", {
         type: "platform_message_created",
         data: { author: { account: ALICE, display_name: "Alice", is_bot: false } },

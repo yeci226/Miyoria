@@ -22,6 +22,7 @@ import { type GazeConfig, IdleMotion, MOTION_PARAMS, type MotionConfig } from ".
 import { clampParam, type EmotionConfig, PoseBlender, paramRange } from "./pose.js";
 import type { GazeTarget, GiftExpression } from "./protocol.js";
 import { Random } from "./random.js";
+import { type TouchConfig, type TouchPart, TouchReaction, touchParams } from "./touch.js";
 import type { VtsClient, VtsConfig } from "./vts.js";
 import type { Watch } from "./watch.js";
 
@@ -47,6 +48,7 @@ export interface AvatarLoopConfig {
   blink: BlinkConfig;
   emotion: EmotionConfig;
   gesture: GestureConfig;
+  touch: TouchConfig;
   avatar: AvatarProfile;
 }
 
@@ -66,6 +68,7 @@ export class AvatarLoop {
   readonly #gestures: GestureController;
   readonly #blink: BlinkScheduler;
   readonly #mouth: MouthShaper;
+  readonly #touch: TouchReaction;
   readonly #motion: IdleMotion;
   /** Expression / hotkey requests run in order. */
   readonly #commands = new SerialQueue();
@@ -103,6 +106,7 @@ export class AvatarLoop {
     this.#gestures = new GestureController(config.avatar, config.gesture, random.fork(), now);
     this.#blink = new BlinkScheduler(config.blink, random.fork());
     this.#mouth = new MouthShaper(config.lipsync);
+    this.#touch = new TouchReaction(config.touch);
     this.#motion = new IdleMotion(config.gaze, config.motion, random.fork());
   }
 
@@ -113,6 +117,7 @@ export class AvatarLoop {
     if (c.vts.idle_motion) for (const p of MOTION_PARAMS) names.add(p);
     for (const p of this.#poser.params()) names.add(p);
     if (c.blink.enabled) for (const p of EYE_PARAMS) names.add(p);
+    for (const p of touchParams(c.touch)) names.add(p);
     if (c.avatar.lipsync === "inject") {
       names.add(c.avatar.mouthOpen);
       if (c.avatar.mouthForm !== null) names.add(c.avatar.mouthForm);
@@ -180,8 +185,30 @@ export class AvatarLoop {
     });
   }
 
+  /**
+   * A viewer touched her (`head`, `face` or `body`; `screen` does nothing): a short reaction on
+   * parameters (see touch.ts), and the part's gift expression when one is configured. Touches
+   * close together extend one reaction.
+   */
+  touch(part: TouchPart): void {
+    if (!this.#touch.touch(part, this.#clock.now())) return;
+    const expression = this.#touch.expression();
+    if (expression === null) return;
+    this.gift(expression.name, expression.seconds).catch((error: unknown) =>
+      log.debug({ err: errorMessage(error) }, "cannot show the touch expression"),
+    );
+  }
+
   gaze(target: GazeTarget): void {
     this.#motion.setTarget(target);
+  }
+
+  /**
+   * The beat of the song she sings (`times_ms` from its start, `offset_ms` into it now), applied
+   * `latency_ms` later like her mouth; empty `times_ms` stops it.
+   */
+  beat(times: readonly number[], offsetMs: number): void {
+    this.#later(() => this.#motion.setBeat(times, offsetMs));
   }
 
   #send(commands: VtsCommand[]): void {
@@ -359,6 +386,9 @@ export class AvatarLoop {
       for (const [name, offset] of shaped) {
         values.set(name, (values.get(name) ?? this.#poser.rest(name)) + offset);
       }
+    }
+    for (const [name, offset] of this.#touch.update(dt, now)) {
+      values.set(name, (values.get(name) ?? this.#poser.rest(name)) + offset);
     }
     for (const [name, v] of values) values.set(name, clampParam(name, v));
     return values;

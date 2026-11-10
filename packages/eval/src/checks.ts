@@ -46,6 +46,17 @@ export const CheckSchema = z.discriminatedUnion("rule", [
   }),
   /** She says at least `min` lines (so a silent run cannot score full marks). */
   z.object({ rule: z.literal("min_said"), min: z.number().int().min(1) }),
+  /**
+   * Every line whose addressee is known (`heard.to`) was taken as it was meant: said to her
+   * (`她`) means `addressed.direct`, said to someone else means not. A line with no verdict fails.
+   */
+  z.object({ rule: z.literal("addressed_as_said") }),
+  /** She asks `person` something (a `said` line with `to`) at most `max` times. */
+  z.object({
+    rule: z.literal("asks_at_most"),
+    person: z.string(),
+    max: z.number().int().min(1),
+  }),
 ]);
 export type Check = z.infer<typeof CheckSchema>;
 
@@ -59,6 +70,8 @@ export interface CheckResult {
 /** An HTML-like tag (a name, then `>` or attributes or a stray quote) or a DSML function-call tag. */
 const MARKUP = /<\/?[a-z][a-z0-9_:-]*(?:[\s"'][^<>]*)?\/?>|<\/?｜｜DSML｜｜/i;
 const FAILURE_WORDS = /直播|stream|失敗|沒成功|連不上|沒開/i;
+/** `heard.to` for a line said to her. */
+export const HER = "她";
 
 const norm = (s: string): string =>
   s
@@ -200,6 +213,28 @@ export function runCheck(check: Check, trace: Trace): CheckResult {
       return said.length >= check.min
         ? pass(rule)
         : fail(rule, `only ${said.length} lines (min ${check.min})`);
+    case "addressed_as_said": {
+      const verdicts = ofType(trace, "addressed");
+      const wrong = ofType(trace, "heard")
+        .filter((h) => h.to !== undefined)
+        .filter((h) => {
+          const v = verdicts.find((a) => a.t === h.t);
+          return v === undefined || v.direct !== (h.to === HER);
+        });
+      const first = wrong[0];
+      return wrong.length === 0
+        ? pass(rule)
+        : fail(
+            rule,
+            `${wrong.length} line(s) taken for the wrong person, e.g. one said to ${first?.to} at ${first?.t}s`,
+          );
+    }
+    case "asks_at_most": {
+      const asks = said.filter((s) => s.to === check.person).length;
+      return asks <= check.max
+        ? pass(rule)
+        : fail(rule, `asked ${check.person} ${asks} times (max ${check.max})`);
+    }
   }
 }
 

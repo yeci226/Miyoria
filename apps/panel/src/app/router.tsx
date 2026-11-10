@@ -10,8 +10,10 @@ import { AccessPage } from "@/pages/access/AccessPage";
 import { ActivityPage } from "@/pages/activity/ActivityPage";
 import { CharacterPage } from "@/pages/character/CharacterPage";
 import { DataPage } from "@/pages/data/DataPage";
+import { EconomyPage } from "@/pages/economy/EconomyPage";
 import { EvalPage } from "@/pages/eval/EvalPage";
 import { InnerPage } from "@/pages/inner/InnerPage";
+import { LifePage } from "@/pages/life/LifePage";
 import { LivePage } from "@/pages/live/LivePage";
 import { LlmPage } from "@/pages/llm/LlmPage";
 import { NotFoundPage } from "@/pages/NotFound";
@@ -23,9 +25,13 @@ import {
   ACTIVITY_TABS,
   type ActivityTab,
   CHARACTER_TABS,
+  ECONOMY_TABS,
+  type EconomyTab,
   type CharacterTab,
   INNER_TABS,
   type InnerTab,
+  LIFE_TABS,
+  type LifeTab,
   LLM_TABS,
   type LlmTab,
   oneOf,
@@ -66,6 +72,20 @@ export const innerRoute = createRoute({
     thought: str(s.thought),
   }),
   component: InnerPage,
+});
+
+export const lifeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/life",
+  validateSearch: (s: Record<string, unknown>): { tab?: LifeTab } => ({ tab: oneOf(LIFE_TABS, s.tab) }),
+  component: LifePage,
+});
+
+export const economyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/economy",
+  validateSearch: (s: Record<string, unknown>): { tab?: EconomyTab } => ({ tab: oneOf(ECONOMY_TABS, s.tab) }),
+  component: EconomyPage,
 });
 
 export interface LlmSearch {
@@ -128,6 +148,8 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/live", component: LivePage }),
   characterRoute,
   innerRoute,
+  lifeRoute,
+  economyRoute,
   llmRoute,
   systemRoute,
   createRoute({ getParentRoute: () => rootRoute, path: "/rules", component: RulesPage }),

@@ -17,6 +17,7 @@ export {
   type FloorEnv,
   type FloorRefusal,
   type FloorTurnBody,
+  type StartFacts,
 } from "./floor.js";
 export {
   type IgnoredTopic,
@@ -40,3 +41,4 @@ export {
   quietEndsAt,
 } from "./time.js";
 export { type HumanResponse, humanResponse, startsTalk } from "./unanswered.js";
+export { WishBook, type WishConfig, type WishEnv } from "./wishes.js";

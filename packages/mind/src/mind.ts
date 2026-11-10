@@ -108,6 +108,13 @@ import { rankDesires, type Whereabouts } from "./desire.js";
 import { describeTrigger, type GoalBook, GoalError, goalKey, TriggerWatch } from "./goals.js";
 import type { Journal } from "./journal.js";
 import { fromLedger, type PlanLimits } from "./ledger.js";
+import {
+  activityOfCapability,
+  type LifeSituation,
+  NO_TALLY,
+  overShare,
+} from "./life/activities.js";
+import type { LifeBook } from "./life/log.js";
 import { type BudgetState, CallLog, heartbeatMs, localDay, urgeOf } from "./pace.js";
 import { PresenceStats, renderHabit } from "./presence.js";
 import { type PersonRef, type PlanInput, planMessages, type WakeReason } from "./prompt.js";
@@ -180,6 +187,8 @@ export interface MindDeps {
   goals: GoalBook;
   /** Where her plan state is kept (`null`: memory only). */
   store?: SettingsStore | null;
+  /** What she did today (v4 §8.2: variety, and wants that lead to her own activities). */
+  life?: LifeBook | null;
 }
 
 /** A turn she started herself: what it was about, and whom (for a DM). */
@@ -1149,15 +1158,68 @@ export class MindLoop implements Mind {
     return new Set([...names, CHAT_START, CHAT_DM]);
   }
 
+  /**
+   * Her day as the activity table sees it (v4 §8.2): the hour, her energy, who is around, what
+   * she did today and what the owner's rules and the Arbiter hold back. `null` without a life log.
+   */
+  #lifeSituation(affect: AffectSnapshot | null, capabilities: Set<string>): LifeSituation | null {
+    const life = this.#d.life;
+    if (!life) return null;
+    const now = this.#now();
+    const world = this.#d.services.get(WorldStateKey)?.snapshot() ?? null;
+    const her = this.#herVoice();
+    const humans = (c: { members: { is_self: boolean }[] }) =>
+      c.members.filter((m) => !m.is_self).length;
+    const channels = world?.voice_channels ?? [];
+    const mine = her === null ? undefined : channels.find((c) => c.channel === her.channel);
+    const voicePeople = mine ? humans(mine) : Math.max(0, ...channels.map(humans));
+    const people = (world?.people ?? []).filter(
+      (p) => p.status !== null && p.status !== "offline",
+    ).length;
+    const arbiter = this.#d.services.get(ArbiterKey);
+    const blocked = arbiter?.ledger(null).limits.blocked ?? [];
+    return {
+      now,
+      hour: localDay(now, this.#d.config.utc_offset_minutes).hour,
+      capabilities,
+      energy: affect?.mood.energy ?? 0.5,
+      people,
+      voicePeople,
+      done: life.tally(now),
+      awakeMinutes: life.awakeMinutes(now),
+      gameShare: this.#d.config.game_share,
+      held: (capability) =>
+        arbiter?.held?.(capability) ??
+        blocked.find((b) => b.capability === capability)?.reason ??
+        this.#blocks.get(capability)?.reason ??
+        null,
+      budgetOk: this.#budget() === "ok",
+      doing: this.#doing()?.type ?? null,
+    };
+  }
+
+  /** Why her own Plan may not start `capability` now: its row had its share of today. */
+  #variety(capability: string, now: number): string | null {
+    const life = this.#d.life;
+    const activity = activityOfCapability(capability);
+    if (!life || activity === null) return null;
+    const tally = life.tally(now).get(activity.id) ?? NO_TALLY;
+    const over = overShare(activity, tally, life.awakeMinutes(now), this.#d.config.game_share);
+    return over === null ? null : `variety: ${over}`;
+  }
+
   #desires(affect: AffectSnapshot | null, goals: Goal[], fired: ReadonlySet<string>): Desire[] {
     const cards = this.#d.services.get(AffectStateKey)?.cards() ?? [];
+    const capabilities = this.#capabilities();
+    const life = this.#lifeSituation(affect, capabilities);
     return rankDesires({
+      ...(life === null ? {} : { life }),
       affect,
       cards,
       where: (h) => this.where(h),
       goals,
       fired,
-      capabilities: this.#capabilities(),
+      capabilities,
       activity: this.#doing()?.type ?? null,
       inVoice: this.#herVoice() !== null,
       cared: this.#d.config.cared_attachment,
@@ -1667,7 +1729,7 @@ export class MindLoop implements Mind {
         if (capability === "") problem = "no capability";
         else if (registry?.get(capability) === undefined || NOT_FOR_HER.includes(capability)) {
           problem = "not something she can do";
-        }
+        } else problem = this.#variety(capability, now);
       }
       let context: ContextKey | null = place?.context ?? goal?.context ?? snap.focus;
       if (capability === CHAT_DM) {

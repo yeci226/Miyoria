@@ -17,6 +17,7 @@ export {
   type WorkerJob,
   WorkerJobSchema,
 } from "./client.js";
+export { type ClipDeps, clipStartOf, SingClips, sliceClip } from "./clips.js";
 export { backingOf, listCard, registerCommands } from "./commands.js";
 export {
   defaultSingConfig,
@@ -42,7 +43,7 @@ export {
   type SongPayments,
   SongPaymentsKey,
 } from "./payments.js";
-export { paced, singSong, sleep, songVideoPath } from "./player.js";
+export { paced, singSong, sleep, songBeats, songVideoPath } from "./player.js";
 export { PROMPT_KEY, SingPrompt } from "./prompt.js";
 export {
   BACKING_LABELS,

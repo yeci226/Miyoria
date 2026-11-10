@@ -63,6 +63,45 @@ describe("shapes", () => {
       },
       evidence: { min_overlap: 0.25, max_events: 24, match_window_secs: 10 },
       unknown_origin_factor: 0.8,
+      // v4 §5
+      context_weight: 0.6,
+      person_points: 2,
+      person_point_importance: 0.5,
+      recent: {
+        hours: 6,
+        max_events: 3000,
+        cache_secs: 10,
+        contributors: true,
+        just_now_chars: 1200,
+        talk_entries: 6,
+        quote_chars: 60,
+        coalesce_mins: 10,
+        elsewhere_mins: 30,
+        elsewhere_places: 3,
+        elsewhere_lines: 3,
+        elsewhere_recap_chars: 240,
+        elsewhere_chars: 900,
+        question_hours: 24,
+        answer_hours: 12,
+        hidden_channels: [],
+      },
+      profiles: {
+        max_people: 6,
+        person_chars: 360,
+        points: 5,
+        session_gap_mins: 30,
+        topic_chars: 80,
+      },
+      notebook: {
+        enabled: true,
+        max_pages: 300,
+        page_chars: 4000,
+        path_chars: 60,
+        read_chars: 2000,
+        writes_per_hour: 30,
+        index_chars: 600,
+      },
+      dates: { enabled: true, utc_offset_minutes: 480, met_anniversary: true },
     });
     // Nested sections keep their other defaults.
     expect(memoryConfig({ weights: { vector: 1 } }).weights.text).toBe(0.25);
@@ -74,6 +113,13 @@ describe("shapes", () => {
       dimensions: null,
       timeout_secs: 10,
       batch_size: 32,
+      runtime: "@huggingface/transformers",
+      models_dir: "",
+      allow_download: true,
+      dtype: "q8",
+      threads: 2,
+      query_prefix: null,
+      passage_prefix: null,
     });
     expect(() => MemoryConfigSchema.parse({ guild_scope: "server" })).toThrow();
   });

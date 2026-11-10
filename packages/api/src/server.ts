@@ -19,10 +19,12 @@ import { factRoutes } from "./facts.js";
 import { fortuneRoutes } from "./fortune-routes.js";
 import { innerRoutes } from "./inner.js";
 import { learningRoutes } from "./learning.js";
+import { liveRoutes } from "./live.js";
 import { llmCallRoutes } from "./llmcalls.js";
 import { memberRoutes } from "./member.js";
 import { memoryRoutes } from "./memory.js";
 import { metricsRoutes } from "./metrics.js";
+import { turnMetricsRoutes } from "./metrics-turns.js";
 import { mindRoutes } from "./mind.js";
 import * as oauth from "./oauth.js";
 import { ogRoutes, rewriteHtml } from "./og.js";
@@ -48,6 +50,7 @@ import {
 } from "./session.js";
 import type { ApiContext, ApiEnv, ApiState } from "./state.js";
 import { telemetryRoutes } from "./telemetry.js";
+import { v4Routes } from "./v4-routes.js";
 import { walletRoutes } from "./wallet.js";
 
 const log = getLogger("api.server");
@@ -168,10 +171,13 @@ export function routes(state: ApiState, options: AppOptions = {}): Route[] {
     ...bodyRoutes(state),
     ...affectRoutes(state),
     ...promptRoutes(state),
+    ...turnMetricsRoutes(state),
     ...learningRoutes(state),
     ...controlRoutes(state),
     ...llmCallRoutes(state),
     ...telemetryRoutes(state),
+    ...liveRoutes(state),
+    ...v4Routes(state),
 
     ...metricsRoutes(state, { public: options.metricsPublic ?? false }),
   ];

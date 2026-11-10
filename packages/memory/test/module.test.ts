@@ -162,9 +162,22 @@ describe("module", () => {
     const h = await harness(new MockProvider("sum").reply("{}"), { tick_secs: 1 });
     expect(h.sup.services.get(FollowupSourceKey)).toBeDefined();
     expect(h.sup.services.get(MemoryEngineKey)).toBeInstanceOf(MemoryEngine);
-    expect(h.contributors.all()).toHaveLength(1);
-    expect(h.contributors.all()[0]?.key).toBe("memory");
-    expect(h.tools.names()).toEqual(["recall", "remember"]);
+    // The memory contributor, and the v4 §5 ones (just now, elsewhere, her notebook's index).
+    expect(h.contributors.all().map((c) => c.key)).toEqual([
+      "elsewhere",
+      "just_now",
+      "memory",
+      "notebook",
+    ]);
+    expect(h.tools.names()).toEqual([
+      "forget_date",
+      "notebook_delete",
+      "notebook_read",
+      "notebook_write",
+      "recall",
+      "remember",
+      "remember_date",
+    ]);
     const reg = h.sup.services.require(CommandRegistryKey);
     for (const path of PATHS) {
       const spec = reg.get(path.split(" "));

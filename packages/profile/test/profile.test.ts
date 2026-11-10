@@ -82,7 +82,9 @@ describe("Profile", () => {
       );
       expect(p.ownIdentity()).toContain("本名是 Miyoria");
       expect(p.ownIdentity()).toContain("「T」");
-      expect(ownIdentity("Miyoria")).not.toContain("角色設定是");
+      expect(ownIdentity("Miyoria")).not.toContain("「Miyoria」");
+      // Her names as a fact, not a role she plays (and no 「角色設定」 for her to repeat: leak.ts).
+      expect(ownIdentity("T")).not.toMatch(/演|角色設定/);
       p.setSection("a", "A2");
       p.setSection("c", "C");
       expect(p.sections.map((s) => s.body)).toEqual(["B body", "A2", "C"]);

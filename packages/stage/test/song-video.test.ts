@@ -232,6 +232,46 @@ describe("song cues to stage messages", () => {
     expect(hub.initial().some((m) => m.includes("notice"))).toBe(false);
   });
 
+  it("sends the beat at the start, stops it at the end and resumes it for a new node", () => {
+    let now = 5_000;
+    const f = new Forwarder(false, { now: () => now });
+    const beats = { bpm: 120, times_ms: [500, 1000, 1500] };
+    const out = f.onEvent(started({ beats }));
+    expect(out).toStrictEqual([
+      { type: "speaking", state: "started" },
+      { type: "beat", song: "yt-abc", bpm: 120, times_ms: [500, 1000, 1500], offset_ms: 0 },
+    ]);
+    now += 1_200;
+    expect(f.resumeBeat()).toMatchObject({ type: "beat", offset_ms: 1_200 });
+    const end = f.onEvent(
+      customEvent(SONG_TOPIC, { state: "ended", song: "yt-abc", outcome: "finished" }),
+    );
+    expect(end.at(-1)).toStrictEqual({
+      type: "beat",
+      song: "yt-abc",
+      bpm: 0,
+      times_ms: [],
+      offset_ms: 0,
+    });
+    expect(f.resumeBeat()).toBeNull();
+    expect(
+      parseCoreMessage({ type: "beat", song: "s", bpm: 98.5, times_ms: [1, 2], offset_ms: 3 }),
+    ).toStrictEqual({ type: "beat", song: "s", bpm: 98.5, times_ms: [1, 2], offset_ms: 3 });
+  });
+
+  it("parses beats on a cue: sorted, finite and capped", () => {
+    const cue = parseSongCue({
+      state: "started",
+      song: "s",
+      title: "t",
+      beats: { bpm: 100, times_ms: [600, 100, 600, -5, "x", 1200.4] },
+    });
+    expect(cue).toMatchObject({ beats: { bpm: 100, times_ms: [600, 1200] } });
+    expect(
+      parseSongCue({ state: "started", song: "s", title: "t", beats: { bpm: 0, times_ms: [1] } }),
+    ).not.toHaveProperty("beats");
+  });
+
   it("songs without a video send no video messages", () => {
     const f = new Forwarder(false);
     expect(f.onEvent(started()).map((m: CoreMessage) => m.type)).toEqual(["speaking"]);

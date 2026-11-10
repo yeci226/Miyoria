@@ -11,13 +11,16 @@ import {
 import {
   type PromptContributors,
   PromptContributorsKey,
+  SongClipsKey,
   SpeechPauseKey,
   serviceKey,
   TaskSteerKey,
   VoiceFloorKey,
+  VoicePlayerKey,
 } from "@miyoria/types";
 import { singCapabilities } from "./actions.js";
 import { HttpSingWorker, type SingWorker } from "./client.js";
+import { SingClips } from "./clips.js";
 import { registerCommands } from "./commands.js";
 import { SingConfigSchema } from "./config.js";
 import { PROMPT_KEY, SingPrompt } from "./prompt.js";
@@ -28,6 +31,7 @@ export const SingerKey = serviceKey<Singer>("Singer");
 
 interface Running {
   singer: Singer;
+  clips: SingClips | null;
   worker: SingWorker;
   commands: CommandMount;
   prompts: PromptContributors | null;
@@ -42,6 +46,9 @@ interface Running {
  * to her mind, plays them through the voice node (`VoicePlayerKey`) with lyrics cues and the
  * vocal stem as the lip-sync track, and holds the voice channel while a song plays
  * (`VoiceFloorKey`).
+ *
+ * Also provides `SongClips` (`clips.ts`): short pieces of the songs she covered, played in voice
+ * for the party game that guesses songs without being her singing.
  *
  * Registers `sing.request` / `sing.play` / `sing.stop` (tools `sing_request` / `sing_start` /
  * `sing_stop`), `/queue song ...` and the prompt section `sing`; sings `[modules.queue]` items
@@ -99,6 +106,21 @@ export class SingModule implements Module {
     ctx.provide(SingerKey, singer);
     ctx.provide(VoiceFloorKey, singer);
     ctx.provide(SpeechPauseKey, singer);
+    let clips: SingClips | null = null;
+    if (cfg.clips) {
+      clips = new SingClips({
+        cfg,
+        clock: ctx.clock,
+        worker,
+        voice: () => ctx.services.get(VoicePlayerKey) ?? null,
+        entries: () => singer.list.all(),
+        waitQuiet: (guild, expectMs, signal) => singer.waitQuiet(guild, null, expectMs, signal),
+        clipping: (guild, delta) => singer.clipping(guild, delta),
+        singing: () => singer.playing() !== null,
+      });
+      ctx.provide(SongClipsKey, clips);
+      ctx.spawn("clips", (signal) => (clips as SingClips).run(signal));
+    }
 
     const events = ctx.subscribe([
       "voice.joined",
@@ -128,7 +150,7 @@ export class SingModule implements Module {
           },
         }),
       }) ?? null;
-    this.#running = { singer, worker, commands, prompts, capabilities, unroute };
+    this.#running = { singer, clips, worker, commands, prompts, capabilities, unroute };
   }
 
   async health(): Promise<Health> {

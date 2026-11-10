@@ -29,6 +29,17 @@ import {
   versionArgs,
 } from "./args.js";
 import type { SandboxConfig } from "./config.js";
+import {
+  egressNetworkName,
+  egressProxyArgs,
+  egressProxyName,
+  egressReadyArgs,
+  networkConnectArgs,
+  networkCreateArgs,
+  networkInspectArgs,
+  networkRemoveArgs,
+  proxyEnv,
+} from "./egress.js";
 import { checkProfileId } from "./paths.js";
 import { type PoolStats, type Standby, WarmPool } from "./pool.js";
 import type { DockerRunner, ExecOptions, ExecResult } from "./runner.js";
@@ -63,6 +74,7 @@ import {
   writeInputs,
   writeProgram,
 } from "./workspace.js";
+import { PersistentWorkspace, type Removed } from "./workspace-store.js";
 
 const log = getLogger("sandbox");
 
@@ -77,6 +89,9 @@ const CONTROL_OUTPUT_BYTES = 16 * 1024;
 /** Sessions that closed on their own, remembered by name until she is told. */
 const MAX_TOMBSTONES = 32;
 const MIB = 1024 * 1024;
+/** How often and how long `#startEgress` waits for the proxy to listen. */
+const EGRESS_READY_TRIES = 20;
+const EGRESS_READY_WAIT_MS = 250;
 
 /** A `docker exec` failure of the CLI or the daemon (not of the program). */
 const DAEMON_ERROR =
@@ -170,7 +185,7 @@ interface Launch {
   standby?: boolean;
 }
 
-type Validated = Required<Omit<RunRequest, "network">>;
+type Validated = Required<Omit<RunRequest, "network">> & { network: "none" | "allow" };
 type Executed = Omit<RunResult, "files_out" | "files_out_truncated" | "session">;
 
 /** One of her named sessions. */
@@ -206,6 +221,7 @@ interface Session {
  */
 export class DockerSandbox implements Sandbox {
   readonly tools: ToolsWorkspace;
+  readonly workspace: PersistentWorkspace | null;
   readonly instance: string;
   readonly #config: SandboxConfig;
   readonly #root: string;
@@ -226,6 +242,10 @@ export class DockerSandbox implements Sandbox {
   /** Sessions that closed on their own, by name, until she uses the name again. */
   readonly #tombstones = new Map<string, SessionCloseReason>();
   #sweep: ReturnType<typeof setInterval> | null = null;
+  /** The egress proxy is up (checked again before each use). */
+  #egressUp = false;
+  #egressTouched = false;
+  #egressStart: Promise<void> | null = null;
   #health: SandboxHealth = {
     available: false,
     server_version: null,
@@ -252,6 +272,19 @@ export class DockerSandbox implements Sandbox {
       maxScripts: config.max_scripts,
       maxScriptBytes: config.caps.max_code_bytes,
     });
+    const ws = config.workspace;
+    this.workspace = ws.enabled
+      ? new PersistentWorkspace(
+          join(this.#root, "profiles", profile, "workspace"),
+          {
+            maxBytes: ws.max_mb * MIB,
+            maxFiles: ws.max_files,
+            maxFileBytes: ws.max_file_kb * 1024,
+          },
+          // Outside the directory a container can write: the approvals of her scripts.
+          join(this.#root, "profiles", profile, "workspace-scripts.json"),
+        )
+      : null;
     this.#sessionsDir = sessionsDir(this.#root, profile);
     this.#pool = new WarmPool({
       size: config.pool_size,
@@ -263,6 +296,10 @@ export class DockerSandbox implements Sandbox {
 
   get root(): string {
     return this.#root;
+  }
+
+  get networkAllow(): readonly string[] {
+    return this.#config.network.allow;
   }
 
   /** The container user (`uid:gid`). */
@@ -329,6 +366,74 @@ export class DockerSandbox implements Sandbox {
   }
 
   /**
+   * Makes sure the egress network and its proxy are up and returns the network's name (see
+   * `egress.ts`). Concurrent callers share one start; a proxy that died is started again.
+   */
+  async #ensureEgress(signal: AbortSignal): Promise<string> {
+    if (this.#egressStart === null) {
+      this.#egressStart = this.#startEgress(signal).finally(() => {
+        this.#egressStart = null;
+      });
+    }
+    await this.#egressStart;
+    return egressNetworkName(this.instance);
+  }
+
+  async #startEgress(signal: AbortSignal): Promise<void> {
+    const network = egressNetworkName(this.instance);
+    const proxy = egressProxyName(this.instance);
+    if (this.#egressUp && (await this.#state(proxy)) === "running") return;
+    this.#egressUp = false;
+    this.#egressTouched = true;
+    await this.ensureImage("node", signal);
+    const fail = (what: string, result: ExecResult): SandboxError =>
+      new SandboxError("docker_failed", `egress proxy: cannot ${what}: ${why(result)}`);
+    const inspected = await this.#control(networkInspectArgs(network), signal);
+    if (inspected.exit_code !== 0) {
+      const created = await this.#control(networkCreateArgs(network, this.instance), signal);
+      if (created.exit_code !== 0 || created.error !== null) {
+        throw fail("create the network", created);
+      }
+    }
+    // A leftover of the same name (stopped, or from before a Docker restart) would block the start.
+    await this.#control(removeArgs([proxy]), signal).catch(() => undefined);
+    const started = await this.#control(
+      egressProxyArgs({
+        name: proxy,
+        instance: this.instance,
+        image: this.image("node"),
+        network: this.#config.network,
+      }),
+      signal,
+      START_TIMEOUT_MS,
+    );
+    if (started.exit_code !== 0 || started.error !== null) throw fail("start the proxy", started);
+    const connected = await this.#control(networkConnectArgs(network, proxy), signal);
+    if (connected.exit_code !== 0 || connected.error !== null) {
+      await this.#control(removeArgs([proxy])).catch(() => undefined);
+      throw fail("connect the proxy", connected);
+    }
+    const ready = egressReadyArgs(proxy, this.#config.network.proxy_port);
+    for (let attempt = 0; attempt < EGRESS_READY_TRIES; attempt++) {
+      const probe = await this.#control(ready, signal);
+      if (probe.exit_code === 0 && probe.error === null) {
+        this.#egressUp = true;
+        return;
+      }
+      await sleep(EGRESS_READY_WAIT_MS, signal);
+    }
+    await this.#control(removeArgs([proxy])).catch(() => undefined);
+    throw new SandboxError("docker_failed", "egress proxy: it did not start listening");
+  }
+
+  /** Removes the proxy and the egress network (leftovers, or at shutdown). */
+  async #teardownEgress(): Promise<void> {
+    this.#egressUp = false;
+    await this.#control(removeArgs([egressProxyName(this.instance)])).catch(() => undefined);
+    await this.#control(networkRemoveArgs(egressNetworkName(this.instance))).catch(() => undefined);
+  }
+
+  /**
    * Removes containers of this instance left over from an earlier process (crash, kill -9),
    * pooled and session containers included. Call it before `warm`. Returns how many were removed.
    */
@@ -340,6 +445,10 @@ export class DockerSandbox implements Sandbox {
       .filter((id) => /^[0-9a-f]{12,64}$/.test(id));
     if (ids.length === 0) return 0;
     const removed = await this.#control(removeArgs(ids), signal);
+    // A leftover egress proxy goes with them; its network can go once nothing is on it.
+    await this.#control(networkRemoveArgs(egressNetworkName(this.instance)), signal).catch(
+      () => undefined,
+    );
     if (removed.exit_code === 0)
       log.info({ count: ids.length }, "removed leftover sandbox containers");
     else
@@ -434,11 +543,25 @@ export class DockerSandbox implements Sandbox {
     }
     const r = parsed.data;
     const caps = this.#config.caps;
+    const configured = this.#config.network.allow;
     if (r.network !== undefined && r.network !== "none") {
-      throw new SandboxError(
-        "network_unsupported",
-        "network allowlists are not supported yet; runs have no network",
-      );
+      if (configured.length === 0) {
+        throw new SandboxError(
+          "network_unsupported",
+          "no network allowlist is configured ([modules.sandbox.network] allow); runs have no network",
+        );
+      }
+      const unknown = r.network.allow.filter((host) => !configured.includes(host.toLowerCase()));
+      if (unknown.length > 0) {
+        throw new SandboxError(
+          "invalid_request",
+          `hosts not in the configured allowlist: ${unknown.join(", ")}`,
+        );
+      }
+    }
+    const wantsNetwork = r.network !== undefined && r.network !== "none";
+    if (r.mount_workspace && this.workspace === null) {
+      throw new SandboxError("invalid_request", "the workspace is turned off");
     }
     if (Buffer.byteLength(r.code, "utf8") > caps.max_code_bytes) {
       throw new SandboxError("invalid_request", `code is over ${caps.max_code_bytes} bytes`);
@@ -458,7 +581,18 @@ export class DockerSandbox implements Sandbox {
     if (session !== FRESH && r.mount_tools) {
       throw new SandboxError("invalid_request", "sessions do not mount /tools; use a fresh run");
     }
+    if (session !== FRESH && r.mount_workspace) {
+      throw new SandboxError(
+        "invalid_request",
+        "sessions do not mount /workspace; use a fresh run",
+      );
+    }
+    if (session !== FRESH && wantsNetwork) {
+      throw new SandboxError("invalid_request", "sessions have no network; use a fresh run");
+    }
     return {
+      network: wantsNetwork ? "allow" : "none",
+      mount_workspace: r.mount_workspace ?? false,
       language: r.language,
       code: r.code,
       files: r.files ?? [],
@@ -481,8 +615,9 @@ export class DockerSandbox implements Sandbox {
     const release = await this.#slot(signal);
     try {
       await this.ensureImage(r.language, signal);
-      // The pool's containers mount no tools workspace.
-      const pooled = r.mount_tools ? null : this.#pool.take(r.language);
+      // The pool's containers mount no tools or workspace and have no network.
+      const plain = !r.mount_tools && !r.mount_workspace && r.network === "none";
+      const pooled = plain ? this.#pool.take(r.language) : null;
       if (pooled) {
         try {
           return await this.#runPooled(pooled, r, signal);
@@ -578,6 +713,21 @@ export class DockerSandbox implements Sandbox {
       await writeProgram(dirs.codeDir, r.language, r.code);
       const inputs = await writeInputs(dirs.workDir, r.files, this.#config.caps);
       const toolsDir = r.mount_tools ? await this.tools.ensure() : null;
+      const workspace = r.mount_workspace ? this.workspace : null;
+      let workspaceDir: string | null = null;
+      let before: Map<string, string> = new Map();
+      if (workspace) {
+        workspaceDir = await workspace.ensure();
+        const usage = await workspace.usage();
+        if (usage.overflow) {
+          throw new SandboxError(
+            "limit",
+            "the workspace has too many entries to mount; delete some files first",
+          );
+        }
+        before = await workspace.snapshot();
+      }
+      const network = r.network === "allow" ? await this.#ensureEgress(signal) : null;
       const name = containerName(runId);
       const args = buildRunArgs({
         name,
@@ -586,23 +736,51 @@ export class DockerSandbox implements Sandbox {
         workDir: dirs.workDir,
         codeDir: dirs.codeDir,
         toolsDir,
+        workspaceDir,
+        ...(network === null ? {} : { network }),
         user: this.#user,
         limits: this.#config.limits,
         command: entryCommand(r.language),
-        env: CONTAINER_ENV,
+        env:
+          network === null
+            ? CONTAINER_ENV
+            : { ...CONTAINER_ENV, ...proxyEnv(this.#config.network.proxy_port) },
       });
-      const result = await this.#execute(
-        runId,
-        r,
-        {
-          start: (options) => this.#runner.exec(args, options),
-          kill: () => this.#control(killArgs(name)),
-          hung: () => this.#control(removeArgs([name])),
-          container: null,
-        },
-        signal,
-      );
-      return await this.#finishRun(result, dirs.workDir, inputs);
+      const state: { removed?: Removed[] } = {};
+      const enforce = async (): Promise<void> => {
+        // Whatever happened to the run, the container may have written in the workspace.
+        if (!workspace) return;
+        const removed = await workspace.enforce(before).catch((error: unknown) => {
+          log.warn({ err: errorMessage(error) }, "could not check the workspace after a run");
+          return undefined;
+        });
+        if (removed === undefined) return;
+        state.removed = removed;
+        if (removed.length > 0) {
+          this.#publish("sandbox.workspace.enforced", { run_id: runId, removed: removed.length });
+        }
+      };
+      try {
+        const result = await this.#execute(
+          runId,
+          r,
+          {
+            start: (options) => this.#runner.exec(args, options),
+            kill: () => this.#control(killArgs(name)),
+            hung: () => this.#control(removeArgs([name])),
+            container: null,
+          },
+          signal,
+        );
+        await enforce();
+        const finished = await this.#finishRun(result, dirs.workDir, inputs);
+        return state.removed === undefined
+          ? finished
+          : { ...finished, workspace_removed: state.removed };
+      } catch (error) {
+        await enforce();
+        throw error;
+      }
     } finally {
       await this.#releaseRunDirs(runId, dirs);
     }
@@ -1228,6 +1406,7 @@ export class DockerSandbox implements Sandbox {
       this.#pool.close(),
       ...sessions.map((session) => this.#end(session, "shutdown", false)),
     ]);
+    if (this.#egressTouched) await this.#teardownEgress();
     if (this.#sweep !== null) clearInterval(this.#sweep);
     this.#sweep = null;
   }

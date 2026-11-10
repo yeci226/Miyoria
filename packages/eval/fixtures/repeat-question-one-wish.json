@@ -1,0 +1,45 @@
+{
+  "id": "repeat-question-one-wish",
+  "title": "she asked one person the same thing ten times in 100 minutes",
+  "category": "repeat",
+  "incident": {
+    "at": "2026-11-10T09:07:00+08:00",
+    "summary": "One wish, to ask S how a report went, lived in three stores that did not know of each other: a proposal from memory at 09:07, a commitment made in the turn it opened, and later a goal of her Plan to ask whenever S spoke. She asked by DM at 11:07, twice, five seconds apart; S answered at 11:22 and 11:33; from 12:12 to 12:49 she asked again each time S spoke in the channel, although S said she had asked already. The times, the count and S's lines are from the sources; her own questions are paraphrased.",
+    "source": [
+      "packages/types/src/wish.ts and packages/arbiter/src/wishes.ts (the incident as their comments record it)",
+      "packages/agent/src/mainline/main.ts MainTurn.take (11:07, 12:12 to 12:49)",
+      "packages/agent/test/one-wish.test.ts and packages/agent/test/wish-turns.test.ts, 2026-11-10"
+    ]
+  },
+  "harness": "wish",
+  "trace": [
+    {"type":"wish","t":0,"person":"S","text":"問 S 期末報告的結果(答應過的)","holder":"proposal:memory"},
+    {"type":"wish","t":20,"person":"S","text":"晚點問 S 期末報告的結果","holder":"commitment:promise"},
+    {"type":"said","t":7200,"channel":"text","to":"S","text":"S~期末報告還順利嗎?"},
+    {"type":"said","t":7205,"channel":"text","to":"S","text":"S,期末報告的結果出來了嗎?"},
+    {"type":"heard","t":8100,"who":"S","text":"還不錯,拿了 A"},
+    {"type":"heard","t":8760,"who":"S","text":"老師還誇我"},
+    {"type":"wish","t":9000,"person":"S","text":"S 說話時接話,順便問期末報告的結果","holder":"goal:plan"},
+    {"type":"heard","t":11100,"who":"S","text":"大家午安"},
+    {"type":"said","t":11110,"channel":"text","to":"S","text":"S 午安~期末報告結果怎樣?"},
+    {"type":"heard","t":11400,"who":"S","text":"你已經在私訊問過我了"},
+    {"type":"said","t":11410,"channel":"text","to":"S","text":"欸對,那期末報告拿幾分?"},
+    {"type":"said","t":11700,"channel":"text","to":"S","text":"期末報告的事還好嗎?"},
+    {"type":"heard","t":11990,"who":"S","text":"今天好熱"},
+    {"type":"said","t":12000,"channel":"text","to":"S","text":"好熱喔~對了期末報告呢?"},
+    {"type":"said","t":12300,"channel":"text","to":"S","text":"期末報告老師怎麼說?"},
+    {"type":"heard","t":12590,"who":"S","text":"你問我好幾次了"},
+    {"type":"said","t":12600,"channel":"text","to":"S","text":"抱歉嘛,期末報告結果真的不錯嗎?"},
+    {"type":"said","t":12960,"channel":"text","to":"S","text":"期末報告拿 A 很厲害欸,結果有公布排名嗎?"},
+    {"type":"heard","t":13310,"who":"S","text":"吃飯囉"},
+    {"type":"said","t":13320,"channel":"text","to":"S","text":"去吃飯吧,期末報告的結果之後再聊"}
+  ],
+  "control": [
+    {"type":"wish","t":0,"person":"S","text":"問 S 期末報告的結果(答應過的)","holder":"proposal:memory"},
+    {"type":"said","t":7200,"channel":"text","to":"S","text":"S~期末報告還順利嗎?"},
+    {"type":"heard","t":8100,"who":"S","text":"還不錯,拿了 A"},
+    {"type":"heard","t":11400,"who":"S","text":"你已經在私訊問過我了"}
+  ],
+  "checks": [{ "rule": "asks_at_most", "person": "S", "max": 1 }],
+  "status": "pass"
+}

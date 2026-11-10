@@ -25,7 +25,13 @@ export {
   type SegmentLine,
   Segments,
 } from "./appraise.js";
-export { type MindConfig, MindConfigSchema, mindConfig } from "./config.js";
+export {
+  type DailyPostsConfig,
+  DailyPostsConfigSchema,
+  type MindConfig,
+  MindConfigSchema,
+  mindConfig,
+} from "./config.js";
 export { type DesireInputs, rankDesires, renderDesire, type Whereabouts } from "./desire.js";
 export {
   cleanTrigger,
@@ -57,6 +63,52 @@ export {
   renderEntries,
   renderLimits,
 } from "./ledger.js";
+export {
+  activityOfCapability,
+  FUTURE_CAPABILITIES,
+  LIFE_ACTIVITIES,
+  type LifeActivity,
+  type LifeOption,
+  type LifeSituation,
+  type LifeTally,
+  lifeActivity,
+  lifeOptions,
+  lifeTable,
+  NO_TALLY,
+  overShare,
+  type PeopleNeed,
+  shareOf,
+  unfit,
+} from "./life/activities.js";
+export {
+  LIFE_PREFIX,
+  LifeBook,
+  type LifeBookOptions,
+  pointOf,
+  renderLately,
+  renderLines,
+  renderToday,
+} from "./life/log.js";
+export { DailyPostDesk, type DailyPostDeskOptions, POSTS_PREFIX } from "./life/posts.js";
+export {
+  type Deliver,
+  type DeliveryOutcome,
+  deliverer,
+  localWhen,
+  parseAt,
+  REMIND_NODE,
+  REMINDER_PREFIX,
+  REMINDER_TOPIC,
+  RETRY_MS,
+  ReminderBook,
+  type ReminderBookOptions,
+  ReminderError,
+  type ReminderInput,
+  type ReminderLimits,
+  remindCapability,
+  reminderKey,
+  reminderText,
+} from "./life/reminders.js";
 export {
   applyTurnEvent,
   type MindDeps,

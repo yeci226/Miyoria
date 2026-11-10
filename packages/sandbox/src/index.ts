@@ -31,6 +31,7 @@ export {
   TOOLS_DIR,
   versionArgs,
   WORK_DIR,
+  WORKSPACE_DIR,
 } from "./args.js";
 export {
   CODE_RUN,
@@ -41,8 +42,15 @@ export {
   CodeSessionArgsSchema,
   summarizeRun,
   TOOL_PROPOSE,
+  WORKSPACE_DELETE,
+  WORKSPACE_LIST,
+  WORKSPACE_READ,
+  WORKSPACE_RUN,
+  WORKSPACE_SAVE_SCRIPT,
+  WORKSPACE_WRITE,
 } from "./capabilities.js";
 export {
+  ALLOWED_HOST,
   defaultSandboxConfig,
   IMAGE_REF,
   type SandboxCaps,
@@ -55,9 +63,26 @@ export {
   SandboxImagesSchema,
   type SandboxLimits,
   SandboxLimitsSchema,
+  type SandboxNetwork,
+  SandboxNetworkSchema,
   type SandboxSessions,
   SandboxSessionsSchema,
+  type SandboxWorkspace,
+  SandboxWorkspaceSchema,
 } from "./config.js";
+export {
+  EGRESS_ALIAS,
+  EGRESS_PROGRAM,
+  egressNetworkName,
+  egressProxyArgs,
+  egressProxyName,
+  egressReadyArgs,
+  networkConnectArgs,
+  networkCreateArgs,
+  networkInspectArgs,
+  networkRemoveArgs,
+  proxyEnv,
+} from "./egress.js";
 export { EXTRACT_PROGRAM } from "./extract.js";
 export {
   allowedHost,
@@ -71,9 +96,15 @@ export {
   SandboxFileReader,
 } from "./files.js";
 export {
+  formatRun,
+  layoutRun,
+  OUTPUTS_DIR,
+  type RenderOptions,
+  renderRun,
+} from "./format.js";
+export {
   codeRunCapability,
   codeSessionCapability,
-  formatRun,
   NODE_CODE_RUN,
   NODE_PROPOSED_PREFIX,
   NODE_TOOL_PROPOSE,
@@ -164,3 +195,20 @@ export {
   walkWork,
   writeInputs,
 } from "./workspace.js";
+export {
+  NODE_WORKSPACE,
+  type WorkspaceGateOptions,
+  workspaceFileCapabilities,
+  workspaceRunCapability,
+  workspaceSaveScriptCapability,
+} from "./workspace-gate.js";
+export {
+  PersistentWorkspace,
+  type Removed,
+  scriptLanguage,
+  type WorkspaceApi,
+  type WorkspaceEntry,
+  type WorkspaceLimits,
+  type WorkspaceRead,
+  type WorkspaceUsage,
+} from "./workspace-store.js";

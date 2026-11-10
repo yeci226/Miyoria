@@ -1,7 +1,8 @@
 // Her working notes: what she chose to keep from a tool result for the rest of a conversation.
 //
-// A tool result lives for one turn: the next one sees only what she said. On 2026-11-09 she looked
-// up a song's lyrics, and a turn later did not know the next line when someone sang it to her. She
+// A tool result lives for one turn: the next one sees only what she said, and since v4 §4.2 a short
+// trace of what her tools of the loop found. On 2026-11-09 she looked up a song's lyrics, and a
+// turn later did not know the next line when someone sang it to her. She
 // decides what is worth keeping (`keep_note`, in her own words) and lets it go (`drop_note`); each
 // conversation shows its notes until they expire. Memory only: a restart forgets them, as it
 // should forget a conversation's scratch paper. Long-term memory is something else.
@@ -20,6 +21,43 @@ export const MAX_NOTES = 5;
 /** Characters per note. */
 export const MAX_NOTE_CHARS = 600;
 export const DEFAULT_NOTE_MINUTES = 30;
+/** A tool result at least this long gets the keep_note reminder. */
+export const LONG_RESULT_CHARS = 300;
+/**
+ * The reminder for a result nothing keeps after the turn that reads it: a result the hands bring
+ * back in a turn of its own (`resultData`), and every tool result of the V2 pipeline.
+ */
+export const KEEP_HINT =
+  "\n(這些結果下一回合就看不到了;這段對話之後還會用到的,用 keep_note 用自己的話記下重點)";
+
+/** The reminder for a result of the tool loop whose trace keeps only its first `chars`. */
+export function traceKeepHint(chars: number): string {
+  return `\n(下一回合只會留下這個結果開頭 ${chars} 字的摘要;這段對話之後還會用到全文的,用 keep_note 用自己的話記下重點)`;
+}
+
+/**
+ * The keep_note reminder for a result of the tool loop (v4 §4.5 step 1), `null` for none. The
+ * reminder said a result is gone next turn; since v4 §4.2 a trace of the call stays beside her
+ * reply, with the head of what came back (`[modules.agent.mainline] trace_result_chars`). So:
+ *
+ * * a receipt (the tool only got something started) gets none: the real result comes back
+ *   through the hands, in a turn whose result block carries `KEEP_HINT` itself;
+ * * a result the trace keeps whole gets none: nothing of it is lost;
+ * * a result the trace keeps the head of gets the reminder, saying what is kept;
+ * * with no trace (`traced` is `null`: traces off, or nothing to keep it beside) it is the old
+ *   reminder, which is true there.
+ */
+export function loopKeepHint(
+  resultChars: number,
+  receipt: boolean,
+  traced: number | null,
+): string | null {
+  if (receipt) return null;
+  if (traced === null) return KEEP_HINT;
+  return resultChars <= traced ? null : traceKeepHint(traced);
+}
+/** Her note tools: instant, and nothing to tell her about afterwards. */
+export const NOTE_TOOLS: ReadonlySet<string> = new Set(["keep_note", "drop_note"]);
 export const MAX_NOTE_MINUTES = 180;
 
 export interface WorkingNote {

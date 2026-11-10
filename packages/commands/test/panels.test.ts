@@ -985,3 +985,84 @@ describe("public panels", () => {
     expect(registry.unknownVisibility().sort()).toEqual(["me wallett", "nothing"]);
   });
 });
+
+describe("the economy hub on /me i", () => {
+  const V2 = [
+    "me quests",
+    "me draw",
+    "me album",
+    "me titles",
+    "me giveitem",
+    "me predictions",
+    "me bet",
+    "me shop",
+    "me room",
+    "me commission",
+    "me commissions",
+  ];
+  const ARGS: Record<string, ArgSpec[]> = {
+    "me giveitem": [argSpec("user", "u", ArgKind.user), argSpec("item", "i", ArgKind.string)],
+    "me bet": [
+      argSpec("prediction", "p", ArgKind.string),
+      argSpec("option", "o", ArgKind.string),
+      argSpec("amount", "a", ArgKind.integer),
+    ],
+    "me shop": [argSpec("item", "i", ArgKind.string, { required: false })],
+    "me room": [
+      argSpec("item", "i", ArgKind.string, { required: false }),
+      argSpec("amount", "a", ArgKind.integer, { required: false }),
+    ],
+    "me commission": [argSpec("kind", "k", ArgKind.string), argSpec("brief", "b", ArgKind.string)],
+  };
+
+  function withEconomy() {
+    const ctx = setup();
+    for (const path of V2) {
+      ctx.add({ path, args: ARGS[path] ?? [], permission: "", ephemeral: false });
+    }
+    return ctx;
+  }
+
+  it("without_the_economy_there_is_no_play_page", async () => {
+    const { registry } = setup();
+    const labels = selectOf(await open(registry, "me", MEMBER))?.options.map((o) => o.label);
+    expect(labels).not.toContain("玩與收藏");
+  });
+
+  it("the_play_page_reaches_every_second_generation_feature", async () => {
+    const { registry, calls } = withEconomy();
+    const home = await open(registry, "me", MEMBER);
+    const nav = selectOf(home);
+    expect(nav?.options.map((o) => o.label)).toContain("玩與收藏");
+    const page = updated(
+      await registry.dispatchComponent(click(nav?.id ?? "", MEMBER, { values: ["play"] })),
+    );
+    for (const label of [
+      "抽收藏",
+      "收藏冊",
+      "稱號",
+      "看預測",
+      "她的小店",
+      "她的房間",
+      "我的委託",
+    ]) {
+      expect(button(page, label)).toBeDefined();
+    }
+    await registry.dispatchComponent(click(button(page, "抽收藏").id, MEMBER));
+    // (The status line of the page runs again after a press, so the draw is not the last call.)
+    expect(calls.some((c) => c.path === "me draw")).toBe(true);
+    // Commands with arguments ask for them in a modal.
+    const bet = modalOf(await registry.dispatchComponent(click(button(page, "押預測").id, MEMBER)));
+    expect(bet.fields.map((f) => f.id)).toEqual(["prediction", "option", "amount"]);
+    await registry.dispatchComponent(
+      click(bet.id, MEMBER, { fields: { prediction: "p1", option: "2", amount: "10" } }),
+    );
+    expect(calls.find((c) => c.path === "me bet")).toMatchObject({
+      args: { prediction: "p1", option: "2", amount: 10 },
+    });
+    const commission = modalOf(
+      await registry.dispatchComponent(click(button(page, "委託她做一件事").id, MEMBER)),
+    );
+    expect(commission.fields.map((f) => f.id)).toEqual(["kind", "brief"]);
+  });
+});

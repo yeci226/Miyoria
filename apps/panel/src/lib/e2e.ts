@@ -7,6 +7,7 @@ import type { E2eRecord, E2eSegmentName, LogEvent } from "@/api/types";
 export const E2E_SEGMENTS: { name: E2eSegmentName; label: string }[] = [
   { name: "endpoint", label: "判斷說完" },
   { name: "asr", label: "辨識" },
+  { name: "prepare", label: "準備" },
   { name: "llm_first", label: "LLM 首字" },
   { name: "tts_queue", label: "TTS 排隊" },
   { name: "tts_first", label: "TTS 合成" },

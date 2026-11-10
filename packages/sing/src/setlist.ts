@@ -65,6 +65,11 @@ export interface SongEntry {
   last_reminder_ms: number | null;
   /** Ledger row of the ticket that let this song past the per-person limit; refunded once. */
   ticket_entry: string | null;
+  /**
+   * She prepared it for herself (v4 §8.1 練歌), nobody is waiting for it: it is never sung on its
+   * own, her mind hears about it once, and she sings it when she wants and someone is there.
+   */
+  practice?: boolean;
   /** The paid dedication's words (already screened), or `null`. */
   dedication: string | null;
   /** Ledger row of the dedication; refunded once when the song is not sung. */
@@ -78,7 +83,13 @@ export type NewSong = Pick<
   Partial<
     Pick<
       SongEntry,
-      "backing" | "forced" | "queue_item" | "ticket_entry" | "dedication" | "dedication_entry"
+      | "backing"
+      | "forced"
+      | "practice"
+      | "queue_item"
+      | "ticket_entry"
+      | "dedication"
+      | "dedication_entry"
     >
   >;
 
@@ -147,6 +158,7 @@ const StoredEntrySchema = z.object({
   requester_name: z.string().catch("觀眾"),
   context: ContextSchema.nullable().catch(null),
   forced: z.boolean().catch(false),
+  practice: z.boolean().catch(false),
   state: z.enum(["preparing", "ready", "playing", "done", "failed", "cancelled"]),
   stage: z.string().catch(""),
   progress: z.number().catch(0),
@@ -237,6 +249,11 @@ export class SetList {
     return this.#entries.find((e) => e.state === "playing") ?? null;
   }
 
+  /** Songs she prepared for herself that are still open. */
+  practicing(): SongEntry[] {
+    return this.open().filter((e) => e.practice === true);
+  }
+
   /** The same song (by query, key and backing mode) already open. */
   findOpen(query: string, key: number, backing: BackingMode = "keep"): SongEntry | null {
     const q = query.trim().toLowerCase();
@@ -290,6 +307,7 @@ export class SetList {
       requester_name: song.requester_name,
       context: song.context,
       forced: song.forced ?? false,
+      practice: song.practice ?? false,
       state: "preparing",
       stage: "queued",
       progress: 0,

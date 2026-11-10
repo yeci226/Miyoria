@@ -17,6 +17,107 @@ export const DEFAULT_FRAMES: Frame[] = [
   { id: "gold", label: "金框", price: 300 },
 ];
 
+/** Rarities of a collectible, most common first (docs/design/cards.md §4). */
+export const RARITIES = ["N", "R", "SR", "SSR"] as const;
+export type Rarity = (typeof RARITIES)[number];
+
+const slug = z.string().regex(/^[a-z0-9_-]{1,32}$/);
+
+/** One collectible of a series (docs/design/cards.md §3: the traits a card is made of). */
+export const CollectibleSchema = z.object({
+  id: slug,
+  label: z.string().min(1).max(32),
+  rarity: z.enum(RARITIES),
+});
+export type Collectible = z.output<typeof CollectibleSchema>;
+
+/** A set of collectibles; owning all of it earns a title and a one-time reward. */
+export const SeriesSchema = z.object({
+  id: slug,
+  label: z.string().min(1).max(32),
+  /** The title the person holds once they own every item. */
+  title: z.string().min(1).max(16),
+  items: z.array(CollectibleSchema).min(1).max(40),
+});
+export type Series = z.output<typeof SeriesSchema>;
+
+export const DEFAULT_SERIES: Series[] = [
+  {
+    id: "glasses",
+    label: "眼鏡系列",
+    title: "眼鏡收藏家",
+    items: [
+      { id: "glasses_black", label: "黑框眼鏡", rarity: "N" },
+      { id: "glasses_round", label: "圓框眼鏡", rarity: "R" },
+      { id: "glasses_monocle", label: "單片眼鏡", rarity: "SR" },
+      { id: "glasses_star", label: "星星眼鏡", rarity: "SSR" },
+    ],
+  },
+  {
+    id: "hands",
+    label: "手上的東西",
+    title: "牽手達人",
+    items: [
+      { id: "hand_none", label: "空著手", rarity: "N" },
+      { id: "hand_foxtail", label: "狗尾草", rarity: "N" },
+      { id: "hand_finger", label: "豎食指", rarity: "R" },
+      { id: "hand_pot", label: "大鋼盆", rarity: "SR" },
+    ],
+  },
+  {
+    id: "sky",
+    label: "背景系列",
+    title: "旅行家",
+    items: [
+      { id: "bg_dusk", label: "黃昏漸層", rarity: "N" },
+      { id: "bg_water", label: "水面", rarity: "R" },
+      { id: "bg_stars", label: "星點", rarity: "R" },
+      { id: "bg_night", label: "夜空", rarity: "SR" },
+      { id: "bg_aurora", label: "極光", rarity: "SSR" },
+    ],
+  },
+];
+
+/** One piece of furniture, a costume or a background the audience funds together. */
+export const RoomItemSchema = z.object({
+  id: slug,
+  label: z.string().min(1).max(32),
+  kind: z.enum(["furniture", "outfit", "background"]),
+  /** What it costs in all, in coins. */
+  price: z.number().int().positive(),
+});
+export type RoomItem = z.output<typeof RoomItemSchema>;
+
+export const DEFAULT_ROOM: RoomItem[] = [
+  { id: "kotatsu", label: "暖桌", kind: "furniture", price: 400 },
+  { id: "fish_lamp", label: "魚燈", kind: "furniture", price: 250 },
+  { id: "pillow_pile", label: "抱枕山", kind: "furniture", price: 300 },
+  { id: "yukata", label: "浴衣", kind: "outfit", price: 800 },
+  { id: "bg_sakura", label: "櫻花背景", kind: "background", price: 500 },
+];
+
+/** One thing her weekly shop may stock. */
+export const ShopStockSchema = z.object({
+  id: slug,
+  label: z.string().min(1).max(32),
+  /** `title` adds a title to the buyer; `collectible` adds an item of a series (`item`). */
+  kind: z.enum(["title", "collectible"]),
+  price: z.number().int().positive(),
+  /** The title's text, or the collectible's id in `collection_series`. */
+  item: z.string().min(1).max(32),
+});
+export type ShopStock = z.output<typeof ShopStockSchema>;
+
+export const DEFAULT_SHOP: ShopStock[] = [
+  { id: "title_regular", label: "稱號「常客」", kind: "title", price: 60, item: "常客" },
+  { id: "title_fishfan", label: "稱號「魚粉」", kind: "title", price: 60, item: "魚粉" },
+  { id: "title_nightowl", label: "稱號「夜貓子」", kind: "title", price: 80, item: "夜貓子" },
+  { id: "item_foxtail", label: "狗尾草", kind: "collectible", price: 45, item: "hand_foxtail" },
+  { id: "item_water", label: "水面背景", kind: "collectible", price: 70, item: "bg_water" },
+  { id: "item_round", label: "圓框眼鏡", kind: "collectible", price: 70, item: "glasses_round" },
+  { id: "item_stars", label: "星點背景", kind: "collectible", price: 70, item: "bg_stars" },
+];
+
 /**
  * `[modules.economy]` (docs/design/economy.md): what people earn by being with her and what
  * feeding her and small gifts cost. A paid gift raises affinity by a hair (`gift_affinity`, capped
@@ -146,6 +247,105 @@ export const EconomyConfigSchema = z.object({
   bounty_days: z.number().int().positive().default(3),
   /** How often ended goals and bounties are settled. */
   agency_sweep_s: z.number().int().positive().default(60),
+  // ---- economy 2.0 (docs/design/v4-plan.md §10) -----------------------------------------------
+  // Playing and taking part (play.ts): what each activity pays, how often one activity may pay one
+  // person a day, and the most all play together pays one person a day. `0` takes one off.
+  play_rewards: z.record(z.string().regex(/^[a-z0-9_]{1,32}$/), coins).default({
+    game_join: 5,
+    game_finish: 10,
+    game_win: 5,
+    sing_along: 5,
+    headpat: 1,
+    web_reaction: 1,
+    prediction_join: 3,
+  }),
+  play_per_activity_per_day: coins.default(10),
+  play_cap: coins.default(40),
+  // Three small daily quests (quests.ts): what each pays, what finishing all three adds, and the
+  // day's most (the three plus the bonus).
+  quest_reward: coins.default(10),
+  quest_bonus: coins.default(15),
+  quest_cap: coins.default(45),
+  /** Days a topic may not repeat for the "talk about something new" quest. */
+  quest_topic_days: z.number().int().positive().default(14),
+  // Achievements and titles (achievements.ts): a one-time reward by size, and the day's most.
+  achievement_small: z.number().int().positive().default(10),
+  achievement_big: z.number().int().positive().default(30),
+  achievement_cap: coins.default(60),
+  // Collection (collection.ts): what a draw costs, how many a day, the odds (weights, public), and
+  // after how many draws without an SR or better one is guaranteed (`0`: no pity).
+  draw_price: coins.default(30),
+  draws_per_day: coins.default(10),
+  rarity_weights: z
+    .object({
+      N: z.number().nonnegative(),
+      R: z.number().nonnegative(),
+      SR: z.number().nonnegative(),
+      SSR: z.number().nonnegative(),
+    })
+    .default({ N: 70, R: 22, SR: 7, SSR: 1 })
+    .refine((w) => w.N + w.R + w.SR + w.SSR > 0, { message: "the weights must not all be 0" }),
+  draw_pity: coins.default(30),
+  /** Items one person may give away per day, and receive. `0` closes gifting. */
+  item_gifts_per_day: coins.default(3),
+  collection_series: z
+    .array(SeriesSchema)
+    .max(30)
+    .default(DEFAULT_SERIES)
+    .refine(
+      (list) => {
+        const items = list.flatMap((s) => s.items);
+        return (
+          new Set(list.map((s) => s.id)).size === list.length &&
+          new Set(items.map((i) => i.id)).size === items.length
+        );
+      },
+      { message: "series and item ids must be unique" },
+    ),
+  // Commissions (commissions.ts): prices by kind (`0` takes a kind off), how many one person may
+  // ask a day, how many may wait for her at once, after how many days an untouched one is given
+  // back, and the share of a delivered price she keeps (the rest leaves the economy).
+  commission_prices: z
+    .partialRecord(z.enum(["poem", "name", "tool", "song", "voice"]), coins)
+    .default({ poem: 40, name: 30, tool: 120, song: 80, voice: 60 }),
+  commissions_per_day: coins.default(3),
+  commissions_open: z.number().int().positive().default(10),
+  commission_days: z.number().int().positive().default(3),
+  commission_share: z.number().min(0).max(1).default(0.5),
+  // Predictions (predictions.ts): the most one person may stake on one and in a day, how long
+  // betting may stay open at most (minutes), how many may be open, and how long an unresolved one
+  // waits after it closed before every stake is given back (hours).
+  bet_max: coins.default(50),
+  bet_daily_max: coins.default(100),
+  prediction_max_minutes: z.number().int().positive().default(120),
+  predictions_open: z.number().int().positive().default(3),
+  prediction_expire_hours: z.number().int().positive().default(24),
+  // Her room (room.ts): what the audience can fund together, and the most one person puts in one.
+  room_items: z
+    .array(RoomItemSchema)
+    .max(100)
+    .default(DEFAULT_ROOM)
+    .refine((list) => new Set(list.map((i) => i.id)).size === list.length, {
+      message: "room item ids must be unique",
+    }),
+  room_pledge_max: z.number().int().positive().default(100),
+  // Her weekly shop (shop.ts): what it may stock, how many things are on the shelf in a week, and
+  // the share of a sale that goes in her purse (the rest leaves the economy).
+  shop_catalog: z
+    .array(ShopStockSchema)
+    .max(100)
+    .default(DEFAULT_SHOP)
+    .refine((list) => new Set(list.map((i) => i.id)).size === list.length, {
+      message: "shop item ids must be unique",
+    }),
+  shop_slots: z.number().int().positive().max(20).default(4),
+  shop_her_share: z.number().min(0).max(1).default(0.5),
+  /** How many days a broken deal counts as "owes her a meal" until they feed her. */
+  owe_days: z.number().int().positive().default(14),
+  // The health table (health.ts): how many days it shows, and under what share of the coins issued
+  // that were taken back in a week the table says "inflating".
+  health_days: z.number().int().positive().max(90).default(14),
+  health_warn_ratio: z.number().min(0).max(1).default(0.6),
   /** Where "today" starts. */
   utc_offset_minutes: z.number().int().min(-720).max(840).default(480),
   frames: z

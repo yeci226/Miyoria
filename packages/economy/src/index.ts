@@ -59,3 +59,4 @@ export {
   type WalletExport,
   type WalletView,
 } from "./types.js";
+export { type Economy2, Economy2Key } from "./v2-types.js";

@@ -6,6 +6,8 @@
 //   a bigger glance that the head partly follows.
 // * Body: a lagged, smaller copy of the head plus its own drift, on custom parameters
 //   (`MiyoriaBodyX/Y/Z`) the model maps to its body (see the docs for the VTS mapping).
+// * Beat: while a song with a known beat plays (`setBeat`), a small nod on every beat and a sway
+//   from side to side, one side per beat, on the body and a little on the head.
 
 import { z } from "zod";
 import { BODY_PARAMS } from "./pose.js";
@@ -76,6 +78,10 @@ export const MotionConfigSchema = z.object({
   body_lag_ms: z.number().nonnegative().default(450),
   /** Body drift amplitude (degrees). */
   body_drift: z.number().default(3.5),
+  /** Nod on each beat of a song (degrees, down); 0 turns it off. */
+  beat_nod_deg: z.number().nonnegative().default(2.5),
+  /** Sway to each side on the beats of a song (degrees of body tilt); 0 turns it off. */
+  beat_sway_deg: z.number().nonnegative().default(5),
 });
 export type MotionConfig = z.output<typeof MotionConfigSchema>;
 
@@ -133,6 +139,10 @@ export class IdleMotion {
   #prevOpen = 0;
   #sinceNod = Number.POSITIVE_INFINITY;
   #body = { x: 0, y: 0, z: 0 };
+  /** The song's beat: beat times (ms), where the song is (ms), the next beat, the sway side. */
+  #beat: { times: number[]; at: number; next: number; side: number } | null = null;
+  /** Sway on the beat (degrees) and where it is heading. */
+  #sway = { z: 0, tz: 0 };
 
   constructor(
     gaze: GazeConfig,
@@ -156,6 +166,61 @@ export class IdleMotion {
 
   setTarget(target: GazeTarget): void {
     this.#target = target;
+  }
+
+  /**
+   * The beat of the song that plays now: `times` (ms from its start, sorted) and how far into
+   * the song it is (`offsetMs`). Empty `times` stops it and the sway settles.
+   */
+  setBeat(times: readonly number[], offsetMs: number): void {
+    if (times.length === 0) {
+      this.#beat = null;
+      this.#sway.tz = 0;
+      return;
+    }
+    const next = times.findIndex((t) => t >= offsetMs);
+    this.#beat = {
+      times: [...times],
+      at: offsetMs,
+      next: next < 0 ? times.length : next,
+      side: this.#random.sign(),
+    };
+  }
+
+  /** Whether a song's beat is being followed. */
+  beating(): boolean {
+    return this.#beat !== null;
+  }
+
+  /** Advances the beat by `dt`: a nod and a change of side on every beat passed. */
+  #followBeat(dt: number): void {
+    const b = this.#beat;
+    if (b === null) return;
+    b.at += dt;
+    let passed = false;
+    while (b.next < b.times.length && (b.times[b.next] as number) <= b.at) {
+      b.next++;
+      passed = true;
+    }
+    if (passed) {
+      const c = this.#c;
+      if (c.beat_nod_deg > 0) {
+        this.#pulses.push({
+          axis: "y",
+          amount: -c.beat_nod_deg * this.#random.range(0.7, 1.1),
+          tau: 90,
+          t: 0,
+        });
+      }
+      b.side = -b.side;
+      this.#sway.tz = b.side * c.beat_sway_deg;
+    }
+    // Two seconds after the last beat the song is over (its `ended` may never come).
+    const last = b.times.at(-1) ?? 0;
+    if (b.next >= b.times.length && b.at > last + 2_000) {
+      this.#beat = null;
+      this.#sway.tz = 0;
+    }
   }
 
   /** A sentence starts: a small tilt or nod that relaxes over a few seconds. */
@@ -234,6 +299,8 @@ export class IdleMotion {
       }
     }
     this.#prevOpen = open;
+    this.#followBeat(dt);
+    this.#sway.z = approach(this.#sway.z, this.#sway.tz, dt, 160);
     const pulse = { x: 0, y: 0, z: 0 };
     for (const q of this.#pulses) {
       q.t += dt;
@@ -254,7 +321,7 @@ export class IdleMotion {
     const nz = c.drift_z * dz.update(dt) * lively;
     const hx = k * (nx + this.#follow.x + pulse.x);
     const hy = k * (ny + this.#follow.y + pulse.y + this.#lean.y);
-    const hz = k * (nz + pulse.z + this.#lean.z);
+    const hz = k * (nz + pulse.z + this.#lean.z + 0.4 * this.#sway.z);
     const faceX = clamp(p.face_x + hx, -30, 30);
     const faceY = clamp(p.face_y + hy, -30, 30);
     const faceZ = clamp(p.face_z + hz, -30, 30);
@@ -278,7 +345,7 @@ export class IdleMotion {
       EyeRightY: eyeY,
       MiyoriaBodyX: clamp(this.#body.x + bd * bx.update(dt), -30, 30),
       MiyoriaBodyY: clamp(this.#body.y + bd * 0.6 * by.update(dt), -30, 30),
-      MiyoriaBodyZ: clamp(this.#body.z + bd * bz.update(dt), -30, 30),
+      MiyoriaBodyZ: clamp(this.#body.z + bd * bz.update(dt) + k * this.#sway.z, -30, 30),
     };
   }
 }

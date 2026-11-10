@@ -567,6 +567,95 @@ function mePages(policyUrl: string | null): PanelPage[] {
       ],
     },
     {
+      // The economy's second generation (quests, collection, predictions, commissions, her room,
+      // her shop). Commands come from the economy module; without it the page is hidden.
+      id: "play",
+      label: "玩與收藏",
+      description: "每日任務、抽收藏、預測、委託、小店、她的房間",
+      refresh: true,
+      status: [{ path: "me quests", label: "今天的任務" }],
+      actions: [
+        { id: "draw", label: "抽收藏", path: "me draw", style: "primary" },
+        { id: "album", label: "收藏冊", path: "me album" },
+        { id: "titles", label: "稱號", path: "me titles" },
+        {
+          id: "giveitem",
+          label: "送重複的收藏",
+          path: "me giveitem",
+          ask: {
+            title: "送收藏給別人",
+            fields: [USER_FIELD, field("item", "哪一個收藏（名字）")],
+          },
+        },
+        { id: "predictions", label: "看預測", path: "me predictions" },
+        {
+          id: "bet",
+          label: "押預測",
+          path: "me bet",
+          ask: {
+            title: "押魚幣猜結果",
+            fields: [
+              field("prediction", "預測的代號", { placeholder: "「看預測」裡的代號" }),
+              field("option", "選項的號碼或名字"),
+              field("amount", "押多少魚幣"),
+            ],
+          },
+        },
+        { id: "shop", label: "她的小店", path: "me shop" },
+        {
+          id: "shop-buy",
+          label: "買小店的東西",
+          path: "me shop",
+          ask: { title: "買小店的東西", fields: [field("item", "東西的名字或代號")] },
+        },
+        { id: "room", label: "她的房間", path: "me room" },
+        {
+          id: "room-fund",
+          label: "出錢佈置房間",
+          path: "me room",
+          ask: {
+            title: "出魚幣佈置她的房間",
+            fields: [field("item", "要出錢的東西（名字或代號）"), field("amount", "出多少魚幣")],
+          },
+        },
+        {
+          id: "commission",
+          label: "委託她做一件事",
+          path: "me commission",
+          ask: {
+            title: "委託她做一件事",
+            fields: [
+              field("kind", "種類", {
+                placeholder: "poem 詩 / name 取名 / tool 小工具 / song 唱歌 / voice 一句語音",
+              }),
+              field("brief", "想請她做什麼", { style: "paragraph", maxLength: 300 }),
+            ],
+          },
+        },
+        { id: "commissions", label: "我的委託", path: "me commissions" },
+      ],
+    },
+    {
+      // The card and the slip come from the commands module itself (the api module gives them);
+      // the letter from the economy module.
+      id: "keepsakes",
+      label: "卡片與籤詩",
+      description: "她給你的卡片、今日籤詩、寫信給她",
+      actions: [
+        { id: "card", label: "我的卡片", path: "me card", style: "primary" },
+        { id: "fortune", label: "抽今日籤詩", path: "me fortune" },
+        {
+          id: "letter",
+          label: "寫信給她",
+          path: "me letter",
+          ask: {
+            title: "寫信給她",
+            fields: [field("text", "信的內容（120 字內）", { style: "paragraph", maxLength: 120 })],
+          },
+        },
+      ],
+    },
+    {
       id: "wishes",
       label: "她的願望",
       description: "她的目標、懸賞",

@@ -327,7 +327,7 @@ describe("rule triggers", () => {
     }
     const missing = h.self.heart("p3")?.emotions.missing ?? 0;
     expect(missing).toBeGreaterThan(0.2);
-    expect(h.self.shown()?.style).toContain("才沒有在等你");
+    expect(h.self.shown()?.style).toContain("裝作不在意");
 
     h.publish(message("3", { direct: true }));
     await vi.waitFor(() => expect(h.self.heart("p3")?.emotions.missing ?? 0).toBeLessThan(missing));

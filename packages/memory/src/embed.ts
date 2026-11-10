@@ -2,6 +2,7 @@
 
 import { inspect } from "node:util";
 import type { EmbeddingConfig } from "./config.js";
+import { LocalEmbedder } from "./local-embed.js";
 
 export interface Embedder {
   /** Provider name for logs, e.g. `"openai-compatible"`. */
@@ -10,6 +11,11 @@ export interface Embedder {
   readonly enabled: boolean;
   /** One vector per input text, in order. */
   embed(texts: readonly string[], signal?: AbortSignal): Promise<number[][]>;
+  /**
+   * The same for search queries, for models trained with different prefixes for queries and
+   * passages (e5: `query: ` / `passage: `). Absent: `embed`.
+   */
+  embedQuery?(texts: readonly string[], signal?: AbortSignal): Promise<number[][]>;
 }
 
 export class EmbeddingError extends Error {
@@ -143,13 +149,15 @@ export function buildEmbedder(config: EmbeddingConfig): Embedder {
     case "":
     case "none":
       return new NoEmbedder();
+    case "local":
+      return new LocalEmbedder(config);
     case "openai-compatible":
     case "openai":
     case "ollama":
       return new OpenAiCompatibleEmbedder(config);
     default:
       throw new EmbeddingError(
-        `unknown [memory.embedding] provider \`${provider}\` (expected \`none\` or \`openai-compatible\`)`,
+        `unknown [memory.embedding] provider \`${provider}\` (expected \`none\`, \`local\` or \`openai-compatible\`)`,
       );
   }
 }

@@ -22,6 +22,7 @@ import {
   componentSegments,
   validateRoute,
 } from "./components.js";
+import { MAX_MENUS_PER_TARGET, MENU_ROOT, type MenuSpec, menuCommandSpec } from "./menu.js";
 import { isAdminNode } from "./nodes.js";
 import { Permissions } from "./perms.js";
 import { type CommandReply, notice, replyEphemeral } from "./reply.js";
@@ -36,9 +37,13 @@ import {
   type InvocationData,
   splitPath,
 } from "./spec.js";
-import { COMMAND_GROUPS, groupInfo } from "./tree.js";
+import { COMMAND_GROUPS, groupInfo, SLASH_REGROUP } from "./tree.js";
 
 const log = getLogger("commands.registry");
+
+/** Real path to the path Discord shows it under, and back (see `SLASH_REGROUP`). */
+const PRESENTED = new Map(Object.entries(SLASH_REGROUP));
+const REAL = new Map([...PRESENTED].map(([real, shown]) => [shown, real]));
 
 /**
  * Optional service run before a permission check, so an `Authorizer` that loads data lazily
@@ -68,6 +73,8 @@ export type Visibility = "public" | "private";
 /** Deepest supported command path (Discord: group / subcommand group / subcommand). */
 export const MAX_PATH_DEPTH = 3;
 const MAX_NAME_LEN = 32;
+/** Discord: a context menu name is 1 to 32 characters. */
+const MAX_MENU_NAME = 32;
 /** Discord shows at most 25 autocomplete suggestions. */
 const MAX_CHOICES = 25;
 
@@ -211,6 +218,8 @@ export class CommandRegistry {
   readonly #clock: Clock;
   readonly #entries = new Map<string, Entry>();
   readonly #panels = new Map<string, Entry>();
+  /** Context menu entries by id; their commands live at `["menu", id]` (see `menu.ts`). */
+  readonly #menus = new Map<string, { menu: MenuSpec; entry: Entry }>();
   readonly #visibility = new Map<string, Visibility>();
   readonly #groups = new Map<string, GroupInfo>();
   readonly #routes = new Map<string, { owner: string; route: AnyComponentRoute }>();
@@ -250,6 +259,9 @@ export class CommandRegistry {
   register(spec: CommandSpec, handler: CommandHandler, options: RegisterOptions = {}): void {
     validateSpec(spec);
     const key = spec.path.join(" ");
+    if (spec.path[0] === MENU_ROOT) {
+      throw new CommandError(`command \`${commandName(spec)}\`: \`${MENU_ROOT}\` is reserved`);
+    }
     if (
       spec.path.length === 2 &&
       spec.path[1] === PANEL_SUBCOMMAND &&
@@ -294,6 +306,55 @@ export class CommandRegistry {
       this.#bump();
     }
     return removed;
+  }
+
+  /**
+   * Registers (or replaces) a context menu entry. Throws `CommandError` for a bad name or id,
+   * or when the platform's limit per target would be passed.
+   */
+  registerMenu(menu: MenuSpec, handler: CommandHandler): void {
+    const length = [...menu.name].length;
+    if (length < 1 || length > MAX_MENU_NAME) {
+      throw new CommandError(
+        `menu \`${menu.id}\`: the name must be 1 to ${MAX_MENU_NAME} characters`,
+      );
+    }
+    const spec = menuCommandSpec(menu);
+    validateSpec(spec);
+    const same = [...this.#menus.values()].filter(
+      (m) => m.menu.target === menu.target && m.menu.id !== menu.id,
+    );
+    if (same.length >= MAX_MENUS_PER_TARGET) {
+      throw new CommandError(
+        `menu \`${menu.id}\`: at most ${MAX_MENUS_PER_TARGET} ${menu.target} menus`,
+      );
+    }
+    if (same.some((m) => m.menu.name === menu.name)) {
+      throw new CommandError(`menu \`${menu.id}\`: the name \`${menu.name}\` is taken`);
+    }
+    const scratch = new Map<string, Entry>();
+    this.#store(scratch, spec.path.join(" "), spec.path.join(" "), spec, handler, {});
+    const entry = scratch.get(spec.path.join(" ")) as Entry;
+    this.#menus.set(menu.id, { menu: { ...menu }, entry });
+  }
+
+  /** Removes a context menu entry. */
+  unregisterMenu(id: string): boolean {
+    const removed = this.#menus.delete(id);
+    if (removed) this.#bump();
+    return removed;
+  }
+
+  /** The context menu entries, by target then name. */
+  menus(): MenuSpec[] {
+    return [...this.#menus.values()]
+      .map((m) => ({ ...m.menu }))
+      .sort((a, b) => a.target.localeCompare(b.target) || a.name.localeCompare(b.name));
+  }
+
+  /** The menu entry named `name` for `target`, as the platform shows it. */
+  menuByName(target: MenuSpec["target"], name: string): MenuSpec | undefined {
+    return this.menus().find((m) => m.target === target && m.name === name);
   }
 
   #store(
@@ -400,7 +461,23 @@ export class CommandRegistry {
    * every other command.
    */
   slashSpecs(): CommandSpec[] {
-    return [...this.#panelSpecs(), ...this.specs()];
+    const regrouped = this.specs().map((spec) => ({
+      ...spec,
+      path: this.slashPath(spec.path),
+    }));
+    return [...this.#panelSpecs(), ...regrouped];
+  }
+
+  /** The path a platform with a command tree shows `path` under (usually `path` itself). */
+  slashPath(path: readonly string[]): string[] {
+    const shown = PRESENTED.get(path.join(" "));
+    return shown === undefined ? [...path] : splitPath(shown);
+  }
+
+  /** `path` as the registry knows it: a regrouped path (`me play quests`) becomes the real one. */
+  #real(path: readonly string[]): string[] {
+    const real = REAL.get(path.join(" "));
+    return real === undefined ? [...path] : splitPath(real);
   }
 
   #panelSpecs(): CommandSpec[] {
@@ -430,13 +507,16 @@ export class CommandRegistry {
 
   /** A command or panel by path. */
   get(path: readonly string[]): CommandSpec | undefined {
-    const entry = this.#find(path.join(" "));
-    return entry ? this.#view(entry.spec, path) : undefined;
+    const real = this.#real(path);
+    const entry = this.#find(real.join(" "));
+    return entry ? this.#view(entry.spec, real) : undefined;
   }
 
   /** A panel at its opening path (`panelPath`), else a command. */
   #find(key: string): Entry | undefined {
+    key = REAL.get(key) ?? key;
     const head = splitPath(key)[0];
+    if (head === MENU_ROOT) return this.#menus.get(splitPath(key)[1] ?? "")?.entry;
     const panel = head === undefined ? undefined : this.#panels.get(head);
     if (panel && head !== undefined && this.panelPath(head).join(" ") === key) return panel;
     return this.#entries.get(key);
@@ -557,6 +637,7 @@ export class CommandRegistry {
    */
   async dispatch(data: InvocationData, io: DispatchIo = {}): Promise<CommandReply> {
     const invocation = Invocation.from(data);
+    invocation.path = this.#real(invocation.path);
     const entry = this.#find(invocation.path.join(" "));
     if (!entry) return notice("warn", TEXT.unknownCommand(invocation.path.join(" ")));
     const { spec, handler } = entry;
@@ -663,6 +744,7 @@ export class CommandRegistry {
    */
   async autocomplete(data: InvocationData, name: string, value: string): Promise<Choice[]> {
     const invocation = Invocation.from(data);
+    invocation.path = this.#real(invocation.path);
     const entry = this.#find(invocation.path.join(" "));
     const handler = entry?.autocomplete.get(name);
     if (!entry || !handler) return [];

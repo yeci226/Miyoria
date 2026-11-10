@@ -32,12 +32,15 @@ import {
   Routes,
 } from "discord.js";
 import type { DiscordConfig } from "./config.js";
+import { type EmojiLike, EmojiTable, EmojiUsage, serverEmoji } from "./emoji.js";
 import { ambientChannel, messageAllowed } from "./gate.js";
 import { DiscordHistory, type HistoryClientLike } from "./history.js";
 import {
+  type ContextMenuInteractionLike,
   handleAutocomplete,
   handleCommandInteraction,
   handleComponentInteraction,
+  handleContextMenuInteraction,
   type InteractionEnv,
 } from "./interaction.js";
 import {
@@ -78,6 +81,8 @@ export interface GuildLike {
   };
   presences: { cache: { values(): Iterable<PresenceLike> } };
   voiceStates: { cache: { values(): Iterable<VoiceStateLike> } };
+  /** Custom emoji (the server emoji table). */
+  emojis?: { cache: { values(): Iterable<EmojiLike> } };
 }
 
 /** The parts of a discord.js `MessageReaction` the bridge reads. */
@@ -93,6 +98,9 @@ export class Shared {
   ready = false;
   #syncStarted = false;
   readonly #kinds = new Map<string, ContextKind>();
+  /** Custom emoji of every guild she is in, and what she used per channel. */
+  readonly emoji = new EmojiTable();
+  readonly emojiUsage = new EmojiUsage();
   /** Messages with live controls (panels). */
   readonly sessions = new PanelSessions({
     onError: (error) => log.debug({ error: errorMessage(error) }, "cannot disable a panel"),
@@ -194,6 +202,20 @@ export class GatewayBridge {
     client.on(Events.GuildCreate, (guild) =>
       this.guard("guild snapshot", () => this.snapshotGuild(guild as unknown as GuildLike)),
     );
+    client.on(Events.GuildDelete, (guild) => this.shared.emoji.dropGuild(guild.id));
+    client.on(Events.GuildEmojiCreate, (emoji) => this.onEmoji(emoji.guild.id, emoji, false));
+    client.on(Events.GuildEmojiUpdate, (_old, emoji) => this.onEmoji(emoji.guild.id, emoji, false));
+    client.on(Events.GuildEmojiDelete, (emoji) => this.onEmoji(emoji.guild.id, emoji, true));
+  }
+
+  /** A custom emoji added, changed or removed. */
+  onEmoji(guild: string, emoji: EmojiLike, removed: boolean): void {
+    if (removed) {
+      if (emoji.id) this.shared.emoji.remove(guild, emoji.id);
+      return;
+    }
+    const e = serverEmoji(emoji);
+    if (e) this.shared.emoji.upsert(guild, e);
   }
 
   /**
@@ -201,6 +223,10 @@ export class GatewayBridge {
    * `initial` updates, after fetching the member list when the members intent is on.
    */
   async snapshotGuild(guild: GuildLike): Promise<void> {
+    if (guild.emojis) {
+      const list = [...guild.emojis.cache.values()].map(serverEmoji).filter((e) => e !== null);
+      this.shared.emoji.setGuild(guild.id, list);
+    }
     if (this.shared.config.presence_intents) {
       try {
         await guild.members.fetch();
@@ -286,6 +312,13 @@ export class GatewayBridge {
     if (interaction.isChatInputCommand()) {
       const kind = await kindOfInteraction();
       await handleCommandInteraction(this.env(client), interaction, kind);
+    } else if (interaction.isContextMenuCommand()) {
+      const kind = await kindOfInteraction();
+      await handleContextMenuInteraction(
+        this.env(client),
+        interaction as unknown as ContextMenuInteractionLike,
+        kind,
+      );
     } else if (interaction.isAutocomplete()) {
       const kind = await kindOfInteraction();
       await handleAutocomplete(this.env(client), interaction, kind);
@@ -327,7 +360,13 @@ export class GatewayBridge {
         data: { platform: PLATFORM, self_account: account(id) },
       });
     }
-    const sink = new DiscordSink(client.rest, () => this.ctx.services.get(ModerationKey));
+    const emojiConfig = this.shared.config.emoji;
+    const sink = new DiscordSink(client.rest, () => this.ctx.services.get(ModerationKey), {
+      table: this.shared.emoji,
+      usage: this.shared.emojiUsage,
+      enabled: () => emojiConfig.enabled,
+      limits: () => emojiConfig,
+    });
     this.shared.sinks?.register(sink);
     this.shared.histories?.register(
       new DiscordHistory(client as unknown as HistoryClientLike, this.shared.selfIds),

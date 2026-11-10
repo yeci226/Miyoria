@@ -13,6 +13,13 @@ import {
   PERSON_EMOTION_OUTPUTS,
   type PersonCard,
 } from "@miyoria/types";
+import {
+  type LifeOption,
+  type LifeSituation,
+  lifeActivity,
+  lifeOptions,
+  unfit,
+} from "./life/activities.js";
 
 /** Desires listed at most. */
 export const MAX_DESIRES = 6;
@@ -38,6 +45,11 @@ export interface DesireInputs {
   inVoice: boolean;
   /** People at or above this attachment are the ones she cares about. */
   cared: number;
+  /**
+   * Her day so far and what fits now (v4 §8.2): wants like `explore` lead to a row of the
+   * activity table. Without it they fall back to the plain capability (`web.search`).
+   */
+  life?: LifeSituation;
 }
 
 const n1 = (v: number) => (Math.round(v * 10) / 10).toFixed(1);
@@ -86,6 +98,38 @@ export function rankDesires(i: DesireInputs): Desire[] {
   const has = (cap: string) => (i.capabilities.has(cap) ? cap : null);
   const a = i.affect;
   const lonely = a?.top.find((e) => e.name === "lonely")?.intensity ?? 0;
+  /** A row of the activity table as a desire (`fit`: how much it varies her day). */
+  const addLife = (want: string, o: LifeOption, weight: number, why: string) =>
+    add({
+      want,
+      label: o.activity.label,
+      weight: weight * (0.6 + 0.4 * o.fit),
+      why: `${why},${o.why};${o.activity.does}`,
+      person: null,
+      capability: o.capability,
+      goal: null,
+    });
+  /**
+   * Wanting something new leads somewhere (2026-11-10: `explore` had no capability and she only
+   * ever played or sang): the best fitting row, else the web, else just the wish.
+   */
+  const explore = (weight: number, why: string) => {
+    const best = i.life ? lifeOptions(i.life, ["explore", "curiosity"])[0] : undefined;
+    if (best) {
+      addLife("explore", best, weight, why);
+      return;
+    }
+    const web = i.life ? null : has("web.search");
+    add({
+      want: "explore",
+      label: web === null ? "找點新鮮事" : "逛網路",
+      weight,
+      why,
+      person: null,
+      capability: web,
+      goal: null,
+    });
+  };
 
   for (const w of a?.biases.wants ?? []) {
     switch (w.want) {
@@ -128,17 +172,41 @@ export function rankDesires(i: DesireInputs): Desire[] {
         });
         break;
       }
-      case "play":
+      case "play": {
+        const why = `${w.why}(想玩 ${n1(a?.drives.play ?? 0)}、無聊 ${n1(a?.boredom ?? 0)})`;
+        // §8.2: games have a share of her day; past it the wish to play leads elsewhere.
+        const game = i.life ? unfit(lifeActivity("game"), i.life) : null;
+        const over =
+          game !== null && "reason" in game && i.activity !== "game" && has("game.start") !== null
+            ? game.reason
+            : null;
+        if (over !== null) {
+          add({
+            want: "play",
+            label: "玩遊戲",
+            weight: w.weight * 0.3,
+            why: `${why},但${over}`,
+            person: null,
+            capability: null,
+            goal: null,
+          });
+          const other = i.life
+            ? lifeOptions(i.life, ["play", "explore"]).find((o) => o.activity.id !== "game")
+            : undefined;
+          if (other) addLife("explore", other, w.weight * 0.8, "想玩但今天遊戲玩夠了");
+          break;
+        }
         add({
           want: "play",
           label: i.activity === "game" ? "繼續玩遊戲" : "玩遊戲",
           weight: w.weight,
-          why: `${w.why}(想玩 ${n1(a?.drives.play ?? 0)}、無聊 ${n1(a?.boredom ?? 0)})`,
+          why,
           person: null,
           capability: i.activity === "game" ? null : has("game.start"),
           goal: null,
         });
         break;
+      }
       case "stream":
         add({
           want: "stream",
@@ -150,7 +218,7 @@ export function rankDesires(i: DesireInputs): Desire[] {
           goal: null,
         });
         break;
-      case "rest":
+      case "rest": {
         add({
           want: "rest",
           label: i.inVoice ? "收台休息" : "休息一下",
@@ -160,17 +228,13 @@ export function rankDesires(i: DesireInputs): Desire[] {
           capability: i.inVoice ? has("voice.leave") : null,
           goal: null,
         });
+        // A quiet thing of her own that fits being tired (her diary in the evening).
+        const quiet = i.life ? lifeOptions(i.life, ["rest"])[0] : undefined;
+        if (quiet) addLife("calm", quiet, w.weight * 0.7, w.why);
         break;
+      }
       case "explore":
-        add({
-          want: "explore",
-          label: "找點新鮮事",
-          weight: w.weight,
-          why: w.why,
-          person: null,
-          capability: null,
-          goal: null,
-        });
+        explore(w.weight, w.why);
         break;
       case "sing":
         add({
@@ -216,18 +280,16 @@ export function rankDesires(i: DesireInputs): Desire[] {
     });
   }
 
-  // Curiosity: something new (no capability in particular).
+  // Curiosity: something new, on the web, in code, in her notes (§8.1).
   const curiosity = a?.drives.curiosity ?? 0;
-  if (curiosity > 0.4) {
-    add({
-      want: "explore",
-      label: "找點新鮮事",
-      weight: curiosity * 0.6,
-      why: `好奇 ${n1(curiosity)}`,
-      person: null,
-      capability: null,
-      goal: null,
-    });
+  if (curiosity > 0.4) explore(curiosity * 0.6, `好奇 ${n1(curiosity)}`);
+
+  // Boredom: anything of her own that fits now and varies her day.
+  const boredom = a?.boredom ?? 0;
+  if (i.life && boredom > 0.5) {
+    const taken = new Set([...out.values()].map((d) => d.capability));
+    const pick = lifeOptions(i.life).find((o) => !taken.has(o.capability));
+    if (pick) addLife("life", pick, boredom * 0.5, `無聊 ${n1(boredom)}`);
   }
 
   // Her own goals: fired ones first, the rest as things she meant to do.

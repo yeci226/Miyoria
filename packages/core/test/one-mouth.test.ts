@@ -105,6 +105,8 @@ describe("only the main line acts", () => {
       "packages/stage/src/link/commands.ts",
       "packages/stage/src/link/module.ts",
       "packages/voice/src/commands.ts",
+      // `watch.start` brings her to the stream through `voice.join`, as whoever asked.
+      "packages/watch/src/actions.ts",
     ]);
   });
 

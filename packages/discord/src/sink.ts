@@ -15,6 +15,13 @@ import {
   safeOutgoing,
 } from "@miyoria/types";
 import { MessageFlags, Routes } from "discord.js";
+import {
+  type EmojiLimits,
+  type EmojiTable,
+  type EmojiUsage,
+  reactionEmoji,
+  renderEmoji,
+} from "./emoji.js";
 import { PLATFORM, snowflake } from "./mapping.js";
 import { renderReply } from "./render.js";
 import { MAX_MESSAGE_LEN, splitMessage } from "./split.js";
@@ -82,16 +89,46 @@ async function inContext<T>(what: string, work: () => Promise<T>): Promise<T> {
  */
 export type DiscordOutgoing = OutgoingMessage & { proactive?: boolean };
 
+/** Server emoji in her messages and reactions (emoji.ts). */
+export interface SinkEmoji {
+  table: EmojiTable;
+  usage: EmojiUsage;
+  /** Read per message, so a config change applies at once. */
+  enabled(): boolean;
+  limits(): EmojiLimits;
+}
+
 export class DiscordSink implements PlatformSink, ReplySink {
   readonly platform: PlatformId = PLATFORM;
   readonly sendsFiles = true;
   readonly #rest: RestLike;
   readonly #moderation: () => ModerationService | undefined;
+  readonly #emoji: SinkEmoji | null;
 
   /** `moderation`: looked up per message, it may come and go. */
-  constructor(rest: RestLike, moderation: () => ModerationService | undefined = () => undefined) {
+  constructor(
+    rest: RestLike,
+    moderation: () => ModerationService | undefined = () => undefined,
+    emoji: SinkEmoji | null = null,
+  ) {
     this.#rest = rest;
     this.#moderation = moderation;
+    this.#emoji = emoji;
+  }
+
+  /** `:name:` → server emoji in guild channels, within the limits; recorded per channel. */
+  #withEmoji(context: ContextKey, text: string): string {
+    const emoji = this.#emoji;
+    if (emoji === null || context.scope === null || !emoji.enabled()) return text;
+    const guild = context.scope;
+    const rendered = renderEmoji(
+      text,
+      (name) => emoji.table.get(guild, name),
+      emoji.usage.recent(context.channel),
+      emoji.limits(),
+    );
+    emoji.usage.record(context.channel, rendered.used);
+    return rendered.text;
   }
 
   /**
@@ -107,7 +144,7 @@ export class DiscordSink implements PlatformSink, ReplySink {
     // Last line of defence: nothing moderation stops, no role / everyone / here mentions, no
     // secrets, whoever got this far.
     const safe = safeOutgoing(this.#moderation(), { path: "reply", text: message.text, context });
-    const chunks = splitMessage(safe.text, MAX_MESSAGE_LEN);
+    const chunks = splitMessage(this.#withEmoji(context, safe.text), MAX_MESSAGE_LEN);
     if (chunks.length === 0) throw new DiscordSendError("cannot send an empty message");
     let reference: Record<string, unknown> | null = null;
     if (message.reply_to) {
@@ -158,11 +195,17 @@ export class DiscordSink implements PlatformSink, ReplySink {
   async react(message: MessageRef, emoji: string, signal?: AbortSignal): Promise<void> {
     const channel = channelOf(message.context);
     const id = snowflake(message.id, "message");
+    const guild = message.context.scope;
+    const table = this.#emoji?.table ?? null;
+    const resolved =
+      table !== null && guild !== null
+        ? reactionEmoji(emoji, (name) => table.get(guild, name))
+        : emoji;
     await inContext(
       `reacting to message ${message.id} in ${contextKeyString(message.context)}`,
       async () => {
         await this.#rest.put(
-          Routes.channelMessageOwnReaction(channel, id, encodeURIComponent(emoji)),
+          Routes.channelMessageOwnReaction(channel, id, encodeURIComponent(resolved)),
           { signal },
         );
       },

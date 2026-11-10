@@ -6,8 +6,11 @@
 // `game` (JSON mode) for `{goal, goal_status, action, commentary, mood_nudge}` and starts the
 // action as a task with an id and a budget (`game.act`, through the gate); the task's
 // `game.<id>.task.done|failed` event (with a failure code) ends it, and every goal that ends is
-// published on `game.director.goal` with its code. After a failure it withholds the low-level
-// move / mine actions for a while, so she changes method or goal. It consumes
+// published on `game.director.goal` with its code. A goal has a success condition (her
+// inventory) and survives a failed attempt; a `done` that changed nothing is no progress; the
+// same method (action and item) failing the same way twice is held, so she changes method; her
+// record of attempts, the holds and the skills she learned are in every decision; night and
+// death start survival goals by themselves (docs/design/v4-plan.md §11.2). It consumes
 // `queue.item_activated` items of kind `game_goal` as locked goals; requests live commentary
 // with `agent.initiative` (reason `game`); nudges the mood on deaths and achievements; and
 // contributes a `game` prompt section. The one timeout policy is in `timeouts.ts`.
@@ -52,6 +55,8 @@ export {
   type ReportedStatus,
   type Verdict,
   verdictDebug,
+  type Want,
+  wantMet,
 } from "./decision.js";
 export {
   type ChatHandled,
@@ -81,6 +86,13 @@ export {
 } from "./guard.js";
 export { LIVE_TOPICS, LiveState } from "./live.js";
 export {
+  FINAL_CODES,
+  INTERRUPTION_CODES,
+  MethodGuard,
+  type MethodHold,
+  methodKey,
+} from "./methods.js";
+export {
   GameControl,
   GameControlKey,
   GameHandle,
@@ -88,6 +100,8 @@ export {
   GameModule,
   PROMPT_KEY,
 } from "./module.js";
+export { type Attempt, AttemptRecord, type AttemptResult } from "./record.js";
+export { SKILL_TOPIC, type Skill, SkillBook } from "./skills.js";
 export {
   budgetFor,
   codeOf,

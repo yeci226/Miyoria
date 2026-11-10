@@ -230,6 +230,9 @@ describe("reasoning", () => {
     for (const p of REASONING_PURPOSES) expect(DEFAULT_REASONING[p]).toBeDefined();
     expect(reasoningFor("chat_text")).toBe("off");
     expect(reasoningFor("plan_daily")).toBe("high");
+    // v4 §4.4: reading her tools' results and answering a real question think a little.
+    expect(reasoningFor("chat_tools")).toBe("low");
+    expect(reasoningFor("chat_question")).toBe("low");
     expect(reasoningFor("plan", { plan: "low" })).toBe("low");
     expect(reasoningFor("unknown")).toBe("off");
   });

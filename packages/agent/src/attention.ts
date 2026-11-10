@@ -5,9 +5,18 @@
 // * the prefilter: the channel's mode, direct address (mention, reply, her name, a DM; in voice
 //   a question right after she spoke or a one-on-one), someone answering what she just said,
 //   and in voice someone still speaking (she does not join in over them);
-// * whether to join in: a cheap salience score × her talkativeness (`talkFactor`), under the
-//   share cap (her share of recent messages); in the gray zone the `fast` model is asked (in
-//   the turn itself).
+// * someone who goes on talking with her (`conversing`): under the main line that turn is the
+//   model's to answer or pass, with no score, share cap or dice in between;
+// * who a line is for, beyond who it replies to (`saidToOthers`, `reactionOnly`): a reply to her
+//   that opens by calling someone else, or talks about her to others, is about her, said to them;
+//   a reply that is only a laugh or an emoji is a reaction for the room. Neither is direct: the
+//   main line gets them as lines it may pass (`Aside`);
+// * whether to join in: under the main line in text channels "a look" (v4 §7.2): something worth
+//   a look (a topic of hers, a question left unanswered, someone she is close to, an image, a new
+//   topic) opens a turn in which the model picks a rung of the response ladder, within the level's
+//   share cap and a cap of looks per hour (`[modules.agent.rhythm]`). Otherwise (voice, V2) a cheap
+//   salience score × her talkativeness (`talkFactor`), under the share cap; in the gray zone the
+//   `fast` model is asked (in the turn itself).
 //
 // Her talkativeness is hers: what she set for the context (`SelfState`), shifted by lessons and
 // her feelings (`AffectSnapshot.biases`, in the turn), with a floor; without one, the channel
@@ -19,10 +28,10 @@
 // interrupt scale) and every cooldown are gone: how often she starts something on her own is
 // the Arbiter's (`[modules.arbiter]`), and her feelings already moved her talkativeness.
 
-import { type IncomingMessage, timestampMs } from "@miyoria/types";
+import { type IncomingMessage, imageType, sameAccount, timestampMs } from "@miyoria/types";
 import type { Activeness, AttentionConfig, ChannelMode } from "./config.js";
 import { type Ceiling, cappedTalk } from "./levels.js";
-import type { Session } from "./session.js";
+import type { HistoryEntry, Session } from "./session.js";
 import {
   accountId,
   fixed,
@@ -71,6 +80,12 @@ export type Gate =
   /** Gray zone: ask the `fast` model, otherwise sample with the score. */
   | { kind: "ask_llm" };
 
+/**
+ * Why a turn that is not direct was handed to the model (main line): it goes on talking with
+ * her, it is about her but said to someone else, it only reacts to her line, or it is a look.
+ */
+export type Opened = "conversing" | "about_her" | "reaction" | "look";
+
 export interface Assessment {
   direct: boolean;
   score: number;
@@ -78,6 +93,8 @@ export interface Assessment {
   reasons: string[];
   /** Multiplier for ambient probabilities decided later (after the LLM check): `talkFactor`. */
   ambientScale: number;
+  /** Set when the turn was handed to the model without being direct (main line). */
+  opened?: Opened | null;
 }
 
 /** Extra facts of voice contexts. */
@@ -88,6 +105,27 @@ export interface VoiceAttention {
   questionWindowMs: number;
   /** People in the voice channel besides her (`null` = unknown). */
   others: number | null;
+  /** Display names of the people in the voice channel besides her (`Session.voiceMembers`). */
+  roster?: readonly string[];
+}
+
+/** What a look (v4 §7.2) needs to know besides the turn itself (text channels, main line). */
+export interface LookFacts {
+  /** Looks she took in this channel in the last hour. */
+  used: number;
+  /** `[modules.agent.rhythm] looks_per_hour`: the cap at the `normal` level, as usual. */
+  perHour: number;
+  /** A question standing this long (s) with nobody answering is worth a look. */
+  questionSecs: number;
+  /** A gap this long (ms) before the turn's first line: a new topic. */
+  topicGapMs: number;
+  /** Someone she is close to who speaks in this turn (for the trace), if anyone. */
+  close: string | null;
+  /**
+   * The coordinator saw the turn's question stand `questionSecs` by its own clock (a platform's
+   * timestamps may be skewed from it).
+   */
+  stood?: boolean;
 }
 
 /** The talkativeness she set for a context (0 = silent, 0.5 = as usual, 1 = very chatty). */
@@ -138,6 +176,13 @@ export interface AttentionInput {
   now: number;
   /** Set for voice contexts. */
   voice: VoiceAttention | null;
+  /**
+   * The model may answer `<silence/>` (the main line): a turn that goes on talking with her
+   * (`conversing`) is left to it instead of the score and the share cap.
+   */
+  modelMayPass?: boolean;
+  /** Text channels under the main line: what a look needs (`null`: no looks, the score decides). */
+  look?: LookFacts | null;
 }
 
 /**
@@ -182,12 +227,27 @@ export function ambientProbability(input: AttentionInput, p: number): number {
   return clamp01(p * ambientScale(input));
 }
 
-/** Why a message addresses her directly, if it does. */
-export function directReason(msg: IncomingMessage, names: readonly string[]): string | null {
+/**
+ * Why a message addresses her directly, if it does. `roster`: the other people in a voice
+ * channel (display names), whose names an utterance may open with.
+ *
+ * Being a reply to her is not enough (2026-11-10: someone replied to her line with "@someone-else
+ * she keeps skipping like a broken record, six times now", the log said `addressed_to_her` and she
+ * answered it): a reply that is said to someone else (`saidToOthers`) or is only a reaction for
+ * the room (`reactionOnly`) does not address her, and neither does her name inside a line said to
+ * someone else. A line that @-mentions her and others together is still to her.
+ */
+export function directReason(
+  msg: IncomingMessage,
+  names: readonly string[],
+  roster: readonly string[] = [],
+): string | null {
   const kind = msg.id.context.kind;
   if (kind === "dm") return "dm";
   if (msg.mentions_self) return "mention";
-  if (msg.reply_to_self) return "reply";
+  const elsewhere = saidToOthers(msg, names, roster);
+  if (msg.reply_to_self) return elsewhere === null && !reactionOnly(msg) ? "reply" : null;
+  if (elsewhere !== null) return null;
   // Transcripts space and punctuate names arbitrarily ("deep seek chan"), so voice compares
   // letters and digits only.
   const voice = kind === "voice";
@@ -227,6 +287,111 @@ export function vocativeName(
   return null;
 }
 
+/**
+ * In voice, the participant an utterance opens by calling (`roster`: display names of the others),
+ * if it calls one of them and not her. Latin names are matched like hers (`vocativeName`: speech
+ * recognition mangles them); other names (Chinese, Japanese) must open the utterance as they are.
+ */
+export function openingCall(
+  text: string,
+  roster: readonly string[],
+  names: readonly string[],
+): string | null {
+  if (vocativeName(text, names) !== null) return null;
+  const head = letters(text);
+  if (names.some((n) => letters(n) !== "" && head.startsWith(letters(n)))) return null;
+  const latin = vocativeName(text, roster);
+  if (latin !== null) return latin.name;
+  for (const n of roster) {
+    const name = letters(n);
+    // Only names with more than ASCII in them: an ASCII prefix like "mo" would match "more".
+    if ([...name].length >= 2 && !/^[a-z0-9]+$/.test(name) && head.startsWith(name)) return n;
+  }
+  return null;
+}
+
+/** Lower-cased letters and digits of `s` (how transcripts are compared). */
+function letters(s: string): string {
+  return [...s.toLowerCase()].filter(isAlphanumeric).join("");
+}
+
+/** `text` speaks of her in the third person: one of her names, 她, she / her. */
+export function aboutHerInThirdPerson(text: string, names: readonly string[]): boolean {
+  const lower = text.toLowerCase();
+  if (names.some((n) => n.trim() !== "" && lower.includes(n.trim().toLowerCase()))) return true;
+  return /她/.test(text) || /\b(?:she|her|hers|this bot|the bot)\b/i.test(text);
+}
+
+/**
+ * Whom a message is said to, when its words say it is someone other than her: it opens with an
+ * @-mention of someone else, it @-mentions only others and talks about her in the third person,
+ * or (voice) it opens by calling another participant (`openingCall`). `null`: nothing says so.
+ * A message that @-mentions her is never said to others, whoever else it mentions.
+ */
+export function saidToOthers(
+  msg: IncomingMessage,
+  names: readonly string[],
+  roster: readonly string[] = [],
+): string | null {
+  if (msg.mentions_self) return null;
+  const others = msg.mentions_others ?? [];
+  const first = others[0]?.display_name ?? "別人";
+  if (msg.opens_with_other_mention === true) return first;
+  if (msg.id.context.kind === "voice") {
+    const called = openingCall(msg.text, roster, names);
+    if (called !== null) return called;
+  }
+  return others.length > 0 && aboutHerInThirdPerson(msg.text, names) ? first : null;
+}
+
+/** Laughter and cheers that are a reaction, not something said (letters only, lower-cased). */
+const REACTION_WORDS =
+  /^(?:l+o+l+|lmf?a+o+|rofl|x+d+|w{2,}|草+|笑死(?:我了)?|哈+|呵+|嘻+|嘿+|23{2,}|6{3,}|好耶+|讚+)+$/;
+
+/**
+ * The message is only a reaction for the room: laughter ("LOL", 「哈哈哈」, 「笑死」), emoji or a
+ * sticker, with nothing asked and nothing attached.
+ */
+export function reactionOnly(msg: IncomingMessage): boolean {
+  if (msg.attachments.length > 0 || (msg.forwarded?.length ?? 0) > 0) return false;
+  if (/[?？]/.test(msg.text)) return false;
+  const stripped = msg.text
+    .replace(/<a?:[\w~-]+:\d+>/g, "")
+    .replace(/:[\w~-]+:/g, "")
+    .replace(/\p{Extended_Pictographic}|\p{Emoji_Modifier}|‍|️|⃣/gu, "")
+    .replace(/[\s\p{P}\p{S}]/gu, "")
+    .toLowerCase();
+  if (stripped === "") return msg.text.trim() !== "" || (msg.stickers?.length ?? 0) > 0;
+  return REACTION_WORDS.test(stripped);
+}
+
+/** A line answering her line that is not said to her (the main line may pass on it). */
+export type Aside =
+  /** About her, said to someone else (`to`). */
+  | { kind: "about_her"; to: string }
+  /** Only a reaction for the room. */
+  | { kind: "reaction" };
+
+/**
+ * Whether `msg`, a reply to her or a line that follows hers (`followsHer`), is not said to her:
+ * in text, about her but said to someone else (a voice line that calls someone else is simply
+ * theirs); anywhere, only a reaction. `null` for lines that address her and for the rest.
+ */
+export function asideOf(
+  msg: IncomingMessage,
+  names: readonly string[],
+  roster: readonly string[],
+  followsHer: boolean,
+): Aside | null {
+  if (!msg.reply_to_self && !followsHer) return null;
+  if (directReason(msg, names, roster) !== null) return null;
+  if (msg.id.context.kind !== "voice") {
+    const to = saidToOthers(msg, names, roster);
+    if (to !== null) return { kind: "about_her", to };
+  }
+  return reactionOnly(msg) ? { kind: "reaction" } : null;
+}
+
 /** Levenshtein distance. */
 function editDistance(a: string, b: string): number {
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -247,8 +412,12 @@ function questionAfterHer(input: AttentionInput): string | null {
   if (voice === null) return null;
   const last = input.session.lastSelfAt();
   if (last === null) return null;
+  const roster = voice.roster ?? [];
   const hit = input.inputs
-    .filter((m) => isQuestion(m.text.toLowerCase()))
+    // A question that opens by calling someone else is theirs, however soon after her.
+    .filter(
+      (m) => isQuestion(m.text.toLowerCase()) && saidToOthers(m, input.names, roster) === null,
+    )
     .some((m) => {
       const gap = timestampMs(m.ts) - last;
       return gap >= -voice.questionWindowMs && gap <= voice.questionWindowMs;
@@ -261,9 +430,10 @@ export function assess(input: AttentionInput): Assessment {
   const replying = followsHer(input);
   const cfg = input.config;
   const reasons = [`mode ${input.mode}`];
+  const roster = input.voice?.roster ?? [];
   let why: string | null = null;
   for (const m of input.inputs) {
-    why = directReason(m, input.names);
+    why = directReason(m, input.names, roster);
     if (why !== null) break;
   }
   why ??= questionAfterHer(input);
@@ -279,7 +449,14 @@ export function assess(input: AttentionInput): Assessment {
       ? { level: USUAL_TALKATIVENESS, scope: `${raw.scope}, replying` }
       : raw;
   const scale = talkFactor(talk.level);
-  const done = (gate: Gate): Assessment => ({ direct, score, gate, reasons, ambientScale: scale });
+  const done = (gate: Gate, opened: Opened | null = null): Assessment => ({
+    direct,
+    score,
+    gate,
+    reasons,
+    ambientScale: scale,
+    ...(opened === null ? {} : { opened }),
+  });
 
   switch (input.mode) {
     case "off":
@@ -317,11 +494,65 @@ export function assess(input: AttentionInput): Assessment {
     reasons.push("someone is speaking");
     return done({ kind: "ignore" });
   }
+  const mayPass = input.modelMayPass === true;
+  const look = mayPass && input.voice === null ? (input.look ?? null) : null;
+  // Looks taken in the last hour against the cap of this level and her talkativeness.
+  const lookCap =
+    look === null ? 0 : Math.round(look.perHour * (ceiling?.looks ?? 1) * talkFactor(talk.level));
+  if (mayPass) {
+    const asides = input.inputs.map((m) => asideOf(m, input.names, roster, replying));
+    const about = asides.find((a) => a?.kind === "about_her");
+    // 2026-11-10: a reply to her opening with "@someone-else she keeps skipping…" was answered
+    // as if said to her. It is about her: hers to join, but she is told whom it is said to.
+    if (about?.kind === "about_her") {
+      reasons.push(`about her, said to ${about.to}: hers to join or pass`);
+      return done({ kind: "sample", probability: 1 }, "about_her");
+    }
+    if (asides.length > 0 && asides.every((a) => a?.kind === "reaction")) {
+      // A laugh at her line needs no answer: the model sees it and may pass or react, and it
+      // counts as a look, so a lively room does not buy a model call per laugh.
+      if (look !== null && look.used >= lookCap) {
+        reasons.push(`a reaction to her line; looks spent (${look.used}/${lookCap} this hour)`);
+        return done({ kind: "ignore" });
+      }
+      reasons.push("a reaction to her line: hers to answer or pass");
+      return done({ kind: "sample", probability: 1 }, "reaction");
+    }
+  }
+  // 2026-11-07 to 11-10: of 1,803 follow-ups she did not answer, the share cap stopped 1,489 (two
+  // people going back and forth put her near 0.5) and the level's minimum score 253. Whether a
+  // line is still meant for her is read off its words, so the model decides: it may pass.
+  if (
+    replying &&
+    mayPass &&
+    conversing(input.session, input.inputs, input.now, input.names, roster)
+  ) {
+    reasons.push("talking with her: hers to answer or pass");
+    return done({ kind: "sample", probability: 1 }, "conversing");
+  }
   const share = input.session.selfShare(cfg.recent_window);
   const maxShare = Math.min(input.maxShare, ceiling?.maxShare ?? 1);
   if (share > maxShare) {
     reasons.push(`anti-spam: her share ${fixed(share, 2)} > ${fixed(maxShare, 2)}`);
     return done({ kind: "ignore" });
+  }
+  // 2026-11-07 to 11-10: unaddressed, she joined 11 times in 4,964 (0.2%): every text channel was
+  // `quiet`, and a dice roll under its minimum score decided. Under the main line something worth
+  // a look opens a turn and she picks the rung (nothing, an emoji, a short line, joining in).
+  if (look !== null) {
+    const worth = lookTriggers(input, look);
+    if (worth.length === 0) {
+      reasons.push("nothing worth a look");
+      return done({ kind: "ignore" });
+    }
+    if (look.used >= lookCap) {
+      reasons.push(
+        `worth a look (${worth.join(", ")}); looks spent (${look.used}/${lookCap} this hour)`,
+      );
+      return done({ kind: "ignore" });
+    }
+    reasons.push(`a look: ${worth.join(", ")} (${look.used + 1}/${lookCap} this hour)`);
+    return done({ kind: "sample", probability: 1 }, "look");
   }
   const grayLow = Math.max(cfg.gray_low, ceiling?.minScore ?? 0);
   const grayHigh = Math.max(cfg.gray_high, grayLow);
@@ -353,18 +584,106 @@ export function answersHer(
   inputs: readonly IncomingMessage[],
   now: number,
 ): boolean {
+  const her = earlier(session, inputs)
+    .reverse()
+    .slice(0, 3)
+    .find((e) => e.isSelf);
+  return her !== undefined && Math.trunc((now - her.ts) / 1000) < FOLLOW_UP_SECS;
+}
+
+/** A line this long after hers no longer follows it. */
+const FOLLOW_UP_SECS = 180;
+
+/** The history without `inputs` (which are already in it), oldest first. */
+function earlier(session: Session, inputs: readonly IncomingMessage[]): HistoryEntry[] {
   const ids = new Set(inputs.map((m) => m.id.id));
   const history = session.history();
   // Inputs without an id match in the history are its last entries (as recorded).
   const known = history.filter((e) => e.id !== null && ids.has(e.id)).length;
-  const rest = history
+  return history
     .slice(0, history.length - (inputs.length - known))
     .filter((e) => e.id === null || !ids.has(e.id));
-  const her = rest
-    .reverse()
-    .slice(0, 3)
-    .find((e) => e.isSelf);
-  return her !== undefined && Math.trunc((now - her.ts) / 1000) < 180;
+}
+
+/**
+ * This turn goes on talking with her, which is narrower than `answersHer`: her lines are the
+ * last thing said before it, or one other line came between and the speaker is the one her
+ * lines answered (who spoke right before them). A reply to someone else's message is not.
+ *
+ * Narrow on purpose: every such turn costs a call and may make her speak. Once two lines passed
+ * without her, the conversation went on without her and the score decides again.
+ */
+export function conversing(
+  session: Session,
+  inputs: readonly IncomingMessage[],
+  now: number,
+  names: readonly string[] = [],
+  roster: readonly string[] = [],
+): boolean {
+  const speaker = inputs.at(-1)?.author.account;
+  if (speaker === undefined) return false;
+  if (inputs.some((m) => (m.reply_to ?? null) !== null && !m.reply_to_self)) return false;
+  // Words that say it is for someone else win over coming right after her (`saidToOthers`).
+  if (inputs.some((m) => saidToOthers(m, names, roster) !== null)) return false;
+  const rest = earlier(session, inputs);
+  const last = rest.findLastIndex((e) => e.isSelf);
+  const her = rest[last];
+  if (her === undefined || last < rest.length - 2) return false;
+  if (Math.trunc((now - her.ts) / 1000) >= FOLLOW_UP_SECS) return false;
+  if (last === rest.length - 1) return true;
+  // Her reply may be several messages: who spoke before the first of them.
+  let first = last;
+  while (first > 0 && rest[first - 1]?.isSelf === true) first -= 1;
+  const answered = rest[first - 1];
+  return answered !== undefined && sameAccount(answered.account, speaker);
+}
+
+/** Openings that change the subject. */
+const NEW_TOPIC = /^\s*(?:話說|對了|換個話題|說到這|順便問|btw\b|by the way)/i;
+
+/**
+ * What in this turn is worth a look (v4 §7.2), for the trace; empty: nothing. A topic of hers, a
+ * question that stood `questionSecs` with nobody answering (the coordinator looks again then),
+ * someone she is close to, an image or sticker, a new topic (an opening that changes the subject,
+ * or the first line after a long gap).
+ */
+export function lookTriggers(input: AttentionInput, look: LookFacts): string[] {
+  const out: string[] = [];
+  const texts = input.inputs.map((m) => m.text.toLowerCase());
+  const topic = [...input.config.keywords, ...input.interests].find((k) =>
+    texts.some((t) => mentionsTopic(t, k)),
+  );
+  if (topic !== undefined) out.push(`topic \`${topic}\``);
+  const last = input.inputs.at(-1);
+  const newest = input.session.history().at(-1);
+  if (
+    last !== undefined &&
+    isQuestion(last.text.toLowerCase()) &&
+    saidToOthers(last, input.names) === null &&
+    newest !== undefined &&
+    newest.id === last.id.id &&
+    (look.stood === true || input.now - timestampMs(last.ts) >= look.questionSecs * 1000)
+  ) {
+    out.push("a question nobody answered");
+  }
+  if (look.close !== null) out.push(`close to ${look.close}`);
+  if (
+    input.inputs.some(
+      (m) => m.attachments.some((a) => imageType(a) !== null) || (m.stickers?.length ?? 0) > 0,
+    )
+  ) {
+    out.push("an image");
+  }
+  const first = input.inputs[0];
+  const before = first === undefined ? undefined : earlier(input.session, input.inputs).at(-1);
+  if (
+    first !== undefined &&
+    (NEW_TOPIC.test(first.text) ||
+      (before !== undefined && timestampMs(first.ts) - before.ts >= look.topicGapMs))
+  ) {
+    out.push("a new topic");
+  }
+  return out;
 }
 
 function salience(input: AttentionInput, direct: boolean, reasons: string[]): number {

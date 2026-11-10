@@ -95,6 +95,7 @@ export const queryKeys = {
   prompts: ["prompts"] as const,
   turnOutcomes: (q: object) => ["turns", "outcomes", q] as const,
   turnsAll: ["turns"] as const,
+  turnMetrics: (days: number) => ["turns", "metrics", days] as const,
   turnE2e: (turn: string) => ["e2e", turn] as const,
   factEvents: (q: FactEventsQuery) => ["facts", "events", q] as const,
   factChain: (id: string) => ["facts", "chain", id] as const,
@@ -752,6 +753,18 @@ export function useTurnOutcomes(q: { limit?: number; outcome?: TurnOutcomeKind; 
     queryKey: queryKeys.turnOutcomes(q),
     queryFn: ({ signal }) => api.turnOutcomes(q, { signal }),
     refetchInterval: poll(15_000),
+  });
+}
+
+/** The V4 participation measures per local day (`GET /api/turns/metrics`). */
+export function useTurnMetrics(days: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.turnMetrics(days),
+    queryFn: ({ signal }) => api.turnMetrics(days, { signal }),
+    refetchInterval: poll(60_000),
+    placeholderData: (prev) => prev,
+    retry: false,
   });
 }
 

@@ -220,6 +220,163 @@ describe("broadcast", () => {
   });
 });
 
+describe("broadcast through the hub (obs_hub)", () => {
+  const HUB = { obs_hub: true };
+  const order = (w: FakeWorld) =>
+    w.calls.map((c) => `${c.capability}${c.args.action ? `:${String(c.args.action)}` : ""}`);
+
+  it("starts OBS first, waits obs_start_delay_ms after it streams, then Go Live", async () => {
+    const w = new FakeWorld({ config: { ...HUB, obs_start_delay_ms: 40 } });
+    const r = await w.service.request(w.transition(LIVE));
+    expect(w.service.snapshot().broadcast.type).toBe("starting");
+    await until(() => w.obsStreaming);
+    const streamingAt = Date.now();
+    await until(() => w.count("stream.start") === 1);
+    expect(Date.now() - streamingAt).toBeGreaterThanOrEqual(30);
+    await settle(w, r.status === "started" ? r.task : null);
+    expect(order(w)).toEqual(["stage.stream:start", "stream.start"]);
+    // OBS is an implied step; Go Live is the primary one.
+    expect(w.calls[0]?.primary).toBeNull();
+    expect(w.calls[0]?.principal.kind).toBe("director");
+    expect(w.published(ACTIVITY_DONE_TOPIC)).toHaveLength(1);
+    expect(w.service.snapshot().broadcast).toMatchObject({ type: "live", golive: true, obs: true });
+    expect((await w.service.request(w.transition(LIVE))).status).toBe("already");
+  });
+
+  it("OBS already streaming (the website's): only Go Live starts", async () => {
+    const w = new FakeWorld({ config: HUB });
+    w.obsStreaming = true;
+    w.setObs(true);
+    expect(w.service.snapshot().broadcast).toEqual({ type: "off" });
+    const r = await w.service.request(w.transition(LIVE));
+    await settle(w, r.status === "started" ? r.task : null);
+    expect(order(w)).toEqual(["stream.start"]);
+    expect(w.service.snapshot().broadcast).toMatchObject({ type: "live", golive: true, obs: true });
+  });
+
+  it("OBS that does not stream fails before Go Live is touched", async () => {
+    const w = new FakeWorld({ config: { ...HUB, obs_attempts: 2 } });
+    w.obsStuck = true;
+    const r = await w.service.request(w.transition(LIVE));
+    await settle(w, r.status === "started" ? r.task : null);
+    expect(order(w)).toEqual(["stage.stream:start", "stage.stream:start"]);
+    expect(w.published(NOTICE_TOPIC).at(-1)?.text).toBe("開台失敗:OBS 沒有開始直播");
+    expect(w.service.snapshot().broadcast.type).toBe("off");
+  });
+
+  it("OBS not open: 開台失敗:OBS 沒開, without starting Go Live", async () => {
+    const w = new FakeWorld({ obs: false, config: HUB });
+    const r = await w.service.request(w.transition(LIVE));
+    await settle(w, r.status === "started" ? r.task : null);
+    expect(w.published(NOTICE_TOPIC).at(-1)?.text).toBe("開台失敗:OBS 沒開");
+    expect(w.calls).toEqual([]);
+  });
+
+  it("without a stage node Go Live starts directly", async () => {
+    const w = new FakeWorld({ stage: false, config: HUB });
+    const r = await w.service.request(w.transition(LIVE));
+    await settle(w, r.status === "started" ? r.task : null);
+    expect(order(w)).toEqual(["stream.start"]);
+    expect(w.service.snapshot().broadcast).toMatchObject({ type: "live", golive: true });
+  });
+
+  it("stop_live ends Go Live only; OBS keeps streaming and reads as no broadcast", async () => {
+    const w = new FakeWorld({ config: HUB });
+    const live = await w.service.request(w.transition(LIVE));
+    await settle(w, live.status === "started" ? live.task : null);
+    const stop = await w.service.request(w.transition({ type: "stop_live" }));
+    await settle(w, stop.status === "started" ? stop.task : null);
+    expect(order(w)).toEqual(["stage.stream:start", "stream.start", "stream.stop"]);
+    expect(w.obsStreaming).toBe(true);
+    expect(w.service.snapshot().broadcast).toEqual({ type: "off" });
+    // Nothing left to stop: OBS alone is the website's.
+    expect(await w.service.request(w.transition({ type: "stop_live" }))).toMatchObject({
+      status: "already",
+    });
+  });
+
+  it("leaving voice stops Go Live but not OBS, and does not wait on OBS", async () => {
+    const w = new FakeWorld({ config: HUB });
+    const live = await w.service.request(w.transition(LIVE));
+    await settle(w, live.status === "started" ? live.task : null);
+    const leave = await w.service.request(w.transition({ type: "leave_voice" }));
+    await settle(w, leave.status === "started" ? leave.task : null);
+    expect(w.service.task(leave.status === "started" ? leave.task : "")?.status).toBe("done");
+    expect(order(w)).toEqual(["stage.stream:start", "stream.start", "stream.stop", "voice.leave"]);
+    expect(w.obsStreaming).toBe(true);
+    const snap = w.service.snapshot();
+    expect(snap.presence).toEqual({ type: "none" });
+    expect(snap.broadcast).toEqual({ type: "off" });
+  });
+
+  it("leaving voice while only OBS streams just leaves", async () => {
+    const w = new FakeWorld({ config: HUB });
+    w.obsStreaming = true;
+    w.setObs(true);
+    w.voice.set(GUILD, "v1");
+    w.emit({
+      type: "voice_joined",
+      data: { context: { ...CHAT, channel: "v1", kind: "voice" }, participants: [] },
+    });
+    const leave = await w.service.request(w.transition({ type: "leave_voice" }));
+    await settle(w, leave.status === "started" ? leave.task : null);
+    expect(order(w)).toEqual(["voice.leave"]);
+    expect(w.obsStreaming).toBe(true);
+  });
+
+  it("a Go Live that fails is rolled back without stopping OBS", async () => {
+    const w = new FakeWorld({ config: HUB });
+    w.goliveFails = "rtmp pull: no publisher";
+    const r = await w.service.request(w.transition(LIVE));
+    await settle(w, r.status === "started" ? r.task : null);
+    expect(w.published(ACTIVITY_FAILED_TOPIC)[0]?.detail).toContain("no publisher");
+    expect(w.count("stage.stream")).toBe(1);
+    expect(w.obsStreaming).toBe(true);
+    expect(w.service.snapshot().broadcast.type).toBe("off");
+  });
+
+  it("a Go Live that never comes up stops Go Live only", async () => {
+    const w = new FakeWorld({ config: { ...HUB, golive_timeout_ms: 60 } });
+    w.goliveHangs = true;
+    const r = await w.service.request(w.transition(LIVE));
+    await settle(w, r.status === "started" ? r.task : null);
+    expect(w.published(ACTIVITY_FAILED_TOPIC)[0]?.detail).toContain("還沒開始");
+    expect(order(w)).toEqual(["stage.stream:start", "stream.start", "stream.stop"]);
+    expect(w.obsStreaming).toBe(true);
+  });
+
+  it("a Go Live started elsewhere is adopted; when it ends OBS keeps streaming", async () => {
+    const w = new FakeWorld({ config: HUB });
+    w.obsStreaming = true;
+    w.setObs(true);
+    w.golive.set(GUILD, "live");
+    w.emit(customEvent("voice.golive", { guild: GUILD, state: "live", error: null, reason: null }));
+    expect(w.service.snapshot().broadcast).toMatchObject({ type: "live", golive: true, obs: true });
+    w.golive.delete(GUILD);
+    w.emit(
+      customEvent("voice.golive", {
+        guild: GUILD,
+        state: "failed",
+        error: "node crashed",
+        reason: null,
+      }),
+    );
+    await tick(30);
+    expect(w.calls).toEqual([]);
+    expect(w.obsStreaming).toBe(true);
+    expect(w.service.snapshot().broadcast).toEqual({ type: "off" });
+  });
+
+  it("a Go Live started elsewhere while OBS is off brings OBS up", async () => {
+    const w = new FakeWorld({ config: HUB });
+    w.golive.set(GUILD, "live");
+    w.emit(customEvent("voice.golive", { guild: GUILD, state: "live", error: null, reason: null }));
+    await until(() => w.obsStreaming);
+    await until(() => w.count("stream.start") === 1);
+    expect(order(w)).toEqual(["stage.stream:start", "stream.start"]);
+  });
+});
+
 describe("activity", () => {
   it("game start answers at once, never starts twice, and notices when it is up", async () => {
     const w = new FakeWorld({ launchMs: 60 });
@@ -302,8 +459,9 @@ describe("activity", () => {
     });
   });
 
-  it("browse stays off; chatting needs no driver", async () => {
+  it("browse needs the web; chatting needs no driver", async () => {
     const w = new FakeWorld();
+    w.missing.add("web.search");
     const browse = await w.service.request(
       w.transition({ type: "start", activity: "browse", target: "threads", goal: null }),
     );

@@ -5,7 +5,7 @@ import { E2E_REASON_LABEL, E2E_SEGMENTS, fmtMs } from "@/lib/e2e";
 
 /**
  * Voice response time of one voice channel: speech end to first audio, its median and slowest
- * 10%, then the six segments. `e2e` is absent on a Core older than the measurement.
+ * 10%, then the segments. `e2e` is absent on a Core older than the measurement.
  */
 export function VoiceLatency({ e2e }: { e2e: VoiceE2eLatency | undefined }) {
   if (!e2e) return <EmptyLine>這個 Core 還沒有提供語音回應延遲</EmptyLine>;

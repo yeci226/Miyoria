@@ -120,6 +120,96 @@ export const EvidenceConfigSchema = z.object({
 export type EvidenceConfig = z.output<typeof EvidenceConfigSchema>;
 
 /**
+ * What she can see of the last hours across every place (v4 §5.2, §5.3): the "just now"
+ * timeline, the other places she is in and her questions to people. Read from the EventLog, so a
+ * restart loses none of it.
+ */
+export const RecentConfigSchema = z.object({
+  /** Hours of the log looked at. */
+  hours: z.number().min(0).default(6),
+  /** Newest events read from the log per pass (the rest is too old to matter). */
+  max_events: uint().default(3000),
+  /** Seconds one read of the log is reused (the voice hot path asks every turn). */
+  cache_secs: uint().default(10),
+  /** Register the prompt contributors `just_now` and `elsewhere`. */
+  contributors: z.boolean().default(true),
+  /** Characters of the timeline in a prompt. */
+  just_now_chars: uint().default(1200),
+  /** Exchanges with people (someone talked to her, she answered) kept in the timeline. */
+  talk_entries: uint().default(6),
+  /** Characters of one quoted line inside an entry. */
+  quote_chars: uint().default(60),
+  /** Minutes within which the same state (who is in voice) is written once. */
+  coalesce_mins: uint().default(10),
+  /** A place counts as active elsewhere when something was said there this recently. */
+  elsewhere_mins: uint().default(30),
+  /** Other places summarized. */
+  elsewhere_places: uint().default(3),
+  /** Last lines quoted per place. */
+  elsewhere_lines: uint().default(3),
+  /** Characters of the recap of one place. */
+  elsewhere_recap_chars: uint().default(240),
+  /** Characters of the whole summary in a prompt. */
+  elsewhere_chars: uint().default(900),
+  /** Hours within which her questions to a person are grouped and counted. */
+  question_hours: z.number().min(0).default(24),
+  /** Hours after a question within which the person speaking to her counts as the answer. */
+  answer_hours: z.number().min(0).default(12),
+  /**
+   * Channel ids (text or voice) whose content never shows anywhere else: places not everyone in
+   * the guild can see, until a platform provides `PlaceAccess`.
+   */
+  hidden_channels: z.array(z.string()).default([]),
+});
+export type RecentConfig = z.output<typeof RecentConfigSchema>;
+
+/** Person profiles (v4 §5.6): one block per person present, every source read once. */
+export const ProfilesConfigSchema = z.object({
+  /** People with a profile, the ones she is talking with first. */
+  max_people: uint().default(6),
+  /** Characters of one person's profile. */
+  person_chars: uint().default(360),
+  /** Things she holds about them (facts, then her documents), retrieved ones left out. */
+  points: uint().default(5),
+  /** Minutes of silence that end a stretch of talk ("last seen" is before the current one). */
+  session_gap_mins: uint().default(30),
+  /** Characters of the last topic. */
+  topic_chars: uint().default(80),
+});
+export type ProfilesConfig = z.output<typeof ProfilesConfigSchema>;
+
+/** Her notebook (v4 §5.5): pages she writes and reads with tools. */
+export const NotebookConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** Pages kept (a write past it is refused: she has to tidy up first). */
+  max_pages: uint().default(300),
+  /** Characters of one page. */
+  page_chars: uint().default(4000),
+  /** Characters of a path (`人/Owen`, `主題/Minecraft 建築`). */
+  path_chars: uint().default(60),
+  /** Characters one read returns (longer pages are read in parts). */
+  read_chars: uint().default(2000),
+  /** Writes per hour, all pages together. */
+  writes_per_hour: uint().default(30),
+  /** Characters of the page index in a prompt. */
+  index_chars: uint().default(600),
+});
+export type NotebookConfig = z.output<typeof NotebookConfigSchema>;
+
+/**
+ * `[modules.memory.dates]`: birthdays and other dates people tell her (`remember_date`), and the
+ * day she met them; on the day, the first time they speak she gets a followup to bring it up.
+ */
+export const DatesConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** Her calendar's offset from UTC (minutes; 480 = Taiwan). */
+  utc_offset_minutes: z.number().int().min(-840).max(840).default(480),
+  /** The yearly day she first met someone counts too (from the first anniversary on). */
+  met_anniversary: z.boolean().default(true),
+});
+export type DatesConfig = z.output<typeof DatesConfigSchema>;
+
+/**
  * `[modules.memory]`.
  *
  * ```toml
@@ -204,6 +294,23 @@ export const MemoryConfigSchema = z.object({
    * against one with evidence. They stay usable, just never as sure as a memory with a source.
    */
   unknown_origin_factor: z.number().min(0).max(1).default(0.8),
+  /**
+   * Weight of the lines before the one being answered against the line itself (0..1): a reply
+   * like "好啊" shares no word with anything, the talk around it does (v4 §5.4).
+   */
+  context_weight: z.number().min(0).max(1).default(0.6),
+  /**
+   * Memories about a person she is talking with, or named in the talk, that may come back
+   * without a shared word (their most important ones, still above `min_score`). 2026-11-10:
+   * someone answering "好啊" got none of what she knew about them.
+   */
+  person_points: uint().default(2),
+  /** ... only those at least this important. */
+  person_point_importance: z.number().min(0).max(1).default(0.5),
+  recent: RecentConfigSchema.prefault({}),
+  profiles: ProfilesConfigSchema.prefault({}),
+  notebook: NotebookConfigSchema.prefault({}),
+  dates: DatesConfigSchema.prefault({}),
 });
 export type MemoryConfig = z.output<typeof MemoryConfigSchema>;
 
@@ -212,20 +319,44 @@ export function memoryConfig(overrides: z.input<typeof MemoryConfigSchema> = {})
   return MemoryConfigSchema.parse(overrides);
 }
 
+/** The model `provider = "local"` uses when `model` is empty: small, multilingual, CPU-friendly. */
+export const DEFAULT_LOCAL_MODEL = "Xenova/multilingual-e5-small";
+
 /**
  * Top-level `[memory.embedding]`. Embeddings are optional; without them retrieval uses full
  * text, recency and importance only.
  *
+ * `provider = "local"` is the owner's choice (v4 §16 row 5: members' words do not leave this
+ * machine): a small multilingual model on the CPU, in a worker thread, through the ONNX runtime
+ * of `@huggingface/transformers` (installed separately; see `local-embed.ts`).
+ *
  * ```toml
  * [memory.embedding]
+ * provider = "local"                      # model = "Xenova/multilingual-e5-small" by default
+ *
+ * # or a server that speaks the OpenAI format
  * provider = "openai-compatible"
  * base_url = "http://localhost:11434/v1"
  * model = "bge-m3"
  * ```
  */
 export const EmbeddingConfigSchema = z.object({
-  /** `"none"` (default) or `"openai-compatible"`. */
+  /** `"none"` (default), `"local"` or `"openai-compatible"`. */
   provider: z.string().default("none"),
+  /** `local`: the module that runs the model (resolved from this package, or a `file:` URL). */
+  runtime: z.string().default("@huggingface/transformers"),
+  /** `local`: where model files are kept (empty: the runtime's own cache). */
+  models_dir: z.string().default(""),
+  /** `local`: fetch the model files once when they are not there (only the model comes in). */
+  allow_download: z.boolean().default(true),
+  /** `local`: weight type (`q8` is about a quarter of `fp32` and close enough). */
+  dtype: z.string().default("q8"),
+  /** `local`: CPU threads of the worker (keep it off the cores voice needs). */
+  threads: uint().default(2),
+  /** Prepended to texts searched for (e5 models: `query: `). Default by model for `local`. */
+  query_prefix: z.string().nullable().default(null),
+  /** Prepended to texts stored (e5 models: `passage: `). Default by model for `local`. */
+  passage_prefix: z.string().nullable().default(null),
   /** API root, e.g. `https://api.openai.com/v1`; `/embeddings` is appended. */
   base_url: z.string().default(""),
   api_key: z.string().nullable().default(null),

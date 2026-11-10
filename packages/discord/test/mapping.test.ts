@@ -3,6 +3,7 @@ import { ApplicationCommandOptionType, ChannelType } from "discord.js";
 import { describe, expect, test } from "vitest";
 import {
   commandPath,
+  componentsText,
   displayName,
   hasContent,
   incomingMessage,
@@ -11,6 +12,7 @@ import {
   type MemberLike,
   type MessageLike,
   type OptionLike,
+  otherMentions,
   parseUserIds,
   quotedMessage,
   resolvedUsers,
@@ -304,5 +306,103 @@ describe("mapping", () => {
     expect(q.author_name).toBe("Ali");
     expect(q.text.startsWith("@Alice 長")).toBe(true);
     expect([...q.text].length).toBe(301);
+  });
+});
+
+describe("who a message is for", () => {
+  const people = new Map([
+    ["7", user("7", "miyoria", null, true)],
+    ["50", user("50", "bob_w", "Bob")],
+    ["51", user("51", "helper", null, true)],
+  ]);
+
+  test("reply_to_her_that_opens_with_someone_else_is_flagged", () => {
+    // The 2026-11-10 incident: a reply to her whose text talks to another person.
+    const msg = message({
+      content: "<@50> she keeps repeating herself",
+      mentions: { users: new Map([...people].filter(([id]) => id !== "51")) },
+    });
+    const m = incomingMessage(msg, "channel", selves(), "7");
+    expect(m.reply_to_self).toBe(true);
+    expect(m.mentions_self).toBe(true);
+    expect(m.opens_with_other_mention).toBe(true);
+    expect(m.mentions_others).toEqual([
+      { account: { platform: "discord", id: "50" }, display_name: "Bob", is_bot: false },
+    ]);
+  });
+
+  test("a_reply_ping_without_markup_is_not_a_mention_of_someone_else", () => {
+    const msg = message({
+      content: "hello there",
+      mentions: { users: new Map([["50", people.get("50") as UserLike]]) },
+    });
+    const m = incomingMessage(msg, "channel", selves(), "50");
+    expect(m.mentions_others).toEqual([]);
+    expect(m.opens_with_other_mention).toBe(false);
+  });
+
+  test("opening_with_her_is_not_opening_with_someone_else", () => {
+    const msg = message({ content: "<@7> and <@!50> please", mentions: { users: people } });
+    const m = incomingMessage(msg, "channel", selves());
+    expect(m.opens_with_other_mention).toBe(false);
+    expect(m.mentions_others?.map((x) => x.account.id)).toEqual(["50"]);
+  });
+
+  test("her_second_account_counts_as_her", () => {
+    const users = new Map([["8", user("8", "self2", null)]]);
+    const m = incomingMessage(message({ content: "<@8> hi", mentions: { users } }), "dm", selves());
+    expect(m.mentions_others).toEqual([]);
+    expect(m.opens_with_other_mention).toBe(false);
+  });
+
+  test("bots_are_flagged_dedupe_and_keep_order_nicknames_win_roles_are_left_out", () => {
+    const { mentions_others } = otherMentions(
+      "x <@51> <@!50> <@51> <@&99>",
+      {
+        users: people,
+        members: new Map([["50", { nickname: "Bobby" }]]),
+        roles: new Map([["99", { name: "mods" }]]),
+      },
+      selves(),
+    );
+    expect(mentions_others).toEqual([
+      { account: { platform: "discord", id: "51" }, display_name: "helper", is_bot: true },
+      { account: { platform: "discord", id: "50" }, display_name: "Bobby", is_bot: false },
+    ]);
+  });
+
+  test("a_leading_role_mention_is_not_a_person", () => {
+    const r = otherMentions("<@&99> meeting", { users: new Map() }, selves());
+    expect(r).toEqual({ mentions_others: [], opens_with_other_mention: false });
+  });
+
+  test("a_mention_in_the_middle_does_not_open_the_text", () => {
+    const m = incomingMessage(
+      message({ content: "  hey <@50>", mentions: { users: people } }),
+      "channel",
+      selves(),
+    );
+    expect(m.opens_with_other_mention).toBe(false);
+    expect(m.mentions_others).toHaveLength(1);
+    const lead = incomingMessage(
+      message({ content: "  <@50> hey", mentions: { users: people } }),
+      "channel",
+      selves(),
+    );
+    expect(lead.opens_with_other_mention).toBe(true);
+  });
+});
+
+describe("componentsText", () => {
+  test("reads_text_displays_in_order_and_ignores_the_rest", () => {
+    expect(
+      componentsText([
+        { type: 17, components: [{ type: 10, content: " 第一行 " }, { type: 14 }] },
+        { toJSON: () => ({ type: 10, content: "第二行" }) },
+        null,
+      ]),
+    ).toBe("第一行\n第二行");
+    expect(componentsText(undefined)).toBe("");
+    expect([...componentsText([{ type: 10, content: "長".repeat(700) }])].length).toBe(601);
   });
 });

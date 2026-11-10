@@ -23,6 +23,7 @@ import {
 } from "@miyoria/store";
 import { type ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
 import {
+  type AccountRef,
   CONVERSATION_FOLDED_TOPIC,
   type ContextKey,
   contextKeyString,
@@ -30,8 +31,10 @@ import {
   FollowupSourceKey,
   isJsonObject,
   type JsonValue,
+  MESSAGE_EXCLUDED_TOPIC,
   MemoryCuratorKey,
   MemoryRetrievalKey,
+  type MessageExcluded,
   PersonNoteWriterKey,
   PinnedMemoryKey,
   type ProfileId,
@@ -48,10 +51,19 @@ import {
 } from "./config.js";
 import { CONTRIBUTOR_KEY, MemoryContributor } from "./contributor.js";
 import { Curator } from "./curate.js";
+import {
+  DateBook,
+  DateGreeter,
+  FORGET_DATE,
+  ForgetDateTool,
+  REMEMBER_DATE,
+  RememberDateTool,
+} from "./dates.js";
 import { buildEmbedder, type Embedder } from "./embed.js";
 import { MemoryEngine, MemoryEngineKey } from "./engine.js";
 import { PersonNotes } from "./person-note.js";
 import { PinnedReader } from "./pinned.js";
+import { RecentPast } from "./recent-install.js";
 import { MemoryRetriever } from "./retrieval.js";
 import { RECALL, REMEMBER, RecallTool, RememberTool } from "./tools.js";
 
@@ -59,6 +71,9 @@ import { RECALL, REMEMBER, RecallTool, RememberTool } from "./tools.js";
 const MAINTENANCE_FIRST_MS = 60_000;
 const MAINTENANCE_CHECK_MS = 600_000;
 const HOUR_MS = 3_600_000;
+/** How often records without a vector are given one, and how many at a time. */
+const BACKFILL_MS = 120_000;
+const BACKFILL_BATCH = 32;
 
 export class MemoryModuleError extends Error {
   override readonly name = "MemoryModuleError";
@@ -99,6 +114,7 @@ export class MemoryModule implements Module {
   readonly #records: MemoryRecordStore | undefined;
   readonly #installer = new Installer();
   #engine: MemoryEngine | null = null;
+  #embedderInUse: Embedder | null = null;
   #degraded: string | null = null;
 
   /** `embedding` is the top-level `[memory.embedding]` section. */
@@ -137,13 +153,26 @@ export class MemoryModule implements Module {
       clock: ctx.clock,
     });
     this.#engine = engine;
+    this.#embedderInUse = embedder;
     engine.attach(services);
+    const recent = new RecentPast(engine, services, ctx.clock);
+    try {
+      await recent.notebook.load();
+    } catch (error) {
+      ctx.log.warn({ error: errorMessage(error) }, "cannot load her notebook: it starts empty");
+    }
+    recent.provide((key, value) => ctx.provide(key, value));
     ctx.provide(MemoryEngineKey, engine);
     ctx.provide(PinnedMemoryKey, new PinnedReader(engine, ctx.clock));
     ctx.provide(MemoryRetrievalKey, new MemoryRetriever(engine));
     ctx.provide(FollowupSourceKey, engine);
     ctx.provide(MemoryCuratorKey, new Curator(engine));
     ctx.provide(PersonNoteWriterKey, new PersonNotes(engine));
+    await engine.loadExclusions();
+    this.#installer.recent = recent;
+    const book = new DateBook(settings, this.profile);
+    this.#installer.book = book;
+    const greeter = new DateGreeter(book, engine, people, () => config.dates);
     this.#installer.install(ctx, engine);
     ctx.log.info({ embedder: embedder.name }, "memory started");
 
@@ -154,16 +183,30 @@ export class MemoryModule implements Module {
       "platform.message.created",
       "voice.utterance",
       CONVERSATION_FOLDED_TOPIC,
+      MESSAGE_EXCLUDED_TOPIC,
     ]);
     const installer = this.#installer;
-    ctx.spawn("consolidate", (signal) => consolidationLoop(ctx, engine, installer, sub, signal));
+    const seen = (account: AccountRef, context: ContextKey, nowMs: number): void => {
+      greeter.seen(account, context, nowMs).catch((error: unknown) => {
+        ctx.log.warn({ error: errorMessage(error) }, "cannot check today's dates");
+      });
+    };
+    ctx.spawn("consolidate", (signal) =>
+      consolidationLoop(ctx, engine, installer, sub, signal, () => recent.log.invalidate(), seen),
+    );
     if (config.forgetting.enabled) {
       ctx.spawn("forget", (signal) => maintenanceLoop(ctx, engine, signal));
+    }
+    if (embedder.enabled) {
+      ctx.spawn("embed", (signal) => backfillLoop(ctx, engine, signal));
     }
   }
 
   async stop(): Promise<void> {
     this.#installer.uninstall();
+    const embedder = this.#embedderInUse as (Embedder & { close?: () => Promise<void> }) | null;
+    this.#embedderInUse = null;
+    await embedder?.close?.();
   }
 
   async health(): Promise<Health> {
@@ -182,6 +225,12 @@ export class MemoryModule implements Module {
 class Installer {
   #contributors: PromptContributors | null = null;
   #tools: ToolRegistry | null = null;
+  /** The v4 readers' contributors and tools, registered beside the memory ones. */
+  recent: RecentPast | null = null;
+  #recentContributors: string[] = [];
+  #recentTools: string[] = [];
+  /** The dates book of `remember_date` / `forget_date` (set at start). */
+  book: DateBook | null = null;
   readonly #commands = new MemoryCommands();
 
   install(ctx: ModuleContext, engine: MemoryEngine): void {
@@ -190,19 +239,22 @@ class Installer {
     const contributors = services.get(PromptContributorsKey);
     if (contributors && contributors !== this.#contributors) {
       this.#contributors?.unregister(CONTRIBUTOR_KEY);
+      for (const key of this.#recentContributors) this.#contributors?.unregister(key);
       contributors.register(new MemoryContributor(engine));
+      this.#recentContributors = this.recent?.register(contributors, engine) ?? [];
       this.#contributors = contributors;
     }
     const tools = services.get(ToolRegistryKey);
     if (tools && tools !== this.#tools) {
-      if (this.#tools) {
-        this.#tools.unregister(REMEMBER);
-        this.#tools.unregister(RECALL);
-        this.#tools = null;
-      }
+      if (this.#tools) this.#unregisterTools(this.#tools);
       try {
         tools.register(new RememberTool(engine, ctx.clock));
         tools.register(new RecallTool(engine, ctx.clock));
+        if (this.book !== null) {
+          tools.register(new RememberDateTool(this.book, engine, ctx.clock));
+          tools.register(new ForgetDateTool(this.book, engine));
+        }
+        this.#recentTools = this.recent?.registerTools(tools, engine) ?? [];
         this.#tools = tools;
       } catch (error) {
         ctx.log.warn({ error: errorMessage(error) }, "could not register memory tools");
@@ -214,14 +266,22 @@ class Installer {
     }
   }
 
+  #unregisterTools(tools: ToolRegistry): void {
+    tools.unregister(REMEMBER);
+    tools.unregister(RECALL);
+    tools.unregister(REMEMBER_DATE);
+    tools.unregister(FORGET_DATE);
+    for (const name of this.#recentTools) tools.unregister(name);
+    this.#recentTools = [];
+    this.#tools = null;
+  }
+
   uninstall(): void {
     this.#contributors?.unregister(CONTRIBUTOR_KEY);
+    for (const key of this.#recentContributors) this.#contributors?.unregister(key);
+    this.#recentContributors = [];
     this.#contributors = null;
-    if (this.#tools) {
-      this.#tools.unregister(REMEMBER);
-      this.#tools.unregister(RECALL);
-      this.#tools = null;
-    }
+    if (this.#tools) this.#unregisterTools(this.#tools);
     this.#commands.uninstall();
   }
 }
@@ -314,6 +374,9 @@ async function consolidationLoop(
   installer: Installer,
   sub: Subscription,
   signal: AbortSignal,
+  excluded: () => void = () => {},
+  /** Someone spoke (birthdays and other dates of theirs are checked). */
+  seen: (account: AccountRef, context: ContextKey, nowMs: number) => void = () => undefined,
 ): Promise<void> {
   const config = engine.config;
   const tracker = new ActivityTracker();
@@ -340,9 +403,24 @@ async function consolidationLoop(
       if (env === null) return;
       const nowMs = ctx.clock.now();
       if (env.event.type === "platform_message_created") {
-        tracker.message(env.event.data.id.context, nowMs);
+        const data = env.event.data;
+        tracker.message(data.id.context, nowMs);
+        if (!data.author.is_bot) seen(data.author.account, data.id.context, nowMs);
       } else if (env.event.type === "voice_utterance") {
-        tracker.message(env.event.data.context, nowMs);
+        const data = env.event.data;
+        tracker.message(data.context, nowMs);
+        if (!data.speaker.is_bot) seen(data.speaker.account, data.context, nowMs);
+      } else if (env.event.type === "custom" && env.event.data.topic === MESSAGE_EXCLUDED_TOPIC) {
+        const body = parseExcluded(env.event.data.payload);
+        if (body !== null) {
+          try {
+            const gone = await engine.excludeMessage(body);
+            excluded();
+            ctx.log.info(gone, "a message she was asked not to remember was taken out");
+          } catch (error) {
+            ctx.log.warn({ error: errorMessage(error) }, "cannot take out an excluded message");
+          }
+        }
       } else if (
         env.event.type === "custom" &&
         env.event.data.topic === CONVERSATION_FOLDED_TOPIC &&
@@ -380,6 +458,18 @@ async function consolidationLoop(
   }
 }
 
+/** The payload of `agent.message.excluded`, when it has the parts used here. */
+function parseExcluded(value: JsonValue | undefined): MessageExcluded | null {
+  if (!isJsonObject(value) || !isJsonObject(value.message) || !isJsonObject(value.context)) {
+    return null;
+  }
+  const message = value.message;
+  const context = parseFolded(value.context);
+  const messageContext = parseFolded(message.context);
+  if (context === null || messageContext === null || typeof message.id !== "string") return null;
+  return value as unknown as MessageExcluded;
+}
+
 function parseFolded(value: JsonValue | undefined): ContextKey | null {
   if (!isJsonObject(value)) return null;
   const { platform, scope, channel, kind } = value;
@@ -410,6 +500,29 @@ async function maintenanceLoop(
       ctx.log.info({ report }, "memory maintenance done");
     } catch (error) {
       ctx.log.warn({ error: errorMessage(error) }, "memory maintenance failed");
+    }
+  }
+}
+
+/** Gives vectors to records stored without one, a batch at a time, while the embedder is on. */
+async function backfillLoop(
+  ctx: ModuleContext,
+  engine: MemoryEngine,
+  signal: AbortSignal,
+): Promise<void> {
+  for (;;) {
+    try {
+      await sleep(BACKFILL_MS, signal);
+    } catch {
+      return;
+    }
+    if (!engine.embedder.enabled) return;
+    try {
+      const n = await engine.backfillEmbeddings(BACKFILL_BATCH, signal);
+      if (n > 0) ctx.log.info({ records: n }, "memories given vectors");
+    } catch (error) {
+      if (signal.aborted) return;
+      ctx.log.warn({ error: errorMessage(error) }, "embedding backfill failed");
     }
   }
 }

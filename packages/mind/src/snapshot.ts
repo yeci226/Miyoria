@@ -27,6 +27,7 @@ import {
   type ProfileId,
   PromptContributorsKey,
   type PromptSection,
+  REMIND_CAPABILITY,
   type SalientEvent,
   type SelfState,
   SelfStateKey,
@@ -45,13 +46,17 @@ import type { CapabilityInfo, PersonRef, PlaceRef } from "./prompt.js";
 
 const log = getLogger("mind.snapshot");
 
-/** Capabilities that are not hers to start (the panel's "say", the director's game moves). */
+/**
+ * Capabilities that are not hers to start from Plan (the panel's "say", the director's game
+ * moves; her timers are set in conversation, Plan has goals with a time for that).
+ */
 export const NOT_FOR_HER: readonly string[] = [
   "speak",
   "game.act",
   "stage.stream",
   "message.dm",
   "watch.look",
+  REMIND_CAPABILITY,
 ];
 
 /** Without a handle table: the person's name, with `#2` for a second one of the same name. */

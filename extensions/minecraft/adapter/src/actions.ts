@@ -51,8 +51,13 @@ export const ACTIONS: GameActionSpec[] = [
   },
   {
     name: "explore",
-    description: "以某點(預設目前位置)為中心探索沒去過的地方",
-    parameters: obj({ x: int("x"), z: int("z") }),
+    description:
+      "以某點(預設目前位置)為中心探索沒去過的地方;給 find 就找到那個方塊或生物時停下。看到新東西才算有進展,只是跑滿時間不算",
+    parameters: obj({
+      x: int("x"),
+      z: int("z"),
+      find: { type: "array", items: { type: "string" }, description: "要找的方塊或生物 id,例如 [\"oak_log\",\"cow\"]" },
+    }),
     budget_s: 120,
   },
   {
@@ -70,7 +75,7 @@ export const ACTIONS: GameActionSpec[] = [
   {
     name: "obtain",
     description:
-      "取得一個物品(工具、材料、方塊都是),只說目標就好(例如 {item:\"iron_pickaxe\"}):程式依配方和工具等級往回推出步驟(砍樹 → 木材 → 工作台 → 木鎬 → 石頭 → 石鎬 → 熔爐 → 鐵…),一步一步挖、合成、燒、放,邊做邊回報,做完或卡住會說原因;只會挖看得到的方塊。不會的東西有 AltoClef 時交給它",
+      "取得一個物品(工具、材料、方塊、食物都是),只說目標就好(例如 {item:\"iron_pickaxe\"}):程式依配方和工具等級往回推出步驟(砍樹 → 木材 → 工作台 → 木鎬 → 石頭 → 石鎬 → 熔爐 → 鐵…),一步一步挖、合成、燒、放,邊做邊回報,做完或卡住會說原因;只會挖看得到的方塊。食物也行:cooked_beef 會自己打牛再烤、bread 會收小麥再做,{item:\"food\"} 挑附近最容易的吃的。count 是背包裡總共要有幾個。不會的東西有 AltoClef 時交給它",
     parameters: obj(
       {
         item: str("物品 id,例如 oak_planks、crafting_table、iron_pickaxe、torch、furnace"),
@@ -79,6 +84,25 @@ export const ACTIONS: GameActionSpec[] = [
       ["item"],
     ),
     budget_s: 600,
+  },
+  {
+    name: "hunt",
+    description:
+      "打獵:追著某種動物打({entity},例如 cow、pig、chicken、sheep、rabbit),直到多掉了 count 個肉(預設 1);附近沒有會先探索。要熟食用 obtain cooked_beef 這類",
+    parameters: obj({ entity: str("動物 id,例如 cow"), count: int("要多拿幾個肉,預設 1") }, ["entity"]),
+    budget_s: 180,
+  },
+  {
+    name: "shelter",
+    description: "躲起來過夜:有床就放下來睡,沒有就往下挖三格、用方塊封頂,等到天亮(天黑時系統會自己做,通常不用呼叫)",
+    parameters: obj({}),
+    budget_s: 540,
+  },
+  {
+    name: "recover",
+    description: "回到上次死掉的地方撿掉的東西(東西約 5 分鐘後消失;死後系統會自己做,通常不用呼叫)",
+    parameters: obj({}),
+    budget_s: 180,
   },
   {
     name: "place",
@@ -223,6 +247,7 @@ export function toRequests(action: GameAction, opts: MapOptions = {}): BridgeReq
       throw new ActionError("follow 要給 player 或 entity");
     }
     case "explore": {
+      // `find` is the adapter's business (it watches what she sees), not the mod's.
       const x = num(a.x);
       const z = num(a.z);
       return [baritone("explore", x !== undefined && z !== undefined ? { x: Math.round(x), z: Math.round(z) } : {})];
@@ -339,6 +364,12 @@ export function describeAction(action: GameAction): string {
       return `用 AltoClef 取得 ${a.item}${a.count ? ` ×${a.count}` : ""}`;
     case "obtain":
       return `開始取得 ${zh(String(a.item))}${a.count ? ` ×${a.count}` : ""}`;
+    case "hunt":
+      return `開始打${zh(String(a.entity))}`;
+    case "shelter":
+      return "開始找地方躲起來過夜";
+    case "recover":
+      return "回去撿死掉時掉的東西";
     case "craft":
       return `開始合成 ${zh(String(a.item))}${a.count ? ` ×${a.count}` : ""}`;
     case "smelt":
@@ -357,10 +388,18 @@ export function describeAction(action: GameAction): string {
 /** `"oak_log/birch_log"` → `"橡木原木、樺木原木"`. */
 const names = (ids: string): string => ids.split("/").map(zh).join("、");
 
-/** `"stick x2, oak_planks+ x3"` (the mod's `missing_items` list) → `"木棒×2、橡木材(或同類)×3"`. */
+/**
+ * `"stick x2, oak_planks+ x3"` (the mod's `missing_items` list) → `"木棒 stick×2、橡木材 oak_planks(或同類)×3"`.
+ * The id stays next to the name: she can ask for it as it is, and the director's method guard
+ * reads what is missing from it, so a held recipe comes back once that is in her inventory.
+ */
 function missingList(list: string): string {
   return [...list.matchAll(/([a-z0-9_:]+)(\+?) x(\d+)/g)]
-    .map(([, item, similar, n]) => (item === "fuel" ? "燃料(煤炭、木炭、木材或原木)" : `${zh(item)}${similar ? "(或同類)" : ""}×${n}`))
+    .map(([, item, similar, n]) => {
+      if (item === "fuel") return "燃料(煤炭、木炭、木材或原木)";
+      const name = zh(item);
+      return `${name}${name === item ? "" : ` ${item}`}${similar ? "(或同類)" : ""}×${n}`;
+    })
     .join("、");
 }
 

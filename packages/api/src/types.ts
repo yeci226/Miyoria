@@ -667,10 +667,15 @@ export interface E2eStats {
   samples: number;
 }
 
-/** The six segments of `speech_end → first_audio_played`, in the order a listener hears them. */
+/**
+ * The seven segments of `speech_end → first_audio_played`, in the order a listener hears them.
+ * `prepare` (the wait, attention, memory and prompt building before the model call) was part of
+ * `llm_first` until 2026-11-10.
+ */
 export type E2eSegmentName =
   | "endpoint"
   | "asr"
+  | "prepare"
   | "llm_first"
   | "tts_queue"
   | "tts_first"

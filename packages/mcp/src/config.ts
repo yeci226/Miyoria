@@ -47,6 +47,12 @@ const ServerConfigSchema = z.object({
   args: z.array(z.string()).default([]),
   /** Extra environment variables for the child process. */
   env: z.record(z.string(), z.string()).default({}),
+  /**
+   * Host environment variables to pass on besides the safe basics (`PATH`, `HOME`, `TEMP`, ...):
+   * exact names, or a prefix ending in `*` (`GITHUB_*`). The server does not inherit the host's
+   * environment, which holds the bot's tokens.
+   */
+  env_pass: z.array(z.string()).default([]),
   cwd: z.string().nullable().default(null),
   /** http: Streamable HTTP endpoint. */
   url: z.string().nullable().default(null),
@@ -84,6 +90,7 @@ export class ServerConfig implements ServerConfigData {
   command: string | null = null;
   args: string[] = [];
   env: Record<string, string> = {};
+  env_pass: string[] = [];
   cwd: string | null = null;
   url: string | null = null;
   headers: Record<string, string> = {};
@@ -168,6 +175,7 @@ export class ServerConfig implements ServerConfigData {
       command: this.command,
       args: this.args,
       env: Object.keys(this.env),
+      env_pass: this.env_pass,
       cwd: this.cwd,
       url: this.url,
       headers: Object.keys(this.headers),

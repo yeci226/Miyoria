@@ -576,6 +576,10 @@ describe("stage.link", () => {
       label: "一碗白飯",
     });
     h.publish(customEvent("economy.gift", { name: "", item: "rice", count: 1, label: "x" }));
+    // A viewer's touch on the live page (`live.touch`) goes on as `touch`, without anything extra.
+    h.publish(customEvent("live.touch", { x: 0.7, y: 0.2, part: "head", name: "Owen" }));
+    expect(await node.recvJson()).toStrictEqual({ type: "touch", x: 0.7, y: 0.2, part: "head" });
+    h.publish(customEvent("live.touch", { x: 2, y: 0.2, part: "head" }));
     h.link().gaze("chat");
     expect(await node.recvJson()).toStrictEqual({ type: "gaze", target: "chat" });
   });

@@ -120,6 +120,19 @@ describe("planGoLive", () => {
     expect(b.ok && b.plan).toMatchObject({ width: 1280, height: undefined });
   });
 
+  it("pulls an RTMP source from a hub (MediaMTX) with listen:false, listens on it by default", () => {
+    const hub = "rtmp://127.0.0.1:1935/live/miyoria";
+    const pull = planGoLive(req({ source: hub, listen: false }), cfg);
+    expect(pull.ok && pull.plan).toMatchObject({ source: hub, inputOptions: [], live: true });
+    const push = planGoLive(req({ source: hub }), cfg);
+    expect(push.ok && push.plan).toMatchObject({ source: hub, inputOptions: ["-listen", "1"], live: true });
+    const parsed = parseCoreMessage(JSON.stringify({ type: "golive_start", guild: "g1", source: hub, listen: false }));
+    expect(parsed.ok && planGoLive(parsed.value as GoLiveStartMessage, cfg)).toMatchObject({
+      ok: true,
+      plan: { inputOptions: [] },
+    });
+  });
+
   it("fails with a readable error for out-of-range values and bad sources", () => {
     expect(planGoLive(req({ fps: 500 }), cfg)).toEqual({ ok: false, error: "`fps` must be in 1..120 (got 500)" });
     expect(planGoLive(req({ height: 4 }), cfg).ok).toBe(false);

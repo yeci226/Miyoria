@@ -15,13 +15,41 @@ export const SONG_PREPARE_TOPIC = "sing.prepare";
 const MAX_PATH = 1024;
 /** Longest song a cue's `duration_ms` describes (a day). */
 const MAX_DURATION_MS = 86_400_000;
+/** Most beats a cue carries (a 10-minute song at 200 BPM). */
+export const MAX_BEATS = 2_000;
+
+/**
+ * The beat of a song: its tempo and when each beat falls, in ms from the start of the playback
+ * (sorted). She sways and nods with it while she sings.
+ */
+export interface SongBeats {
+  bpm: number;
+  times_ms: number[];
+}
+
+/** A `SongBeats` from an untyped value (sorted, finite, at most `MAX_BEATS`), or `null`. */
+export function parseSongBeats(value: JsonValue | undefined): SongBeats | null {
+  if (!isJsonObject(value)) return null;
+  const { bpm, times_ms: times } = value;
+  if (typeof bpm !== "number" || !Number.isFinite(bpm) || bpm <= 0 || bpm > 400) return null;
+  if (!Array.isArray(times)) return null;
+  const out: number[] = [];
+  for (const t of times) {
+    if (typeof t !== "number" || !Number.isFinite(t) || t < 0 || t > MAX_DURATION_MS) continue;
+    if (out.length > 0 && t <= (out.at(-1) as number)) continue;
+    out.push(Math.round(t));
+    if (out.length >= MAX_BEATS) break;
+  }
+  return out.length === 0 ? null : { bpm, times_ms: out };
+}
 
 /**
  * `started`: the song became audible; `video` is the absolute path of its original video on the
  * streaming PC (inside the song worker's data dir) when it has one, and `offset_ms` how far into
- * the song it already was when the cue was sent; `duration_ms` is how long the song is (missing from
-older publishers). `line`: a lyrics line starts now (`text` may be
- * empty: an instrumental break). `ended`: the song finished, was stopped or failed.
+ * the song it already was when the cue was sent; `duration_ms` is how long the song is (missing
+ * from older publishers); `beats` its beat when the worker found one. `line`: a lyrics line
+ * starts now (`text` may be empty: an instrumental break). `ended`: the song finished, was
+ * stopped or failed.
  */
 export type SongCue =
   | {
@@ -31,6 +59,7 @@ export type SongCue =
       video?: string;
       offset_ms?: number;
       duration_ms?: number;
+      beats?: SongBeats;
     }
   | { state: "line"; song: string; index: number; text: string }
   | { state: "ended"; song: string; outcome: string };
@@ -56,6 +85,8 @@ export function parseSongCue(payload: JsonValue): SongCue | null {
       if (typeof duration === "number" && duration > 0 && duration <= MAX_DURATION_MS) {
         cue.duration_ms = Math.round(duration);
       }
+      const beats = parseSongBeats(payload.beats);
+      if (beats !== null) cue.beats = beats;
       return cue;
     }
     case "line":

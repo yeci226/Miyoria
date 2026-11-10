@@ -12,7 +12,7 @@ const ACTIVITY_NAMES: Readonly<Record<string, string>> = {
   chatting: "聊天",
   singing: "唱歌",
   game: "遊戲",
-  browse: "瀏覽",
+  browse: "逛網路",
 };
 
 function gameName(target: string | null): string {

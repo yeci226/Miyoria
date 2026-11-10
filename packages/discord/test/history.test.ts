@@ -96,6 +96,49 @@ describe("DiscordHistory", () => {
     expect(await history.recent(ctx, { before: null, limit: 0 })).toEqual([]);
   });
 
+  test("fetched_history_carries_who_the_message_is_for", async () => {
+    const bob = { id: "50", username: "bob", globalName: "Bob" };
+    const msgs = [
+      fetched("1", 1000),
+      fetched("2", 2000, {
+        type: MessageType.Reply,
+        reference: { messageId: "1" },
+        content: "<@50> she repeats herself",
+        mentions: { users: new Map([["50", bob]]), repliedUser: { id: "7" } },
+      }),
+    ];
+    const history = new DiscordHistory(client(msgs), new Set(["7"]));
+    const out = await history.recent(ctx, { before: null, limit: 10 });
+    expect(out[0]?.mentions_others).toEqual([]);
+    expect(out[1]?.opens_with_other_mention).toBe(true);
+    expect(out[1]?.mentions_others?.map((m) => m.display_name)).toEqual(["Bob"]);
+    const one = await history.fetch({ context: ctx, id: "2" });
+    expect(one?.opens_with_other_mention).toBe(true);
+  });
+
+  test("a_reply_to_her_card_reads_what_the_card_says", async () => {
+    // A slash command's answer (Components V2, no content), as her cards and receipts are.
+    const card = fetched("8", 8000, {
+      type: MessageType.ChatInputCommand,
+      author: { id: "7", username: "miyo", bot: true },
+      content: "",
+      components: [
+        {
+          type: 17,
+          components: [
+            { type: 10, content: "## 收據" },
+            { toJSON: () => ({ type: 10, content: "Owen 付了 30 魚幣" }) },
+          ],
+        },
+      ],
+    });
+    const history = new DiscordHistory(client([card]), new Set(["7"]));
+    const parent = await history.fetch({ context: ctx, id: "8" });
+    expect(parent?.text).toBe("## 收據\nOwen 付了 30 魚幣");
+    // Not in a channel's recent lines: those stay what people wrote.
+    expect(await history.recent(ctx, { before: null, limit: 5 })).toEqual([]);
+  });
+
   test("an_aborted_signal_stops_the_read", async () => {
     const history = new DiscordHistory(client([fetched("5", 5000)]), new Set());
     const controller = new AbortController();

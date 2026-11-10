@@ -84,7 +84,7 @@ describe("parseConfig", () => {
 
   it("shows everything by default and derives the websocket from where the page was served", () => {
     const c = parseConfig("", loc);
-    expect([...c.show].sort()).toEqual(["activity", "emotion", "gifts", "queue", "screen", "status", "subtitles", "wave"]);
+    expect([...c.show].sort()).toEqual(["activity", "emotion", "gifts", "queue", "screen", "status", "subtitles", "touches", "wave"]);
     expect(c.ws).toBe("ws://192.168.1.5:7884/overlay/ws");
     expect(c).toMatchObject({ cps: DEFAULT_CPS, scale: 1, debug: false, demo: false });
   });
@@ -92,8 +92,8 @@ describe("parseConfig", () => {
   it("show= selects sections, ignoring unknown names and falling back when none are valid", () => {
     expect([...parseConfig("?show=subtitles,queue", loc).show]).toEqual(["subtitles", "queue"]);
     expect([...parseConfig("?show=Subtitles,%20EMOTION,bogus", loc).show]).toEqual(["subtitles", "emotion"]);
-    expect(parseConfig("?show=bogus", loc).show.size).toBe(8);
-    expect(parseConfig("?show=", loc).show.size).toBe(8);
+    expect(parseConfig("?show=bogus", loc).show.size).toBe(9);
+    expect(parseConfig("?show=", loc).show.size).toBe(9);
   });
 
   it("ws= overrides, but only ws:// or wss://", () => {

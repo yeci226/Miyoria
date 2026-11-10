@@ -150,8 +150,48 @@ export const VoiceConfigSchema = z.object({
    * setup (server `rtmp://127.0.0.1:1935/live`, key `miyoria`).
    */
   golive_source: z.string().default("rtmp://127.0.0.1:1935/live/miyoria"),
+  /**
+   * The node's ffmpeg is the server OBS pushes to (`-listen 1` for RTMP, `mode=listener` for SRT
+   * without `mode=`). False: another server (MediaMTX, `workers/mediamtx/`) takes OBS's stream
+   * and ffmpeg pulls the source from it. Applies to every Go Live source. Default true.
+   */
+  golive_listen: z.boolean().default(true),
+  /**
+   * 墊話 (v4 §7.5): when she was addressed and nothing of hers is heard `filler_after_ms` after her
+   * turn started, one short sound of hers plays so the silence has an owner. Never over her own
+   * speech, for a turn she passes on, or once her first sentence is written; never the same twice
+   * in a row; not a line (not in her history or the Floor's budget). Default true.
+   */
+  filler: z.boolean().default(true),
+  /**
+   * How long after her turn started the silence gets a filler. Default 600: the model's first
+   * sentence alone took longer than that on most turns measured 2026-11-07 to 11-10.
+   */
+  filler_after_ms: z.number().int().nonnegative().default(600),
+  /**
+   * The filler sounds by the language she is heard in (`tts_translate`, else `tts_language`); a
+   * language without a list gets none. Short and neutral: each must fit before any answer (a
+   * laugh does not fit before a refusal). Synthesized once per voice and cached in `filler_dir`.
+   */
+  filler_lines: z.record(z.string(), z.array(z.string().min(1))).default({
+    Chinese: ["嗯?", "欸~", "蛤?", "等等"],
+    Japanese: ["ん?", "え~", "え?", "えっと"],
+  }),
+  /** Cache of the synthesized fillers (one folder per voice). Default `data/voice/fillers`. */
+  filler_dir: z.string().default("data/voice/fillers"),
+  /** A synthesized filler longer than this is not used. Default 1500. */
+  filler_max_ms: z.number().int().positive().default(1_500),
 });
 export type VoiceConfig = z.output<typeof VoiceConfigSchema>;
+
+/** The filler lines for the language she is heard in (`[]`: none). */
+export function fillerLines(config: VoiceConfig, language: string): readonly string[] {
+  const want = language.trim().toLowerCase();
+  for (const [name, lines] of Object.entries(config.filler_lines)) {
+    if (name.trim().toLowerCase() === want) return lines;
+  }
+  return [];
+}
 
 /** Smart Turn takes this much of the end of a turn. */
 const TURN_AUDIO_MS = 8_000;

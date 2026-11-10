@@ -1,5 +1,6 @@
 import { serviceKey } from "@miyoria/types";
 import { z } from "zod";
+import type { Removed, WorkspaceApi } from "./workspace-store.js";
 
 /** Languages the sandbox runs. */
 export const LANGUAGES = ["python", "node"] as const;
@@ -7,9 +8,10 @@ export type Language = (typeof LANGUAGES)[number];
 export const LanguageSchema = z.enum(LANGUAGES);
 
 /**
- * Network policy of a run. Only `"none"` (`--network none`: no interfaces but loopback) is
- * implemented; an allowlist is accepted by the type so callers can be written against it, but
- * `run` refuses it with `network_unsupported` until the egress proxy exists (see README).
+ * Network policy of a run: `"none"` (`--network none`: no interfaces but loopback) or an
+ * allowlist, which only works when the owner listed hosts in `[modules.sandbox.network]`
+ * (otherwise `run` refuses it with `network_unsupported`) and goes through the egress proxy
+ * (see `egress.ts`).
  */
 export type NetworkPolicy = "none" | { allow: string[] };
 export const NetworkPolicySchema = z.union([
@@ -51,10 +53,19 @@ export interface RunRequest {
   stdin?: string;
   /** Wall-clock limit; default and maximum come from the config. */
   timeout_ms?: number;
-  /** Default `"none"`. */
+  /**
+   * Default `"none"`. `{ allow }` needs `[modules.sandbox.network] allow` to list every host
+   * named; the run then gets the egress proxy as its only way out, which lets through all the
+   * configured hosts (not only the ones named). Fresh runs only.
+   */
   network?: NetworkPolicy;
   /** Mount the profile's tools workspace read-only at `/tools`. Default `false`. */
   mount_tools?: boolean;
+  /**
+   * Mount her persistent workspace read-write at `/workspace`. Default `false`. Fresh runs
+   * only; what the program leaves there is checked against the quotas afterwards.
+   */
+  mount_workspace?: boolean;
   /**
    * `"fresh"` (default): a throwaway container. A name (`weather-tool`): the long-lived session
    * of that name, created by its first run; `/work` and `/tmp` carry over between its runs.
@@ -71,6 +82,7 @@ export const RunRequestSchema = z.object({
   timeout_ms: z.number().int().positive().optional(),
   network: NetworkPolicySchema.optional(),
   mount_tools: z.boolean().optional(),
+  mount_workspace: z.boolean().optional(),
   session: SessionChoiceSchema.optional(),
 });
 
@@ -152,6 +164,11 @@ export interface RunResult {
   killed_reason: KilledReason | null;
   /** The session the run used; `null` for a fresh run. */
   session: SessionRun | null;
+  /**
+   * Only on runs that mounted the workspace: what was removed from it afterwards because the
+   * program broke a rule (a link) or a quota. Empty when everything stayed.
+   */
+  workspace_removed?: Removed[];
 }
 
 /** Whether Docker can be used. */
@@ -250,6 +267,10 @@ export interface Sandbox {
   health(options?: { signal?: AbortSignal; refresh?: boolean }): Promise<SandboxHealth>;
   /** The profile's persistent tools workspace. */
   readonly tools: ToolsWorkspaceApi;
+  /** Her persistent workspace (`mount_workspace`); `null` when `[modules.sandbox.workspace]` is off. */
+  readonly workspace: WorkspaceApi | null;
+  /** Hosts a run may reach with `network: { allow }` (empty = the network is closed). */
+  readonly networkAllow: readonly string[];
 }
 
 /** Scripts she keeps between runs (mounted read-only at `/tools` on request). */

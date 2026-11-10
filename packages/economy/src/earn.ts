@@ -4,6 +4,8 @@
 // * `voice`: per 10-minute window in her voice channel, when they spoke in it and are still
 //   there when it ends (sitting in silence earns nothing).
 // * `song`: a song they requested that she sang to the end.
+// * the daily quest "hear a song" (quests.ts): whoever was in her voice channel when a song
+//   started and still is when she sang it to the end.
 //
 // Only people she knows earn (`EconomyService.earn` checks); keys make a replayed event or a
 // restart pay nothing twice.
@@ -43,6 +45,8 @@ export class Earnings {
   /** Account → when to look a stranger up again. */
   readonly #strangers = new Map<string, number>();
   #voice: Voice | null = null;
+  /** Who was in her voice channel when the song now playing started. */
+  #listening = new Map<string, AccountRef>();
   #window = -1;
   /** Who spoke in `#window`. */
   readonly #spoke = new Map<string, AccountRef>();
@@ -164,22 +168,37 @@ export class Earnings {
     }
   }
 
+  /** The song was sung to the end: whoever sat through it ticks the daily quest. */
+  async #heard(): Promise<void> {
+    const stayed = [...this.#listening].filter(([key]) => this.#voice?.present.has(key));
+    this.#listening = new Map();
+    for (const [, account] of stayed) {
+      const who = await this.#economy.member(account);
+      if (who) await this.#economy.v2.questDone(who, "listen_song");
+    }
+  }
+
   /** A song ended: its requester earns when she sang it to the end. */
   async #song(payload: Parameters<typeof parseSongCue>[0]): Promise<void> {
     const cue = parseSongCue(payload);
+    if (cue?.state === "started") this.#listening = new Map(this.#voice?.present ?? []);
     if (cue?.state !== "ended" || cue.outcome !== "finished") return;
+    await this.#heard();
     const list = this.#services.get(SingerKey)?.list.all() ?? [];
     const entry = list
       .filter((e) => e.song?.id === cue.song && e.requester !== null && e.state === "done")
       .sort((a, b) => b.no - a.no)[0];
     if (!entry?.requester) return;
     const title = [...(entry.song?.title || entry.query)].slice(0, 100).join("");
-    await this.#economy.earn(
+    const paid = await this.#economy.earn(
       entry.requester,
       "song",
       this.#config.song_finished,
       `song:${entry.no}:${entry.created_at}`,
       title,
     );
+    if (paid === null) return;
+    const who = await this.#economy.member(entry.requester);
+    if (who) await this.#economy.v2.afterEarn(who);
   }
 }

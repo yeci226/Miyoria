@@ -813,3 +813,100 @@ body {
     opacity: 0.6;
   }
 }
+
+/* ── touches: where a viewer touched the stream on the website ────────── */
+
+/* The layer is the whole frame, so left / top in percent are the same place as on the viewer's picture. */
+.touches {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.touch {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+/* A thin ring that opens from the touch and fades. */
+.touch__ripple {
+  position: absolute;
+  left: -1.5rem;
+  top: -1.5rem;
+  box-sizing: border-box;
+  width: 3rem;
+  height: 3rem;
+  border: 1px solid rgb(255 255 255 / 0.75);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.1);
+  opacity: 0;
+  animation: touch-ripple 1300ms var(--ease-out) both;
+}
+
+/* A small heart that drifts up from it. */
+.touch__heart {
+  position: absolute;
+  left: -0.6rem;
+  top: -0.6rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  fill: oklch(0.78 0.13 12);
+  filter: drop-shadow(0 0.1rem 0.3rem rgb(0 0 0 / 0.35));
+  opacity: 0;
+  animation: touch-heart 1300ms var(--ease-out) both;
+}
+
+@keyframes touch-ripple {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.3);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+@keyframes touch-heart {
+  0% {
+    opacity: 0;
+    transform: translateY(0.3rem) scale(0.7);
+  }
+  18% {
+    opacity: 1;
+    transform: translateY(-0.4rem) scale(1);
+  }
+  70% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-2.4rem) scale(1);
+  }
+}
+
+/* No movement: the ring and the heart just appear in place and fade. */
+@media (prefers-reduced-motion: reduce) {
+  .touch__ripple {
+    animation-name: touch-fade;
+    transform: none;
+  }
+
+  .touch__heart {
+    animation-name: touch-fade;
+    transform: none;
+  }
+
+  @keyframes touch-fade {
+    0% {
+      opacity: 0;
+    }
+    15% {
+      opacity: 0.9;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+}

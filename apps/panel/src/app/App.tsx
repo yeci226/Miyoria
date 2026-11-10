@@ -10,6 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TokenGate } from "@/pages/login/TokenGate";
 import { CardVerify, cardSerialIn } from "@/pages/public/CardVerify";
 import { PublicSite } from "@/pages/public/PublicSite";
+import { isLivePath, LivePage } from "@/pages/public/live/LivePage";
 import { Backdrop } from "./Backdrop";
 import { ConnectionProvider, useConnection } from "./connection";
 import { EventStreamProvider } from "./events-store";
@@ -178,6 +179,15 @@ function Authenticated({ router }: { router: AppRouter }) {
     return (
       <QueryClientProvider client={queryClient}>
         <CardVerify serial={serial} />
+      </QueryClientProvider>
+    );
+  }
+
+  // Her live page; anyone may watch, logged in or not.
+  if (isLivePath(path)) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <LivePage />
       </QueryClientProvider>
     );
   }

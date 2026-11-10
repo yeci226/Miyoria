@@ -14,6 +14,13 @@
 // `whenever` and a default expiry; the migration remembers which items it took
 // (`mind:plan:migration`), so it is idempotent across restarts. The mind then closes the
 // migrated items in `self:state`, so there is one agenda.
+//
+// A goal about a person is a wish (`@miyoria/types` `wish.ts`): it joins the wish about that
+// person and topic that a proposal or a promise may hold already. 2026-11-10 11:47: her Plan added
+// "when S speaks, pick up … and also ask about X" (`whenever`) after she had asked S by DM and S
+// had answered there; it sat in every prompt and she asked again each time S spoke. Now a goal
+// whose wish was asked or answered is not added, and one that is open is done (or loses that
+// step) the moment she asks, wherever she does.
 
 import { errorMessage, getLogger, SerialQueue } from "@miyoria/kernel";
 import type { SettingsStore } from "@miyoria/store";
@@ -35,9 +42,13 @@ import {
   type PersonId,
   type ProfileId,
   repairHandleText,
+  sameWish,
   type Timestamp,
   type TriggerProbe,
   toTimestamp,
+  type Wish,
+  type Wishes,
+  wishHolder,
 } from "@miyoria/types";
 
 const log = getLogger("mind.goals");
@@ -164,6 +175,20 @@ export interface GoalBookOptions {
   defaultDays: number;
   /** Every new or changed goal (`plan.goal`). */
   publish?: (goal: Goal) => void;
+  /** What she wants to ask whom (the arbiter's `WishesKey`), when it runs. */
+  wishes?: () => Wishes | null;
+}
+
+/** Why a goal about a wish ends, in her words. */
+function wishReason(wish: Wish): string {
+  switch (wish.end) {
+    case "answered":
+      return "對方已經回答了";
+    case "stop":
+      return "對方說問過了,不要再問";
+    default:
+      return wish.state === "asked" ? "問過了,等對方回" : "這件事結束了";
+  }
 }
 
 /** A change to an open goal (Plan's `edit`). */
@@ -285,7 +310,42 @@ export class GoalBook implements GoalAgenda {
     this.#goals.set(goal.id, goal);
     this.#persist(goal, goal.id);
     this.#bound(now);
+    const wish =
+      goal.person === null
+        ? null
+        : (this.#o
+            .wishes?.()
+            ?.hold(
+              goal.person,
+              [goal.what, ...goal.steps].join(" "),
+              wishHolder("goal", goal.id),
+            ) ?? null);
+    // Asked already, or answered: not a new goal, however the Plan worded it.
+    if (wish !== null && wish.state !== "open") {
+      return this.setStatus(goal.id, "dropped", wishReason(wish)) ?? structuredClone(goal);
+    }
     return structuredClone(goal);
+  }
+
+  /**
+   * A wish was asked or closed: a goal holding it is done, or loses the step that was it (a goal
+   * with more to it than the question keeps the rest).
+   */
+  wished(wish: Wish): void {
+    if (wish.state === "open" || wish.end === "expired") return;
+    for (const holder of wish.holders) {
+      if (!holder.startsWith("goal:")) continue;
+      const goal = this.#goals.get(holder.slice("goal:".length));
+      if (!goal || !isOpen(goal)) continue;
+      const left = goal.steps.filter((s) => !sameWish(s, wish.topic, wish.person));
+      const whole = sameWish(goal.what, wish.topic, wish.person) || left.length === 0;
+      if (whole) {
+        const end = wish.end === "stop" ? "dropped" : "done";
+        this.setStatus(goal.id, end, wishReason(wish));
+      } else if (left.length < goal.steps.length) {
+        this.edit(goal.id, { steps: left });
+      }
+    }
   }
 
   setStatus(id: string, status: GoalStatus, reason: string | null = null): Goal | null {

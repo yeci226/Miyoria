@@ -116,7 +116,7 @@ export class WatchModule implements Module {
           (await s.get(StreamHearingKey)?.transcribe(samples, signal)) ?? null,
       },
       busy: (guild) => playing.has(guild) || (s.get(VoiceFloorKey)?.holder(guild) ?? null) !== null,
-      speak: (target: WatchTarget, hint: string) => {
+      initiative: (target: WatchTarget, hint: string) => {
         try {
           ctx.publish({
             type: "agent_initiative",

@@ -4,6 +4,8 @@
 import { contentText, MockProvider } from "@miyoria/llm";
 import { ToolRegistryKey } from "@miyoria/tools";
 import {
+  type AffectState,
+  AffectStateKey,
   type Attitude,
   type ContextKey,
   type DecisionTrace,
@@ -17,6 +19,7 @@ import {
   type PromptSection,
   type SocialSignals,
   SocialSignalsKey,
+  toTimestamp,
   type VoiceParticipant,
 } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -268,6 +271,45 @@ function provideSocial(h: Harness): FakeSocial {
 }
 
 describe("social signals", () => {
+  it("a feeling's cause reaches the turn only with its person present", async () => {
+    const mock = new MockProvider("chat").reply("嗯").reply("嗯");
+    const h = await Harness.create("always", noCheck(), mock);
+    const social = provideSocial(h);
+    social.set("Owen", 50, false);
+    const owen = social.attitudes.get("Owen")?.person ?? null;
+    let about: string | null = "someone-who-told-her-in-a-dm";
+    const top = (person: string | null) => ({
+      name: "sorrow" as const,
+      intensity: 0.8,
+      cause: "他說他被裁員了",
+      at: toTimestamp(0),
+      person,
+    });
+    h.sup.services.provide(APP, AffectStateKey, {
+      snapshot: () => ({
+        at: toTimestamp(0),
+        drives: {},
+        boredom: 0,
+        top: [top(about)],
+        mood: { valence: 0, arousal: 0.5, energy: 0.5 },
+        mood_line: "",
+        shown: null,
+        biases: { talkativeness: 0, initiative: 0, wants: [] },
+      }),
+      cardByHandle: () => null,
+      card: () => null,
+    } as unknown as AffectState);
+
+    h.say(mention(channel("c"), "Owen", "早安"));
+    await wait(3000);
+    expect(data(mock, 0)).not.toContain("被裁員");
+
+    about = owen;
+    h.say(mention(channel("c2"), "Owen", "在嗎"));
+    await wait(3000);
+    expect(data(mock, 1)).toContain("讓你很難過的事:他說他被裁員了");
+  });
+
   it("blocked_people_are_ignored_and_hidden", async () => {
     const mock = new MockProvider("chat").reply("嗯");
     const h = await Harness.create("always", noCheck(), mock);

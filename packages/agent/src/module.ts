@@ -1,9 +1,18 @@
-import { ActuatorRegistryKey, actuatorsFor } from "@miyoria/actions";
-import { defineManifest, errorMessage, type Module, type ModuleContext } from "@miyoria/kernel";
+import { type ActuatorRegistry, ActuatorRegistryKey, actuatorsFor } from "@miyoria/actions";
+import {
+  defineManifest,
+  errorMessage,
+  type Module,
+  type ModuleContext,
+  sleep,
+} from "@miyoria/kernel";
+import { LlmRouterKey } from "@miyoria/llm";
 import type { Profile } from "@miyoria/profile";
 import { SettingsStoreKey } from "@miyoria/store";
 import { ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
 import {
+  customEvent,
+  DirectivesKey,
   ImpulseHostKey,
   IntentSinkKey,
   MouthKey,
@@ -13,6 +22,7 @@ import {
   SelfStateKey,
   TurnFocusViewKey,
   TurnSilencerKey,
+  WorkLaneKey,
 } from "@miyoria/types";
 
 import { activenessCapability, chatCapabilities } from "./actions.js";
@@ -29,15 +39,21 @@ import {
   type VoiceRooms,
 } from "./handle.js";
 import { AgentIntents } from "./intents.js";
+import { ACTING_ALONE } from "./mainline/main.js";
 import { WorkingNotes } from "./notes.js";
 import { PersonaHandle, PersonaHandleKey } from "./persona.js";
 import { Agent } from "./runtime.js";
 import { DropNoteTool, KeepNoteTool, ReactTool } from "./tools.js";
 import { TimeoutError, timeout } from "./util.js";
 import type { FetchLike } from "./vision.js";
+import { WORK_START_TOOL, workCapabilities } from "./worklane/capabilities.js";
+import { workBoard } from "./worklane/initiative.js";
+import { WorkLaneService } from "./worklane/lane.js";
 
 /** Loading persisted settings must not hold up startup for long. */
 const SETTINGS_LOAD_TIMEOUT_MS = 5_000;
+/** How long after start the work tasks a restart cut are told (the Floor must be up). */
+const RECOVER_DELAY_MS = 5_000;
 
 /**
  * Module `agent`: requires `llm` and `scheduler`, optionally uses `commands`.
@@ -94,6 +110,7 @@ export class AgentModule implements Module {
   readonly #commands = new AgentCommands();
   #unregister: (() => void)[] = [];
   #agent: Agent | null = null;
+  #lane: WorkLaneService | null = null;
 
   constructor(profile: Profile) {
     this.#persona = new PersonaHandle(profile);
@@ -213,15 +230,85 @@ export class AgentModule implements Module {
     ctx.provide(TurnFocusViewKey, agent.focusBoard);
     ctx.provide(SavedPromptsKey, agent.prompts);
     this.#agent = agent;
+    const lane = config.work.enabled ? this.#startLane(ctx, agent, tools, actuators) : null;
     if (agent.mainline !== null) {
       ctx.provide(MouthKey, agent.mainline);
-      ctx.provide(ProposalBoardKey, agent.mainline.proposals);
+      // Her own wishes to work become work-lane tasks on the same board (worklane/initiative.ts).
+      const proposals = agent.mainline.proposals;
+      ctx.provide(
+        ProposalBoardKey,
+        lane === null || !config.work.initiative
+          ? proposals
+          : workBoard(proposals, () => !ctx.signal.aborted),
+      );
       await agent.mainline.start();
     }
     ctx.spawn("events", () => agent.run(events));
   }
 
+  /**
+   * The work lane (v4 §4.3): provided as `WorkLaneKey` (the game director drives its tasks
+   * there); under the main line also its three capabilities, and its results reach her through
+   * the hands. Tasks a restart cut are told once, after the other modules are up.
+   */
+  #startLane(
+    ctx: ModuleContext,
+    agent: Agent,
+    tools: ToolRegistry,
+    actuators: ActuatorRegistry,
+  ): WorkLaneService {
+    const persona = this.#persona;
+    const main = agent.mainline;
+    const lane = new WorkLaneService({
+      config: ctx.config(AgentConfigSchema).work,
+      now: () => ctx.clock.now(),
+      router: () => ctx.services.get(LlmRouterKey) ?? null,
+      tools: () => tools,
+      services: ctx.services,
+      publish: (topic, payload) => ctx.publish(customEvent(topic, payload)),
+      follow: (topic, payload) => {
+        main?.custom(topic, payload);
+      },
+      store: () => ctx.services.get(SettingsStoreKey) ?? null,
+      profile: () => persona.read((p) => p.id),
+      self: (platform) => agent.selfAccount(platform),
+      persona: () => ({
+        name: persona.read((p) => p.displayName),
+        text: persona.corePrompt(),
+      }),
+      rules: (context) => ctx.services.get(DirectivesKey)?.inject(context) ?? [],
+      retell: ({ context, requester, detail }) => {
+        main?.hands.report({
+          context: context ?? ACTING_ALONE,
+          tool: WORK_START_TOOL,
+          state: "failed",
+          detail,
+          requester,
+          report: requester === null ? "prompt" : "turn",
+        });
+      },
+      log: ctx.log,
+    });
+    this.#lane = lane;
+    ctx.provide(WorkLaneKey, lane);
+    if (main !== null) {
+      main.hands.lookUpEnded((task) => lane.ended(task));
+      for (const capability of workCapabilities({ lane, tools: () => tools })) {
+        this.#unregister.push(actuators.register(capability));
+      }
+    }
+    ctx.spawn("work-recover", async (signal) => {
+      // After the Floor and the Arbiter are up: telling her opens a turn through them.
+      await sleep(RECOVER_DELAY_MS, signal);
+      const n = await lane.recover();
+      if (n > 0) ctx.log.info({ count: n }, "work tasks cut by the restart were told");
+    });
+    return lane;
+  }
+
   async stop(): Promise<void> {
+    this.#lane?.close();
+    this.#lane = null;
     this.#commands.uninstall();
     this.#agent?.mainline?.stop();
     this.#agent = null;

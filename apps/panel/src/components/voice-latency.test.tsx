@@ -12,6 +12,7 @@ const E2E: VoiceE2eLatency = {
   segments: {
     endpoint: stat(600, 900),
     asr: stat(1364, 2000),
+    prepare: stat(400, 900),
     llm_first: stat(1900, 3000),
     tts_queue: stat(300, 700),
     tts_first: stat(520, 800),
@@ -25,7 +26,7 @@ const E2E: VoiceE2eLatency = {
 const CTX = { platform: "discord", scope: "g1", channel: "v1", kind: "voice" } as const;
 
 describe("語音回應", () => {
-  it("shows the median, the slowest 10% and the six segments in the order she says them", async () => {
+  it("shows the median, the slowest 10% and the segments in the order she says them", async () => {
     renderPage(<VoiceLatency e2e={E2E} />);
     const facts = await screen.findByLabelText("語音回應延遲");
     expect(facts).toHaveTextContent("中位數4.80 s");
@@ -35,6 +36,7 @@ describe("語音回應", () => {
     expect(rows.map((r) => r.textContent)).toEqual([
       "判斷說完600 ms",
       "辨識1.36 s",
+      "準備400 ms",
       "LLM 首字1.90 s",
       "TTS 排隊300 ms",
       "TTS 合成520 ms",

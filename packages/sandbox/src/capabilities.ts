@@ -29,8 +29,55 @@ export const CodeRunArgsSchema = z.object({
   timeout_ms: z.number().int().positive().optional(),
   mount_tools: z.boolean().optional().describe("Mount her saved scripts read-only at /tools"),
   session: SessionChoiceSchema.optional().describe("`fresh` (default) or a session name"),
+  use_workspace: z
+    .boolean()
+    .optional()
+    .describe("Mount her persistent workspace read-write at /workspace (fresh runs only)"),
+  use_network: z
+    .boolean()
+    .optional()
+    .describe("Reach the hosts the owner allowed (only when some are configured; fresh runs only)"),
 });
 export type CodeRunArgs = z.output<typeof CodeRunArgsSchema>;
+
+/** Capability ids of her workspace (the file tools need no Docker; `workspace.run` does). */
+export const WORKSPACE_LIST = "workspace.list";
+export const WORKSPACE_READ = "workspace.read";
+export const WORKSPACE_WRITE = "workspace.write";
+export const WORKSPACE_DELETE = "workspace.delete";
+export const WORKSPACE_RUN = "workspace.run";
+export const WORKSPACE_SAVE_SCRIPT = "workspace.save_script";
+
+/** Longest text one `workspace.write` takes, in characters (the byte quota applies as well). */
+export const MAX_WRITE_CHARS = 200_000;
+
+const WorkspacePath = z.string().min(1).max(255);
+export const WorkspaceListArgsSchema = z.object({ path: WorkspacePath.optional() });
+export const WorkspaceReadArgsSchema = z.object({
+  path: WorkspacePath,
+  offset: z.number().int().min(0).optional(),
+});
+export const WorkspaceWriteArgsSchema = z.object({
+  path: WorkspacePath,
+  content: z.string().max(MAX_WRITE_CHARS),
+  append: z.boolean().optional(),
+});
+export const WorkspaceDeleteArgsSchema = z.object({ path: WorkspacePath });
+export const WorkspaceSaveScriptArgsSchema = z.object({
+  path: WorkspacePath.describe("A .py or .mjs path"),
+  content: z.string().min(1).max(MAX_WRITE_CHARS),
+});
+export const WorkspaceRunArgsSchema = z.object({
+  path: WorkspacePath.describe("An approved .py or .mjs script in the workspace"),
+  stdin: z.string().optional(),
+  timeout_ms: z.number().int().positive().optional(),
+});
+export type WorkspaceSaveScriptArgs = z.output<typeof WorkspaceSaveScriptArgsSchema>;
+export type WorkspaceListArgs = z.output<typeof WorkspaceListArgsSchema>;
+export type WorkspaceReadArgs = z.output<typeof WorkspaceReadArgsSchema>;
+export type WorkspaceWriteArgs = z.output<typeof WorkspaceWriteArgsSchema>;
+export type WorkspaceDeleteArgs = z.output<typeof WorkspaceDeleteArgsSchema>;
+export type WorkspaceRunArgs = z.output<typeof WorkspaceRunArgsSchema>;
 
 /** Arguments of `code.session`: list her sessions, or close one. */
 export const CodeSessionArgsSchema = z

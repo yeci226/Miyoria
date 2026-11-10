@@ -96,11 +96,15 @@ import type {
   DealPatch,
   DealStatus,
   DecisionRecord,
+  DocFilter,
+  DocUpdate,
+  EconomyDoc,
   FortuneRecord,
   Goal,
   GoalPatch,
   GoalPledge,
   GoalStatus,
+  LedgerDayTotal,
   LogEntry,
   MemberCardRecord,
   MemoryFilter,
@@ -127,6 +131,7 @@ import type {
   DealStore,
   DecisionLog,
   DirectiveStore,
+  EconomyDocStore,
   EventCompaction,
   EventCompactionResult,
   EventLogStore,
@@ -787,6 +792,29 @@ class SqliteCoins implements CoinLedgerStore {
       spent: num(r, "n"),
     }));
   }
+
+  async dailyTotals(
+    profile: ProfileId,
+    since: Timestamp,
+    offsetMinutes: number,
+  ): Promise<LedgerDayTotal[]> {
+    // Microseconds since the epoch, moved to local time, divided into whole days (ts is positive;
+    // the casts keep the division integral however the driver binds a JS number).
+    const rows = this.db.all(
+      "SELECT CAST((ts + CAST($offset AS INTEGER)) / 86400000000 AS INTEGER) AS day, reason, " +
+        "COALESCE(SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END), 0) AS positive, " +
+        "COALESCE(-SUM(CASE WHEN delta < 0 THEN delta ELSE 0 END), 0) AS negative " +
+        "FROM coin_ledger WHERE profile_id = $profile AND ts >= $since " +
+        "GROUP BY day, reason ORDER BY day, reason",
+      { profile, since: toMicros(since), offset: Math.round(offsetMinutes) * 60_000_000 },
+    );
+    return rows.map((r) => ({
+      day: num(r, "day"),
+      reason: str(r, "reason"),
+      positive: num(r, "positive"),
+      negative: num(r, "negative"),
+    }));
+  }
 }
 
 // ---- fortunes ------------------------------------------------------------------------------
@@ -1221,6 +1249,118 @@ class SqliteBounties implements BountyStore {
   }
 }
 
+// ---- economy documents ---------------------------------------------------------------------
+
+function docFromRow(row: Row): EconomyDoc {
+  const platform = optStr(row, "owner_platform");
+  const id = optStr(row, "owner_id");
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    kind: str(row, "kind"),
+    owner: platform !== null && id !== null ? { platform, id } : null,
+    status: str(row, "status"),
+    version: num(row, "version"),
+    data: json<JsonObject>(row, "data", "economy document"),
+    created_at: ts(row, "created_at"),
+    updated_at: ts(row, "updated_at"),
+  };
+}
+
+class SqliteEconomyDocs implements EconomyDocStore {
+  constructor(private readonly db: Db) {}
+
+  async create(doc: EconomyDoc): Promise<boolean> {
+    try {
+      return (
+        this.db.run(
+          "INSERT INTO economy_docs (profile_id, kind, id, owner_platform, owner_id, status, " +
+            "version, data, created_at, updated_at) VALUES ($profile, $kind, $id, $platform, " +
+            "$owner, $status, $version, $data, $created, $updated) ON CONFLICT DO NOTHING",
+          {
+            profile: doc.profile,
+            kind: doc.kind,
+            id: doc.id,
+            platform: doc.owner?.platform ?? null,
+            owner: doc.owner?.id ?? null,
+            status: doc.status,
+            version: doc.version,
+            data: JSON.stringify(doc.data),
+            created: toMicros(doc.created_at),
+            updated: toMicros(doc.updated_at),
+          },
+        ) > 0
+      );
+    } catch (cause) {
+      throw new StoreError("cannot write the economy document", { cause });
+    }
+  }
+
+  async get(profile: ProfileId, kind: string, id: string): Promise<EconomyDoc | null> {
+    const row = this.db.get(
+      "SELECT * FROM economy_docs WHERE profile_id = $profile AND kind = $kind AND id = $id",
+      { profile, kind, id },
+    );
+    return row ? docFromRow(row) : null;
+  }
+
+  async update(
+    profile: ProfileId,
+    kind: string,
+    id: string,
+    expected: number,
+    next: DocUpdate,
+  ): Promise<boolean> {
+    const params: Params = {
+      profile,
+      kind,
+      id,
+      expected,
+      status: next.status,
+      data: JSON.stringify(next.data),
+      at: toMicros(next.at),
+    };
+    let owner = "";
+    if (next.owner !== undefined) {
+      params.platform = next.owner?.platform ?? null;
+      params.owner = next.owner?.id ?? null;
+      owner = ", owner_platform = $platform, owner_id = $owner";
+    }
+    try {
+      return (
+        this.db.run(
+          "UPDATE economy_docs SET status = $status, data = $data, version = version + 1, " +
+            `updated_at = $at${owner} WHERE profile_id = $profile AND kind = $kind AND ` +
+            "id = $id AND version = $expected",
+          params,
+        ) > 0
+      );
+    } catch (cause) {
+      throw new StoreError("cannot update the economy document", { cause });
+    }
+  }
+
+  async list(profile: ProfileId, kind: string, filter: DocFilter): Promise<EconomyDoc[]> {
+    if (filter.statuses?.length === 0 || filter.owners?.length === 0) return [];
+    const params: Params = { profile, kind, limit: limitParam(filter.limit) };
+    let where = "profile_id = $profile AND kind = $kind";
+    if (filter.statuses) where += ` AND ${statusIn(filter.statuses, params)}`;
+    if (filter.owners) {
+      const who = filter.owners.map((a, i) => {
+        params[`op${i}`] = a.platform;
+        params[`oi${i}`] = a.id;
+        return `(owner_platform = $op${i} AND owner_id = $oi${i})`;
+      });
+      where += ` AND (${who.join(" OR ")})`;
+    }
+    const rows = this.db.all(
+      `SELECT * FROM economy_docs WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT $limit`,
+      params,
+    );
+    return rows.map(docFromRow);
+  }
+}
+
 // ---- module state -------------------------------------------------------------------------
 
 class SqliteModuleState implements ModuleStateStore {
@@ -1527,6 +1667,29 @@ class SqliteDecisionLog implements DecisionLog {
             { profile, key: contextLookupKey(context), limit: limitParam(limit) },
           );
     return rows.map((r) => json<TurnOutcomeRecord>(r, "record", "turn outcome"));
+  }
+
+  async outcomesSince(profile: ProfileId, sinceTs: Timestamp): Promise<TurnOutcomeRecord[]> {
+    const rows = this.db.all(
+      "SELECT record FROM turn_outcomes WHERE profile_id = $profile AND ts >= $since " +
+        "ORDER BY ts DESC, id DESC",
+      { profile, since: toMicros(sinceTs) },
+    );
+    return rows.map((r) => json<TurnOutcomeRecord>(r, "record", "turn outcome"));
+  }
+
+  async decisionsSince(profile: ProfileId, sinceTs: Timestamp): Promise<DecisionRecord[]> {
+    const rows = this.db.all(
+      "SELECT id, ts, trace FROM decision_log WHERE profile_id = $profile AND ts >= $since " +
+        "ORDER BY ts DESC, id DESC",
+      { profile, since: toMicros(sinceTs) },
+    );
+    return rows.map((r) => ({
+      id: str(r, "id"),
+      profile,
+      ts: ts(r, "ts"),
+      trace: json<DecisionTrace>(r, "trace", "decision trace"),
+    }));
   }
 
   #trim(profile: ProfileId, cap: number): void {
@@ -2593,6 +2756,7 @@ export class SqliteStore implements Store {
   readonly fortunes: FortuneStore;
   readonly goals: GoalStore;
   readonly bounties: BountyStore;
+  readonly economyDocs: EconomyDocStore;
   readonly #db: Db;
 
   private constructor(db: Db, maxDecisions: number | null) {
@@ -2617,6 +2781,7 @@ export class SqliteStore implements Store {
     this.fortunes = new SqliteFortunes(db);
     this.goals = new SqliteGoals(db);
     this.bounties = new SqliteBounties(db);
+    this.economyDocs = new SqliteEconomyDocs(db);
   }
 
   /**

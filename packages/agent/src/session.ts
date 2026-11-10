@@ -83,11 +83,19 @@ export class Session {
    * the fetch started (clock ms). Turns wait for it, but not past the history timeout.
    */
   warmup: { done: Promise<void>; startedAt: number } | null = null;
+  /** When the session started (clock ms): which example dialogues it shows (main line). */
+  readonly startedAt: number;
+  /**
+   * Time of the first history line the main line's prompt shows (`null`: not set yet). It only
+   * moves forward, and only in steps (`historyWindow`), so the prompt's prefix stays cached.
+   */
+  promptStart: number | null = null;
 
   constructor(context: ContextKey, limit: number, clock: Clock = systemClock) {
     this.context = context;
     this.#limit = Math.max(limit, 1);
     this.#clock = clock;
+    this.startedAt = clock.now();
   }
 
   /**
@@ -336,6 +344,14 @@ export class Session {
 
   voiceMembers(): readonly VoiceParticipant[] {
     return this.#voiceMembers;
+  }
+
+  /**
+   * The people in the voice channel who can hear her: not deafened. 2026-11-08: she finished a
+   * song in an empty channel and said out loud that nobody seemed to have heard it.
+   */
+  listeners(): readonly VoiceParticipant[] {
+    return this.#voiceMembers.filter((m) => !m.deafened);
   }
 
   setSpeaking(account: AccountRef, speaking: boolean): void {

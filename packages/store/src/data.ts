@@ -291,6 +291,18 @@ export const DATA_CATEGORIES: readonly DataCategory[] = [
         winner_platform: "text",
         winner_id: "text",
       }),
+      // Economy 2.0: collection items, predictions and bets, commissions, her room.
+      table("economy_docs", "economy_docs", "profile", "updated_at", "created_at, id", {
+        kind: "text",
+        id: "text",
+        owner_platform: "text",
+        owner_id: "text",
+        status: "text",
+        version: "num",
+        data: "json",
+        created_at: "ts",
+        updated_at: "ts",
+      }),
     ],
     { modules: ["social", "agent"] },
   ),

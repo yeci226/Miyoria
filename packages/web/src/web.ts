@@ -1,5 +1,6 @@
-// What `web_search` and `web_read` do, without the gate: DuckDuckGo, the guarded page reader,
-// the caches and the rate limits. Results are formatted as untrusted data blocks for her.
+// What `web_search` and `web_read` do, without the gate: DuckDuckGo (paced, so a burst is not
+// challenged), the guarded page reader, the caches and the rate limits. Results are formatted as
+// untrusted data blocks for her.
 
 import { type Clock, dataBlock } from "@miyoria/types";
 import type { WebConfig } from "./config.js";
@@ -17,7 +18,13 @@ export interface WebDeps extends GuardDeps {
   clock: Clock;
   /** Replaces the global `fetch` (tests). Only DuckDuckGo is fetched through it. */
   fetch?: typeof fetch;
+  /** Waits between DuckDuckGo searches (tests pass one that does not). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Why a search failed, for the log (she is only told it could not search). */
+  note?: (detail: string) => void;
 }
+
+const realSleep = (ms: number) => new Promise<void>((ok) => setTimeout(ok, ms));
 
 const clip = (text: string, max: number): string => {
   const chars = [...text];
@@ -46,6 +53,10 @@ export class WebService {
   readonly #readCache: TtlCache<ReadOutcome>;
   readonly #searches: Limits;
   readonly #reads: Limits;
+  /** DuckDuckGo searches go one at a time, `ddg_gap_ms` apart. */
+  #ddgQueue: Promise<unknown> = Promise.resolve();
+  #ddgLast = Number.NEGATIVE_INFINITY;
+  #ddgResting = 0;
 
   constructor(deps: WebDeps) {
     this.#d = deps;
@@ -86,10 +97,45 @@ export class WebService {
     if (!this.#searches.take(who, this.#now())) {
       throw new WebError("查太多次了,等一下再查。", "search rate limit");
     }
-    const hits = (await this.#duckDuckGo(q, signal)).slice(0, max);
-    const outcome: SearchOutcome = { hits, text: formatHits(q, hits, cfg.result_chars) };
+    const hits = (await this.#find(q, signal)).slice(0, max);
+    const outcome: SearchOutcome = { hits, text: formatHits(q, hits, cfg.search_chars) };
     this.#searchCache.set(key, outcome, this.#now());
     return outcome;
+  }
+
+  /** DuckDuckGo, paced; why it failed goes to the log. */
+  async #find(query: string, signal: AbortSignal): Promise<SearchHit[]> {
+    try {
+      return await this.#paced(() => this.#duckDuckGo(query, signal));
+    } catch (error) {
+      if (error instanceof WebError) this.#d.note?.(error.reason);
+      throw error;
+    }
+  }
+
+  /** Runs a DuckDuckGo search in its turn, `ddg_gap_ms` after the last; none while it rests. */
+  #paced<T>(run: () => Promise<T>): Promise<T> {
+    const cfg = this.#d.config;
+    const sleep = this.#d.sleep ?? realSleep;
+    const go = async (): Promise<T> => {
+      if (this.#now() < this.#ddgResting) {
+        throw new WebError(SEARCH_DOWN, "duckduckgo resting after a challenge");
+      }
+      const wait = this.#ddgLast + cfg.ddg_gap_ms - this.#now();
+      if (wait > 0) await sleep(wait);
+      this.#ddgLast = this.#now();
+      try {
+        return await run();
+      } catch (error) {
+        if (error instanceof WebError && error.reason === "duckduckgo challenge") {
+          this.#ddgResting = this.#now() + cfg.ddg_cooldown_s * 1000;
+        }
+        throw error;
+      }
+    };
+    const next = this.#ddgQueue.then(go, go);
+    this.#ddgQueue = next.catch(() => undefined);
+    return next;
   }
 
   async #duckDuckGo(query: string, signal: AbortSignal): Promise<SearchHit[]> {
@@ -113,7 +159,11 @@ export class WebService {
     }
     if (response.status !== 200) {
       await response.body?.cancel().catch(() => undefined);
-      throw new WebError(SEARCH_DOWN, `duckduckgo status ${response.status}`);
+      // 202 is how it challenges (with the anomaly page), the same "no" as one inside a 200.
+      throw new WebError(
+        SEARCH_DOWN,
+        response.status === 202 ? "duckduckgo challenge" : `duckduckgo status ${response.status}`,
+      );
     }
     let html: string;
     try {

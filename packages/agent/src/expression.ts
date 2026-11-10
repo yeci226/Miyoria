@@ -46,6 +46,11 @@ export type Segment =
   | { type: "silence" }
   /** `<voice>…</voice>`: what she says out loud for the text that follows. */
   | { type: "spoken"; text: string }
+  /**
+   * A `<voice>` span opened and its end is not here yet: the text before it is complete. Once
+   * per span, and only when the span arrives in pieces.
+   */
+  | { type: "spoken_start" }
   /** `<sing_start>`: a tool written as text instead of called. */
   | { type: "tool"; name: string }
   /** Markup nobody should see (`<span>`, `</span>`): dropped. */
@@ -57,6 +62,8 @@ export type Segment =
 export class ExpressionParser {
   /** Unconsumed input that may be the start of a tag. */
   #held = "";
+  /** The `<voice>` span being held was announced (`spoken_start`). */
+  #announced = false;
 
   push(chunk: string): Segment[] {
     this.#held += chunk;
@@ -95,15 +102,19 @@ export class ExpressionParser {
           flush();
           const end = close === -1 ? input.length : close;
           out.push({ type: "spoken", text: input.slice(from, end) });
+          this.#announced = false;
           pos = close === -1 ? end : close + VOICE_CLOSE.length;
           continue;
         }
         if (input.length - from <= MAX_VOICE_LEN) {
           flush();
+          if (!this.#announced) out.push({ type: "spoken_start" });
+          this.#announced = true;
           this.#held = input.slice(start);
           return out;
         }
         // Too long to be a spoken line: plain text.
+        this.#announced = false;
       }
       const rest = lower.slice(start);
       const closing = EMO_CLOSE.exec(rest);
@@ -124,7 +135,7 @@ export class ExpressionParser {
         const close = lower.indexOf(`</emo:${thinking[1]}>`, from);
         if (close !== -1) {
           flush();
-          pos = close + thinking[1]!.length + 7;
+          pos = close + (thinking[1] ?? "").length + 7;
           continue;
         }
         if (!eof && input.length - from <= MAX_THINK_LEN) {
@@ -278,6 +289,7 @@ export class Expression {
         break;
       case "pause":
       case "spoken":
+      case "spoken_start":
       case "markup":
         break;
       case "silence":

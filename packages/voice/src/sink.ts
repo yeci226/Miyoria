@@ -33,11 +33,12 @@ import type { BargeIn } from "./barge.js";
 import type { VoiceConfig, VoiceProfile } from "./config.js";
 import type { E2eLatency, E2eMeasure } from "./e2e.js";
 import type { SelfEchoGuard } from "./echo.js";
+import type { FillerClip } from "./filler.js";
 import { VoiceLinkError } from "./link/conn.js";
 import type { VoiceLink } from "./link/link.js";
 import type { Playback } from "./link/playback.js";
 import { BufferedAudio, type LinePrefetch, type PreparedLine, type Producer } from "./prefetch.js";
-import { stripTags } from "./text.js";
+import { stripEmoji, stripTags } from "./text.js";
 import { LATENCY_TOPIC } from "./topics.js";
 import type { SpeechTranslator } from "./translate.js";
 import type { TurnGate } from "./turn.js";
@@ -113,6 +114,10 @@ export class Speaker implements VoiceSink {
     string,
     { playback: Playback; turn: TurnId | null; endsAt: number | null }
   >();
+  /** When a line of hers was last prepared or asked to be spoken, per guild (clock ms). */
+  readonly #lineAt = new Map<string, number>();
+  /** Fillers playing per guild. */
+  readonly #fillers = new Map<string, number>();
 
   constructor(deps: SpeakerDeps) {
     this.#d = deps;
@@ -420,6 +425,62 @@ export class Speaker implements VoiceSink {
     this.#d.prefetch?.cancelGroup(guild);
   }
 
+  /**
+   * Nothing of hers plays or is on its way in `guild` since `since`: no line was prepared or asked
+   * for, nothing (filler included) is playing, no song or GPU loan holds the channel, no emergency
+   * stop. A filler may then stand in for her.
+   */
+  quiet(guild: string, since: number): boolean {
+    if (this.#muted || this.#held(guild) !== null) return false;
+    if ((this.#playing.get(guild) ?? 0) > 0 || (this.#fillers.get(guild) ?? 0) > 0) return false;
+    return (this.#lineAt.get(guild) ?? Number.NEGATIVE_INFINITY) < since;
+  }
+
+  /**
+   * Plays a filler sound for `turn` (filler.ts). Not a line: no `voice_playback`, no subtitle,
+   * nothing for her history; her own voice coming back is still known as hers. Resolves when it is
+   * over.
+   */
+  async playFiller(context: ContextKey, turn: TurnId, clip: FillerClip): Promise<void> {
+    const guild = context.scope;
+    if (guild === null) return;
+    const { link, echo, e2e, ctx } = this.#d;
+    const chunk = { sampleRate: clip.sampleRate, samples: clip.samples };
+    const audio = (async function* () {
+      yield chunk;
+    })();
+    this.#fillers.set(guild, (this.#fillers.get(guild) ?? 0) + 1);
+    let playback: Playback | null = null;
+    try {
+      playback = await link.play(guild, clip.sampleRate, audio);
+      this.#live.add(playback);
+      echo.started(guild, [clip.text]);
+      if (this.#muted) playback.stop(0);
+      const state = await playback.state$.waitFor((s) => s !== null);
+      if (state === "started" || state === "finished") {
+        const at = ctx.clock.now();
+        e2e.filler(turn, at);
+        ctx.publish(
+          customEvent(LATENCY_TOPIC, {
+            stage: "filler",
+            context: { ...context },
+            turn,
+            text: clip.text,
+            ms: Math.round((clip.samples.length * 1000) / Math.max(1, clip.sampleRate)),
+          }),
+          { turn },
+        );
+      }
+      await playback.wait();
+    } finally {
+      if (playback !== null) {
+        echo.ended(guild);
+        this.#live.delete(playback);
+      }
+      this.#fillers.set(guild, Math.max(0, (this.#fillers.get(guild) ?? 0) - 1));
+    }
+  }
+
   /** `VoiceSink.silence`: lines that came here without the scheduler stop too. */
   silence(): void {
     for (const playback of this.#live) playback.stop(0);
@@ -433,6 +494,7 @@ export class Speaker implements VoiceSink {
   prepare(context: ContextKey, rawText: string, spoken?: string, emotion?: string | null): void {
     const text = stripTags(rawText);
     if (text === "") return;
+    if (context.scope !== null) this.#lineAt.set(context.scope, this.#d.ctx.clock.now());
     // The first text of a reply is here: the clock for `llm_first` stops.
     this.#d.e2e.textReady(this.#focusOf(context, null));
     const said = spoken === undefined ? "" : stripTags(spoken);
@@ -548,8 +610,10 @@ export class Speaker implements VoiceSink {
     if (guild === null) {
       throw new VoiceLinkError(`voice context \`${contextKeyString(context)}\` has no guild`);
     }
-    const stripped = stripTags(rawText);
+    // Emoji and server emoji shortcodes cannot be said (docs/design/server-emoji.md).
+    const stripped = stripEmoji(stripTags(rawText));
     if (stripped === "") return "completed";
+    this.#lineAt.set(guild, this.#d.ctx.clock.now());
     if (this.#muted) return "interrupted";
     // Subtitles and her history follow what is said here: a blocked line is gone from them too.
     const { text, blocked } = this.#review(context, turn, stripped, "tts");

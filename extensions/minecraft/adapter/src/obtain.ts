@@ -26,6 +26,7 @@ import {
   normalizeItem,
   plan,
   planksOf,
+  unknownText,
 } from "./planner.js";
 import type { Snapshot } from "./summary.js";
 
@@ -54,7 +55,7 @@ export function parsePlanPatch(patch: Record<string, unknown>): PlanPatch | stri
     if (key === "item") {
       const item = normalizeItem(typeof value === "string" ? value : "");
       if (!/^#?[a-z0-9_]+$/.test(item)) return "item 要是物品 id";
-      if (!knows(item)) return `不知道怎麼取得${itemName(item)}(只會砍樹、挖礦、合成和用熔爐燒的東西)`;
+      if (!knows(item)) return unknownText(item);
       out.item = item;
     } else if (key === "count") {
       if (typeof value !== "number" || !Number.isFinite(value)) return "count 要是數字";
@@ -86,7 +87,31 @@ export interface RunnerOptions {
   /** Longest wait for an interrupting reflex to end. */
   reflexWaitMs?: number;
   maxSteps?: number;
+  /** Longest one hunting step chases and hits. */
+  huntMs?: number;
+  /** How often hunting looks where it is and hits. */
+  huntPollMs?: number;
+  /** Longest one harvest runs Baritone's farm. */
+  gatherMs?: number;
+  /** Wait after a hunt or harvest for the drops to be picked up (the pickup reflex). */
+  pickupWaitMs?: number;
 }
+
+/** How far her hand reaches an animal (blocks). */
+const REACH = 3.2;
+/** Swords and axes, best first (what she hits with). */
+const WEAPONS = [
+  "netherite_sword",
+  "diamond_sword",
+  "iron_sword",
+  "stone_sword",
+  "golden_sword",
+  "wooden_sword",
+  "diamond_axe",
+  "iron_axe",
+  "stone_axe",
+  "wooden_axe",
+];
 
 export interface RunnerResult {
   ok: boolean;
@@ -118,8 +143,14 @@ interface Waiter {
 
 /** Stations she can reach without placing one (any visible within the scan radius; `goto` covers the walk). */
 export function worldOf(s: Snapshot): World {
-  const seen = (block: string) => (s.nearby_blocks ?? []).some((b) => b.block === block);
-  return { table: seen("crafting_table"), furnace: seen("furnace") };
+  const blocks = (s.nearby_blocks ?? []).map((b) => b.block);
+  const animals = (s.nearby_entities ?? []).filter((e) => !e.hostile).map((e) => e.type);
+  return {
+    table: blocks.includes("crafting_table"),
+    furnace: blocks.includes("furnace"),
+    animals: [...new Set(animals)],
+    crops: blocks.filter((b) => ["wheat", "carrots", "potatoes", "beetroots"].includes(b)),
+  };
 }
 
 /** The member of a group she has most of (`#logs` → `birch_log`), for the mod's concrete ids. */
@@ -161,6 +192,10 @@ export class ObtainRunner {
       collectMarginMs: opts.collectMarginMs ?? 1_500,
       reflexWaitMs: opts.reflexWaitMs ?? 60_000,
       maxSteps: opts.maxSteps ?? 40,
+      huntMs: opts.huntMs ?? 90_000,
+      huntPollMs: opts.huntPollMs ?? 400,
+      gatherMs: opts.gatherMs ?? 90_000,
+      pickupWaitMs: opts.pickupWaitMs ?? 2_500,
     };
   }
 
@@ -361,6 +396,10 @@ export class ObtainRunner {
         case "place":
           await this.#send("place", { item: step.item });
           return "done";
+        case "hunt":
+          return await this.#hunt(step, snap);
+        case "gather":
+          return await this.#gather(step, snap);
       }
     } catch (error) {
       if (error instanceof BridgeError) return { fail: errorText(error.code, error.message), code: failureCode(error.code) };
@@ -404,18 +443,116 @@ export class ObtainRunner {
 
   /** Explores until one of `blocks` comes into sight; false when the time runs out. */
   async #explore(blocks: string[]): Promise<boolean> {
+    return this.#exploreUntil((s) => (s.nearby_blocks ?? []).some((b) => blocks.includes(b.block)));
+  }
+
+  /** Explores until `found` holds for what she sees; false when the time runs out. */
+  async #exploreUntil(found: (s: Snapshot) => boolean): Promise<boolean> {
     await this.#send("baritone", { command: "explore" });
     const end = Date.now() + this.#o.exploreMs;
     while (Date.now() < end) {
       if (!(await this.#sleep(this.#o.explorePollMs))) return false;
-      const seen = (await this.#host.observe()).nearby_blocks ?? [];
-      if (seen.some((b) => blocks.includes(b.block))) {
+      if (found(await this.#host.observe())) {
         await this.#host.request("stop").catch(() => undefined);
         return true;
       }
     }
     await this.#host.request("stop").catch(() => undefined);
     return false;
+  }
+
+  /**
+   * Hunting: follow the nearest animal of the kinds that drop the item (Baritone `follow`),
+   * hit it whenever it is under the crosshair within reach (the mod's `attack` is a left click
+   * on what she looks at, like a player), and stop once enough dropped. Without an animal in
+   * sight she explores for one first. The drops are picked up by walking over them and by the
+   * pickup reflex after the job stops.
+   */
+  async #hunt(step: Extract<Step, { kind: "hunt" }>, snap: Snapshot): Promise<Outcome> {
+    const before = countOf(snap.inventory ?? {}, step.item);
+    const goal = before + step.count;
+    const kinds = step.entities;
+    const inSight = (s: Snapshot) => (s.nearby_entities ?? []).filter((e) => kinds.includes(e.type));
+    const names = kinds.slice(0, 3).map(zh).join("、");
+    let seen = snap;
+    if (inSight(seen).length === 0) {
+      if (!(await this.#exploreUntil((s) => inSight(s).length > 0))) {
+        return {
+          fail: `附近看不到${names},探索了 ${Math.round(this.#o.exploreMs / 1000)} 秒也沒找到(換個地方,草原和森林比較多動物)`,
+          code: "not_found",
+        };
+      }
+      seen = await this.#host.observe();
+    }
+    const target = inSight(seen)[0]?.type ?? (kinds[0] as string);
+    const weapon = WEAPONS.find((w) => (seen.inventory?.[w] ?? 0) > 0);
+    if (weapon) await this.#host.request("select_slot", { item: weapon }).catch(() => undefined);
+    await this.#send("baritone", { command: "follow", entity: target });
+    let followed = Date.now();
+    let aimed = 0;
+    const end = Date.now() + this.#o.huntMs;
+    try {
+      while (Date.now() < end) {
+        if (!(await this.#sleep(this.#o.huntPollMs))) return "interrupted";
+        const s = await this.#host.observe();
+        if (countOf(s.inventory ?? {}, step.item) >= goal) return "done";
+        const look = s.looking_at;
+        if (look?.kind === "entity" && kinds.includes(look.entity ?? "") && (look.distance ?? 99) <= REACH) {
+          await this.#host.request("attack", {}).catch(() => undefined);
+          continue;
+        }
+        const near = inSight(s).find((e) => e.distance <= REACH + 0.5);
+        if (near && Date.now() - aimed > 1_000) {
+          aimed = Date.now();
+          // With its position (a newer mod) aim at its body; else tilt down at Baritone's heading.
+          const at = near.position;
+          const aim = at ? { at: { x: at.x + 0.5, y: at.y + 0.6, z: at.z + 0.5 } } : { pitch: 25 };
+          await this.#host.request("look", aim).catch(() => undefined);
+          continue;
+        }
+        if (inSight(s).length === 0) break;
+        // A reflex or a dead target stopped the follow: pick it up again.
+        if (s.baritone?.busy === false && Date.now() - followed > 3_000) {
+          const next = inSight(s)[0]?.type ?? target;
+          await this.#host.request("baritone", { command: "follow", entity: next }).catch(() => undefined);
+          followed = Date.now();
+        }
+      }
+    } finally {
+      await this.#host.request("stop").catch(() => undefined);
+    }
+    if (!(await this.#sleep(this.#o.pickupWaitMs))) return "interrupted";
+    const after = countOf((await this.#host.observe()).inventory ?? {}, step.item);
+    if (after >= goal) return "done";
+    if (after > before) return "progress";
+    return { fail: `打不到${names}(追不上、打不到準心,或附近沒有了)`, code: "not_found" };
+  }
+
+  /** Harvesting: Baritone's `farm` (ripe crops only, replanted) until enough was picked up. */
+  async #gather(step: Extract<Step, { kind: "gather" }>, snap: Snapshot): Promise<Outcome> {
+    const before = countOf(snap.inventory ?? {}, step.item);
+    const goal = before + step.count;
+    await this.#send("baritone", { command: "farm" });
+    const end = Date.now() + this.#o.gatherMs;
+    try {
+      while (Date.now() < end) {
+        if (!(await this.#sleep(this.#o.explorePollMs))) return "interrupted";
+        const s = await this.#host.observe();
+        if (countOf(s.inventory ?? {}, step.item) >= goal) return "done";
+        // Baritone's farm goes idle when nothing ripe is in range.
+        if (s.baritone?.busy === false) break;
+      }
+    } finally {
+      await this.#host.request("stop").catch(() => undefined);
+    }
+    if (!(await this.#sleep(this.#o.pickupWaitMs))) return "interrupted";
+    const after = countOf((await this.#host.observe()).inventory ?? {}, step.item);
+    if (after >= goal) return "done";
+    if (after > before) return "progress";
+    return {
+      fail: `附近沒有成熟的${step.crops.map(zh).join("、")}可以收(找村莊的田,或改去打獵)`,
+      code: "not_found",
+    };
   }
 
   async #goto(block: string): Promise<boolean> {

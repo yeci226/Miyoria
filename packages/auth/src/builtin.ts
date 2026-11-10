@@ -89,59 +89,43 @@ const V1_MODERATOR = [
 ];
 const V1_ADMIN = ["admin.*", "module.*", "memory.*", "stream.*"];
 
+/**
+ * Members may ask her to set timers (`remind_me`, v4 §8.3). Trusted and above have it through
+ * `tools.*`; the member role lists it with the other low-risk everyday tools in
+ * `@miyoria/commands` (`nodes.ts`). Named here so a stored role from before it is still upgraded.
+ */
+const REMIND_TOOL = "tools.remind";
+
+/** The role's current grants without `removed` (the nodes a later version added). */
+function without(name: string, removed: readonly string[]): string[] {
+  const role = builtinRoleGrants().find((r) => r.name === name);
+  return (role?.grants ?? []).filter((n) => !removed.includes(n));
+}
+
+/** A built-in role's grants before members could ask her to set timers. */
+function beforeRemind(name: string): string[] {
+  return without(name, [REMIND_TOOL]);
+}
+
 /** A built-in role's grants before moderators could make rules. */
 function beforeDirectives(name: string): string[] {
-  const role = builtinRoleGrants().find((r) => r.name === name);
-  return (role?.grants ?? []).filter(
-    (n) => n !== DIRECTIVE_MODERATE && n !== WEB_TOOL && n !== FILE_READ,
-  );
+  return without(name, [DIRECTIVE_MODERATE, WEB_TOOL, FILE_READ, REMIND_TOOL]);
 }
 
 /** A built-in role's grants before members could ask her to search the web. */
 function beforeWeb(name: string): string[] {
-  const role = builtinRoleGrants().find((r) => r.name === name);
-  return (role?.grants ?? []).filter((n) => n !== WEB_TOOL && n !== FILE_READ);
+  return without(name, [WEB_TOOL, FILE_READ, REMIND_TOOL]);
 }
 
 /** A built-in role's grants before members could send her files. */
 function beforeFiles(name: string): string[] {
-  const role = builtinRoleGrants().find((r) => r.name === name);
-  return (role?.grants ?? []).filter((n) => n !== FILE_READ);
+  return without(name, [FILE_READ, REMIND_TOOL]);
 }
 
 /** A built-in role's grants before trusted people could ask her to run code. */
 function beforeSandbox(name: string): string[] {
   return beforeDirectives(name).filter((n) => n !== SANDBOX_CODE_RUN);
 }
-
-/**
- * Grants of the built-in roles as earlier versions seeded them. A stored built-in role that
- * still has exactly these grants was never edited and is upgraded to the current definition.
- */
-export const LEGACY_BUILTIN_GRANTS: Readonly<Record<string, readonly (readonly string[])[]>> = {
-  admin: [
-    [...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED, ...V1_MODERATOR, ...V1_ADMIN],
-    beforeSandbox("admin"),
-    beforeDirectives("admin"),
-    beforeWeb("admin"),
-    beforeFiles("admin"),
-  ],
-  moderator: [
-    [...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED, ...V1_MODERATOR],
-    beforeSandbox("moderator"),
-    beforeDirectives("moderator"),
-    beforeWeb("moderator"),
-    beforeFiles("moderator"),
-  ],
-  trusted: [
-    [...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED],
-    beforeSandbox("trusted"),
-    beforeWeb("trusted"),
-    beforeFiles("trusted"),
-  ],
-  user: [[...V1_PRIVACY, ...V1_EVERYDAY], beforeWeb("user"), beforeFiles("user")],
-  restricted: [V1_PRIVACY],
-};
 
 /** The same nodes, in any order: a store may hand them back sorted differently than they were seeded. */
 const sameList = (a: readonly string[], b: readonly string[]) => {
@@ -150,6 +134,57 @@ const sameList = (a: readonly string[], b: readonly string[]) => {
   const y = [...b].sort();
   return x.every((n, i) => n === y[i]);
 };
+
+/**
+ * Grants of the built-in roles as earlier versions seeded them, oldest first. A stored built-in
+ * role that still has exactly these grants was never edited and is upgraded to the current
+ * definition.
+ */
+const LEGACY: Readonly<Record<string, readonly (readonly string[])[]>> = {
+  admin: [
+    [...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED, ...V1_MODERATOR, ...V1_ADMIN],
+    beforeSandbox("admin"),
+    beforeDirectives("admin"),
+    beforeWeb("admin"),
+    beforeFiles("admin"),
+    beforeRemind("admin"),
+  ],
+  moderator: [
+    [...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED, ...V1_MODERATOR],
+    beforeSandbox("moderator"),
+    beforeDirectives("moderator"),
+    beforeWeb("moderator"),
+    beforeFiles("moderator"),
+    beforeRemind("moderator"),
+  ],
+  trusted: [
+    [...V1_PRIVACY, ...V1_EVERYDAY, ...V1_TRUSTED],
+    beforeSandbox("trusted"),
+    beforeWeb("trusted"),
+    beforeFiles("trusted"),
+    beforeRemind("trusted"),
+  ],
+  user: [
+    [...V1_PRIVACY, ...V1_EVERYDAY],
+    beforeWeb("user"),
+    beforeFiles("user"),
+    beforeRemind("user"),
+  ],
+  restricted: [V1_PRIVACY],
+};
+
+/**
+ * The legacy lists that differ from today's role: a step that did not change a role (the node it
+ * added is not in that role's grants) is no earlier version of it, and a stored role equal to the
+ * current one is `current`, never an upgrade.
+ */
+export const LEGACY_BUILTIN_GRANTS: Readonly<Record<string, readonly (readonly string[])[]>> =
+  Object.fromEntries(
+    Object.entries(LEGACY).map(([name, lists]) => {
+      const current = builtinRoleGrants().find((r) => r.name === name)?.grants ?? [];
+      return [name, lists.filter((grants) => !sameList(grants, current))];
+    }),
+  );
 
 /**
  * What to do with a stored role named like a built-in one: `current` (nothing to do),

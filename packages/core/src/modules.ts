@@ -5,7 +5,7 @@
 // which is there before anything can say a word): llm, speech, voice.link, voice, scheduler, agent, commands,
 // auth, actions, directive, activity, social, mood, world, self, memory, arbiter, mind, knowledge, conversation,
 // reflect, queue, game, game.chat, sing, share (opt-in), watch (opt-in), mcp,
-// stage.link, economy, web, sandbox (opt-in), recorder, Discord bot, Admin API, terminal chat, then the
+// stage.link, economy, web, sandbox (opt-in), party, recorder, Discord bot, Admin API, terminal chat, then the
 // extension host and one `ext.<id>` per extension.
 
 import { mkdir } from "node:fs/promises";
@@ -30,6 +30,7 @@ import {
   ReflectModule,
   repairEphemeralHandles,
 } from "@miyoria/learning";
+import { LiveModule } from "@miyoria/live";
 import {
   type LlmConfig,
   LlmConfigSchema,
@@ -42,6 +43,7 @@ import { McpModule } from "@miyoria/mcp";
 import { EmbeddingConfigSchema, MemoryModule } from "@miyoria/memory";
 import { MindModule } from "@miyoria/mind";
 import { ModerationModule } from "@miyoria/moderation";
+import { PartyModule } from "@miyoria/party";
 import type { Profile } from "@miyoria/profile";
 import { QueueModule } from "@miyoria/queue";
 import { SandboxModule } from "@miyoria/sandbox";
@@ -49,6 +51,7 @@ import { SchedulerModule } from "@miyoria/scheduler";
 import { SelfModule } from "@miyoria/self";
 import { ShareModule } from "@miyoria/share";
 import { SingModule } from "@miyoria/sing";
+import { SkillsModule } from "@miyoria/skills";
 import { MoodModule, SocialModule } from "@miyoria/social";
 import { SpeechConfigSchema, SpeechModule } from "@miyoria/speech";
 import {
@@ -189,6 +192,9 @@ async function coreModules({
     new EconomyModule(profileId),
     new WebModule(),
     new SandboxModule(profileId, { baseDir }),
+    new SkillsModule(),
+    new LiveModule({ names: profile.names() }),
+    new PartyModule(),
   ];
 }
 

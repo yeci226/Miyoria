@@ -26,6 +26,7 @@ import {
   type Deal,
   type DecisionRecord,
   dataCategory,
+  type EconomyDoc,
   type Goal,
   type GoalPledge,
   type LogEntry,
@@ -472,6 +473,153 @@ function behaviour(open: () => Promise<Store>): void {
     };
     await log.appendOutcome?.(profile, revised);
     expect(await log.recentOutcomes?.(profile, a, 10)).toEqual([silent, revised]);
+  });
+
+  it("decisions and outcomes since a time: no row cap, newest first, this profile only", async () => {
+    const log = store.decisions;
+    expect(log.decisionsSince).toBeTypeOf("function");
+    expect(log.outcomesSince).toBeTypeOf("function");
+    const profile = unique("profile");
+    const other = unique("profile");
+    const ctx = channel("guild", unique("chan"), "channel");
+    const t0 = Date.now();
+    const old = decision(profile, ctx, "old", at(t0));
+    const edge = decision(profile, ctx, "edge", at(t0 + SECOND));
+    const late = decision(profile, ctx, "late", at(t0 + 2 * SECOND));
+    for (const d of [late, old, edge]) await log.append(d);
+    await log.append(decision(other, ctx, "else", at(t0 + 2 * SECOND)));
+    expect(reasons((await log.decisionsSince?.(profile, at(t0 + SECOND))) ?? [])).toEqual([
+      "late",
+      "edge",
+    ]);
+    expect(await log.decisionsSince?.(profile, at(t0 + 3 * SECOND))).toEqual([]);
+
+    const first = outcome(ctx, "sent", at(t0));
+    const second = outcome(ctx, "silence", at(t0 + SECOND));
+    const third = outcome(ctx, "sent", at(t0 + 2 * SECOND));
+    for (const o of [third, first, second]) await log.appendOutcome?.(profile, o);
+    await log.appendOutcome?.(other, outcome(ctx, "sent", at(t0 + 2 * SECOND)));
+    expect(await log.outcomesSince?.(profile, at(t0 + SECOND))).toEqual([third, second]);
+    expect(await log.outcomesSince?.(profile, at(t0 + 3 * SECOND))).toEqual([]);
+  });
+
+  it("economy documents: create once, compare-and-set update, list by kind, owner and status", async () => {
+    const docs = store.economyDocs;
+    const profile = unique("profile");
+    const mine = account(unique("acct"));
+    const theirs = account(unique("acct"));
+    const doc = (kind: string, id: string, owner: typeof mine | null, ms: number): EconomyDoc => ({
+      id,
+      profile,
+      kind,
+      owner,
+      status: "open",
+      version: 1,
+      data: { title: id, nested: { n: [1, 2] } },
+      created_at: at(ms),
+      updated_at: at(ms),
+    });
+    const a = doc("item", "a", mine, 1_000);
+    const b = doc("item", "b", theirs, 2_000);
+    const c = doc("item", "c", null, 3_000);
+    const p = doc("prediction", "a", null, 1_000);
+    for (const d of [a, b, c, p]) expect(await docs.create(d)).toBe(true);
+
+    // The same id twice changes nothing; the same id of another kind is another document.
+    expect(await docs.create({ ...a, status: "gone", data: {} })).toBe(false);
+    expect(await docs.get(profile, "item", "a")).toEqual(a);
+    expect(await docs.get(profile, "prediction", "a")).toEqual(p);
+    expect(await docs.get(profile, "item", "zzz")).toBeNull();
+    expect(await docs.get(unique("profile"), "item", "a")).toBeNull();
+
+    // Compare and set on the version.
+    const next = { status: "held", data: { title: "a", held: true }, at: at(5_000) };
+    expect(await docs.update(profile, "item", "a", 2, next)).toBe(false);
+    expect(await docs.update(profile, "item", "a", 1, next)).toBe(true);
+    expect(await docs.update(profile, "item", "a", 1, next)).toBe(false);
+    expect(await docs.get(profile, "item", "a")).toEqual({
+      ...a,
+      status: "held",
+      data: { title: "a", held: true },
+      version: 2,
+      updated_at: at(5_000),
+    });
+    expect(await docs.update(profile, "item", "nope", 1, next)).toBe(false);
+
+    // The owner changes only when given, `null` included.
+    expect(await docs.update(profile, "item", "c", 1, { ...next, owner: theirs })).toBe(true);
+    expect((await docs.get(profile, "item", "c"))?.owner).toEqual(theirs);
+    expect(await docs.update(profile, "item", "c", 2, { ...next, owner: null })).toBe(true);
+    expect((await docs.get(profile, "item", "c"))?.owner).toBeNull();
+    expect(await docs.update(profile, "item", "b", 1, next)).toBe(true);
+    expect((await docs.get(profile, "item", "b"))?.owner).toEqual(theirs);
+
+    // Newest first by creation, narrowed by owner and status, limited.
+    const ids = async (kind: string, filter: Parameters<typeof docs.list>[2]) =>
+      (await docs.list(profile, kind, filter)).map((d) => d.id);
+    expect(await ids("item", { limit: 9 })).toEqual(["c", "b", "a"]);
+    expect(await ids("item", { limit: 2 })).toEqual(["c", "b"]);
+    expect(await ids("item", { limit: 0 })).toEqual([]);
+    expect(await ids("item", { owners: [mine], limit: 9 })).toEqual(["a"]);
+    expect(await ids("item", { owners: [mine, theirs], limit: 9 })).toEqual(["b", "a"]);
+    expect(await ids("item", { owners: [], limit: 9 })).toEqual([]);
+    expect(await ids("item", { statuses: ["held"], limit: 9 })).toEqual(["c", "b", "a"]);
+    expect(await ids("item", { statuses: ["open"], limit: 9 })).toEqual([]);
+    expect(await ids("item", { statuses: [], limit: 9 })).toEqual([]);
+    expect(await ids("prediction", { limit: 9 })).toEqual(["a"]);
+    expect(await docs.list(unique("profile"), "item", { limit: 9 })).toEqual([]);
+  });
+
+  it("ledger daily totals: per local day and reason, issued and recovered, all accounts", async () => {
+    const profile = unique("profile");
+    const x = unique("acct");
+    const y = unique("acct");
+    const base = Date.UTC(2026, 10, 3); // a UTC midnight
+    const post = (who: string, delta: number, reason: string, ms: number) =>
+      store.coins.post(
+        {
+          id: newId(),
+          profile,
+          account: account(who),
+          delta,
+          reason,
+          ref: null,
+          idem_key: null,
+          ts: at(ms),
+        },
+        { wallet: [] },
+      );
+    await post(x, 10, "checkin", base + HOUR);
+    await post(y, 5, "checkin", base + 2 * HOUR);
+    await post(x, 3, "talked", base + 22 * HOUR);
+    await post(x, -4, "feed", base + 23 * HOUR);
+    await post(y, -6, "feed", base + DAY + HOUR);
+    await post(y, 8, "checkin", base + 2 * DAY);
+    await post(y, 7, "checkin", base - DAY); // before `since`
+    const since = at(base);
+    const d0 = Math.floor(base / DAY);
+
+    // UTC: rows of one reason are added across accounts.
+    expect(await store.coins.dailyTotals(profile, since, 0)).toEqual([
+      { day: d0, reason: "checkin", positive: 15, negative: 0 },
+      { day: d0, reason: "feed", positive: 0, negative: 4 },
+      { day: d0, reason: "talked", positive: 3, negative: 0 },
+      { day: d0 + 1, reason: "feed", positive: 0, negative: 6 },
+      { day: d0 + 2, reason: "checkin", positive: 8, negative: 0 },
+    ]);
+
+    // Two hours east: the 22:00 and 23:00 rows fall on the next local day.
+    const east = await store.coins.dailyTotals(profile, since, 120);
+    expect(east.filter((r) => r.day === d0)).toEqual([
+      { day: d0, reason: "checkin", positive: 15, negative: 0 },
+    ]);
+    expect(
+      east.filter((r) => r.day === d0 + 1).map((r) => [r.reason, r.positive, r.negative]),
+    ).toEqual([
+      ["feed", 0, 10],
+      ["talked", 3, 0],
+    ]);
+    expect(await store.coins.dailyTotals(unique("profile"), since, 0)).toEqual([]);
   });
 
   it("settings", async () => {
@@ -1925,6 +2073,7 @@ function behaviour(open: () => Promise<Store>): void {
       goals: 0,
       goal_pledges: 0,
       bounties: 0,
+      economy_docs: 0,
       self_state: 1,
       self_feelings: 1,
       self_cards_migration: 0,

@@ -37,8 +37,11 @@ export interface WatcherDeps {
   hearing: StreamHearing | null;
   /** She is talking or singing. */
   busy(guild: string): boolean;
-  /** `hint` goes into a data block downstream; it is not wrapped here. */
-  speak(target: WatchTarget, hint: string): void;
+  /**
+   * Asks for a turn of hers about the stream (an `agent_initiative`; the turn says it, through
+   * the main line). `hint` goes into a data block downstream; it is not wrapped here.
+   */
+  initiative(target: WatchTarget, hint: string): void;
   now(): number;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   warn(message: string, error?: unknown): void;
@@ -428,7 +431,7 @@ export class Watcher {
     if (topicKey(topic) !== "")
       run.recentTopics = [...run.recentTopics, topic].slice(-RECENT_TOPICS);
     try {
-      this.#deps.speak(run.target, this.#hint(run));
+      this.#deps.initiative(run.target, this.#hint(run));
     } catch (error) {
       this.#deps.warn("watch speak failed", error);
     }

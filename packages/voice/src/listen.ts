@@ -127,6 +127,14 @@ export class Listener {
     this.#aliases = compileAliases(deps.config.asr_aliases, deps.config.to_traditional);
   }
 
+  /** Somebody she listens to is talking in `guild` right now. */
+  talking(guild: string): boolean {
+    for (const s of this.#streams.values()) {
+      if (s.talking && s.info.context.scope === guild) return true;
+    }
+    return false;
+  }
+
   /** Consumes `audio` until it ends or `signal` aborts. */
   async run(audio: AsyncIterable<AudioEvent>, signal: AbortSignal): Promise<void> {
     const sweep = this.#sweep(signal);

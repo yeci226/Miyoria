@@ -21,6 +21,7 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   channelIdOf,
+  type GoLiveDefaults,
   joinTarget,
   STAY_AFTER_INVITE_MS,
   voiceCapabilities,
@@ -69,8 +70,9 @@ class FakeLink {
     this.inVoice = null;
   }
 
-  async goliveStart(req: { guild: string; source: string }) {
-    this.calls.push(`golive ${req.guild} ${req.source}`);
+  async goliveStart(req: { guild: string; source: string; listen?: boolean }) {
+    const listen = req.listen === undefined ? "" : ` listen=${req.listen}`;
+    this.calls.push(`golive ${req.guild} ${req.source}${listen}`);
     this.streaming = true;
   }
 
@@ -86,6 +88,8 @@ interface SetupOptions {
   /** People (other than her) in the voice channel she is in. */
   others?: number;
   now?: () => number;
+  /** The Go Live defaults (the source alone by default). */
+  golive?: () => string | GoLiveDefaults;
 }
 
 function setup(nodes: string[], options: SetupOptions = {}) {
@@ -122,7 +126,7 @@ function setup(nodes: string[], options: SetupOptions = {}) {
   });
   for (const c of voiceCapabilities(
     link as unknown as VoiceLink,
-    () => "rtmp://obs/live",
+    options.golive ?? (() => "rtmp://obs/live"),
     () => world,
     () => floor,
     options.now,
@@ -316,6 +320,35 @@ describe("voice capabilities", () => {
     expect(s.link.calls).toEqual(["join g1 null 7", "golive g1 rtmp://obs/live"]);
   });
 
+  it("stream_start pulls from a hub when golive_listen is off, for any source", async () => {
+    const s = setup(["voice.golive"], {
+      golive: () => ({ source: "rtmp://127.0.0.1:1935/live/miyoria", listen: false }),
+    });
+    s.link.inVoice = "vc1";
+    expect(await s.tools.get("stream_start")?.call(s.ctx, {})).toBe("Go Live started");
+    s.link.streaming = false;
+    // `/voice golive start source:…` names its own source.
+    const run = await s.registry.invoke({
+      principal: Principals.command(OWEN, CTX),
+      capability: "stream.start",
+      args: { guild: "g1", source: "srt://other:9000" },
+      why: "test",
+      turn: null,
+    });
+    expect(run.status).toBe("done");
+    // The node's own default (listen) is never sent.
+    const listening = setup(["voice.golive"], {
+      golive: () => ({ source: "rtmp://obs/live", listen: true }),
+    });
+    listening.link.inVoice = "vc1";
+    await listening.tools.get("stream_start")?.call(listening.ctx, {});
+    expect([...s.link.calls, ...listening.link.calls]).toEqual([
+      "golive g1 rtmp://127.0.0.1:1935/live/miyoria listen=false",
+      "golive g1 srt://other:9000 listen=false",
+      "golive g1 rtmp://obs/live",
+    ]);
+  });
+
   it("stream_stop lets the stage show the ending scene first", async () => {
     const s = setup(["voice.golive"]);
     s.link.streaming = true;
@@ -328,6 +361,22 @@ describe("voice capabilities", () => {
     s.services.provide("stage.link", StreamCurtainKey, curtain);
     expect(await s.tools.get("stream_stop")?.call(s.ctx, {})).toBe("Go Live stopped");
     expect(s.link.calls).toEqual(["curtain", "golive_stop g1"]);
+  });
+
+  it("stream_stop leaves OBS alone when Go Live pulls from the hub the website also reads", async () => {
+    const s = setup(["voice.golive"], {
+      golive: () => ({ source: "rtmp://127.0.0.1:1935/live/miyoria", listen: false }),
+    });
+    s.link.streaming = true;
+    s.link.inVoice = "vc1";
+    const curtain: StreamCurtain = {
+      close: async () => {
+        s.link.calls.push("curtain");
+      },
+    };
+    s.services.provide("stage.link", StreamCurtainKey, curtain);
+    expect(await s.tools.get("stream_stop")?.call(s.ctx, {})).toBe("Go Live stopped");
+    expect(s.link.calls).toEqual(["golive_stop g1"]);
   });
 
   it("another server is off limits for her and chat requests", async () => {

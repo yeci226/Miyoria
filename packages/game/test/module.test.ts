@@ -461,6 +461,10 @@ describe("game director", () => {
       verdict: "Replace",
       commentary: "開工囉",
       busy: false,
+      // What she saw is in the record with the thought (§11.2 item 9).
+      observation: "血量 20/20\n位置 (0, 64, 0)",
+      want: null,
+      held: [],
     });
     await h.stop();
   });
@@ -742,14 +746,19 @@ describe("game director", () => {
     const llm = new MockProvider("mock").reply(
       decision("蓋房子", { name: "get", args: { item: "oak_planks" } }),
     );
-    const h = await Harness.create(llm, { max_attempts: 2 });
+    // The method guard is off here: this is about counting attempts.
+    const h = await Harness.create(llm, { max_attempts: 2, method_repeat_limit: 0 });
     h.exec.autoEnd = () => ({ type: "failed", code: "precondition", detail: "沒有安裝 AltoClef" });
     await h.start();
-    // Her own goal ends with the task's code.
-    expect(h.status()?.goal).toBeNull();
+    // Her own goal survives one failure: the next decision can try another way.
+    expect(h.status()?.goal?.text).toBe("蓋房子");
     expect(h.status()?.last_action).toBe(
       'get {"item":"oak_planks"} → 失敗(precondition):沒有安裝 AltoClef',
     );
+    expect(h.goalLog.take()).toEqual([]);
+    // The second failure ends it with the task's code.
+    await secs(4);
+    expect(h.status()?.goal).toBeNull();
     expect(h.goalLog.take()).toEqual([
       expect.objectContaining({ goal: "蓋房子", status: "failed", code: "precondition" }),
     ]);
@@ -818,13 +827,16 @@ describe("game director", () => {
     await h.gameEvent("plan_failed", "取得鐵鎬失敗", true);
     expect(h.status()?.goal?.text).toBe("拿鐵鎬");
     await h.taskFailed("not_found", "取得鐵鎬失敗,卡在「挖粗鐵×3」:附近看不到鐵礦");
-    expect(h.status()?.goal).toBeNull();
-    // the failure triggers the next decision, which is told what is withheld
+    // The goal stays (one failed attempt of three) ...
+    expect(h.status()?.goal?.text).toBe("拿鐵鎬");
+    // ... and the failure triggers the next decision, which is told what is withheld and sees
+    // the failure with its code in her record.
     await secs(1);
     expect(llm.requests).toHaveLength(2);
-    expect(contentText(llm.requests.at(-1)?.messages.at(-1)?.content ?? "")).toContain(
-      "暫時不能用",
-    );
+    const prompt = contentText(llm.requests.at(-1)?.messages.at(-1)?.content ?? "");
+    expect(prompt).toContain("暫時不能用");
+    expect(prompt).toContain('obtain {"item":"iron_pickaxe"} → 失敗(not_found)');
+    expect(prompt).toContain("要:iron_pickaxe");
     await h.stop();
   });
 });

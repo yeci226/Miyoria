@@ -24,6 +24,8 @@
   "dependencies": {
     "@miyoria/commands": "workspace:*",
     "@miyoria/kernel": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@miyoria/store": "workspace:*",
     "@miyoria/types": "workspace:*",
     "discord.js": "^14.26.0",
     "zod": "^4.6.7"

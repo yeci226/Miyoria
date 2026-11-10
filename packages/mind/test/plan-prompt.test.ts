@@ -125,7 +125,7 @@ describe("the Plan prompt", () => {
 
   it("has a short system: her core, the task, the limits, her numbers, a format of empty values", () => {
     const { system } = textOf(input());
-    expect(system.startsWith("你是 DeepSeek 小鯨魚\n你是 DeepSeek，")).toBe(true);
+    expect(system.startsWith("你是 DeepSeek-chan\n")).toBe(true);
     // Not the chat persona: no speaking style, no <silence/> / <emo> rules.
     expect(system).not.toMatch(/silence|<emo|說話風格/);
     expect(system).not.toContain(persona.slice(-200));

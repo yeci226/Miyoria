@@ -107,6 +107,7 @@ import type {
   PersonCard,
   PromptSummary,
   SavedPrompt,
+  TurnMetrics,
   TurnOutcomeKind,
   TurnOutcomeRecord,
 } from "./types";
@@ -348,6 +349,8 @@ export function createApi(client: ApiClient) {
         ...o,
         query: { limit: q.limit, outcome: q.outcome, context: q.context ? JSON.stringify(q.context) : undefined },
       }),
+
+    turnMetrics: (days: number, o?: Opts) => client.get<TurnMetrics>("/api/turns/metrics", { ...o, query: { days } }),
 
     factEvents: (q: FactEventsQuery, o?: Opts) =>
       client.get<LogEvent[]>("/api/facts/events", {

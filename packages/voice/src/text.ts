@@ -151,6 +151,20 @@ export function stripTags(text: string): string {
   return collapseWhitespace(out);
 }
 
+/** A pictographic emoji with its modifiers, joiners and variation selectors. */
+const PICTOGRAPH =
+  /\p{Extended_Pictographic}(?:[\u{1F3FB}-\u{1F3FF}️]|‍\p{Extended_Pictographic})*/gu;
+/** A server emoji written `:name:` (docs/design/server-emoji.md). */
+const SHORTCODE = /(?<!\w):\w{2,32}:(?!\w)/g;
+
+/**
+ * Removes what a voice cannot say: emoji (`😤`, `👍🏻`) and server emoji shortcodes
+ * (`:fanfan:`), then collapses whitespace.
+ */
+export function stripEmoji(text: string): string {
+  return collapseWhitespace(text.replace(SHORTCODE, " ").replace(PICTOGRAPH, " ").replace(/️/g, ""));
+}
+
 const TAG_CHAR = /^[A-Za-z0-9 :=_\-/."']*$/;
 
 function looksLikeTag(body: string): boolean {

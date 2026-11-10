@@ -31,6 +31,8 @@ interface Entity {
   name?: string;
   distance: number;
   hostile: boolean;
+  /** Where it stands, when the mod says (a newer mod; hunting aims at it). */
+  position?: Pos;
 }
 
 interface NotableBlock {
@@ -244,11 +246,9 @@ export function compactState(s: Snapshot): Record<string, unknown> {
     weather: s.weather,
     held: s.held_item?.item ?? null,
     pickaxe_tier: s.inventory ? pickaxeTier(s.inventory) : undefined,
-    inventory: Object.fromEntries(
-      Object.entries(s.inventory ?? {})
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, MAX_INVENTORY * 2),
-    ),
+    // All of it (at most 36 kinds): a goal's success condition is read from here, and the one
+    // loaf of bread must not fall off the end of a list of stone.
+    inventory: Object.fromEntries(Object.entries(s.inventory ?? {}).sort((a, b) => b[1] - a[1])),
     free_slots: s.inventory_free_slots,
     entities: (s.nearby_entities ?? []).slice(0, MAX_ENTITIES * 2).map((e) => ({
       type: e.type,

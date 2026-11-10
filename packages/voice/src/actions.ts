@@ -135,10 +135,19 @@ export function joinTarget(
   return { channel: null, follow: requester.id };
 }
 
-/** The four capabilities, bound to `link` (and the default Go Live source). */
+/**
+ * Where Go Live reads from by default: the source, and whether the node's ffmpeg is the server
+ * the encoder pushes to (`listen`, default true) or pulls from one (false, e.g. MediaMTX).
+ */
+export interface GoLiveDefaults {
+  source: string;
+  listen?: boolean;
+}
+
+/** The four capabilities, bound to `link` (and the default Go Live source, or its defaults). */
 export function voiceCapabilities(
   link: VoiceLink,
-  goliveSource: () => string,
+  goliveSource: () => string | GoLiveDefaults,
   world: () => WorldState | undefined = () => undefined,
   floor: () => VoiceFloor | undefined = () => undefined,
   now: () => number = Date.now,
@@ -212,6 +221,15 @@ export function voiceCapabilities(
     },
   });
 
+  /**
+   * Go Live pulls from a hub (MediaMTX) that OBS publishes to for the website as well: ending Go
+   * Live then leaves OBS alone, so the website never sees the ending scene.
+   */
+  const fromHub = (): boolean => {
+    const defaults = goliveSource();
+    return typeof defaults !== "string" && defaults.listen === false;
+  };
+
   const leave = defineCapability<GuildArgs>({
     name: "voice.leave",
     summary: "離開語音頻道",
@@ -243,7 +261,7 @@ export function voiceCapabilities(
       // Without the ActivityManager (it stops the broadcast as its own step): Go Live ends
       // first, with the curtain, so she never streams from a call she left.
       if (!ctx.task && link.isStreaming(guild)) {
-        await ctx.services.get(StreamCurtainKey)?.close(ctx.signal);
+        if (!fromHub()) await ctx.services.get(StreamCurtainKey)?.close(ctx.signal);
         await link.goliveStop(guild);
       }
       await link.leave(guild);
@@ -278,7 +296,10 @@ export function voiceCapabilities(
       if (link.isStreaming(guild)) {
         return { text: "already live", data: { already: true, joined: false } };
       }
-      const source = (args.source ?? goliveSource()).trim();
+      const defaults = goliveSource();
+      const { source: fallback, listen } =
+        typeof defaults === "string" ? { source: defaults, listen: undefined } : defaults;
+      const source = (args.source ?? fallback).trim();
       if (source === "") throw new CapabilityError("no Go Live source configured");
       let joined = false;
       if (link.channel(guild) === null) {
@@ -293,7 +314,8 @@ export function voiceCapabilities(
           throw new GoLiveJoinError(errorMessage(error), { cause: error });
         }
       }
-      await link.goliveStart({ guild, source });
+      // Only a pull is said out loud: the node's default (listen) stays its own.
+      await link.goliveStart({ guild, source, ...(listen === false ? { listen } : {}) });
       return { text: "Go Live started", data: { already: false, joined } };
     },
   });
@@ -306,7 +328,7 @@ export function voiceCapabilities(
     permission: "voice.golive",
     tool: {
       name: "stream_stop",
-      description: "結束 Discord Go Live 直播(OBS 也會停止直播)。",
+      description: "結束 Discord Go Live 直播。",
       properties: { guild: GUILD_PROPERTY },
     },
     scope: guildOf,
@@ -315,8 +337,9 @@ export function voiceCapabilities(
     async execute(args, ctx) {
       const guild = requireGuild(args, ctx.principal);
       if (!link.isStreaming(guild)) return { text: "not live", data: { stopped: false } };
-      // The stage shows the ending scene for a moment first (when it has one).
-      await ctx.services.get(StreamCurtainKey)?.close(ctx.signal);
+      // The stage shows the ending scene for a moment first (when it has one), unless OBS goes on
+      // for the website.
+      if (!fromHub()) await ctx.services.get(StreamCurtainKey)?.close(ctx.signal);
       await link.goliveStop(guild);
       return { text: "Go Live stopped", data: { stopped: true } };
     },

@@ -383,7 +383,7 @@ describe("what she shows is a pure function of what she feels, her rules and who
     r.affect.applyEvent(ev("praised", T0, { key: "a" }));
     r.advance(MINUTE);
     r.affect.applyEvent(ev("praised", r.clock.at, { key: "b" }));
-    // Joy shows as 嘴上說「哼,還好啦」 (smug), not as the happy it is.
+    // Joy shows as acting unbothered (smug), not as the happy it is.
     expect(r.affect.snapshot().shown).toMatchObject({ from: "joy", tag: "smug", masked: true });
   });
 });

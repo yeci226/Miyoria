@@ -50,9 +50,11 @@ import {
   AffectStateKey,
   ArbiterKey,
   AuthorizerKey,
+  accountRefString,
   type CompiledBlock,
   type ContextKey,
   ConversationStatesKey,
+  type CountedOutcome,
   contextKeyString as contextKeyDisplay,
   DirectivesKey,
   dataBlock,
@@ -64,40 +66,57 @@ import {
   type JsonValue,
   type LaneKey,
   LessonsKey,
+  LifeLogKey,
   MemoryRetrievalKey,
   type MessageRef,
   MindKey,
   ModerationKey,
   type Notice,
+  neutralize,
   newAction,
   type Participant,
+  PartyStatusKey,
+  type PersonId,
+  PersonProfilesKey,
+  type PinnedContext,
   PlatformSinksKey,
   Principals,
   type Priority,
   type PromptBlock,
+  type PromptContributors,
   PromptContributorsKey,
   type PromptRequest,
+  type PromptSection,
   type ReasoningLevel,
+  type RetrievedMemory,
   type SafeLine,
   type SavedPrompt,
   SelfStateKey,
+  SkillIndexKey,
   type SocialSignals,
+  safeName,
   safeOutgoing,
   sameAccount,
   type TurnId,
   type TurnOutcome,
-  type TurnOutcomeRecord,
+  type TurnRetrievalQuery,
   textLane,
   timestampMs,
   toTimestamp,
   VoiceSinkKey,
+  type VoiceTurnMark,
+  type VoiceTurnMarks,
+  type VoiceTurnStages,
+  VoiceTurnsKey,
   voiceLane,
   WorkingContextKey,
   WorldStateKey,
 } from "@miyoria/types";
 import {
   assess,
+  directReason,
   flooredTalk,
+  type LookFacts,
   decide as sample,
   type TalkLevel,
   type VoiceAttention,
@@ -114,17 +133,39 @@ import {
 import { budgetBlocks, budgetSelf, contributedData, savedPrompt } from "./compiler.js";
 import type { AttentionConfig, ChannelMode } from "./config.js";
 import { AMBIENT_MODES, typingRefreshMs } from "./config.js";
-import { gather } from "./contributors.js";
+import {
+  type Gathered,
+  gather,
+  mergeGathered,
+  readWarm,
+  WarmContext,
+  type WarmRead,
+} from "./contributors.js";
 import type { TurnFlags } from "./coordinator.js";
 import { Expression, ExpressionParser, type Segment } from "./expression.js";
 import { fileParts, selectFiles } from "./files.js";
 import { type FocusSelection, focusVerb, type TurnFocusInit } from "./focus.js";
 import { voiceScope } from "./handle.js";
 import { awaitBackfill, fetchAround, quotedParent, replyParents } from "./history.js";
-import { looksLikeReasoning, ReplyScreen } from "./leak.js";
-import { ceilingFor, levelHint } from "./levels.js";
+import { isSelfTalk, looksLikeReasoning, ReplyScreen } from "./leak.js";
+import { ceilingFor, levelHint, paceMs } from "./levels.js";
 import type { HeldLine } from "./mainline/gate.js";
 import type { Run } from "./mainline/hands.js";
+import {
+  asksSeriously,
+  CUT_OFF,
+  handedOver,
+  handOver,
+  higher,
+  NOT_OFFERED,
+  OUT_OF_TIME,
+  QUESTION_PURPOSE,
+  ROUND_CUT,
+  ROUND_MIN_CHARS,
+  STILL_RUNNING,
+  TOO_MANY,
+  TOOL_STEP_PURPOSE,
+} from "./mainline/loop.js";
 import {
   ACTING_ALONE,
   FALLBACK_LINES,
@@ -134,21 +175,38 @@ import {
   MainTurn,
   sentences,
 } from "./mainline/main.js";
-import { COMMIT_SPEC, groundArgs, STEER_SPEC, slimTool, turnOutput } from "./mainline/output.js";
+import {
+  COMMIT_SPEC,
+  groundArgs,
+  isPseudoTool,
+  STEER_SPEC,
+  slimTool,
+  turnOutput,
+} from "./mainline/output.js";
 import {
   contextData,
   contextState,
+  exampleDialogues,
   fitHistory,
+  historyWindow,
   mainMessages,
   mainRules,
   pinnedSection,
   promptText,
   proposalData,
   resultData,
+  rotatedExamples,
+  SlowBlocks,
+  stableHash,
+  ToolTraces,
+  type TraceCall,
   tailSection,
+  traceText,
 } from "./mainline/prompt.js";
 import { linkMentions, type MentionTarget } from "./mentions.js";
-import { agentTurns } from "./metrics.js";
+import { agentTurns, CorrectionTally } from "./metrics.js";
+import { KEEP_HINT, LONG_RESULT_CHARS, loopKeepHint, NOTE_TOOLS } from "./notes.js";
+import { prohibitionOf } from "./prohibition.js";
 import {
   afterFold,
   buildMessages,
@@ -156,6 +214,7 @@ import {
   cleanReply,
   dataMessage,
   EXAMPLES_TITLE,
+  FEELING_TITLE,
   FLAGGED_TITLE,
   flaggedBody,
   focusEntries,
@@ -169,13 +228,15 @@ import {
   situationPrompt,
   splitByReplyMarks,
   splitMessage,
+  type TraceAnchor,
   takeReplyMark,
+  traceAnchor,
   transcriptLine,
   VOICE_PRESENT_TITLE,
   whenAndWhere,
 } from "./prompt.js";
 import type { Agent, Initiative, IntentTurn } from "./runtime.js";
-import { type PresentPerson, peopleBody, selfBlocks } from "./self-block.js";
+import { feelingCauseBody, type PresentPerson, peopleBody, selfBlocks } from "./self-block.js";
 import { type HistoryEntry, messageText, type Session } from "./session.js";
 import { type BudgetState, EXHAUSTED_LINE } from "./signals.js";
 import {
@@ -187,14 +248,10 @@ import {
 } from "./speech.js";
 import { offeredIn, scopeOfHer, scopeOfSnapshot, type ToolScope } from "./tool-scope.js";
 import { KeepNoteTool, ReactTool } from "./tools.js";
-import { contextId, fixed, guard, TimeoutError, timeout } from "./util.js";
+import { charCount, contextId, fixed, guard, TimeoutError, timeout } from "./util.js";
 import { imageParts, selectImages } from "./vision.js";
 
 const TYPING_TTL_MS = 10_000;
-/** A tool result at least this long gets the keep_note reminder (notes.ts). */
-const LONG_RESULT_CHARS = 300;
-const KEEP_HINT =
-  "\n(這些結果下一回合就看不到了;這段對話之後還會用到的,用 keep_note 用自己的話記下重點)";
 /** History lines shown to the `fast` model. */
 const CHECK_HISTORY = 12;
 /** History lines before the input sent to prompt contributors. */
@@ -207,6 +264,73 @@ const MEMORY_CONTRIBUTOR = "memory";
 const UNLIMITED = Number.MAX_SAFE_INTEGER;
 /** History lines looked through for suspicious messages. */
 const FLAGGED_HISTORY = 12;
+/**
+ * Contributor sections the main line shows before the history (v4 §4.1), the most stable first:
+ * the server's own emoji (`server_emoji` of packages/discord emoji.ts: they change when someone
+ * adds one) and her notebook's index (when she writes a page). The rest of what contributors say
+ * is data of the turn.
+ */
+const SLOW_ORDER: readonly string[] = ["server_emoji", "notebook"];
+const SLOW_SECTIONS: ReadonlySet<string> = new Set(SLOW_ORDER);
+/** Title of 「今天的她」 (v4 §6.2). */
+const LIFE_TITLE = "今天的你";
+const DAY_MS = 86_400_000;
+/**
+ * The party tools that act in a running game, with the game they are for (`null`: any). Offered
+ * only while `PartyStatus` says one runs here, and `party_start` only while none does (all of
+ * them only in voice: `NEEDS` of tool-scope.ts).
+ */
+const PARTY_MOVES: ReadonlyMap<string, string | null> = new Map([
+  ["party_host", null],
+  ["party_play", null],
+  ["party_ask", "soup"],
+]);
+const PARTY_START = "party_start";
+
+/** What a conversation keeps for the main line's prompt from one turn to the next. */
+interface Kept {
+  slow: SlowBlocks;
+  traces: ToolTraces;
+  /** The people she talked with since the people block was last written. */
+  talking: Set<PersonId>;
+  /** Who was here when the people block was last written. */
+  here: string;
+}
+
+/** Kept per session: a forgotten session forgets it too. */
+const KEPT = new WeakMap<Session, Kept>();
+
+/** What a voice turn reads without waiting (contributors.ts), per voice session. */
+const WARM = new WeakMap<Session, WarmContext>();
+
+/** What is read in the background for later voice turns may take this long (nobody waits). */
+const WARM_LOAD_MS = 10_000;
+
+/** A voice turn's view of what is kept warm: for whom, and how it may wait. */
+interface VoiceWarm {
+  kept: WarmContext;
+  /** The people here: a value made for other people is not used. */
+  key: string;
+  read: WarmRead;
+}
+
+function warmOf(session: Session): WarmContext {
+  let warm = WARM.get(session);
+  if (warm === undefined) {
+    warm = new WarmContext();
+    WARM.set(session, warm);
+  }
+  return warm;
+}
+
+function keptOf(session: Session): Kept {
+  let kept = KEPT.get(session);
+  if (kept === undefined) {
+    kept = { slow: new SlowBlocks(), traces: new ToolTraces(), talking: new Set(), here: "" };
+    KEPT.set(session, kept);
+  }
+  return kept;
+}
 
 export class TurnError extends Error {
   override readonly name = "TurnError";
@@ -218,6 +342,11 @@ export interface TurnPlan {
   selection: FocusSelection | null;
   /** What `agent.turn.focus` / `agent.turn.outcome` say about it. */
   focus: TurnFocusInit;
+  /**
+   * The coordinator saw its one question stand `rhythm.question_secs` by its own clock with
+   * nobody saying anything after it (v4 §7.2).
+   */
+  stood?: boolean;
 }
 
 /**
@@ -243,6 +372,7 @@ export async function runTurn(
   try {
     try {
       text = await t.respond();
+      await t.keepRules();
       outcome = t.outcome(text);
     } catch (error) {
       if (signal.aborted) return;
@@ -275,6 +405,11 @@ interface Extras {
   own: string[];
   /** Contributor sections, rendered within their budgets. */
   sections: string[];
+  /**
+   * The main line's slow-changing data (skills, notebook index, 「今天的她」, the profiles of the
+   * people here), rendered: before the history (v4 §4.1).
+   */
+  slow: string[];
   /** What the compiler did with each block (for the saved prompt). */
   compiled: CompiledBlock[];
   /** For the decision trace. */
@@ -362,6 +497,8 @@ class Speech {
     readonly screen: ((line: HeldLine) => boolean) | null = null,
     /** Every sentence passes here before anything is done with it. */
     readonly safe: Safe = (text, spoken) => safeOutgoing(null, { path: "reply", text, spoken }),
+    /** `true`: the sentence is a note to herself and is not said (the turn counts it). */
+    readonly selfTalk: (text: string) => boolean = isSelfTalk,
   ) {}
 
   /** Her speech was interrupted, or she gave way: nothing more is said. */
@@ -478,6 +615,21 @@ class Speech {
     if (rest !== null) await this.#sentence(rest);
   }
 
+  /**
+   * What was written so far is complete: the next `<voice>` line begins, or the tool calls do.
+   * The sentence of the open line is said now. It used to wait until the next line was written
+   * to its end, or for the end of the stream behind every tool argument, and all of that was
+   * silence in the channel.
+   */
+  async settle(): Promise<void> {
+    if (this.#pair !== null) {
+      if (this.#pair.text.trim() !== "") await this.#endPair();
+      return;
+    }
+    const done = this.#splitter.flushComplete();
+    if (done !== null) await this.#sentence(done);
+  }
+
   /** End of a response: an unclosed code block ends here too. */
   async finish(): Promise<void> {
     for (const piece of this.#fences.flush()) await this.#piece(piece);
@@ -537,8 +689,8 @@ class Speech {
     // Links taken out may leave double spaces behind.
     const text = safe.text.replace(/[ \t]{2,}/g, " ");
     if (!isSpeakable(text)) return;
-    // Her reasoning is no sentence to say (leak.ts).
-    if (looksLikeReasoning(text)) return;
+    // Her reasoning, or a note to herself, is no sentence to say (leak.ts).
+    if (looksLikeReasoning(text) || this.selfTalk(text)) return;
     // The filtered line is said as it is: there is nothing to translate.
     const said = (safe.spoken ?? (safe.blocked === null ? "" : text)).trim();
     const line = { text, spoken: said === "" ? null : said, emotion, blocked };
@@ -563,11 +715,67 @@ class Speech {
   }
 }
 
+/** A line of a list, or a link: long content, kept in one message with its neighbours. */
+function listLine(line: string): boolean {
+  return (
+    /^\s*(?:[-*•‧·]\s|\d{1,3}[.)、]\s?|[(（]\d{1,3}[)）])/.test(line) || /https?:\/\//.test(line)
+  );
+}
+
+/** What is written so far of a line might still turn into a list item. */
+function maybeListLine(partial: string): boolean {
+  return /^\s*(?:\d{1,3}[.)、]?|[-*•‧·(（]|[(（]\d{1,3})?$/.test(partial);
+}
+
+/**
+ * Whether a message may end at the line break at `i` of `text`: not inside long content (v4 §7.3:
+ * a list, its lead-in line ending in a colon, a run of links goes as one message, never split).
+ * After a list line it waits until the next line shows whether the list goes on.
+ */
+export function breaksAt(text: string, i: number): boolean {
+  const start = text.lastIndexOf("\n", i - 1) + 1;
+  const before = text.slice(start, i);
+  const end = text.indexOf("\n", i + 1);
+  const after = text.slice(i + 1, end === -1 ? undefined : end);
+  const leadIn = /[:：]\s*$/.test(before);
+  const known = end !== -1 || !maybeListLine(after);
+  if (leadIn) return known ? !listLine(after) && after.trim() !== "" : false;
+  if (!listLine(before)) return true;
+  return known && !listLine(after);
+}
+
+/**
+ * The rest of a finished text reply as the gate holds it, one piece per message: plain lines
+ * sentence by sentence (`sentences`), but a code block, a list or a run of links whole.
+ */
+export function textPieces(text: string): string[] {
+  const out: string[] = [];
+  let from = 0;
+  let fenced = false;
+  const flush = (to: number) => {
+    const piece = text.slice(from, to);
+    from = to + 1;
+    if (piece.trim() === "") return;
+    const long = piece.includes("```") || piece.includes("\n") || listLine(piece);
+    out.push(...(long ? [piece] : sentences(piece)));
+  };
+  for (let i = 0; i < text.length; i++) {
+    if (text.startsWith("```", i)) {
+      fenced = !fenced;
+      i += 2;
+    } else if (!fenced && text[i] === "\n" && breaksAt(`${text}\n`, i)) {
+      flush(i);
+    }
+  }
+  flush(text.length);
+  return out;
+}
+
 /**
  * Text replies go out line by line while the model writes (a line break outside code blocks
- * ends a message). A line that claims something only a tool does, with nothing backing it
- * (claims.ts), is held back (with the rest of the response), so the reminder in `#produce` can
- * still replace it.
+ * ends a message, unless it is inside a list or a run of links: `breaksAt`). A line that claims
+ * something only a tool does, with nothing backing it (claims.ts), is held back (with the rest of
+ * the response), so the reminder in `#produce` can still replace it.
  */
 class TextSegments {
   /** UTF-16 offset into the step's text up to which it was handled. */
@@ -589,24 +797,26 @@ class TextSegments {
   async update(expression: Expression): Promise<void> {
     if (this.#held || expression.silence) return;
     const text = expression.text;
-    let cut = -1;
+    const cuts: number[] = [];
     let fenced = false;
     for (let i = 0; i < text.length; i++) {
       if (text.startsWith("```", i)) {
         fenced = !fenced;
         i += 2;
-      } else if (!fenced && text[i] === "\n" && i >= this.#sent) {
-        cut = i;
+      } else if (!fenced && text[i] === "\n" && i >= this.#sent && breaksAt(text, i)) {
+        cuts.push(i);
       }
     }
-    if (cut < 0) return;
-    const piece = text.slice(this.#sent, cut);
-    if (this.hold(piece)) {
-      this.#held = true;
-      return;
+    // Lines that arrived together still go out as messages of their own (paced by `#sendText`).
+    for (const cut of cuts) {
+      const piece = text.slice(this.#sent, cut);
+      if (this.hold(piece)) {
+        this.#held = true;
+        return;
+      }
+      this.#sent = cut + 1;
+      if (piece.trim() !== "") await this.send(piece);
     }
-    this.#sent = cut + 1;
-    if (piece.trim() !== "") await this.send(piece);
   }
 
   /** What was not sent yet of `expression`. */
@@ -734,6 +944,18 @@ class Turn {
   readonly #main: MainTurn | null;
   /** The router says a fallback model is answering: its words are reviewed as such. */
   #fallback = false;
+  /** The calls of the tool loop in this turn, for the trace kept beside her reply (v4 §4.2). */
+  readonly #traced: TraceCall[] = [];
+  /** The line this turn's trace follows, once kept. */
+  #traceAfter: TraceAnchor | null = null;
+  /** When her last text message of this turn went out (clock ms): the pace of the next. */
+  #lastTextAt: number | null = null;
+  /** Voice: where the turn's time went, for `VoiceTurns.mark` and its outcome's `voice_stages`. */
+  readonly #marks: VoiceTurnMarks = {};
+  /** What the code changed of her output in this turn (docs/design/v4-patches.md). */
+  readonly #tally: CorrectionTally;
+  /** The turn reached the model: its outcome carries the corrections, `{}` included. */
+  #generated = false;
 
   constructor(
     readonly agent: Agent,
@@ -751,8 +973,10 @@ class Turn {
   ) {
     this.voice = key.kind === "voice";
     this.social = agent.social();
+    this.#tally = new CorrectionTally(this.voice);
     const main = agent.mainline;
-    this.#main = main === null ? null : new MainTurn(main, agent, turn, key, this.#claim());
+    this.#main =
+      main === null ? null : new MainTurn(main, agent, turn, key, this.#claim(), this.#tally);
   }
 
   /** What the Floor knows this turn as. */
@@ -783,11 +1007,13 @@ class Turn {
       this.intent !== null
         ? { id: this.intent.intent.id, tool: this.intent.tool ?? null }
         : (i?.proposal ?? null);
+    // Nobody spoke and nobody in the voice channel can hear her: she may act, not talk.
+    const unheard = this.voice && this.inputs.length === 0 && this.session.listeners().length === 0;
     return {
       kind,
       attention: i?.attention ?? answers,
       cause: this.agent.mainline?.causeOf(first?.id.id) ?? null,
-      muted: this.intent?.muted === true,
+      muted: this.intent?.muted === true || unheard,
       proposal,
       chain: i?.chain ?? null,
     };
@@ -796,6 +1022,95 @@ class Turn {
   /** Generation is over, however it went. */
   ended(): void {
     this.#main?.ended();
+    // Whatever she says now is on its way (or nothing is): no filler for this turn any more.
+    if (this.voice) this.agent.ctx.services.get(VoiceTurnsKey)?.settle(this.turn);
+  }
+
+  // ---- voice latency (v4 §7.5) ------------------------------------------------------------------
+
+  /** Voice: the turn reached `mark` (the first time counts); the voice module hears of it. */
+  #mark(mark: VoiceTurnMark): void {
+    if (!this.voice || this.#marks[mark] !== undefined) return;
+    const at = this.#now;
+    this.#marks[mark] = at;
+    // What a turn that started early and is dropped cost (coordinator.ts).
+    if (mark === "request") this.flags.requestedAt = at;
+    this.agent.ctx.services.get(VoiceTurnsKey)?.mark(this.turn, this.plan.focus.focus, mark, at);
+  }
+
+  /**
+   * A voice turn that started before the wait after the utterance was over (`TurnFlags.hold`)
+   * says, does and concludes nothing until the coordinator confirms it; someone going on drops it
+   * meanwhile (its signal aborts).
+   */
+  async #confirmed(): Promise<void> {
+    const hold = this.flags.hold;
+    if (hold === undefined || hold === null) return;
+    await guard(hold, this.signal);
+    this.#mark("confirmed");
+  }
+
+  /**
+   * She will answer someone who called her in voice: the voice module may fill the silence before
+   * her first sentence with a short sound of hers (not before a turn started early is confirmed).
+   */
+  #expectAnswer(direct: boolean): void {
+    if (!this.voice || !direct || this.inputs.length === 0) return;
+    const turns = this.agent.ctx.services.get(VoiceTurnsKey);
+    if (turns === undefined) return;
+    const startedAt = this.#marks.started ?? this.#now;
+    const expect = () => {
+      if (!this.signal.aborted) turns.expect(this.key, this.turn, startedAt);
+    };
+    const hold = this.flags.hold;
+    if (hold === undefined || hold === null) expect();
+    else hold.then(expect, () => undefined);
+  }
+
+  /**
+   * Where a voice turn's time went, from the person's last sound (the newest focus utterance's
+   * end) to her first sentence; the known parts add up to `latency_ms`. `null` outside voice or
+   * without input.
+   */
+  #voiceStages(last: IncomingMessage | undefined): VoiceTurnStages | null {
+    if (!this.voice || last === undefined) return null;
+    const m = this.#marks;
+    const released =
+      m.first_token === undefined ? undefined : Math.max(m.first_token, m.confirmed ?? 0);
+    const points = [
+      timestampMs(last.ts),
+      this.flags.heardAt,
+      m.started,
+      m.decided,
+      m.context,
+      m.request,
+      m.first_token,
+      released,
+      this.#firstOutputAt ?? undefined,
+    ];
+    // Made non-decreasing, so no part is negative and the known ones add up.
+    let floor = Number.NEGATIVE_INFINITY;
+    const t = points.map((v) => {
+      if (v === undefined || v === null) return null;
+      floor = Math.max(floor, v);
+      return floor;
+    });
+    const span = (i: number): number | null => {
+      const a = t[i];
+      const b = t[i + 1];
+      return a === null || a === undefined || b === null || b === undefined ? null : b - a;
+    };
+    return {
+      heard_ms: span(0),
+      wait_ms: span(1),
+      decide_ms: span(2),
+      context_ms: span(3),
+      prompt_ms: span(4),
+      first_token_ms: span(5),
+      held_ms: span(6),
+      first_sentence_ms: span(7),
+      speculative: this.flags.hold !== undefined && this.flags.hold !== null,
+    };
   }
 
   /**
@@ -805,6 +1120,12 @@ class Turn {
   async fallback(): Promise<string> {
     const main = this.#main;
     if (main === null || !main.owed || this.#parts > 0 || main.claim.muted) return "";
+    // A voice turn started early that failed says nothing before it is confirmed (or dropped).
+    try {
+      await this.#confirmed();
+    } catch {
+      return "";
+    }
     if (!main.main.takeFallback(this.key)) return "";
     const lines =
       main.claim.kind === "result"
@@ -815,7 +1136,9 @@ class Turn {
     const line =
       lines[Math.floor(this.agent.random.nextF32() * lines.length)] ?? FALLBACK_RESULT_LINE;
     try {
-      return await this.#canned(line, main.claim.kind === "addressed", null);
+      const said = await this.#canned(line, main.claim.kind === "addressed", null);
+      this.#tally.count("fallback_line");
+      return said;
     } catch (error) {
       this.agent.log.warn({ turn: this.turn, error: errorMessage(error) }, "no fixed line either");
       return "";
@@ -865,14 +1188,19 @@ class Turn {
     return { type: "silence" };
   }
 
-  outcomeRecord(outcome: TurnOutcome): TurnOutcomeRecord {
+  outcomeRecord(outcome: TurnOutcome): CountedOutcome & { voice_stages?: VoiceTurnStages } {
     const f = this.plan.focus;
     const last = this.#focused.at(-1);
     const latency =
       this.#firstOutputAt === null || last === undefined
         ? null
         : Math.max(this.#firstOutputAt - timestampMs(last.ts), 0);
+    // Voice: the same latency split by where it went (the decision log keeps it per turn).
+    const stages = this.#voiceStages(last);
     return {
+      ...(stages === null ? {} : { voice_stages: stages }),
+      // Only a turn that reached the model is measured: its counts, `{}` when nothing fired.
+      ...(this.#generated ? { corrections: this.#tally.counts() } : {}),
       turn: this.turn,
       context: this.key,
       reason: f.reason,
@@ -910,6 +1238,7 @@ class Turn {
 
   /** Returns the text she sent or said (empty if she stayed quiet). */
   async respond(): Promise<string> {
+    this.#mark("started");
     const names = this.agent.persona.names();
     const budget = this.agent.handle.llmBudget();
     // A cold session's earlier messages (bounded by `history.timeout_ms` from their fetch).
@@ -930,18 +1259,23 @@ class Turn {
     }
     const { respond, direct, score, reasons } = decision;
     if (!respond) {
+      // Voice, started early: the person may still go on, and then this turn never was.
+      await this.#confirmed();
       this.#publishDecision(false, score, reasons);
       this.#main?.silent(reasons.at(-1) ?? "");
       return "";
     }
     const refused = this.#main?.take() ?? null;
     if (refused !== null) {
+      await this.#confirmed();
       reasons.push(`floor: ${refused}`);
       this.#publishDecision(false, score, reasons);
       this.#main?.silent(refused);
       return "";
     }
+    this.#mark("decided");
     if (budget === "exhausted") {
+      await this.#confirmed();
       const notice = this.agent.takeBudgetNotice(this.key);
       reasons.push(
         notice
@@ -951,11 +1285,13 @@ class Turn {
       this.#publishDecision(notice, score, reasons);
       return notice ? await this.#sayExhausted(direct) : "";
     }
+    this.#expectAnswer(direct);
     const [extras, looked, files] = await Promise.all([
       this.#extras(),
       this.#lookAround(),
       this.#readFiles(),
     ]);
+    this.#mark("context");
     reasons.push(...extras.reasons);
     const seen = looked.filter((p) => p.type === "image_url").length;
     if (seen > 0) reasons.push(`looking at ${seen} image(s)`);
@@ -1092,13 +1428,75 @@ class Turn {
   }
 
   /**
+   * A plain "don't play <game>" in this turn that she did not write down herself is written for
+   * her (prohibition.ts), as the person who said it; the directive service decides whether it
+   * counts. Never throws. A correction (`prohibition_written`, `[modules.agent.corrections]
+   * prohibition_write`).
+   */
+  async keepRules(): Promise<void> {
+    if (!this.agent.config.corrections.prohibition_write) return;
+    if (this.#succeeded.has("directive_add")) return;
+    const directives = this.agent.ctx.services.get(DirectivesKey);
+    if (!directives) return;
+    for (const input of this.inputs) {
+      if (input.author.is_bot || this.agent.isSelf(input.author.account)) continue;
+      const found = prohibitionOf(input.text);
+      if (found === null) continue;
+      try {
+        const change = await directives.add({
+          by: {
+            type: "account",
+            subject: {
+              account: input.author.account,
+              context: this.key,
+              platform_roles: [],
+              is_guild_admin: false,
+            },
+            askers: [],
+          },
+          text: found.text,
+          effect: "deny",
+          scope: { activity: found.activity },
+          minutes: found.minutes,
+          source_event: `msg:${input.id.id}`,
+        });
+        this.#tally.count("prohibition_written");
+        this.agent.log.info(
+          { turn: this.turn, activity: found.activity, status: change.status },
+          "wrote down a prohibition she did not",
+        );
+      } catch (error) {
+        this.agent.log.warn(
+          { turn: this.turn, error: errorMessage(error) },
+          "could not write a rule",
+        );
+      }
+    }
+  }
+
+  /**
+   * A sentence to say that is a note to herself (leak.ts `isSelfTalk`) is not said, and counted
+   * (`self_talk_cut`); `[modules.agent.corrections] self_talk = false` says it.
+   */
+  #selfTalk(text: string): boolean {
+    if (!this.agent.config.corrections.self_talk || !isSelfTalk(text)) return false;
+    this.#tally.count("self_talk_cut");
+    return true;
+  }
+
+  /**
    * The message her tools act for: the latest one that @-mentions her or replies to her, else
-   * the latest one. Someone chatting right after a request must not become its requester.
+   * the latest one. Someone chatting right after a request must not become its requester, and a
+   * reply to her that is said to someone else or only laughs (attention's `directReason`) asks
+   * her for nothing.
    */
   #requester(): IncomingMessage | undefined {
     const pool = this.#focused;
+    const names = this.agent.persona.names();
     return (
-      pool.findLast((m) => m.mentions_self || m.reply_to_self) ??
+      pool.findLast(
+        (m) => m.mentions_self || (m.reply_to_self && directReason(m, names) === "reply"),
+      ) ??
       pool.at(-1) ??
       (this.#main?.claim.chain?.requester as IncomingMessage | undefined)
     );
@@ -1169,8 +1567,22 @@ class Turn {
           someoneSpeaking: this.session.someoneSpeaking(),
           questionWindowMs: voiceCfg.question_window_ms,
           others: this.session.voiceMembers().length,
+          roster: this.session.voiceMembers().map((m) => m.display_name),
         }
       : null;
+    // v4 §7.2: under the main line a text channel with a level gets looks instead of the dice.
+    const rhythm = this.agent.rhythm;
+    const look: LookFacts | null =
+      this.#main !== null && !this.voice && ceiling !== null
+        ? {
+            used: rhythm.looksUsed(this.key),
+            perHour: rhythm.config.looks_per_hour,
+            questionSecs: rhythm.config.question_secs,
+            topicGapMs: rhythm.config.topic_gap_mins * 60_000,
+            close: this.#close(rhythm.config.close_affinity),
+            stood: this.plan.stood === true,
+          }
+        : null;
     const assessment = assess({
       config: attentionCfg,
       mode,
@@ -1184,6 +1596,8 @@ class Turn {
       inputs: this.inputs,
       now: this.#now,
       voice,
+      modelMayPass: this.#main !== null,
+      look,
     });
     const reasons = assessment.reasons;
     if (mode !== configured) reasons.push(`llm budget ${budget}: as mention-only`);
@@ -1221,7 +1635,24 @@ class Turn {
         ? `p ${fixed(probability, 2)}`
         : `p ${fixed(probability, 2)}, roll ${fixed(roll, 2)}`,
     );
+    if (respond) {
+      // A look or a reaction to her line is a model call: it counts against the cap.
+      const opened = assessment.opened ?? null;
+      if (opened === "look" || opened === "reaction") rhythm.noteLook(this.key);
+      rhythm.took(this.inputs.map((m) => m.id.id));
+    }
     return { respond, direct: assessment.direct, score: assessment.score, reasons };
+  }
+
+  /** A speaker of this turn she is close to (affinity, or her owner), by name, if any. */
+  #close(affinity: number): string | null {
+    for (const m of this.inputs) {
+      const a = this.social?.attitude(m.author.account) ?? null;
+      if (a !== null && !a.blocked && (a.owner === true || a.affinity >= affinity)) {
+        return m.author.display_name;
+      }
+    }
+    return null;
   }
 
   /** Stable id of this conversation for the LLM provider (routing, prompt caching). */
@@ -1312,17 +1743,59 @@ class Turn {
    * intent) and the sections of prompt contributors, each within its budget.
    */
   async #extras(): Promise<Extras> {
-    const extras: Extras = { self: [], own: [], sections: [], compiled: [], reasons: [] };
+    const extras: Extras = {
+      self: [],
+      own: [],
+      sections: [],
+      slow: [],
+      compiled: [],
+      reasons: [],
+    };
     const cfg = this.agent.config;
     const services = this.agent.ctx.services;
     const about = this.#about();
     const present = this.#present(about);
-    if (this.#main !== null) await this.#mainMemory(extras, present, about);
+    const request = this.#promptRequest(about);
     const self = services.get(SelfStateKey) ?? null;
     const affect = services.get(AffectStateKey) ?? null;
     // Her secret crush (the `self` module's; with person cards, W4's affect owns it).
     const crush = affect === null ? (self?.crush?.() ?? null) : null;
     const crushHere = crush !== null && present.some((p) => p.person === crush.person);
+    // The contributors are asked while her memory is read: the two waits overlap.
+    const registry = services.get(PromptContributorsKey);
+    // The main line reads memory through its layers (`#mainMemory`), not the V2 contributor.
+    const skip =
+      this.#main !== null && services.has(MemoryRetrievalKey) ? [MEMORY_CONTRIBUTOR] : [];
+    // Voice: what does not depend on her line is read warm, the rest waited for briefly (§7.5).
+    const warm = this.#warm(present);
+    const gathering =
+      registry && registry.all().length > 0
+        ? warm === null
+          ? gather(registry, request, cfg.contributor_timeout_ms, this.signal, skip)
+          : this.#gatherVoice(registry, request, skip, warm)
+        : null;
+    gathering?.catch(() => undefined);
+    const skills = this.#main !== null ? this.#mainSkills(warm) : null;
+    skills?.catch(() => undefined);
+    let people: string | null | undefined;
+    if (this.#main !== null) {
+      // With person profiles, the people present are one slow block of theirs instead of the
+      // agent's people line and the pinned people section (v4 §5.6).
+      const profiled = services.has(PersonProfilesKey);
+      const crushOf = crushHere ? (crush?.person ?? null) : null;
+      if (warm !== null) {
+        // Side by side: the profiles cannot leave out what this turn's retrieval brings, but
+        // they no longer wait for it (two 800 ms waits in a row before, 2026-11-10).
+        const [, read] = await Promise.all([
+          this.#mainMemory(extras, present, request, profiled, warm),
+          profiled ? this.#mainPeople(extras, present, [], crushOf, warm) : undefined,
+        ]);
+        people = read;
+      } else {
+        const retrieved = await this.#mainMemory(extras, present, request, profiled);
+        if (profiled) people = await this.#mainPeople(extras, present, retrieved, crushOf);
+      }
+    }
     const own = selfBlocks({
       context: this.key,
       now: this.#now,
@@ -1346,14 +1819,25 @@ class Turn {
     extras.compiled.push(...selfBudget.compiled);
 
     const blocks: PromptBlock[] = [];
-    const people = peopleBody(
-      present,
-      { affect, attitude: (a) => this.social?.attitude(a) ?? null, self },
-      crushHere ? (crush?.person ?? null) : null,
-    );
-    if (people !== "") {
-      blocks.push(ownBlock("people", this.voice ? VOICE_PRESENT_TITLE : PRESENT_TITLE, people, 0));
+    // Without profiles (or when they failed), the people line of each turn, as before.
+    if (people === undefined) {
+      const body = peopleBody(
+        present,
+        { affect, attitude: (a) => this.social?.attitude(a) ?? null, self },
+        crushHere ? (crush?.person ?? null) : null,
+      );
+      if (body !== "") {
+        blocks.push(ownBlock("people", this.#peopleTitle(), body, 0));
+      }
     }
+    const feeling = feelingCauseBody({
+      context: this.key,
+      now: this.#now,
+      affect,
+      self,
+      presentPeople: present.flatMap((p) => (p.person === null ? [] : [p.person])),
+    });
+    if (feeling !== "") blocks.push(ownBlock("feeling", FEELING_TITLE, feeling, 1));
     const hint = this.initiative?.hint.trim() ?? "";
     if (this.initiative !== null && hint !== "") {
       blocks.push(ownBlock(`initiative:${this.initiative.reason}`, INITIATIVE_TITLE, hint, 1));
@@ -1369,23 +1853,29 @@ class Turn {
       budgets: cfg.prompt.budgets,
       defaultBudget: cfg.prompt.default_budget,
     });
-    extras.own = mine.blocks;
+    extras.own.push(...mine.blocks);
     extras.compiled.push(...mine.compiled);
 
-    const registry = services.get(PromptContributorsKey);
-    if (!registry || registry.all().length === 0) return extras;
-    const request = this.#promptRequest(about);
-    // The main line reads memory through its layers (`#mainMemory`), not the V2 contributor.
-    const skip =
-      this.#main !== null && services.has(MemoryRetrievalKey) ? [MEMORY_CONTRIBUTOR] : [];
-    const gathered = await gather(registry, request, cfg.contributor_timeout_ms, this.signal, skip);
-    extras.reasons = gathered.reasons();
-    const { data, superseded } = contributedData(gathered.sections);
+    const gathered = gathering === null ? null : await gathering;
+    const sections = gathered?.sections ?? [];
+    if (gathered !== null) extras.reasons.push(...gathered.reasons());
+    const { data, superseded } = contributedData(
+      this.#main === null ? sections : sections.filter((s) => !SLOW_SECTIONS.has(s.key)),
+    );
     if (superseded.length > 0)
       extras.reasons.push(`rendered by the agent: ${superseded.join(", ")}`);
+    const m = cfg.mainline;
     const contributed = budgetBlocks(data, {
-      total: this.#main === null ? cfg.max_context_chars : cfg.mainline.data_chars,
-      budgets: cfg.prompt.budgets,
+      total: this.#main === null ? cfg.max_context_chars : m.data_chars,
+      // §5's readers bring more than the default budget of a section.
+      budgets:
+        this.#main === null
+          ? cfg.prompt.budgets
+          : {
+              ...cfg.prompt.budgets,
+              just_now: m.just_now_chars,
+              elsewhere: m.elsewhere_chars,
+            },
       defaultBudget: cfg.prompt.default_budget,
     });
     extras.sections = contributed.blocks;
@@ -1394,7 +1884,241 @@ class Turn {
     if (cut.length > 0) {
       extras.reasons.push(`context budgeted: ${cut.map((b) => `${b.key} ${b.fate}`).join(", ")}`);
     }
+    if (this.#main !== null) {
+      const slow = sections.filter((s) => SLOW_SECTIONS.has(s.key));
+      this.#mainSlow(extras, slow, skills === null ? null : await skills, people ?? null);
+    }
     return extras;
+  }
+
+  /** The people block's title. */
+  #peopleTitle(): string {
+    return this.voice ? VOICE_PRESENT_TITLE : PRESENT_TITLE;
+  }
+
+  /**
+   * The slow part of the main line's data (v4 §4.1), the most stable first: her skills, the
+   * server's emoji, her notebook's index, 「今天的她」, the people here. Each has a budget of its own, never a share
+   * of a pool that the turn's other data could change.
+   */
+  #mainSlow(
+    extras: Extras,
+    contributed: readonly PromptSection[],
+    skills: string | null,
+    people: string | null,
+  ): void {
+    const m = this.agent.config.mainline;
+    if (skills !== null && skills.trim() !== "") {
+      // The skill index comes as a data block; anything else is made one.
+      extras.slow.push(skills.includes("⟦資料") ? skills : dataBlock("skills", "你的技能", skills));
+    }
+    const sections: PromptSection[] = [...contributed]
+      .sort((a, b) => SLOW_ORDER.indexOf(a.key) - SLOW_ORDER.indexOf(b.key))
+      .map((s, i) => ({ ...s, order: i }));
+    const life = this.#mainLife();
+    if (life !== null) {
+      sections.push({ key: "life", title: LIFE_TITLE, body: life, order: sections.length });
+    }
+    if (people !== null) {
+      sections.push({
+        key: "people",
+        title: this.#peopleTitle(),
+        body: people,
+        order: sections.length,
+      });
+    }
+    const { data } = contributedData(sections);
+    const slow = budgetBlocks(data, {
+      total: UNLIMITED,
+      budgets: {
+        server_emoji: m.emoji_chars,
+        notebook: m.notebook_chars,
+        life: m.life_chars,
+        people: m.people_chars,
+      },
+      defaultBudget: m.notebook_chars,
+    });
+    extras.slow.push(...slow.blocks);
+    extras.compiled.push(...slow.compiled);
+  }
+
+  /**
+   * Voice with `warm_context`: the values kept for this channel, for the people here (a value
+   * made for other listeners is never shown to these).
+   */
+  #warm(present: readonly PresentPerson[]): VoiceWarm | null {
+    const v = this.agent.config.voice;
+    if (!this.voice || !v.warm_context) return null;
+    return {
+      kept: warmOf(this.session),
+      key: present
+        .map((p) => accountRefString(p.account))
+        .sort()
+        .join(","),
+      read: {
+        now: () => this.#now,
+        maxAgeMs: v.warm_max_age_ms,
+        waitMs: v.live_context_ms,
+        signal: this.signal,
+      },
+    };
+  }
+
+  /**
+   * Voice: the contributors of `warm_contributors` as they were last read (and read again in the
+   * background for the next turn), the others asked now and given `live_context_ms`.
+   */
+  async #gatherVoice(
+    registry: PromptContributors,
+    request: PromptRequest,
+    skip: readonly string[],
+    warm: VoiceWarm,
+  ): Promise<Gathered> {
+    const v = this.agent.config.voice;
+    const keys = registry
+      .all()
+      .map((c) => c.key)
+      .filter((k) => !skip.includes(k));
+    const kept = keys.filter((k) => v.warm_contributors.includes(k));
+    const live = keys.filter((k) => !kept.includes(k));
+    // The refresh outlives the turn: the next one reads it, and nobody waits for it.
+    const background = this.agent.ctx.signal;
+    const limit = Math.max(this.agent.config.contributor_timeout_ms, WARM_LOAD_MS);
+    const [warmed, asked] = await Promise.all([
+      kept.length === 0
+        ? undefined
+        : readWarm(warm.kept.contributors, warm.key, warm.read, () =>
+            gather(registry, request, limit, background, [...skip, ...live]),
+          ),
+      live.length === 0
+        ? undefined
+        : gather(registry, request, v.live_context_ms, this.signal, [...skip, ...kept]),
+    ]);
+    const out = mergeGathered(warmed, asked);
+    if (warmed === undefined) out.skipped.push(...kept.map((k) => `${k} (warming up)`));
+    return out;
+  }
+
+  /** Her skills, a name and a line each (`SkillIndex`); `null` when none or too slow. */
+  async #mainSkills(warm: VoiceWarm | null = null): Promise<string | null> {
+    const index = this.agent.ctx.services.get(SkillIndexKey);
+    const chars = this.agent.config.mainline.skills_chars;
+    if (index === undefined || chars <= 0) return null;
+    if (warm !== null) {
+      // Voice: the index as it was last read; it changes when she learns a skill.
+      const limit = Math.max(this.agent.config.contributor_timeout_ms, WARM_LOAD_MS);
+      const background = this.agent.ctx.signal;
+      const text = await readWarm(warm.kept.skills, `skills:${chars}`, warm.read, async () => {
+        const read = await timeout(limit, background, () => index.index(chars));
+        return read.trim() === "" ? null : read;
+      });
+      return text ?? null;
+    }
+    try {
+      const text = await timeout(this.agent.config.contributor_timeout_ms, this.signal, () =>
+        index.index(chars),
+      );
+      return text.trim() === "" ? null : text;
+    } catch (error) {
+      if (this.signal.aborted) throw error;
+      this.agent.log.warn({ turn: this.turn, error: errorMessage(error) }, "no skill index");
+      return null;
+    }
+  }
+
+  /**
+   * 「今天的她」 (v4 §6.2, §8.1): what she did today, or the last days when nothing yet today. It
+   * is written again only when what she did changes, so the clock in it says up to when the list
+   * is complete, and the block keeps its place in the cached prefix between her activities.
+   */
+  #mainLife(): string | null {
+    const life = this.agent.ctx.services.get(LifeLogKey);
+    if (life === undefined || this.agent.config.mainline.life_chars <= 0) return null;
+    try {
+      const now = this.#now;
+      const today = life.today();
+      const scope = today.length > 0 ? "today" : "lately";
+      const entries = today.length > 0 ? today : life.entries(now - 3 * DAY_MS);
+      const key = `${scope}|${entries.map((e) => e.id).join(",")}`;
+      const slow = keptOf(this.session).slow;
+      const kept = slow.get("life", key, now, Infinity);
+      if (kept !== undefined) return kept;
+      const text = life.summary(scope);
+      const body = text === null || text.trim() === "" ? null : text;
+      slow.set("life", key, now, body);
+      return body;
+    } catch (error) {
+      this.agent.log.warn({ turn: this.turn, error: errorMessage(error) }, "no life log");
+      return null;
+    }
+  }
+
+  /**
+   * The profiles of the people here (`PersonProfiles`, v4 §5.6), what retrieval shows this turn
+   * left out. Kept as written while the same people are here and nobody new talked with her, for
+   * at most `people_refresh_mins` (§4.1: it sits before the history). `undefined`: no profiles
+   * this turn, the people line of the turn stands in.
+   */
+  async #mainPeople(
+    extras: Extras,
+    present: readonly PresentPerson[],
+    retrieved: readonly RetrievedMemory[],
+    crush: PersonId | null,
+    warm: VoiceWarm | null = null,
+  ): Promise<string | null | undefined> {
+    const profiles = this.agent.ctx.services.get(PersonProfilesKey);
+    const m = this.agent.config.mainline;
+    if (profiles === undefined) return undefined;
+    if (m.people_chars <= 0) return null;
+    const now = this.#now;
+    const persons = present.flatMap((p) => (p.person === null ? [] : [p.person]));
+    const kept = keptOf(this.session);
+    const here = `${this.voice ? "voice" : "text"}|${[...persons].sort().join(",")}|${crush ?? ""}`;
+    if (kept.here !== here) {
+      kept.here = here;
+      kept.talking = new Set();
+    }
+    for (const p of present) if (p.speaker && p.person !== null) kept.talking.add(p.person);
+    const talking = [...kept.talking].sort();
+    const key = `${here}|${talking.join(",")}`;
+    const cached = kept.slow.get("people", key, now, m.people_refresh_mins * 60_000);
+    if (cached !== undefined) return cached;
+    const render = async (signal: AbortSignal, limit: number): Promise<string | null> => {
+      const where = {
+        context: this.key,
+        present: persons,
+        talking_with: talking,
+        accounts: present.map((p) => p.account),
+        now: toTimestamp(now),
+      };
+      const exclude = retrieved.flatMap((r) => [r.id, r.content]);
+      const body = await timeout(limit, signal, (s) =>
+        profiles.render(where, m.people_chars, { exclude }, s),
+      );
+      const handle = present.find((p) => crush !== null && p.person === crush)?.handle;
+      const lines = [body.trim(), handle === undefined ? "" : `- ${safeName(handle)}:你偷偷喜歡他`];
+      const text = lines.filter((l) => l !== "").join("\n");
+      const out = text === "" ? null : text;
+      kept.slow.set("people", key, now, out);
+      return out;
+    };
+    if (warm !== null) {
+      // Voice: rendered in the background for the next turn when it is not ready in time; this
+      // turn has the people line meanwhile.
+      const limit = Math.max(this.agent.config.contributor_timeout_ms, WARM_LOAD_MS);
+      const read = await readWarm(warm.kept.people, key, { ...warm.read, maxAgeMs: 0 }, () =>
+        render(this.agent.ctx.signal, limit),
+      );
+      if (read === undefined) extras.reasons.push("person profiles: still being written");
+      return read;
+    }
+    try {
+      return await render(this.signal, this.agent.config.contributor_timeout_ms);
+    } catch (error) {
+      if (this.signal.aborted) throw error;
+      extras.reasons.push(`person profiles skipped: ${errorMessage(error)}`);
+      return undefined;
+    }
   }
 
   /** The example dialogues as one data block (`null`: none). */
@@ -1411,6 +2135,23 @@ class Turn {
       },
     );
     return blocks.length === 0 ? null : blocks.join("");
+  }
+
+  /**
+   * The main line's example dialogues as one data block (`null`: none). V3 left them out (the
+   * prompt had 4000 tokens); they show how she talks better than any rule. Which ones turns over
+   * with the session and stays put within it, as the prefix they sit in must.
+   */
+  #mainExamples(): string | null {
+    const chars = this.agent.config.mainline.examples_chars;
+    if (chars <= 0) return null;
+    // In voice, a dialogue with code in it shows a line that cannot be read aloud.
+    const dialogues = exampleDialogues(this.agent.persona.examples()).filter(
+      (d) => !this.voice || !d.includes("`"),
+    );
+    const seed = stableHash(`${contextId(this.key)}:${this.session.startedAt}`);
+    const picked = rotatedExamples(dialogues, seed, chars);
+    return picked.length === 0 ? null : dataBlock("examples", EXAMPLES_TITLE, picked.join("\n\n"));
   }
 
   /** What prompt contributors get to see of this turn. */
@@ -1478,6 +2219,7 @@ class Turn {
     extras: Extras,
     images: readonly ContentPart[],
   ): Promise<string> {
+    this.#generated = true;
     if (this.#main !== null)
       return await this.#speakMain(this.#main, direct, names, extras, images);
     const cfg = this.agent.config;
@@ -1566,6 +2308,7 @@ class Turn {
         (spoken, written) => this.agent.noteSubtitle(this.key, this.turn, spoken, written),
         null,
         (text, spoken, aloud) => this.#safe(text, spoken, aloud),
+        (text) => this.#selfTalk(text),
       );
       await this.#produce(router, messages, priority, speech);
       this.#save();
@@ -1586,24 +2329,29 @@ class Turn {
     const early: string[] = [];
     // Her reasoning is no reply (leak.ts).
     type Line = { text: string; blocked: string | null; n: number | null };
-    const screen = new ReplyScreen<Line>();
+    const screen = new ReplyScreen<Line>(cfg.corrections.leak_screen, cfg.corrections.self_talk);
     const send = async (raw: string) => {
       for (const part of splitByReplyMarks(raw)) {
         const mark = takeReplyMark(part);
         const safe = this.#safe(cleanReply(mark.text, names));
         const text = this.#linkMentions(safe.text);
         if (text === "") continue;
+        const before = screen.droppedLines;
+        const cut = screen.selfTalk;
         const { send: now } = screen.push({ text, blocked: safe.blocked, n: mark.n });
+        this.#tally.count("leak_dropped", screen.droppedLines - before);
+        this.#tally.count("self_talk_cut", screen.selfTalk - cut);
         for (const item of now) {
           early.push(await this.#sendText(sink, item.text, direct, priority, item.blocked, item.n));
         }
       }
     };
     const offered = new Set(this.#toolSpecs().map((t) => t.name));
-    const segments = new TextSegments(
-      send,
-      (text) => unbackedClaim(text, offered, this.#backing()) !== null,
-    );
+    const segments = new TextSegments(send, (text) => {
+      const hold = cfg.corrections.claims && unbackedClaim(text, offered, this.#backing()) !== null;
+      if (hold) this.#tally.count("claim_held");
+      return hold;
+    });
     const interim = async (e: Expression) => send(segments.rest(e));
     let expression: Expression;
     try {
@@ -1648,9 +2396,10 @@ class Turn {
   async #mainMemory(
     extras: Extras,
     present: readonly PresentPerson[],
-    about: AccountRef[],
-  ): Promise<void> {
-    const services = this.agent.ctx.services;
+    request: PromptRequest,
+    profiled: boolean,
+    warm: VoiceWarm | null = null,
+  ): Promise<RetrievedMemory[]> {
     const limit = this.agent.config.contributor_timeout_ms;
     const now = toTimestamp(this.#now);
     const where = {
@@ -1660,37 +2409,99 @@ class Turn {
       now,
     };
     const pinned = this.#main?.main.pinned() ?? null;
-    if (pinned !== null) {
-      try {
-        const read = await timeout(limit, this.signal, () => pinned.pinned(where));
-        for (const section of read.sections) {
-          if (section.key === "commitments" || section.key === "people") {
-            const body = section.lines.join("\n");
-            extras.own.push(dataBlock(`pinned.${section.key}`, section.title, body));
-          }
+    // The pinned sections and the retrieval run side by side: they waited for each other before
+    // (up to 800 ms each, 2026-11-10). In voice the pinned ones come warm (they depend on who is
+    // here, not on the line) and the retrieval for the line gets `live_context_ms`.
+    const reading =
+      pinned === null
+        ? Promise.resolve(undefined)
+        : warm === null
+          ? timeout(limit, this.signal, () => pinned.pinned(where))
+          : readWarm(warm.kept.pinned, warm.key, warm.read, () =>
+              timeout(Math.max(limit, WARM_LOAD_MS), this.agent.ctx.signal, () =>
+                pinned.pinned(where),
+              ),
+            );
+    reading.catch(() => undefined);
+    const retrieving = this.#retrieve(
+      extras,
+      present,
+      request,
+      where,
+      warm === null ? limit : this.agent.config.voice.live_context_ms,
+    );
+    try {
+      const read = await reading;
+      for (const section of read?.sections ?? []) {
+        // The profiles say what the pinned people section said, once (v4 §5.6).
+        const shown = section.key === "commitments" || (section.key === "people" && !profiled);
+        if (shown) {
+          const body = section.lines.join("\n");
+          extras.own.push(dataBlock(`pinned.${section.key}`, section.title, body));
         }
-      } catch (error) {
-        if (this.signal.aborted) throw error;
-        extras.reasons.push(`pinned memory skipped: ${errorMessage(error)}`);
       }
-    }
-    const retrieval = services.get(MemoryRetrievalKey);
-    const text = this.#promptRequest(about).query;
-    if (retrieval && text.trim() !== "") {
-      try {
-        const memories = await timeout(limit, this.signal, (signal) =>
-          retrieval.retrieve({ ...where, text }, signal),
-        );
-        const body = retrieval.format(memories, now);
-        if (body.trim() !== "") {
-          const room = Math.floor(this.agent.config.mainline.data_chars / 2);
-          extras.own.push(dataBlock("memory", "你記得的事", truncate(body, room)));
-        }
-      } catch (error) {
-        if (this.signal.aborted) throw error;
-        extras.reasons.push(`memories skipped: ${errorMessage(error)}`);
+      if (pinned !== null && read === undefined) {
+        extras.reasons.push("pinned memory skipped: not ready");
       }
+    } catch (error) {
+      if (this.signal.aborted) throw error;
+      extras.reasons.push(`pinned memory skipped: ${errorMessage(error)}`);
     }
+    const [memories, block] = await retrieving;
+    if (block !== null) extras.own.push(block);
+    return memories;
+  }
+
+  /** What memory finds for the line she answers, and its data block (`null`: none). */
+  async #retrieve(
+    extras: Extras,
+    present: readonly PresentPerson[],
+    request: PromptRequest,
+    where: PinnedContext,
+    limit: number,
+  ): Promise<[RetrievedMemory[], string | null]> {
+    const m = this.agent.config.mainline;
+    const now = where.now;
+    const retrieval = this.agent.ctx.services.get(MemoryRetrievalKey);
+    const text = request.query;
+    if (!retrieval || text.trim() === "") return [[], null];
+    try {
+      // v4 §5.4: the lines before the one she answers and who she talks with find memories too,
+      // so a reply like 「好啊」 still brings back what the talk is about.
+      const query: TurnRetrievalQuery = {
+        ...where,
+        text,
+        recent: this.#linesBefore(m.memory_recent_lines),
+        talking_with: present.flatMap((p) => (p.speaker && p.person !== null ? [p.person] : [])),
+        ...(m.memory_lines > 0 ? { limit: m.memory_lines } : {}),
+      };
+      const memories = await timeout(limit, this.signal, (signal) =>
+        retrieval.retrieve(query, signal),
+      );
+      const body = retrieval.format(memories, now);
+      const room = Math.floor(m.data_chars / 2);
+      const block =
+        body.trim() === "" ? null : dataBlock("memory", "你記得的事", truncate(body, room));
+      return [memories, block];
+    } catch (error) {
+      if (this.signal.aborted) throw error;
+      extras.reasons.push(`memories skipped: ${errorMessage(error)}`);
+      return [[], null];
+    }
+  }
+
+  /**
+   * The `n` lines before the newest one she answers, oldest first, as the transcript reads them:
+   * the other messages of the same turn count too (`PromptRequest.recent` stops before them).
+   */
+  #linesBefore(n: number): string[] {
+    if (n <= 0) return [];
+    const her = this.agent.persona.displayName();
+    const history = this.session.history().filter((e) => !this.#hidden(e));
+    const last = this.#focused.at(-1);
+    const end = last === undefined ? -1 : history.findIndex((e) => e.id === last.id.id);
+    const before = end < 0 ? history : history.slice(0, end);
+    return before.slice(-n).map((e) => transcriptLine(e, her));
   }
 
   /** The tools on offer: what she can do, how to promise and how to change a running task. */
@@ -1701,7 +2512,12 @@ class Turn {
     const steerable = main.main.tasks().length > 0;
     const allowed = this.agent.ctx.services.get(DirectivesKey);
     const specs = allowed?.filterTools(this.#toolSpecs(), this.key) ?? this.#toolSpecs();
-    return [...specs.map(slimTool), COMMIT_SPEC, ...(steerable ? [STEER_SPEC] : [])];
+    const limits = { description: cfg.mainline.tool_chars, argument: cfg.mainline.tool_arg_chars };
+    return [
+      ...specs.map((s) => slimTool(s, limits)),
+      COMMIT_SPEC,
+      ...(steerable ? [STEER_SPEC] : []),
+    ];
   }
 
   /** The prompt of §10.4. */
@@ -1723,7 +2539,7 @@ class Turn {
     const buckets = services.get(WorkingContextKey)?.buckets(this.key) ?? [];
     main.shown(line.commitments.overdue(this.key));
     const own = this.intent?.intent.id ?? main.claim.proposal?.id ?? null;
-    const examples = m.examples_chars > 0 ? this.#examples() : null;
+    const examples = this.#mainExamples();
     const wishes = services.get(DirectivesKey)?.wishes(this.key) ?? [];
     const telling = [...line.hands.peekResults(ACTING_ALONE), ...line.hands.peekResults(this.key)];
     main.telling(telling);
@@ -1739,7 +2555,6 @@ class Turn {
       // What she did with nobody there (`ACTING_ALONE`) she hears of wherever she speaks next.
       resultData(telling),
       wishes.length === 0 ? null : dataBlock("viewers", "觀眾的要求", wishes.join("\n")),
-      examples === null ? null : truncate(examples, m.examples_chars),
     ].filter((d): d is string => d !== null);
     const tail = tailSection({
       head: whenAndWhere(this.key, new Date(now), offset),
@@ -1751,24 +2566,41 @@ class Turn {
       recent: main.main.recent(this.key, m.recent_lines),
       actions: [...line.hands.recent(ACTING_ALONE, 2), ...line.hands.recent(this.key, 3)],
       speaksIn: this.voice ? speaksIn : null,
+      now,
+      party: services.get(PartyStatusKey)?.running(this.key) ?? null,
     });
     const selection = this.plan.selection;
     const verbs = selection === null ? new Map<string, string>() : focusVerbs(selection);
     const folded = services.get(ConversationStatesKey)?.get(this.key) ?? null;
-    const history = withOlderParents(
+    const fold = folded?.folded_up_to ?? null;
+    // The history starts where the last turn's did, and only grows (`historyWindow`): unless the
+    // session edited a line since, the prefix up to the newest line is the last turn's, which the
+    // provider has cached (an edited line costs a cache miss, nothing else).
+    const window = historyWindow(
       markCurrent(
-        afterFold(
-          this.session.recent(m.history_lines).filter((e) => !this.#hidden(e)),
-          folded?.folded_up_to ?? null,
-          Math.min(cfg.history_after_fold, m.history_lines),
-        ),
+        this.session.history().filter((e) => !this.#hidden(e)),
         selection?.focus ?? [],
         verbs,
       ),
+      this.session.promptStart,
+      {
+        lines: m.history_lines,
+        chars: m.history_chars,
+        entryChars: m.entry_chars,
+        trim: m.history_trim,
+      },
+      fold === null ? null : timestampMs(fold.ts),
+      Math.min(cfg.history_after_fold, m.history_lines),
+    );
+    this.session.promptStart = window.start;
+    const history = withOlderParents(
+      window.shown,
       (id) => this.#shownEntry(id),
       (id) => this.#shownAround(id),
     );
     this.#replyTargets = focusEntries(history);
+    // What her tools brought back in earlier turns, beside her lines (v4 §4.2).
+    const traces = [...keptOf(this.session).traces.list()];
     const build = (kept: readonly HistoryEntry[]) =>
       mainMessages({
         fixed: core === "" ? rules : `${core}\n\n${rules}`,
@@ -1778,13 +2610,16 @@ class Turn {
           now,
           offset,
         ),
+        slow: [...(examples === null ? [] : [examples]), ...extras.slow],
         data,
         history: kept,
         tail,
         transcript: {
-          maxChars: m.history_chars,
+          // The window is within `history_chars` already; this only stops what it misjudged.
+          maxChars: m.history_chars * 2,
           maxEntryChars: m.entry_chars,
           gapMs: cfg.time_gap_ms,
+          traces,
         },
         images,
       });
@@ -1838,8 +2673,9 @@ class Turn {
         (spoken, written) => this.agent.noteSubtitle(this.key, this.turn, spoken, written),
         (line) => main.screen(line),
         (text, spoken, aloud) => this.#safe(text, spoken, aloud),
+        (text) => this.#selfTalk(text),
       );
-      await this.#mainCall(main, router, messages, tools, priority, speech, null, null);
+      await this.#mainCall(main, router, messages, tools, priority, speech, null, null, null);
       this.#save();
       await this.#postAside(sink, this.#voicePosts(speech), priority);
       return speech.spoken;
@@ -1852,9 +2688,13 @@ class Turn {
       ? Promise.resolve()
       : this.#keepTyping(sink, lane, priority, typing.signal);
     const early: string[] = [];
-    // Her reasoning is no reply (leak.ts).
+    // Her reasoning is no reply (leak.ts). Each response of the tool loop is judged on its own.
     type Line = { text: string; blocked: string | null; n: number | null };
-    const screen = new ReplyScreen<Line>();
+    const screening = cfg.corrections.leak_screen;
+    const selfTalk = cfg.corrections.self_talk;
+    let screen = new ReplyScreen<Line>(screening, selfTalk);
+    let first: Line | null = null;
+    let leaked = 0;
     const out = async (item: Line) => {
       early.push(await this.#sendText(sink, item.text, direct, priority, item.blocked, item.n));
     };
@@ -1862,25 +2702,53 @@ class Turn {
       for (const part of splitByReplyMarks(raw)) {
         if (main.claim.muted) return;
         const mark = takeReplyMark(part);
+        // What an earlier round of the tool loop already said is not sent twice.
+        mark.text = main.cutRepeats(mark.text);
+        if (mark.text.trim() === "") continue;
         const safe = this.#safe(cleanReply(mark.text, names));
         const text = this.#linkMentions(safe.text);
         if (text === "") continue;
+        // Noted as said before the screen decides: the first line it holds is still hers to say.
         main.sent(text);
-        const was = screen.dropped;
-        const { send: now, retracted } = screen.push({ text, blocked: safe.blocked, n: mark.n });
-        if (retracted) main.said.pop();
-        if (screen.dropped && !was) {
-          this.agent.log.warn(
-            { turn: this.turn },
-            "her reasoning was written as the reply: dropped",
-          );
+        const was = screen.droppedLines;
+        const cut = screen.selfTalk;
+        const item = { text, blocked: safe.blocked, n: mark.n };
+        const { send: now, retracted } = screen.push(item);
+        if (screen.selfTalk > cut) {
+          // A note to herself (leak.ts `isSelfTalk`): only this line is left out, and it is not
+          // what she said. It is not the first line the screen holds either.
+          main.unsent(text);
+          this.#tally.count("self_talk_cut");
+          continue;
         }
-        for (const item of now) await out(item);
+        if (screen.droppedLines > was) {
+          // Neither this line nor a first line it took back reached anyone: they are not what she
+          // said (2026-11-10 review: the dropped lines stayed in `said`, and a line of reasoning
+          // like 「我可以說:「我馬上進語音」」 could become a promise she made).
+          main.unsent(text);
+          if (retracted && first !== null) main.unsent(first.text);
+          this.#tally.count("leak_dropped", screen.droppedLines - was);
+          if (was === 0) {
+            this.agent.log.warn(
+              { turn: this.turn },
+              "her reasoning was written as the reply: dropped",
+            );
+          }
+          leaked += screen.droppedLines - was;
+        } else if (now.length === 0) first = item;
+        for (const sent of now) await out(sent);
       }
     };
     const segments = new TextSegments(send, (text) => main.holdsText(text));
+    // A round of the tool loop ended: its first line, if the screen still holds it, goes out
+    // before the tools run, and so the person sees 「我查一下」 while she looks.
+    const between = async () => {
+      if (!main.claim.muted) for (const item of screen.flush()) await out(item);
+      screen = new ReplyScreen<Line>(screening, selfTalk);
+      first = null;
+    };
     try {
-      await this.#mainCall(main, router, messages, tools, priority, null, segments, send);
+      await this.#mainCall(main, router, messages, tools, priority, null, segments, send, between);
       if (!main.claim.muted) for (const item of screen.flush()) await out(item);
       this.#save();
     } finally {
@@ -1888,7 +2756,35 @@ class Turn {
       this.signal.removeEventListener("abort", stopTyping);
       await typingLoop;
     }
+    if (leaked > 0) this.#leakEvidence(router);
     return early.join("\n");
+  }
+
+  /**
+   * Her reasoning was written as the reply (leak.ts). Why is not known yet (docs/design/backlog.md,
+   * docs/design/v4-patches.md): the call log that could tell is in memory only and gone with a
+   * restart. So what the provider said about this turn's calls goes to the log now, without any
+   * text: whether the request asked for thinking, whether the provider sent reasoning apart from
+   * the reply (its characters and tokens), which model answered and whether it was a fallback.
+   */
+  #leakEvidence(router: LlmRouter): void {
+    const log = (router as Partial<Pick<LlmRouter, "calls">>).calls;
+    if (log === undefined || typeof log.list !== "function") return;
+    const calls = log.list({ turn: this.turn, module: "agent" }, 8).items.map((c) => ({
+      id: c.id,
+      model: c.model,
+      reasoning: c.reasoning,
+      thinking: c.thinking,
+      reasoning_chars: c.reasoning_chars,
+      reasoning_tokens: c.usage?.reasoning_tokens ?? null,
+      text_chars: c.text_chars,
+      finish_reason: c.finish_reason,
+      fallbacks: c.fallbacks.length,
+    }));
+    this.agent.log.warn(
+      { turn: this.turn, calls },
+      "leaked reasoning: what the provider said about the calls of this turn",
+    );
   }
 
   /** Streams one response. A model that does not start in time counts as failed. */
@@ -1899,13 +2795,14 @@ class Turn {
     speech: Speech | null,
     segments: TextSegments | null,
     firstTokenMs: number | null = null,
+    level: ReasoningLevel = this.#level ?? "off",
   ): Promise<Step> {
     const controller = new AbortController();
     const onAbort = () => controller.abort(this.signal.reason);
     if (this.signal.aborted) onAbort();
     this.signal.addEventListener("abort", onAbort, { once: true });
     const deadline =
-      (this.#level ?? "off") === "off"
+      level === "off"
         ? main.config.first_token_timeout_ms
         : main.config.reasoning_first_token_timeout_ms;
     const timer = setTimeout(
@@ -1923,9 +2820,38 @@ class Turn {
   }
 
   /**
-   * One call of the main line: what she says goes out while it is written, then her words are
-   * compared with her actions. Only a claim with nothing behind it costs a second call (claims.ts:
-   * the last resort, as §10.1 has it).
+   * The reasoning purpose of a call of the main line (v4 §4.4) and its level: a call that reads
+   * what her tools brought back is `chat_tools`, a text reply to a real question `chat_question`.
+   * Never less than the turn's own purpose would get, so a tier nobody configured changes nothing.
+   */
+  #mainReasoning(
+    main: MainTurn,
+    router: LlmRouter,
+    request: ChatRequest,
+    afterTools: boolean,
+  ): ReasoningLevel {
+    const base = this.#reasoningPurpose();
+    const question =
+      !this.voice &&
+      this.intent === null &&
+      main.claim.kind === "addressed" &&
+      this.#focused.some((m) => asksSeriously(messageText(m)));
+    const purpose = afterTools ? TOOL_STEP_PURPOSE : question ? QUESTION_PURPOSE : base;
+    const level = higher(
+      router.reasoningFor("chat", { ...request, reasoning_purpose: base }),
+      router.reasoningFor("chat", { ...request, reasoning_purpose: purpose }),
+    );
+    request.reasoning_purpose = purpose;
+    request.reasoning = level;
+    return level;
+  }
+
+  /**
+   * One turn of the main line: what she says goes out while it is written, then her words are
+   * compared with her actions. The tools of `loop_tools` run inside the turn (v4 §4.2): their
+   * results go back to her with the transcript of the turn so far, for up to `max_tool_steps`
+   * rounds; what is left for the hands goes out with the last response. Only a claim with nothing
+   * behind it costs a corrective call (claims.ts: the last resort, as §10.1 has it).
    */
   async #mainCall(
     main: MainTurn,
@@ -1936,106 +2862,300 @@ class Turn {
     speech: Speech | null,
     segments: TextSegments | null,
     send: ((text: string) => Promise<void>) | null,
+    between: (() => Promise<void>) | null,
   ): Promise<void> {
     const cfg = this.agent.config;
     const messages = [...initial];
     main.offered(tools.map((t) => t.name));
     const offered = new Set(tools.map((t) => t.name));
+    // Only what is on offer: the Directives' filter decided that, and it holds inside the loop too.
+    const loop = new Set(main.config.loop_tools.filter((t) => offered.has(t) && !isPseudoTool(t)));
     let prompt: string | null = null;
     /** The response a corrective call stands in for: what is left if that call fails. */
     let before: Step | null = null;
-    for (;;) {
-      const request: ChatRequest = {
-        messages: [...messages],
-        tools,
-        temperature: cfg.temperature,
-        max_tokens: cfg.max_tokens,
-        reasoning_purpose: this.#reasoningPurpose(),
-        session: this.#llmSession(),
-      };
-      this.#level ??= router.reasoningFor("chat", request);
-      segments?.step();
-      let step: Step;
-      let fellBack = false;
-      try {
-        // In voice the person waits in silence: a correction starts soon or not at all.
-        const deadline = before !== null && this.voice ? VOICE_CORRECTION_MS : null;
-        step = await this.#mainStream(main, router, request, speech, segments, deadline);
-      } catch (error) {
-        if (before === null || this.signal.aborted) throw error;
-        this.agent.log.warn(
-          { turn: this.turn, error: errorMessage(error) },
-          "the corrective call failed; the first answer stands",
+    /** Calls of earlier rounds that are the hands' (and `commit`): they go with the output. */
+    const later: ToolCall[] = [];
+    let rounds = 0;
+    // All the loop's tools of the turn together: the turn holds the Floor while they run.
+    const budget = this.voice ? main.config.voice_loop_budget_ms : main.config.loop_budget_ms;
+    const started = this.#now;
+    const left = () => budget - (this.#now - started);
+    const run = (tool: string, id: string, args: string, signal: AbortSignal) =>
+      this.#hand({ id, name: tool, arguments: args }, priority, signal);
+    /** A round of tools ran: leaving now must not lose what it did or handed over. */
+    let looped = false;
+    let concluded = false;
+    const leave = (why: "failed" | "stopped") => {
+      if (concluded || !looped) return;
+      concluded = true;
+      const output = turnOutput(new Expression(), handOver(later), main.said);
+      main.leave({ ...output, say: [...main.said] }, run, this.#requester(), why);
+    };
+    try {
+      for (;;) {
+        const request: ChatRequest = {
+          messages: [...messages],
+          tools,
+          temperature: cfg.temperature,
+          max_tokens: cfg.max_tokens,
+          reasoning_purpose: this.#reasoningPurpose(),
+          session: this.#llmSession(),
+        };
+        const level = this.#mainReasoning(main, router, request, rounds > 0);
+        this.#level ??= level;
+        segments?.step();
+        let step: Step;
+        let fellBack = false;
+        try {
+          // In voice the person waits in silence: a correction starts soon or not at all.
+          const deadline = before !== null && this.voice ? VOICE_CORRECTION_MS : null;
+          step = await this.#mainStream(main, router, request, speech, segments, deadline, level);
+        } catch (error) {
+          if (before === null || this.signal.aborted) throw error;
+          this.agent.log.warn(
+            { turn: this.turn, error: errorMessage(error) },
+            "the corrective call failed; the first answer stands",
+          );
+          step = before;
+          fellBack = true;
+        }
+        before = null;
+        const { expression, raw, calls } = step;
+        if (speech?.stopped()) {
+          this.agent.log.debug({ turn: this.turn }, "speech interrupted, generation stopped");
+          leave("stopped");
+          return;
+        }
+        const now = fellBack ? [] : calls.filter((c) => loop.has(c.name));
+        if (now.length > 0 && rounds < cfg.max_tool_steps && left() > 0) {
+          looped = true;
+          await this.#roundEnded(main, expression, now, speech, segments, send, between);
+          messages.push(assistantMessage(raw, calls));
+          let ran = 0;
+          // A page is one result now: what a round adds together keeps the bound it had.
+          let roundLeft = main.config.loop_round_chars;
+          for (const call of calls) {
+            let result: string;
+            if (!main.isOffered(call.name)) {
+              this.agent.log.warn(
+                { turn: this.turn, tool: call.name },
+                "a tool not on offer was called",
+              );
+              result = NOT_OFFERED;
+            } else if (!loop.has(call.name)) {
+              later.push(call);
+              result = handedOver(call.name);
+            } else if (speech?.stopped() || this.signal.aborted) {
+              // A barge-in does not abort the turn: the rest of the round must not run behind it.
+              result = CUT_OFF;
+            } else if (ran >= main.config.loop_calls) {
+              result = TOO_MANY;
+            } else if (left() <= 0) {
+              result = OUT_OF_TIME;
+            } else {
+              ran += 1;
+              result = await this.#inTurn(main, call, offered, priority, left(), roundLeft);
+              roundLeft = Math.max(0, roundLeft - result.length);
+            }
+            messages.push(toolResultMessage(call.id, result));
+          }
+          rounds += 1;
+          main.round();
+          this.signal.throwIfAborted();
+          if (speech?.stopped()) {
+            leave("stopped");
+            return;
+          }
+          continue;
+        }
+        if (segments !== null && !expression.isSilent() && !fellBack) {
+          for (const text of textPieces(segments.rest(expression))) {
+            main.gate.hold({ text, spoken: null, emotion: null });
+          }
+        }
+        // A tool written as a tag runs nothing (it may be words she was talked into). She is asked
+        // once, in the same turn, to call it or not claim it; the lines she said stand.
+        prompt ??= promptText(initial);
+        const called = calls.map((c) => c.name);
+        const written = fellBack
+          ? []
+          : toolsWrittenAsText(expression.tools, offered, called, prompt);
+        main.wrote(written);
+        const depth = main.claim.chain?.depth ?? 0;
+        if (
+          cfg.corrections.tool_text_reask &&
+          written.length > 0 &&
+          calls.length === 0 &&
+          depth < cfg.max_tool_steps &&
+          main.takeCorrection()
+        ) {
+          this.agent.log.info(
+            { turn: this.turn, tools: written },
+            "asking her to call what she wrote",
+          );
+          main.tally.count("tool_text_reask");
+          before = step;
+          messages.push(assistantMessage(raw, []));
+          messages.push(userMessage(toolTextReminder(written)));
+          continue;
+        }
+        // Calls of the loop past the last round go to the hands too: a result turn tells her.
+        const output = turnOutput(expression, handOver([...later, ...calls]), main.said);
+        const fresh = new Set(calls.map((c) => c.name));
+        const outcome = main.finish(
+          output,
+          later.map((c) => c.name).filter((t) => !fresh.has(t)),
         );
-        step = before;
-        fellBack = true;
-      }
-      before = null;
-      const { expression, raw, calls } = step;
-      if (speech?.stopped()) {
-        this.agent.log.debug({ turn: this.turn }, "speech interrupted, generation stopped");
+        if (outcome.remind !== null) {
+          messages.push(assistantMessage(raw, []));
+          messages.push(userMessage(claimReminder(outcome.remind.tool)));
+          continue;
+        }
+        for (const line of main.releasable(outcome.release)) {
+          if (speech !== null) {
+            main.said.push({ text: line.text, voice: line.spoken, emotion: line.emotion });
+            await speech.release(line);
+          } else await send?.(line.text);
+        }
+        // A model that gave nothing at all is no decision to be quiet.
+        if (main.owed && main.said.length === 0 && !output.silence && output.actions.length === 0) {
+          throw new TurnError("the model returned nothing");
+        }
+        concluded = true;
+        main.conclude({ ...output, say: [...main.said] }, run, this.#requester());
         return;
       }
-      if (segments !== null && !expression.isSilent() && !fellBack) {
-        for (const text of sentences(segments.rest(expression))) {
-          main.gate.hold({ text, spoken: null, emotion: null });
-        }
-      }
-      // A tool written as a tag runs nothing (it may be words she was talked into). She is asked
-      // once, in the same turn, to call it or not claim it; the lines she said stand.
-      prompt ??= promptText(initial);
-      const called = calls.map((c) => c.name);
-      const written = fellBack ? [] : toolsWrittenAsText(expression.tools, offered, called, prompt);
-      main.wrote(written);
-      const depth = main.claim.chain?.depth ?? 0;
-      if (
-        written.length > 0 &&
-        calls.length === 0 &&
-        depth < cfg.max_tool_steps &&
-        main.takeCorrection()
-      ) {
-        this.agent.log.info(
-          { turn: this.turn, tools: written },
-          "asking her to call what she wrote",
-        );
-        before = step;
-        messages.push(assistantMessage(raw, []));
-        messages.push(userMessage(toolTextReminder(written)));
-        continue;
-      }
-      const output = turnOutput(expression, calls, main.said);
-      const outcome = main.finish(output);
-      if (outcome.remind !== null) {
-        messages.push(assistantMessage(raw, []));
-        messages.push(userMessage(claimReminder(outcome.remind.tool)));
-        continue;
-      }
-      for (const line of outcome.release) {
-        if (speech !== null) {
-          main.said.push({ text: line.text, voice: line.spoken, emotion: line.emotion });
-          await speech.release(line);
-        } else await send?.(line.text);
-      }
-      // A model that gave nothing at all is no decision to be quiet.
-      if (main.owed && main.said.length === 0 && !output.silence && output.actions.length === 0) {
-        throw new TurnError("the model returned nothing");
-      }
-      main.conclude(
-        { ...output, say: [...main.said] },
-        (tool, id, args, signal) =>
-          this.#hand({ id, name: tool, arguments: args }, priority, signal),
-        this.#requester(),
-      );
-      return;
+    } catch (error) {
+      leave(this.signal.aborted ? "stopped" : "failed");
+      throw error;
     }
   }
 
+  /**
+   * A response of the tool loop ended with calls of the loop: what she wrote after the last line
+   * break goes out (or waits behind a held line, as the gate decides), and in voice someone who has
+   * heard nothing yet hears a line before the tools run.
+   */
+  async #roundEnded(
+    main: MainTurn,
+    expression: Expression,
+    calls: readonly ToolCall[],
+    speech: Speech | null,
+    segments: TextSegments | null,
+    send: ((text: string) => Promise<void>) | null,
+    between: (() => Promise<void>) | null,
+  ): Promise<void> {
+    if (segments !== null && !expression.isSilent()) {
+      const rest = segments.rest(expression);
+      if (rest.trim() !== "") {
+        if (main.holdsText(rest)) {
+          for (const text of textPieces(rest))
+            main.gate.hold({ text, spoken: null, emotion: null });
+        } else await send?.(rest);
+      }
+    }
+    await between?.();
+    if (speech === null) return;
+    const wait = main.waitFor(calls.map((c) => c.name));
+    if (wait === null) return;
+    const line = { text: wait, spoken: null, emotion: null };
+    main.said.push({ text: line.text, voice: null, emotion: null });
+    await speech.release(line);
+  }
+
+  /**
+   * A call of the loop, run now within `leftMs` of the turn's time for tools: what goes back to her
+   * in the same chain. What a tool brought back is outside content (a page, a search, someone's
+   * note): it goes back as data, like the results the hands report.
+   */
+  async #inTurn(
+    main: MainTurn,
+    call: ToolCall,
+    offered: ReadonlySet<string>,
+    priority: Priority,
+    leftMs: number,
+    roundChars: number = Number.POSITIVE_INFINITY,
+  ): Promise<string> {
+    const limit = Math.max(1, Math.min(this.agent.config.tool_timeout_ms, leftMs));
+    const { run, accepted } = await main.inTurn(
+      call.name,
+      call.arguments,
+      () => this.#hand(call, priority, this.signal, limit),
+      this.#requester(),
+    );
+    if (run.ok) this.#succeeded.add(call.name);
+    this.#trace(call, run.ok, run.text);
+    // Cut before it is wrapped, so the block it goes back in stays whole.
+    const room = Math.max(ROUND_MIN_CHARS, roundChars);
+    const body = run.text.length > room ? `${truncate(run.text, room)}${ROUND_CUT}` : run.text;
+    let text = dataBlock("tool", `${call.name} 的結果`, neutralize(body));
+    if (run.ok && accepted) text = `${text}\n${STILL_RUNNING}`;
+    // Read in this turn; the next keeps the head of it in the trace, unless she keeps more.
+    if (
+      run.ok &&
+      text.length >= LONG_RESULT_CHARS &&
+      !NOTE_TOOLS.has(call.name) &&
+      offered.has(KeepNoteTool.NAME)
+    ) {
+      const hint = loopKeepHint(charCount(run.text.trim()), accepted, this.#tracedChars());
+      if (hint !== null) {
+        text += hint;
+        main.tally.count("keep_hint");
+      }
+    }
+    return text;
+  }
+
+  /**
+   * How much of one result of the loop the trace keeps beside her reply (`null`: no trace is kept
+   * this turn). A turn's calls share `trace_chars`: once they are past it a call may be left out
+   * of the trace altogether, so that counts as no trace.
+   */
+  #tracedChars(): number | null {
+    const m = this.agent.config.mainline;
+    if (m.traces <= 0 || m.trace_chars <= 0 || this.#traceAfter === null) return null;
+    const used = this.#traced.reduce(
+      (n, c) => n + Math.min(charCount(c.result), m.trace_result_chars),
+      0,
+    );
+    return used > m.trace_chars ? null : m.trace_result_chars;
+  }
+
+  /**
+   * Keeps what a call of the loop brought back, in a few lines beside her reply (v4 §4.2): the
+   * next turn knows what she looked up and what it said. Kept after every call, so it is complete
+   * before any later line of hers is recorded. Her notes are shown on their own: not traced.
+   */
+  #trace(call: ToolCall, ok: boolean, result: string): void {
+    if (NOTE_TOOLS.has(call.name)) return;
+    const m = this.agent.config.mainline;
+    if (m.traces <= 0) return;
+    this.#traced.push({ tool: call.name, args: call.arguments, ok, result });
+    const text = traceText(this.#traced, m.trace_chars, m.trace_result_chars);
+    if (text === null) return;
+    // After the line that is last now: what she said before the lookup, else what she answers.
+    this.#traceAfter ??= traceAnchor(this.session.history().filter((e) => !this.#hidden(e)));
+    if (this.#traceAfter === null) return;
+    keptOf(this.session).traces.put(this.turn, this.#traceAfter, text, m.traces);
+  }
+
   /** One action, in the hands: it may outlive this turn. */
-  async #hand(call: ToolCall, priority: Priority, signal: AbortSignal): Promise<Run> {
+  async #hand(
+    call: ToolCall,
+    priority: Priority,
+    signal: AbortSignal,
+    limitMs?: number,
+  ): Promise<Run> {
     let data: JsonValue = null;
-    const [ok, full] = await this.#tryTool(call, priority, signal, (d) => {
-      data = d;
-    });
+    const [ok, full] = await this.#tryTool(
+      call,
+      priority,
+      signal,
+      (d) => {
+        data = d;
+      },
+      limitMs,
+    );
     const text = truncate(full, this.agent.config.max_tool_result_chars);
     this.agent.ctx.publish(
       {
@@ -2164,6 +3284,8 @@ class Turn {
     this.flags.committed = true;
     const chunks = splitMessage(text, cfg.max_message_chars);
     for (const [i, chunk] of chunks.entries()) {
+      // The pieces of one long message follow each other at once; a new message waits its turn.
+      if (i === 0) await this.#pace(sink, lane, priority, chunk);
       const action = newAction(
         lane,
         priority,
@@ -2186,8 +3308,40 @@ class Turn {
         throw new TurnError(`submitting reply: ${errorMessage(error)}`, { cause: error });
       }
       this.#output();
+      this.#lastTextAt = this.#now;
     }
     return text;
+  }
+
+  /**
+   * v4 §7.3: the second and later messages of a reply wait for about as long as typing them takes
+   * (`paceMs`, from when the one before went out; generating them counts), with typing shown, so
+   * several short lines do not land at once. The first message never waits here.
+   */
+  async #pace(sink: ActionSink, lane: LaneKey, priority: Priority, text: string): Promise<void> {
+    const last = this.#lastTextAt;
+    if (last === null) return;
+    const wait = paceMs(this.agent.rhythm.config, text) - (this.#now - last);
+    if (wait <= 0) return;
+    try {
+      await sink.submit(this.#typingAction(lane, priority));
+    } catch (error) {
+      this.agent.log.warn({ error: errorMessage(error) }, "could not submit typing action");
+    }
+    await sleep(wait, this.signal);
+  }
+
+  #typingAction(lane: LaneKey, priority: Priority) {
+    return newAction(
+      lane,
+      priority,
+      { type: "typing", context: this.key },
+      {
+        ttl: TYPING_TTL_MS,
+        turn: this.turn,
+        coalesce_key: `typing:${contextKeyDisplay(this.key)}`,
+      },
+    );
   }
 
   /** Budget exhausted: says (or writes) the constant out-of-energy line. */
@@ -2229,18 +3383,8 @@ class Turn {
   ): Promise<void> {
     const refresh = typingRefreshMs(this.agent.config);
     while (!signal.aborted) {
-      const typing = newAction(
-        lane,
-        priority,
-        { type: "typing", context: this.key },
-        {
-          ttl: TYPING_TTL_MS,
-          turn: this.turn,
-          coalesce_key: `typing:${contextKeyDisplay(this.key)}`,
-        },
-      );
       try {
-        await sink.submit(typing);
+        await sink.submit(this.#typingAction(lane, priority));
       } catch (error) {
         this.agent.log.warn({ error: errorMessage(error) }, "could not submit typing action");
       }
@@ -2300,14 +3444,16 @@ class Turn {
       // not sent yet and the corrected reply replaces it.
       if (calls.length === 0 && offered && !reminded && step < cfg.max_tool_steps) {
         const names = new Set(tools.map((t) => t.name));
-        const claim = unbackedClaim(expression.text, names, this.#backing());
+        const flags = cfg.corrections;
+        const claim = flags.claims ? unbackedClaim(expression.text, names, this.#backing()) : null;
         // The same for a tool she wrote as a tag: it runs nothing, she is asked to call it.
         const written =
-          claim === null
+          claim === null && flags.tool_text_reask
             ? toolsWrittenAsText(expression.tools, names, [], promptText(initial))
             : [];
         if (claim || written.length > 0) {
           reminded = true;
+          this.#tally.count(claim ? "claim_reask" : "tool_text_reask");
           this.agent.log.info(
             { turn: this.turn, tool: claim?.tool ?? written.join(",") },
             "she claimed an action without doing it",
@@ -2352,6 +3498,7 @@ class Turn {
     onFirst: (() => void) | null = null,
   ): Promise<Step> {
     const offeredTools = (request.tools?.length ?? 0) > 0;
+    this.#mark("request");
     const stream = await guard(
       withLlmTag({ module: "agent", turn: this.turn, label: "reply" }, () =>
         router.stream("chat", request, signal),
@@ -2365,10 +3512,17 @@ class Turn {
     let raw = "";
     const calls: ToolCall[] = [];
     let finished = false;
+    let first = true;
     try {
       for (;;) {
         const next: IteratorResult<StreamEvent> = await guard(iterator.next(), signal);
         onFirst?.();
+        if (first) {
+          first = false;
+          this.#mark("first_token");
+          // A voice turn started early: nothing it wrote is said or done before it is confirmed.
+          await this.#confirmed();
+        }
         if (next.done) {
           finished = true;
           break;
@@ -2386,6 +3540,8 @@ class Turn {
         } else if (event.type === "reasoning_delta") {
           this.agent.log.debug({ turn: this.turn, reasoning: event.text }, "reasoning");
         } else if (event.type === "tool_call_delta") {
+          // Her words are written before her tool calls: the last sentence need not wait for them.
+          if (calls.length === 0 && speech !== null && !expression.silence) await speech.settle();
           while (calls.length <= event.index) calls.push({ id: "", name: "", arguments: "" });
           const call = calls[event.index] as ToolCall;
           if (event.id !== null) call.id = event.id;
@@ -2460,7 +3616,10 @@ class Turn {
     // A long result (a search, lyrics, a page) is gone next turn unless she keeps what matters.
     if (ok && result.length >= LONG_RESULT_CHARS && call.name !== KeepNoteTool.NAME) {
       const offered = this.#toolSpecs().some((t) => t.name === KeepNoteTool.NAME);
-      if (offered) result += KEEP_HINT;
+      if (offered) {
+        result += KEEP_HINT;
+        this.#tally.count("keep_hint");
+      }
     }
     this.agent.log.info({ turn: this.turn, tool: call.name, ok, result }, "tool call");
     this.signal.throwIfAborted();
@@ -2504,9 +3663,20 @@ class Turn {
 
   /** The tools offered in this context now (`react` makes no sense in voice). */
   #offers(tool: Tool, scope: ToolScope | null): boolean {
-    if (isInternalTool(tool.spec.name)) return false;
-    if (this.voice && tool.spec.name === ReactTool.NAME) return false;
-    return offeredIn(tool, scope);
+    const name = tool.spec.name;
+    if (isInternalTool(name)) return false;
+    if (this.voice && name === ReactTool.NAME) return false;
+    if (!offeredIn(tool, scope)) return false;
+    // A game's moves only while one runs here, turtle soup's referee only for turtle soup, and
+    // no second game over a running one (one per channel).
+    const game = PARTY_MOVES.get(name);
+    const starts = name === PARTY_START;
+    if (game === undefined && !starts) return true;
+    const party = this.agent.ctx.services.get(PartyStatusKey);
+    if (party === undefined) return true;
+    const running = party.running(this.key);
+    if (starts) return running === null;
+    return running !== null && (game === null || running.game === game);
   }
 
   #toolSpecs(): ToolSpec[] {
@@ -2546,7 +3716,14 @@ class Turn {
     priority: Priority,
     turnSignal: AbortSignal = this.signal,
     report: ((data: JsonValue) => void) | null = null,
+    limitMs: number = this.agent.config.tool_timeout_ms,
   ): Promise<[boolean, string]> {
+    // The main line runs only what this turn offered: the Directives' filter is not just a list
+    // shown to the model (a name it wrote anyway used to reach the hands and run).
+    if (this.#main !== null && !this.#main.isOffered(call.name)) {
+      this.agent.log.warn({ turn: this.turn, tool: call.name }, "a tool not on offer was called");
+      return [false, `error: ${NOT_OFFERED}`];
+    }
     const tool = this.#tool(call.name);
     if (!tool) return [false, `error: unknown tool \`${call.name}\``];
     const node = tool.permission ?? null;
@@ -2572,14 +3749,18 @@ class Turn {
         return [false, `error: arguments are not valid JSON: ${errorMessage(error)}`];
       }
     }
-    if (this.#main !== null) args = groundArgs(call.name, args, this.key);
+    if (this.#main !== null) {
+      const grounded = groundArgs(call.name, args, this.key);
+      if (JSON.stringify(grounded) !== JSON.stringify(args)) this.#tally.count("ground_args");
+      args = grounded;
+    }
     const last = this.#requester();
     if (!last && this.intent === null && this.#main === null) {
       return [false, "error: no triggering message"];
     }
     const me = this.agent.selfAccount(this.key.platform);
     try {
-      const out = await timeout(this.agent.config.tool_timeout_ms, turnSignal, (signal) => {
+      const out = await timeout(limitMs, turnSignal, (signal) => {
         const ctx: ToolContext = last
           ? {
               turn: this.turn,
@@ -2622,7 +3803,10 @@ class Turn {
       source: "tool",
       context: this.key,
     });
-    return verdict?.note ? `${verdict.note}\n${text}` : text;
+    // Flooding is something people do: lyrics repeating 「我喜歡你」 are no flood (2026-11-09), and
+    // she was told the song she looked up was spam. Only what a tool's text says can earn a note.
+    if (!verdict?.note || verdict.flags.every((f) => f === "flood")) return text;
+    return `${verdict.note}\n${text}`;
   }
 
   /**
@@ -2648,6 +3832,9 @@ class Turn {
         break;
       case "spoken":
         await out.voiceLine(segment.text);
+        break;
+      case "spoken_start":
+        await out.settle();
         break;
       case "silence":
       case "tool":

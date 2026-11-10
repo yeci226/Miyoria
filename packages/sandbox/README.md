@@ -152,9 +152,13 @@ approvedSpecs()                        已核准的工具 { name, description, p
 3. 唯一的讀寫掛載是全新的 `runs/<id>/work`;設定檔、`.env`、資料庫都不在任何掛載的目錄下。
 4. 程式碼與參數不經過 shell,所以不會被展開成 `$(cat .env)` 之類的東西。
 
-### 網路白名單(尚未實作)
+### 工作區(`[modules.sandbox.workspace]`)
 
-規劃:建一個 `--internal` 的 user-defined network(沒有對外路由),再起一個同時接 internal 與 bridge 的 egress proxy 容器(只放行白名單網域的 HTTP CONNECT),沙箱容器只接 internal network 並設 `HTTP(S)_PROXY`。非 HTTP 流量與 DNS 全擋。在那之前 `network` 一律 `"none"`;模型可呼叫的 `code.run` 參數也**沒有** `network` 欄位(`CodeRunArgsSchema`),即使之後支援白名單,也要由閘門的設定決定,不由模型決定。
+她自己的持久資料夾 `<root>/profiles/<profile>/workspace`,以 bind mount 掛到容器的 `/workspace`。額度:`max_mb`(64)、`max_files`(500)、`max_file_kb`(1024);每次執行後由主機端檢查,超過額度或出現連結(symlink / junction)就移除並回報。路徑一律在主機端逐段 lstat 檢查,拒絕 `..`、絕對路徑與連結,開檔用 `O_NOFOLLOW`,寫入先寫暫存檔再 rename。工具:`workspace_list / read / write / delete`(不需要 Docker)、`workspace_save_script`(高風險,內容過 LLM 審查,雜湊記在容器寫不到的 `workspace-scripts.json`)、`workspace_run`(只跑核可過、內容沒變的腳本)。工具輸出以 `read_chars`(700)為限,較長的執行輸出存成 `outputs/<run_id>.txt` 並回報路徑,只保留最近 `keep_outputs`(20)個。
+
+### 網路白名單(`[modules.sandbox.network]`)
+
+預設關閉:`allow = []`。填入網域後,`code_run` 的 `use_network` 才可用:`--internal` 網路(無對外路由)加一個 egress proxy 容器(同時接 bridge 與 internal,別名 `egress-proxy`),只放行白名單網域、埠 80/443,並自行解析 DNS、擋私有位址。執行容器只接 internal 網路並設 `HTTP(S)_PROXY`。proxy 程式用真的子程序在 loopback 上測過,編排用 FakeRunner 測;真實 Docker 的行為見 `test/docker.workspace.integration.test.ts`(`MIYORIA_LIVE_WORKSPACE_TESTS=1`)。尚未做到:每次執行只開白名單的子集。
 
 ## 閘門與工具(`src/gate.ts`)
 

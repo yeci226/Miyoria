@@ -37,11 +37,15 @@ import type {
   DealPatch,
   DealStatus,
   DecisionRecord,
+  DocFilter,
+  DocUpdate,
+  EconomyDoc,
   FortuneRecord,
   Goal,
   GoalPatch,
   GoalPledge,
   GoalStatus,
+  LedgerDayTotal,
   LogEntry,
   MemberCardRecord,
   MemoryFilter,
@@ -111,11 +115,25 @@ export interface MemberCardStore {
   deleteFor(profile: ProfileId, accounts: readonly AccountRef[]): Promise<number>;
 }
 
+/** Totals over the whole coin ledger, for the economy's health table (docs/design/v4-plan.md §10). */
+export interface LedgerStatsStore {
+  /**
+   * Coins issued (positive rows) and recovered (negative rows) per local day and reason, from
+   * `since` on, all accounts, her purse included. One `GROUP BY`; `offsetMinutes` is the local
+   * time zone as minutes east of UTC.
+   */
+  dailyTotals(
+    profile: ProfileId,
+    since: Timestamp,
+    offsetMinutes: number,
+  ): Promise<LedgerDayTotal[]>;
+}
+
 /**
  * The coin ledger (docs/design/economy.md §6): append-only, the balance is a sum. "A wallet" is
  * the rows of any of `accounts`, so a person with several linked accounts has one.
  */
-export interface CoinLedgerStore {
+export interface CoinLedgerStore extends LedgerStatsStore {
   /**
    * Appends `entry` in one transaction with the checks of `rule`: the key (once per wallet), the
    * caps, the balance.
@@ -161,6 +179,29 @@ export interface CoinLedgerStore {
     since: Timestamp,
     limit: number,
   ): Promise<{ account: AccountRef; spent: number }[]>;
+}
+
+/**
+ * The versioned documents of economy 2.0: collection items, predictions and bets, commissions and
+ * her room (docs/design/v4-plan.md §10). One table, keyed by (profile, kind, id).
+ */
+export interface EconomyDocStore {
+  /** Stores `doc`; `false` when the id already exists (nothing changes). */
+  create(doc: EconomyDoc): Promise<boolean>;
+  get(profile: ProfileId, kind: string, id: string): Promise<EconomyDoc | null>;
+  /**
+   * Compare and set: replaces status, data (and the owner when `next.owner` is given, `null`
+   * included) and bumps the version, only when the stored version is `expected`. `false` otherwise.
+   */
+  update(
+    profile: ProfileId,
+    kind: string,
+    id: string,
+    expected: number,
+    next: DocUpdate,
+  ): Promise<boolean>;
+  /** Newest first (by creation, the id breaking a tie), at most `filter.limit`. */
+  list(profile: ProfileId, kind: string, filter: DocFilter): Promise<EconomyDoc[]>;
 }
 
 /**
@@ -284,6 +325,13 @@ export interface DecisionLog {
     context: ContextKey | null,
     limit: number,
   ): Promise<TurnOutcomeRecord[]>;
+  /**
+   * Every decision since `sinceTs` (inclusive), newest first, with no row cap: for the turn
+   * metrics, which need the whole window. Optional like the other turn methods.
+   */
+  decisionsSince?(profile: ProfileId, sinceTs: Timestamp): Promise<DecisionRecord[]>;
+  /** Every turn outcome since `sinceTs` (inclusive), newest first, with no row cap. */
+  outcomesSince?(profile: ProfileId, sinceTs: Timestamp): Promise<TurnOutcomeRecord[]>;
 }
 
 /**
@@ -507,6 +555,7 @@ export interface Store {
   readonly fortunes: FortuneStore;
   readonly goals: GoalStore;
   readonly bounties: BountyStore;
+  readonly economyDocs: EconomyDocStore;
   /** Releases the backend (closes the database). */
   close(): Promise<void>;
 }
@@ -532,4 +581,6 @@ export const DealStoreKey = serviceKey<DealStore>("DealStore");
 export const FortuneStoreKey = serviceKey<FortuneStore>("FortuneStore");
 export const GoalStoreKey = serviceKey<GoalStore>("GoalStore");
 export const BountyStoreKey = serviceKey<BountyStore>("BountyStore");
+export const EconomyDocsKey = serviceKey<EconomyDocStore>("EconomyDocs");
+export const LedgerStatsKey = serviceKey<LedgerStatsStore>("LedgerStats");
 export const StoreKey = serviceKey<Store>("Store");

@@ -85,7 +85,7 @@ async function rig(): Promise<Rig> {
   } as never);
   const clock = { at: T0 };
   const economy = new EconomyService({
-    config: EconomyConfigSchema.parse({}),
+    config: EconomyConfigSchema.parse({ achievement_cap: 0 }),
     services,
     profile: "p",
     clock: { now: () => clock.at },

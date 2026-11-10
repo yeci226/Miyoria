@@ -119,6 +119,20 @@ export {
   subjectKey,
 } from "./learning.js";
 export {
+  type DailyPosts,
+  DailyPostsKey,
+  isLifeActivityId,
+  LIFE_ACTIVITY_IDS,
+  type LifeActivityId,
+  type LifeEntry,
+  type LifeLog,
+  LifeLogKey,
+  REMIND_CAPABILITY,
+  type Reminder,
+  type ReminderDesk,
+  ReminderDeskKey,
+} from "./life.js";
+export {
   CHAT_DM,
   CHAT_START,
   type DirectorThoughtBody,
@@ -162,6 +176,7 @@ export {
   type IncomingMessage,
   imageType,
   incomingText,
+  type MentionedAccount,
   type MessageRef,
   type OutgoingFile,
   type OutgoingMessage,
@@ -245,10 +260,13 @@ export {
   SocialSignalsKey,
 } from "./social.js";
 export {
+  MAX_BEATS,
+  parseSongBeats,
   parseSongCue,
   parseSongPrepare,
   SONG_PREPARE_TOPIC,
   SONG_TOPIC,
+  type SongBeats,
   type SongCue,
   type SongPrepare,
 } from "./song.js";
@@ -577,6 +595,7 @@ export {
   type TurnSilencer,
   TurnSilencerKey,
 } from "./emergency.js";
+export { type GameTaskOutcome, parseGameOutcome } from "./game-outcome.js";
 export {
   assignHandle,
   ephemeralHandlesIn,
@@ -608,6 +627,43 @@ export {
   isSelfTalk,
   newImpulse,
 } from "./impulse.js";
+export {
+  type KeepsakeCard,
+  type KeepsakeCards,
+  type KeepsakeField,
+  type KeepsakeFortune,
+  type KeepsakeResult,
+  type Keepsakes,
+  KeepsakesKey,
+  type KeepsakeWho,
+} from "./keepsakes.js";
+export {
+  LIVE_TOUCH_TOPIC,
+  type LiveActivity,
+  type LiveActivityKind,
+  type LiveEmotion,
+  type LiveEvent,
+  type LiveFeed,
+  LiveFeedKey,
+  type LiveLine,
+  type LivePart,
+  type LivePatOutcome,
+  type LivePats,
+  type LivePatter,
+  type LivePlace,
+  type LivePresence,
+  type LiveSnapshot,
+  type LiveSpot,
+  type LiveTouch,
+  type LiveVideo,
+} from "./live.js";
+export {
+  type MessageActionOutcome,
+  type MessageActionRequest,
+  type MessageActions,
+  MessageActionsKey,
+} from "./message-actions.js";
+export { MESSAGE_EXCLUDED_TOPIC, type MessageExcluded } from "./message-exclusion.js";
 export {
   holdsBack,
   INPUT_FLAGS,
@@ -641,6 +697,33 @@ export {
   type SafeLine,
   safeOutgoing,
 } from "./moderation.js";
+export {
+  type Participation,
+  ParticipationKey,
+  PLAY_ACTIVITIES,
+  type PlayActivity,
+  type PlayAward,
+  type PlayStatus,
+} from "./participation.js";
+export {
+  type ClipOutcome,
+  type PartyAward,
+  type PartyRewardRequest,
+  type PartyRewards,
+  PartyRewardsKey,
+  type SongClipInfo,
+  type SongClips,
+  SongClipsKey,
+} from "./party.js";
+export {
+  PARTY_RECENT_MAX,
+  type PartyOverview,
+  PartyOverviewKey,
+  type PartyPlayerView,
+  type PartyResultView,
+  type PartySessionView,
+  type PartySnapshot,
+} from "./party-overview.js";
 export { CORE_CHARS, CORE_SENTENCES, characterCore } from "./persona-core.js";
 export {
   type Desire,
@@ -668,6 +751,13 @@ export {
   SELF_BLOCK_KEYS,
   type SelfBlockKey,
 } from "./prompt-block.js";
+export {
+  type PartyGameStatus,
+  type PartyStatus,
+  PartyStatusKey,
+  type SkillIndex,
+  SkillIndexKey,
+} from "./prompt-sources.js";
 export { type KnownName, mentionsAnother, type NameSplit, splitNames } from "./public-text.js";
 export {
   DEFAULT_REASONING,
@@ -679,7 +769,44 @@ export {
   reasoningEnabled,
   reasoningFor,
 } from "./reasoning.js";
+export {
+  type AskedLookup,
+  type AskedQuestion,
+  type Asking,
+  type Elsewhere,
+  ElsewhereKey,
+  type JustNow,
+  type JustNowEntry,
+  JustNowKey,
+  type JustNowKind,
+  type Notebook,
+  type NotebookEntry,
+  NotebookKey,
+  type NotebookPage,
+  type NotebookWhere,
+  type PersonProfile,
+  type PersonProfiles,
+  PersonProfilesKey,
+  type PersonThread,
+  type PersonThreads,
+  PersonThreadsKey,
+  type PlaceAccess,
+  PlaceAccessKey,
+  type PlaceKind,
+  type PlaceRef,
+  type PlaceSummary,
+  type ProfileOptions,
+  type TurnRetrievalQuery,
+  type Whereabouts,
+} from "./recent-past.js";
 export { type SceneRule, type SceneRuleInput, SceneRuleKey } from "./scene-rule.js";
+export {
+  type SkillShelf,
+  type SkillShelfEntry,
+  type SkillShelfFile,
+  SkillShelfKey,
+  type SkillShelfPage,
+} from "./skill-shelf.js";
 export {
   isSteerOutcome,
   isTaskFailureCode,
@@ -757,3 +884,55 @@ export {
   type VoiceBargeInAction,
   type VoiceBargeInReason,
 } from "./voice-barge.js";
+export {
+  VOICE_TURN_MARKS,
+  type VoiceTurnMark,
+  type VoiceTurnMarks,
+  type VoiceTurnStages,
+  type VoiceTurns,
+  VoiceTurnsKey,
+} from "./voice-turn.js";
+export {
+  sameWish,
+  stopsAsking,
+  WISH_SOURCE,
+  type Wish,
+  type WishBody,
+  type WishEnd,
+  type Wishes,
+  WishesKey,
+  type WishState,
+  type WishVerdict,
+  wishGrams,
+  wishHolder,
+} from "./wish.js";
+export {
+  type DrivenStep,
+  type DrivenWork,
+  type DrivenWorkSpec,
+  isWorkEnd,
+  WORK_ENDS,
+  WORK_LIST,
+  WORK_OWNER,
+  WORK_PURPOSE,
+  WORK_START,
+  WORK_STEER,
+  type WorkEnd,
+  WorkEndedError,
+  type WorkLane,
+  WorkLaneKey,
+  type WorkMessage,
+  type WorkState,
+  type WorkTaskView,
+} from "./worklane.js";
+
+// ---- v4 §4.5: the after-the-fact corrections, counted ------------------------------------------
+
+export {
+  CORRECTION_KINDS,
+  type CorrectionCounts,
+  type CorrectionKind,
+  type CountedOutcome,
+  correctionsOf,
+  isCorrectionKind,
+} from "./corrections.js";

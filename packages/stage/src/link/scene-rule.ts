@@ -15,9 +15,15 @@ export interface SceneFacts {
   liveSince: number | null;
   /** In a voice channel. */
   inVoice: boolean;
+  /** A game or web browsing is running (so she is not "away"). */
   playing: boolean;
-  /** The game being played (its id, e.g. `threads`): a role of that name wins over `game`. */
+  /** The game being played (its id, e.g. `minecraft`): a role of that name wins over `game`. */
   game: string | null;
+  /**
+   * She is reading the web (the `browse` activity, v4 §8.1). Its target is a search or a site,
+   * not a game name, so it never picks a role by name.
+   */
+  browsing: boolean;
   singing: boolean;
   /** Her timed override (`stage.scene`), `null` when none or expired. */
   override: { scene: string; until: number } | null;
@@ -53,6 +59,7 @@ export const NO_FACTS: SceneFacts = {
   inVoice: false,
   playing: false,
   game: null,
+  browsing: false,
   singing: false,
   override: null,
 };
@@ -71,9 +78,10 @@ export function factsOf(input: SceneRuleInput, now: number): SceneFacts {
     live,
     liveSince: live ? since : null,
     inVoice: input.presence.type === "in" || input.presence.type === "leaving",
-    // A game (or the browser) shows its scene while it runs; starting it is still chat.
+    // A game (or web browsing) shows its scene while it runs; starting it is still chat.
     playing: running && (a.type === "game" || a.type === "browse"),
-    game: running && (a.type === "game" || a.type === "browse") ? a.target : null,
+    game: running && a.type === "game" ? a.target : null,
+    browsing: running && a.type === "browse",
     singing: running && a.type === "singing",
     override:
       input.override !== null && until > now ? { scene: input.override.scene, until } : null,
@@ -129,7 +137,15 @@ export function sceneWants(
   if (facts.playing && facts.game !== null && ROLE_NAME.test(facts.game)) {
     out.push({ role: facts.game, why: `開始${facts.game}`, urgent: false });
   }
-  if (facts.playing) out.push({ role: "game", why: "開始玩遊戲", urgent: false });
+  if (facts.browsing) {
+    // Her web reading has a scene of its own (`browse`); `threads`, the role of the old Threads
+    // window, still works for setups that have it. Without either: the game scene, as before.
+    out.push({ role: "browse", why: "逛網路", urgent: false });
+    out.push({ role: "threads", why: "逛網路", urgent: false });
+  }
+  if (facts.playing) {
+    out.push({ role: "game", why: facts.browsing ? "逛網路" : "開始玩遊戲", urgent: false });
+  }
   out.push({ role: "chat", why: "回到聊天", urgent: false });
   return out;
 }

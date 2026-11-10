@@ -174,7 +174,8 @@ function snapshotOf(card: IssuedCard): JsonObject {
 
 /** Whose cards these are. */
 export interface CardHolder {
-  session: SessionRecord;
+  /** Only who it was issued to is read: their account, name and picture. */
+  session: Pick<SessionRecord, "account" | "name" | "avatar_url">;
   /** The session account and every account of the person she knows them as. */
   accounts: readonly AccountRef[];
   person: PersonId | null;

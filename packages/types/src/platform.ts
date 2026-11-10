@@ -104,6 +104,13 @@ export interface ForwardedMessage {
   embeds: Embed[];
 }
 
+/** Someone other than her that a message @-mentions (people and bots, never roles). */
+export interface MentionedAccount {
+  account: AccountRef;
+  display_name: string;
+  is_bot: boolean;
+}
+
 /**
  * A message as the platform delivered it.
  *
@@ -129,6 +136,14 @@ export interface IncomingMessage {
   stickers?: Sticker[];
   embeds?: Embed[];
   forwarded?: ForwardedMessage[];
+  /**
+   * Accounts other than her that the text @-mentions, in order of appearance. Reply pings that
+   * are not written in the text are not listed. Together with `reply_to_self` it tells
+   * "a reply to her" apart from "a reply to her that talks to someone else".
+   */
+  mentions_others?: MentionedAccount[];
+  /** The text opens with a mention of someone other than her: it is probably said to them. */
+  opens_with_other_mention?: boolean;
   /** Voice: a model judged the speaker done, so there is no need to wait and see if they go on. */
   turn_complete?: boolean;
 }

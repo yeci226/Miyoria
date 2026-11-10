@@ -52,18 +52,38 @@ export const STEER_SPEC: ToolSpec = {
   },
 };
 
-/** A tool's description is what she needs to pick it; details come back in its errors. */
-function firstSentence(text: string): string {
-  const end = text.search(/[。!?]/u);
-  return end < 0 ? text : text.slice(0, end + 1);
+/** How much of a tool's text is offered (`[modules.agent.mainline]` `tool_chars`, `tool_arg_chars`). */
+export interface ToolLimits {
+  /** Characters of the description (0: no limit). */
+  description: number;
+  /** Characters of one argument's description (0: no limit). */
+  argument: number;
 }
 
-/** An argument with the first clause of its description. */
-function slimProperty(value: JsonValue): JsonValue {
+export const DEFAULT_TOOL_LIMITS: ToolLimits = { description: 600, argument: 200 };
+
+/** Where a sentence or a clause of a tool's text may end. */
+const SENTENCE_ENDS = ["。", "!", "?", "!", "?", ";", ";"];
+
+/**
+ * `text` within `max` characters: whole sentences while they fit, else cut short with `…`. A tool
+ * is offered whole (v4 §4.2): the first sentence alone left out what an argument means, when to
+ * use it and what comes back, and she guessed (V3 cut it for an old 4,000-token target).
+ */
+export function upToSentence(text: string, max: number): string {
+  const chars = [...text];
+  if (max <= 0 || chars.length <= max) return text;
+  const head = chars.slice(0, max).join("");
+  const end = Math.max(...SENTENCE_ENDS.map((p) => head.lastIndexOf(p)));
+  return end > 0 ? head.slice(0, end + 1) : `${chars.slice(0, Math.max(max - 1, 1)).join("")}…`;
+}
+
+/** An argument with its description within `max`. */
+function slimProperty(value: JsonValue, max: number): JsonValue {
   if (!isJsonObject(value) || typeof value.description !== "string") return value;
   // "(省略 = ...)" is what tells her to leave it out: without it she fills in any id she knows.
   if (value.description.includes("省略")) return value;
-  return { ...value, description: value.description.split(/[,。;(]/u)[0] ?? "" };
+  return { ...value, description: upToSentence(value.description, max) };
 }
 
 /**
@@ -84,18 +104,21 @@ export function groundArgs(tool: string, args: JsonValue, key: ContextKey): Json
 /**
  * A tool as the main line offers it. Every capability tool repeats that a request is only a request
  * and what `why` and `on_own` mean, about 150 characters each, 2000 over the tools of a normal
- * turn. The fixed rules say it once (`OUTPUT_RULES`), and the first sentence of what a tool does is
- * what she needs to pick it.
+ * turn: the fixed rules say it once (`OUTPUT_RULES`). The rest of what a tool says is offered
+ * whole, each part within `limits`.
  */
-export function slimTool(spec: ToolSpec): ToolSpec {
-  const description = firstSentence(spec.description.replace(REQUEST_RULE, "").trim());
+export function slimTool(spec: ToolSpec, limits: ToolLimits = DEFAULT_TOOL_LIMITS): ToolSpec {
+  const description = upToSentence(
+    spec.description.replace(REQUEST_RULE, "").trim(),
+    limits.description,
+  );
   const parameters = spec.parameters;
   if (!isJsonObject(parameters) || !isJsonObject(parameters.properties)) {
     return { ...spec, description };
   }
   const properties: JsonObject = {};
   for (const [name, value] of Object.entries(parameters.properties)) {
-    properties[name] = slimProperty(value);
+    properties[name] = slimProperty(value, limits.argument);
   }
   // Her reasons are in the decision she logs; `why` would only say them twice.
   delete properties.why;

@@ -12,7 +12,16 @@ import {
   transcriptLine,
   VOICE_RULES,
 } from "../src/index.js";
-import { focusMessage, MAX_REPLY_EXCERPT, replyTag } from "../src/prompt.js";
+import { mainRules } from "../src/mainline/prompt.js";
+import {
+  focusMessage,
+  MAX_REPLY_EXCERPT,
+  ONE_THOUGHT_RULE,
+  PICK_SOME_RULE,
+  REPLY_PICK_RULE,
+  replyTag,
+  rulesPrompt,
+} from "../src/prompt.js";
 import { withOlderParents } from "../src/turn.js";
 import { entry } from "./fixtures.js";
 
@@ -206,6 +215,36 @@ describe("transcript", () => {
     expect(contentText(buildMessages("P", "S", [quoted])[1]?.content ?? "")).toBe(
       "> (剛剛) 壞人∶ 假的: 第一行 第二行\nOwen(回覆 壞人∶ 假的): 嗨",
     );
+  });
+
+  it("several people get leave to answer only some, one person's run is one thought", () => {
+    const line = (author: string, text: string) => ({
+      ...entry(author, text, false),
+      current: true,
+    });
+    const samePerson = focusMessage([line("Owen", "一"), line("Owen", "二")]);
+    expect(samePerson).toContain(ONE_THOUGHT_RULE);
+    expect(samePerson).not.toContain(PICK_SOME_RULE);
+    expect(samePerson).not.toContain("挑你最想回的一兩件");
+    expect(samePerson).not.toContain("[回覆 編號]");
+    const threeInARow = focusMessage([line("Owen", "一"), line("Owen", "二"), line("Owen", "三")]);
+    expect(threeInARow).toContain(ONE_THOUGHT_RULE);
+    expect(threeInARow).not.toContain("挑你最想回的一兩件");
+    const severalPeople = focusMessage([line("Owen", "一"), line("阿明", "二")]);
+    expect(severalPeople).toContain(REPLY_PICK_RULE);
+    expect(REPLY_PICK_RULE).toContain(PICK_SOME_RULE);
+    expect(focusMessage([line("Owen", "一")])).not.toContain("不需要每則都回");
+  });
+
+  it("every set of format rules keeps actions out of brackets", () => {
+    for (const rules of [
+      rulesPrompt(false),
+      rulesPrompt(true),
+      mainRules(false, null),
+      mainRules(true, null),
+    ]) {
+      expect(rules).toContain("不要用括號寫動作");
+    }
   });
 
   it("rules_explain_the_markers", () => {

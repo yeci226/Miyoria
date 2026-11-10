@@ -3,7 +3,7 @@
 //   /overlay/?layer=backdrop&layout=sing   (the background under the scene's sources)
 import { DEFAULT_CPS } from "./typewriter.js";
 
-export const SECTIONS = ["subtitles", "emotion", "status", "queue", "wave", "activity", "gifts", "screen"] as const;
+export const SECTIONS = ["subtitles", "emotion", "status", "queue", "wave", "activity", "gifts", "screen", "touches"] as const;
 export type Section = (typeof SECTIONS)[number];
 
 /** Which layer of the scene this page is: the overlay on top, or the background under everything. */

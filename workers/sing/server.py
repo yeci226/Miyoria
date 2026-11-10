@@ -1110,18 +1110,24 @@ def _lead_stage(job: Job, sdir: Path, src: Source, timed: Callable[[str, Callabl
     return {"used": True, "cached": False}
 
 
-def _lyrics_meta(found: dict[str, Any] | None, out: Path) -> dict[str, Any] | None:
+def _lyrics_meta(found: dict[str, Any] | None, out: Path, heard: Path | None = None) -> dict[str, Any] | None:
     """The song meta's ``lyrics`` for a lookup result, and ``lyrics.lrc`` written into ``out``.
 
     Besides what the player reads (``synced``, ``lines``, ``plain``) it says where the lyrics came from
     (``provider``, ``how``: metadata | title | llm), the song they were matched to (``track``, ``artist``),
-    how sure the match is (``confidence`` 0..1, ``checks``) and when (``fetched_at``).
+    how sure the match is (``confidence`` 0..1, ``checks``) and when (``fetched_at``). Synced lines that
+    are off by a constant amount against the singer's track ``heard`` are moved back (``offset_s``).
     """
     if not found:
         return None
     from lyrics import parse_lrc
+    from lyrics_align import align, shift_lines
 
     lines = parse_lrc(found["lrc"]) if found.get("lrc") else []
+    offset = align(heard, lines) if lines else 0.0
+    if offset:
+        log.info("lyrics moved by %+.2f s to meet the singing", offset)
+        lines = shift_lines(lines, offset)
     lrc = out / "lyrics.lrc"
     if found.get("lrc"):
         lrc.write_text(found["lrc"], "utf-8")
@@ -1132,7 +1138,7 @@ def _lyrics_meta(found: dict[str, Any] | None, out: Path) -> dict[str, Any] | No
             "plain": None if lines else (found.get("plain") or "")[:4000],
             "how": found.get("how"), "confidence": found.get("confidence"), "matched": found.get("matched"),
             "checks": found.get("checks"), "llm": found.get("llm"), "tried": found.get("tried"),
-            "fetched_at": now_iso()}
+            "offset_s": offset, "fetched_at": now_iso()}
 
 
 def _run_job(job: Job) -> None:
@@ -1286,7 +1292,11 @@ def _run_job(job: Job) -> None:
     # the lead vocal (the original singer, before conversion) is what the ASR spot check listens to
     heard = next((p for p in (sdir / "lead.wav", sdir / "vocals.wav") if p.exists()), None)
     found = timed("lyrics", lambda: b.lyrics(src, duration, heard))
-    lyrics_meta = _lyrics_meta(found, out)
+    lyrics_meta = _lyrics_meta(found, out, heard)
+    from beats import beat_meta
+
+    # her sway and nods follow the beat of what is actually played
+    beats = timed("beats", lambda: beat_meta(out / "play_mix.pcm", PLAY_RATE))
     video = _attach_video(job, src, sdir, out, timings)
     timings["total_s"] = round(time.perf_counter() - t_job, 2)
     g = job.gpu
@@ -1304,6 +1314,7 @@ def _run_job(job: Job) -> None:
         "backing": req.backing if lead["used"] or req.backing == "acapella" else "in_vocal",
         "lyrics": lyrics_meta,
         "lyrics_input": lyrics_input,
+        "beats": beats,
         **video,
         "play": {"sample_rate": PLAY_RATE, "samples": mixed.get("samples"), "format": "s16le", "channels": 1},
         "mix": mixed,
@@ -1543,7 +1554,7 @@ def refetch_lyrics(sid: str, req: LyricsRequest | None = None) -> JSONResponse:
     old = meta.get("lyrics")
     if not found:
         return JSONResponse({"found": False, "kept": bool(old), "lyrics": old and {k: v for k, v in old.items() if k != "lines"}})
-    meta["lyrics"] = _lyrics_meta(found, sdir)
+    meta["lyrics"] = _lyrics_meta(found, sdir, heard)
     meta["lyrics_input"] = {k: v for k, v in hints.items() if v}
     state.store.write_meta(sid, meta)
     return JSONResponse({"found": True, "previous": {"provider": (old or {}).get("provider"),

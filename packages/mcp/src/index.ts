@@ -30,9 +30,11 @@ export {
 export { McpModule, McpStartError } from "./module.js";
 export {
   flattenResult,
+  frameResult,
   globMatch,
   MAX_TOOL_NAME,
   registryName,
+  stdioEnv,
   ToolFilter,
   truncateChars,
 } from "./policy.js";

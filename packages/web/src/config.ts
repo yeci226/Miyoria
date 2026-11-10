@@ -6,7 +6,7 @@ import { z } from "zod";
  * ```toml
  * [modules.web]
  * region = "tw-tzh"
- * read_chars = 4000
+ * read_chars = 12000
  * ```
  */
 export const WebConfigSchema = z.object({
@@ -15,15 +15,25 @@ export const WebConfigSchema = z.object({
     .string()
     .regex(/^[a-z]{2}-[a-z]{2,3}$/)
     .default("tw-tzh"),
+  /**
+   * Shortest gap between two DuckDuckGo searches: it challenges the third of a quick burst
+   * (2026-11-09: two passed, the next six were challenged). Searches wait their turn.
+   */
+  ddg_gap_ms: z.number().int().min(0).max(60_000).default(4000),
+  /** After a challenge DuckDuckGo is left alone this long, so a block is not prolonged. */
+  ddg_cooldown_s: z.number().int().min(0).max(86_400).default(600),
   /** Results `web_search` returns when she does not say (she may ask for 1..8). */
   search_results: z.number().int().min(1).max(8).default(5),
-  /** Characters of page text `web_read` keeps. */
-  read_chars: z.number().int().min(200).max(20_000).default(4000),
+  /** Characters of page text `web_read` keeps (v4 plan §4.2: a page, 12,000). */
+  read_chars: z.number().int().min(200).max(20_000).default(12_000),
   /**
-   * The most characters one tool answer takes, block markers included. Keep it under the agent's
-   * `max_tool_result_chars`, or the cut falls inside the block.
+   * The most characters one `web_read` answer takes, block markers included (§4.2: 12,000).
+   * Keep it at or under the agent's `max_tool_result_chars`, or the agent's cut falls inside the
+   * block: the agent's own default (4000) allows 4000 until it is raised to match.
    */
-  result_chars: z.number().int().min(300).max(20_000).default(3900),
+  result_chars: z.number().int().min(300).max(20_000).default(12_000),
+  /** The most characters one `web_search` answer takes, block markers included. */
+  search_chars: z.number().int().min(300).max(20_000).default(3900),
   /** Per request (DuckDuckGo, and each hop of a page). */
   timeout_ms: z.number().int().min(1000).max(60_000).default(10_000),
   /** A page download stops here; what arrived is still read. */

@@ -1,6 +1,7 @@
 // OBS control (obs-websocket v5 via `obs-websocket-js`), behind `Obs` so it can be faked in
 // tests.
 
+import { writeFile } from "node:fs/promises";
 import { errorMessage, getLogger, SerialQueue, sleep, withTimeout } from "@miyoria/kernel";
 import OBSWebSocket, { type OBSRequestTypes, type OBSResponseTypes } from "obs-websocket-js/json";
 import { z } from "zod";
@@ -48,6 +49,11 @@ export const ObsConfigSchema = z.object({
   song_video_lead_ms: z.number().int().min(0).max(5_000).default(0),
   /** Re-seek the video when it drifts this far from the song (checked now and then); 0 = never. */
   song_video_resync_ms: z.number().int().nonnegative().default(300),
+  /**
+   * Keep OBS's replay buffer running while streaming, so a highlight (`clip`) can be saved; the
+   * buffer's length and folder are set in OBS (Settings → Output → Replay Buffer).
+   */
+  replay_buffer: z.boolean().default(true),
 });
 export type ObsConfig = z.output<typeof ObsConfigSchema>;
 
@@ -91,6 +97,11 @@ export interface Obs {
   /** Playback position in ms, `null` when nothing plays. */
   mediaCursor?(source: string): Promise<number | null>;
   seekMedia?(source: string, ms: number): Promise<void>;
+  /** Whether the replay buffer runs (optional, like the two below). */
+  replayBufferActive?(): Promise<boolean>;
+  startReplayBuffer?(): Promise<void>;
+  /** Saves the replay buffer and returns the file OBS wrote, `null` when it wrote none in time. */
+  saveReplay?(): Promise<string | null>;
   /** Drops the connection (optional). */
   close?(): Promise<void>;
 }
@@ -331,6 +342,35 @@ class ObsWebSocketObs implements Obs {
     });
   }
 
+  async replayBufferActive(): Promise<boolean> {
+    return (await this.#call("GetReplayBufferStatus")).outputActive;
+  }
+
+  async startReplayBuffer(): Promise<void> {
+    await this.#call("StartReplayBuffer");
+  }
+
+  async saveReplay(): Promise<string | null> {
+    const before = await this.#lastReplay();
+    await this.#call("SaveReplayBuffer");
+    // OBS writes the file in the background and reports it as the last replay when done.
+    for (let i = 0; i < 40; i++) {
+      await sleep(250);
+      const path = await this.#lastReplay();
+      if (path !== null && path !== before) return path;
+    }
+    return null;
+  }
+
+  async #lastReplay(): Promise<string | null> {
+    try {
+      const path = (await this.#call("GetLastReplayBufferReplay")).savedReplayPath;
+      return path === "" ? null : path;
+    } catch {
+      return null;
+    }
+  }
+
   async close(): Promise<void> {
     // A hung OBS never answers the close handshake either.
     await withTimeout(this.#client.disconnect(), CALL_TIMEOUT_MS);
@@ -370,6 +410,7 @@ export class ObsController {
   readonly #clearTimers = new Set<ReturnType<typeof setTimeout>>();
   /** Scene switches, one at a time. */
   readonly #switches = new SerialQueue();
+  #replayWarned = false;
 
   constructor(connector: ObsConnector, config: ObsConfig) {
     this.#connector = connector;
@@ -461,7 +502,50 @@ export class ObsController {
     }
     const state: ObsState = { connected: true, scene, streaming, scenes };
     this.#state.set(state);
+    if (streaming) await this.#keepReplayBuffer(obs);
     return state;
+  }
+
+  /** Starts OBS's replay buffer while streaming (`replay_buffer`); failures are logged once. */
+  async #keepReplayBuffer(obs: Obs): Promise<void> {
+    if (!this.#config.replay_buffer || !obs.replayBufferActive || !obs.startReplayBuffer) return;
+    try {
+      if (!(await obs.replayBufferActive())) {
+        await obs.startReplayBuffer();
+        log.info("started the OBS replay buffer for highlights");
+      }
+      this.#replayWarned = false;
+    } catch (error) {
+      if (!this.#replayWarned) {
+        log.warn(
+          { err: errorMessage(error) },
+          "cannot start the OBS replay buffer (enable it in OBS)",
+        );
+      }
+      this.#replayWarned = true;
+    }
+  }
+
+  /**
+   * Saves the replay buffer as a highlight and writes `<file>.json` next to it (`reason`, when).
+   * Returns the video file, or `null` when the buffer is off or OBS wrote nothing.
+   */
+  async clip(reason: string, now: () => number = Date.now): Promise<string | null> {
+    const obs = this.#obs();
+    if (!obs.saveReplay) return null;
+    if (obs.replayBufferActive && !(await obs.replayBufferActive())) return null;
+    const path = await obs.saveReplay();
+    if (path === null) return null;
+    try {
+      await writeFile(
+        `${path}.json`,
+        `${JSON.stringify({ reason, at: new Date(now()).toISOString() }, null, 2)}\n`,
+        "utf8",
+      );
+    } catch (error) {
+      log.warn({ err: errorMessage(error), path }, "cannot write the highlight's note");
+    }
+    return path;
   }
 
   /**

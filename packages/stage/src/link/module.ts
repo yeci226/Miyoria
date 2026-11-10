@@ -33,6 +33,7 @@ import {
   v2Payload,
 } from "@miyoria/types";
 import { type BoundAddress, formatAddress, HttpServer, isLoopback } from "../net.js";
+import { TOUCH_TOPIC } from "../touch.js";
 import { stageCapabilities } from "./actions.js";
 import { ActivityTracker } from "./activity.js";
 import { registerStreamCommands, unregisterStreamCommands } from "./commands.js";
@@ -40,6 +41,7 @@ import { MAX_MESSAGE } from "./conn.js";
 import { type GoLiveState, SceneDirector } from "./director.js";
 import { EMOTION_TOPIC, Forwarder, GIFT_TOPIC, SCREEN_TOPIC, SUBTITLE_TOPIC } from "./forward.js";
 import { goliveFollow, VOICE_GOLIVE_TOPIC } from "./golive.js";
+import { Highlights } from "./highlights.js";
 import {
   DEFAULT_BIND,
   StageLink,
@@ -208,6 +210,17 @@ export class StageLinkModule implements Module {
       now: () => ctx.clock.now(),
     });
     const activity = new ActivityTracker({ textTurns: config.subtitle_text_turns });
+    // Moments worth keeping, saved from OBS's replay buffer while she streams (highlights.ts).
+    const highlights = new Highlights(config.highlights);
+    const clip = (reason: string | null): void => {
+      if (reason === null || link.status()?.streaming !== true) return;
+      const timer = setTimeout(() => {
+        link.clip(reason).catch((error: unknown) => {
+          ctx.log.info({ err: errorMessage(error), reason }, "no highlight saved");
+        });
+      }, config.highlights.delay_ms);
+      timer.unref?.();
+    };
     const sendActivity = (): void => {
       if (!link.isConnected()) return;
       const msg = activity.next(ctx.clock.now());
@@ -225,6 +238,8 @@ export class StageLinkModule implements Module {
       if (status && !nodeUp) {
         const resume = forwarder.resumeSongVideo();
         if (resume) link.send(resume);
+        const beat = forwarder.resumeBeat();
+        if (beat) link.send(beat);
         const resting = forwarder.resumeResting();
         if (resting) link.send(resting);
         const current = activity.resume(ctx.clock.now());
@@ -242,6 +257,7 @@ export class StageLinkModule implements Module {
       AFFECT_CHANGED_TOPIC,
       SUBTITLE_TOPIC,
       GIFT_TOPIC,
+      TOUCH_TOPIC,
       SCREEN_TOPIC,
       SONG_TOPIC,
       SPEECH_PAUSE_TOPIC,
@@ -258,6 +274,7 @@ export class StageLinkModule implements Module {
       "voice.left",
       "voice.participants",
       "voice.utterance",
+      "platform.message.created",
     ]);
     ctx.spawn("forward", async (signal) => {
       // Follow the voice node's Go Live with OBS (see golive.ts). Timers are cleared on stop.
@@ -325,6 +342,12 @@ export class StageLinkModule implements Module {
 
       try {
         for await (const env of events) {
+          // Chat lines only count towards highlights (nothing of their text is used).
+          if (env.event.type === "platform_message_created") {
+            if (!env.event.data.author.is_bot) clip(highlights.message(ctx.clock.now()));
+            continue;
+          }
+          clip(highlights.onEvent(env.event, ctx.clock.now()));
           direct(director, env);
           activity.onEvent(env.event, ctx.clock.now());
           if (env.event.type === "custom" && env.event.data.topic === GAME_SESSION_TOPIC) continue;

@@ -4,7 +4,7 @@
 import { join, resolve } from "node:path";
 import { systemClock } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { paced, type SongMeta, songVideoPath } from "../src/index.js";
+import { paced, type SongMeta, SongMetaSchema, songBeats, songVideoPath } from "../src/index.js";
 
 describe("paced", () => {
   beforeEach(() => {
@@ -69,6 +69,16 @@ describe("paced", () => {
     await vi.advanceTimersByTimeAsync(10);
     await done;
     expect(got.length).toBe(3);
+  });
+});
+
+describe("songBeats", () => {
+  it("turns the worker's seconds into ms and drops a missing or broken beat", () => {
+    const base = { id: "yt-abc", play: { sample_rate: 48_000, samples: 10 } };
+    const withBeats = SongMetaSchema.parse({ ...base, beats: { bpm: 128, times: [0.5, 0.97] } });
+    expect(songBeats(withBeats)).toEqual({ bpm: 128, times_ms: [500, 970] });
+    expect(songBeats(SongMetaSchema.parse(base))).toBeNull();
+    expect(songBeats(SongMetaSchema.parse({ ...base, beats: "x" }))).toBeNull();
   });
 });
 

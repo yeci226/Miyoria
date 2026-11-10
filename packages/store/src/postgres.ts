@@ -77,11 +77,15 @@ import type {
   DealPatch,
   DealStatus,
   DecisionRecord,
+  DocFilter,
+  DocUpdate,
+  EconomyDoc,
   FortuneRecord,
   Goal,
   GoalPatch,
   GoalPledge,
   GoalStatus,
+  LedgerDayTotal,
   LogEntry,
   MemberCardRecord,
   MemoryFilter,
@@ -109,6 +113,7 @@ import type {
   DealStore,
   DecisionLog,
   DirectiveStore,
+  EconomyDocStore,
   FortuneStore,
   GoalStore,
   IdentityStore,
@@ -813,6 +818,27 @@ class PgCoins implements CoinLedgerStore {
     return rows.map((r) => ({
       account: { platform: str(r, "author_platform"), id: str(r, "author_id") },
       spent: num(r, "n"),
+    }));
+  }
+
+  async dailyTotals(
+    profile: ProfileId,
+    since: Timestamp,
+    offsetMinutes: number,
+  ): Promise<LedgerDayTotal[]> {
+    const rows = await this.db.query(
+      "SELECT floor((extract(epoch FROM ts) * 1000 + $3::bigint * 60000) / 86400000)::bigint " +
+        "AS day, reason, " +
+        "COALESCE(SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END), 0)::bigint AS positive, " +
+        "COALESCE(-SUM(CASE WHEN delta < 0 THEN delta ELSE 0 END), 0)::bigint AS negative " +
+        "FROM coin_ledger WHERE profile_id = $1 AND ts >= $2 GROUP BY 1, reason ORDER BY 1, reason",
+      [profile, tsParam(since), Math.round(offsetMinutes)],
+    );
+    return rows.map((r) => ({
+      day: num(r, "day"),
+      reason: str(r, "reason"),
+      positive: num(r, "positive"),
+      negative: num(r, "negative"),
     }));
   }
 }
@@ -1560,6 +1586,29 @@ class PgDecisionLog implements DecisionLog {
     }));
   }
 
+  async outcomesSince(profile: ProfileId, sinceTs: Timestamp): Promise<TurnOutcomeRecord[]> {
+    const rows = await this.db.query(
+      "SELECT record::text AS record FROM turn_outcomes WHERE profile_id = $1 AND ts >= $2 " +
+        'ORDER BY ts DESC, id COLLATE "C" DESC',
+      [profile, tsParam(sinceTs)],
+    );
+    return rows.map((r) => parseJson<TurnOutcomeRecord>(str(r, "record"), "turn outcome"));
+  }
+
+  async decisionsSince(profile: ProfileId, sinceTs: Timestamp): Promise<DecisionRecord[]> {
+    const rows = await this.db.query(
+      "SELECT id, ts, trace::text AS trace FROM decision_log WHERE profile_id = $1 AND " +
+        'ts >= $2 ORDER BY ts DESC, id COLLATE "C" DESC',
+      [profile, tsParam(sinceTs)],
+    );
+    return rows.map((r) => ({
+      id: str(r, "id"),
+      profile,
+      ts: ts(r, "ts"),
+      trace: parseJson<DecisionTrace>(str(r, "trace"), "decision trace"),
+    }));
+  }
+
   async appendOutcome(profile: ProfileId, record: TurnOutcomeRecord): Promise<void> {
     try {
       await this.db.execute(
@@ -1594,6 +1643,119 @@ class PgDecisionLog implements DecisionLog {
       [profile, context === null ? null : contextLookupKey(context), limitParam(limit)],
     );
     return rows.map((r) => parseJson<TurnOutcomeRecord>(str(r, "record"), "turn outcome"));
+  }
+}
+
+// ---- economy documents ---------------------------------------------------------------------
+
+const DOC_COLUMNS =
+  "profile_id, kind, id, owner_platform, owner_id, status, version, data::text AS data, " +
+  "created_at, updated_at";
+
+function docFromRow(row: Row): EconomyDoc {
+  const platform = optStr(row, "owner_platform");
+  const id = optStr(row, "owner_id");
+  return {
+    id: str(row, "id"),
+    profile: str(row, "profile_id"),
+    kind: str(row, "kind"),
+    owner: platform !== null && id !== null ? { platform, id } : null,
+    status: str(row, "status"),
+    version: num(row, "version"),
+    data: parseJson<JsonObject>(str(row, "data"), "economy document"),
+    created_at: ts(row, "created_at"),
+    updated_at: ts(row, "updated_at"),
+  };
+}
+
+class PgEconomyDocs implements EconomyDocStore {
+  constructor(private readonly db: Pg) {}
+
+  async create(doc: EconomyDoc): Promise<boolean> {
+    try {
+      const changed = await this.db.execute(
+        "INSERT INTO economy_docs (profile_id, kind, id, owner_platform, owner_id, status, " +
+          "version, data, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, " +
+          "$8::jsonb, $9, $10) ON CONFLICT DO NOTHING",
+        [
+          doc.profile,
+          doc.kind,
+          doc.id,
+          doc.owner?.platform ?? null,
+          doc.owner?.id ?? null,
+          doc.status,
+          doc.version,
+          JSON.stringify(doc.data),
+          tsParam(doc.created_at),
+          tsParam(doc.updated_at),
+        ],
+      );
+      return changed > 0;
+    } catch (cause) {
+      throw new StoreError("cannot write the economy document", { cause });
+    }
+  }
+
+  async get(profile: ProfileId, kind: string, id: string): Promise<EconomyDoc | null> {
+    const rows = await this.db.query(
+      `SELECT ${DOC_COLUMNS} FROM economy_docs WHERE profile_id = $1 AND kind = $2 AND id = $3`,
+      [profile, kind, id],
+    );
+    return rows[0] ? docFromRow(rows[0]) : null;
+  }
+
+  async update(
+    profile: ProfileId,
+    kind: string,
+    id: string,
+    expected: number,
+    next: DocUpdate,
+  ): Promise<boolean> {
+    const params: unknown[] = [
+      profile,
+      kind,
+      id,
+      expected,
+      next.status,
+      JSON.stringify(next.data),
+      tsParam(next.at),
+    ];
+    let owner = "";
+    if (next.owner !== undefined) {
+      params.push(next.owner?.platform ?? null, next.owner?.id ?? null);
+      owner = `, owner_platform = $${params.length - 1}, owner_id = $${params.length}`;
+    }
+    try {
+      const changed = await this.db.execute(
+        "UPDATE economy_docs SET status = $5, data = $6::jsonb, version = version + 1, " +
+          `updated_at = $7${owner} WHERE profile_id = $1 AND kind = $2 AND id = $3 AND ` +
+          "version = $4",
+        params,
+      );
+      return changed > 0;
+    } catch (cause) {
+      throw new StoreError("cannot update the economy document", { cause });
+    }
+  }
+
+  async list(profile: ProfileId, kind: string, filter: DocFilter): Promise<EconomyDoc[]> {
+    if (filter.statuses?.length === 0 || filter.owners?.length === 0) return [];
+    const params: unknown[] = [profile, kind, limitParam(filter.limit)];
+    let where = "profile_id = $1 AND kind = $2";
+    if (filter.statuses) where += ` AND ${statusIn(filter.statuses, params)}`;
+    if (filter.owners) {
+      const who = filter.owners.map((a) => {
+        params.push(a.platform, a.id);
+        return `(owner_platform = $${params.length - 1} AND owner_id = $${params.length})`;
+      });
+      where += ` AND (${who.join(" OR ")})`;
+    }
+    const rows = await this.db.query(
+      `SELECT ${DOC_COLUMNS} FROM economy_docs WHERE ${where} ` +
+        'ORDER BY created_at DESC, id COLLATE "C" DESC LIMIT $3',
+      params,
+    );
+    return rows.map(docFromRow);
   }
 }
 
@@ -2400,6 +2562,7 @@ export class PostgresStore implements Store {
   readonly fortunes: FortuneStore;
   readonly goals: GoalStore;
   readonly bounties: BountyStore;
+  readonly economyDocs: EconomyDocStore;
   readonly #pool: pg.Pool;
   #closed = false;
 
@@ -2424,6 +2587,7 @@ export class PostgresStore implements Store {
     this.fortunes = new PgFortunes(db);
     this.goals = new PgGoals(db);
     this.bounties = new PgBounties(db);
+    this.economyDocs = new PgEconomyDocs(db);
   }
 
   /** Connects and runs pending migrations. */

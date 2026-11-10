@@ -25,6 +25,7 @@ import {
   VOICE_ADDRESSED,
   VOICE_INITIATIVE,
 } from "../src/index.js";
+import { ONE_THOUGHT_RULE } from "../src/prompt.js";
 import { entry } from "./fixtures.js";
 
 const utc = (y: number, mo: number, d: number, h: number, mi: number) =>
@@ -79,7 +80,7 @@ describe("prompt", () => {
     const rules = rulesPrompt(false);
     expect(rules).toBe(RULES);
     expect(rules).toContain(GUARD_RULES);
-    for (const rule of ["<silence/>", "<emo:名稱>", "一到三句"]) {
+    for (const rule of ["<silence/>", "<emo:名稱>", "長短跟著當下走"]) {
       expect(rules.split(rule).length - 1, rule).toBe(1);
     }
   });
@@ -106,7 +107,7 @@ describe("prompt", () => {
     expect(s).toContain(VOICE_ADDRESSED);
     expect(s).not.toContain(ADDRESSED);
     const rules = rulesPrompt(true);
-    expect(rules).toContain("一到兩句");
+    expect(rules).toContain("有人在聽");
     expect(rules).toContain("emoji");
     expect(rules).toContain("<emo:名稱>");
     expect(rules).not.toContain("<voice>");
@@ -158,7 +159,9 @@ describe("prompt", () => {
     const last = msgs[2]?.content as string;
     expect(last.startsWith("DATA\n\n")).toBe(true);
     expect(
-      last.endsWith(`${FOCUS_HEAD}\nSakana 問你:@Miyoria 要怎麼攻略你?\nSakana 接著說:認真的`),
+      last.endsWith(
+        `${FOCUS_HEAD}\nSakana 問你:@Miyoria 要怎麼攻略你?\nSakana 接著說:認真的\n${ONE_THOUGHT_RULE}`,
+      ),
     ).toBe(true);
     expect(last).not.toContain("永遠不會忘記");
     // Without data the repeated message is its own block; without a current message, nothing.

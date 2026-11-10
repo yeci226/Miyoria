@@ -99,8 +99,11 @@ export class SandboxModule implements Module {
       tools,
       resultChars: config.result_chars,
       toolTimeoutMs: config.tool_timeout_ms,
+      readChars: config.workspace.read_chars,
+      keepOutputs: config.workspace.keep_outputs,
     });
     this.#gate = gate;
+    gate.offerWorkspace();
     this.#removeStatus = registry.addStatus(SandboxModule.ID, () =>
       gate.statusLines(sandbox.lastHealth),
     );

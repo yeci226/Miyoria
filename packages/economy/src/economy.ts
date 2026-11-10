@@ -58,6 +58,7 @@ import { setBoard, sponsorBoard } from "./board.js";
 import { BountyBoard } from "./bounties.js";
 import type { EconomyConfig } from "./config.js";
 import { DealDesk } from "./deals.js";
+import { type EconomyDocStore, EconomyDocsKey, MemoryDocs } from "./docs.js";
 import { GoalDesk } from "./goals.js";
 import { Purse } from "./purse.js";
 import { MAX_SCREEN_CHARS, screenEvent, screenText, screenWait, waitMinutes } from "./screen.js";
@@ -96,6 +97,7 @@ import {
   type WalletExport,
   type WalletView,
 } from "./types.js";
+import { labelV2, V2 } from "./v2.js";
 
 export const STRANGER = "她還不認識你,先和她說說話吧";
 /** Permission node of a wallet (`me.*`): a role without it, like `blocked`, has a stranger's. */
@@ -252,6 +254,8 @@ export interface EconomyDeps {
   clock: Clock;
   publish: (event: Event) => void;
   log: Logger;
+  /** A number in [0, 1) for draws; `Math.random` unless a test pins it. */
+  random?: () => number;
 }
 
 export class EconomyService implements Economy {
@@ -263,6 +267,10 @@ export class EconomyService implements Economy {
   readonly purse: Purse;
   readonly goalDesk: GoalDesk;
   readonly bountyDesk: BountyBoard;
+  /** Economy 2.0 (docs/design/v4-plan.md §10): play, quests, collection, predictions, ... */
+  readonly v2: V2;
+  /** Used when no store provides `EconomyDocsKey` (what is kept there is gone on restart). */
+  #fallbackDocs: MemoryDocs | null = null;
 
   constructor(deps: EconomyDeps) {
     this.#d = deps;
@@ -270,6 +278,95 @@ export class EconomyService implements Economy {
     this.purse = new Purse(this);
     this.goalDesk = new GoalDesk(this);
     this.bountyDesk = new BountyBoard(this);
+    this.v2 = new V2(this);
+  }
+
+  // ---- what economy 2.0 uses ---------------------------------------------------------------
+
+  /** Whether the documents (collection, bets, commissions, room) outlive a restart. */
+  get docsAreDurable(): boolean {
+    return this.#d.services.get(EconomyDocsKey) !== undefined;
+  }
+
+  /** The document store: the real one, else an in-memory one. */
+  docs(): EconomyDocStore {
+    const real = this.#d.services.get(EconomyDocsKey);
+    if (real) return real;
+    this.#fallbackDocs ??= new MemoryDocs();
+    return this.#fallbackDocs;
+  }
+
+  random(): number {
+    return (this.#d.random ?? Math.random)();
+  }
+
+  /** The local day number of now. */
+  today(): number {
+    return this.#today();
+  }
+
+  /** Where the local day `day` starts. */
+  dayStart(day: number): Timestamp {
+    return this.#dayStart(day);
+  }
+
+  /** A ledger row for `who` (not posted). */
+  entryFor(
+    who: Member,
+    delta: number,
+    reason: string,
+    ref: string | null,
+    key: string | null,
+  ): CoinEntry {
+    return this.#entry(who, delta, reason, ref, key);
+  }
+
+  /** Someone she knows, blocked or not (what is owed to them is still theirs). */
+  holder(account: AccountRef): Promise<Member> {
+    return this.#holder(account);
+  }
+
+  /**
+   * Coins earned for taking part in something, within a daily cap summed over `cap.reasons`. Run it
+   * inside `serial` together with whatever count it depends on. `capped` posts nothing.
+   */
+  async faucet(
+    who: Member,
+    reason: string,
+    amount: number,
+    key: string,
+    ref: string | null,
+    cap: { reasons: readonly string[]; limit: number },
+    partial: boolean,
+  ): Promise<{ status: "paid" | "duplicate" | "capped"; entry: CoinEntry | null; paid: number }> {
+    if (amount <= 0) return { status: "capped", entry: null, paid: 0 };
+    const caps: CoinCap[] = [
+      {
+        accounts: who.wallet,
+        reasons: cap.reasons,
+        since: this.#dayStart(this.#today()),
+        limit: cap.limit,
+      },
+    ];
+    const post = await this.#ledger().post(this.#entry(who, amount, reason, ref, key), {
+      wallet: who.wallet,
+      caps,
+      partial,
+    });
+    if (post.status === "posted")
+      return { status: "paid", entry: post.entry, paid: post.entry.delta };
+    if (post.status === "duplicate") return { status: "duplicate", entry: post.entry, paid: 0 };
+    return { status: "capped", entry: null, paid: 0 };
+  }
+
+  /** The first row of this wallet under `key`, or `null`. */
+  byKey(who: Member, key: string): Promise<CoinEntry | null> {
+    return this.#ledger().byKey(this.#d.profile, who.wallet, key);
+  }
+
+  /** Today's rows of the wallet (what the caps count). */
+  rowsToday(who: Member): Promise<CoinEntry[]> {
+    return this.#todayRows(who);
   }
 
   get config(): EconomyConfig {
@@ -612,7 +709,7 @@ export class EconomyService implements Economy {
       case "checkin":
         return r.delta > c.checkin ? "每日簽到(連續 7 天)" : EARN_LABEL.checkin;
       default:
-        return EARN_LABEL[r.reason as EarnReason] ?? r.reason;
+        return labelV2(r, c) ?? EARN_LABEL[r.reason as EarnReason] ?? r.reason;
     }
   }
 
@@ -805,7 +902,7 @@ export class EconomyService implements Economy {
   async checkin(account: AccountRef): Promise<CheckinResult> {
     const who = await this.#known(account);
     const c = this.#d.config;
-    return this.#turns.run(async () => {
+    const done = await this.#turns.run(async () => {
       const day = this.#today();
       const days = await this.#checkinDays(who);
       if (days.has(day)) throw new EconomyError(409, ALREADY_CHECKED_IN);
@@ -824,6 +921,8 @@ export class EconomyService implements Economy {
       if (post.status !== "posted") throw new EconomyError(409, ALREADY_CHECKED_IN);
       return { gained, streak, balance: post.balance };
     });
+    await this.v2.afterEarn(who);
+    return done;
   }
 
   /**
@@ -934,6 +1033,7 @@ export class EconomyService implements Economy {
       await this.deals.paid(who).catch((error: unknown) => {
         this.#d.log.warn({ err: errorMessage(error) }, "cannot check a deal against a feed");
       });
+      await this.v2.afterEarn(who);
     }
     return {
       accepted: true,

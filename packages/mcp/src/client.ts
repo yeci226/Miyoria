@@ -19,7 +19,14 @@ import {
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { ServerConfig } from "./config.js";
-import { flattenResult, registryName, ToolFilter, truncateChars } from "./policy.js";
+import {
+  flattenResult,
+  frameResult,
+  registryName,
+  stdioEnv,
+  ToolFilter,
+  truncateChars,
+} from "./policy.js";
 import type { McpStatus } from "./status.js";
 
 const log = getLogger("mcp.client");
@@ -105,7 +112,11 @@ class McpTool implements Tool {
         { cause: error },
       );
     }
-    const text = truncateChars(flattenResult(result), this.maxResultChars);
+    const text = frameResult(
+      this.server,
+      this.remoteName,
+      truncateChars(flattenResult(result), this.maxResultChars),
+    );
     if (result.isError === true) throw new McpToolError(text);
     return text;
   }
@@ -454,9 +465,8 @@ async function connect(
     if (whichCommand(command) === null) {
       throw new McpConnectionError(`cannot start \`${command}\`: program not found`);
     }
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
-    Object.assign(env, config.env);
+    // Not the whole host environment: it holds the Discord and LLM tokens.
+    const env = stdioEnv(process.env, config.env_pass, config.env);
     const transport = new StdioClientTransport({
       command,
       args: config.args,

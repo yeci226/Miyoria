@@ -62,6 +62,8 @@ export class FakeRunner implements DockerRunner {
   readonly running = new Set<string>();
   /** Every container started with `docker run -d`, by name, with its args. */
   readonly started = new Map<string, string[]>();
+  /** Docker networks created and not removed. */
+  readonly networks = new Set<string>();
   /** Programs run per pooled container name. */
   readonly programs = new Map<string, number>();
   /** Ends a waiting pooled container's CLI, by name. */
@@ -173,6 +175,20 @@ export class FakeRunner implements DockerRunner {
       const name = args[args.length - 1] as string;
       this.running.delete(name);
       this.#kill(name);
+      return result();
+    }
+    if (command === "network") {
+      const [, sub] = args;
+      const name = args.at(-1) as string;
+      if (sub === "inspect") return this.networks.has(name) ? result() : result({ exit_code: 1 });
+      if (sub === "create") {
+        this.networks.add(name);
+        return result();
+      }
+      if (sub === "rm") {
+        this.networks.delete(name);
+        return result();
+      }
       return result();
     }
     if (command === "version") {

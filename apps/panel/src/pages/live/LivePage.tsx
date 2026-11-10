@@ -3,6 +3,7 @@ import { Page, PageHeader } from "@/components/page";
 import { StatusBadge } from "@/components/status";
 import { ChannelLevelsCard } from "./ChannelLevelsCard";
 import { GameCard } from "./GameCard";
+import { PartyCard } from "./PartyCard";
 import { QueueCard } from "./QueueCard";
 import { SayCard } from "./SayCard";
 import { SceneRolesCard } from "./SceneRolesCard";
@@ -46,6 +47,7 @@ export function LivePage() {
       <StageCard />
       <SongsCard />
       <QueueCard />
+      <PartyCard />
       <SceneRolesCard />
     </Page>
   );

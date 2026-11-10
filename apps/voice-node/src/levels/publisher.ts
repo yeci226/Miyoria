@@ -72,7 +72,9 @@ type TapState = "active" | "ended" | "closed";
 export class LevelTap {
   private state: TapState = "active";
   private origin: number | undefined;
-  private readonly pending = new Set<{ cancel(): void }>();
+  /** Points waiting for their time, in timeline order; one timer waits for the first. */
+  private readonly queue: LevelPoint[] = [];
+  private timer: { cancel(): void } | undefined;
 
   constructor(
     private readonly sink: LevelSink,
@@ -118,8 +120,9 @@ export class LevelTap {
 
   private drop(): void {
     this.state = "closed";
-    for (const p of this.pending) p.cancel();
-    this.pending.clear();
+    this.timer?.cancel();
+    this.timer = undefined;
+    this.queue.length = 0;
   }
 
   private emit(points: LevelPoint[]): void {
@@ -132,26 +135,44 @@ export class LevelTap {
     for (const p of points) this.at(p.t, p);
   }
 
-  /** Sends `point` when the wall clock reaches origin + t. */
+  /**
+   * Sends `point` when the wall clock reaches origin + t, after every point queued before it: a
+   * point already due never overtakes one still waiting for its timer.
+   */
   private at(t: number, point: LevelPoint): void {
-    const origin = this.origin ?? this.now() - t;
-    this.origin ??= origin;
-    const wait = origin + t - this.now();
-    if (wait <= 0) {
-      this.fire(point);
-      return;
+    this.origin ??= this.now() - t;
+    this.queue.push(point);
+    this.pump();
+  }
+
+  /** Sends the queued points that are due, in order, and waits for the next one. */
+  private pump(): void {
+    if (this.timer !== undefined) return;
+    while (this.queue.length > 0) {
+      const head = this.queue[0] as LevelPoint;
+      const wait = (this.origin ?? 0) + head.t - this.now();
+      if (wait > 0) {
+        this.timer = this.schedule(() => {
+          this.timer = undefined;
+          this.pump();
+        }, wait);
+        return;
+      }
+      this.queue.shift();
+      this.fire(head);
+      if (this.state === "closed") return;
     }
-    const h = this.schedule(() => {
-      this.pending.delete(h);
-      this.fire(point);
-    }, wait);
-    this.pending.add(h);
   }
 
   private fire(point: LevelPoint): void {
     if (this.state === "closed") return;
     this.sink.send(point);
-    if (this.state === "ended" && this.pending.size === 0 && point.rms === 0 && point.t >= this.framer.positionMs) {
+    if (
+      this.state === "ended" &&
+      this.queue.length === 0 &&
+      point.rms === 0 &&
+      point.t >= this.framer.positionMs
+    ) {
       this.state = "closed";
       this.onClosed(this);
     }

@@ -43,6 +43,7 @@ import {
 import {
   type AccountRef,
   type Clock,
+  NotebookKey,
   newId,
   type PersonId,
   type ProfileId,
@@ -112,7 +113,7 @@ export function wipeModules(scope: WipeScope): string[] {
 
 /** What `me memory forget` removes, said before it is asked and again after it is done. */
 export const FORGET_REMOVES =
-  "會刪除：關於你的記憶、你告訴她的事，以及從你說過的話整理出來的記憶（經歷、事實、她的筆記）。";
+  "會刪除：關於你的記憶、你告訴她的事，以及從你說過的話整理出來的記憶（經歷、事實、她的筆記）；全部忘記時，她筆記本裡關於你的頁面也一起刪除。";
 /** What it leaves, and why. */
 export const FORGET_KEEPS =
   "不會刪除：聊天紀錄和事件紀錄（那是整理記憶的證據，只有擁有者能用 /admin memory wipe 清除）、她對你的好感與印象，以及和你無關、也不是從你的話整理出來的記憶。之後你再說起同樣的事，她可能會重新記下來。";
@@ -243,7 +244,11 @@ class Handler {
   async forget(inv: Invocation, keyword: string | null): Promise<CommandReply> {
     const person = await this.engine.personOf(inv.invoker);
     const report = await this.engine.forget(person, inv.invoker, keyword);
-    const n = report.deleted;
+    // Her notebook pages about them go with "all" (a keyword names memories, not pages).
+    const notebook = this.deps.services.get(NotebookKey);
+    const pages =
+      keyword === null && person !== null && notebook ? await notebook.forgetPerson(person) : 0;
+    const n = report.deleted + pages;
     // Said as it is: what went, how much of it was not about the person themselves, what stayed.
     const detail = [forgetBreakdown(report), FORGET_KEEPS].filter((t) => t !== "").join("\n");
     if (keyword === null) {

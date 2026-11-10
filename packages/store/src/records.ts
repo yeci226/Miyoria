@@ -193,6 +193,57 @@ export interface DealPatch {
   closed_at?: Timestamp | null;
 }
 
+// ---- economy documents ------------------------------------------------------------------
+
+/**
+ * One document of economy 2.0 (docs/design/v4-plan.md §10): a collection item, a prediction and
+ * its bets, a commission, what the audience funded of her room. Coins are never kept here; every
+ * balance change is a row of the coin ledger.
+ */
+export interface EconomyDoc {
+  /** ULID, or a deterministic id that makes `create` idempotent (a card trait: `card:<n>:<trait>`). */
+  id: string;
+  profile: ProfileId;
+  /** `item`, `prediction`, `bet`, `commission`, `room`. */
+  kind: string;
+  /** Who it belongs to; `null` for what belongs to nobody in particular (a prediction, a room item). */
+  owner: AccountRef | null;
+  /** Kind-specific state word (`open`, `held`, `unlocked`, ...). */
+  status: string;
+  /** Starts at 1; `update` bumps it. */
+  version: number;
+  data: JsonObject;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface DocFilter {
+  /** Only documents owned by one of these accounts. */
+  owners?: readonly AccountRef[];
+  statuses?: readonly string[];
+  limit: number;
+}
+
+/** What `EconomyDocStore.update` writes. */
+export interface DocUpdate {
+  status: string;
+  data: JsonObject;
+  /** Replaces the owner when given (`null` included). */
+  owner?: AccountRef | null;
+  at: Timestamp;
+}
+
+/** Coins of one reason on one local day, from the ledger, all wallets. */
+export interface LedgerDayTotal {
+  /** The local day number: `floor((epoch_ms + offset) / 86_400_000)`. */
+  day: number;
+  reason: string;
+  /** The sum of the rows with `delta > 0`. */
+  positive: number;
+  /** The sum of the rows with `delta < 0`, as a positive number. */
+  negative: number;
+}
+
 // ---- goals and bounties -----------------------------------------------------------------
 
 /**

@@ -16,9 +16,11 @@ export {
   defaultActivityConfig,
 } from "./config.js";
 export {
+  BROWSE_CAPABILITIES,
   FACT_TOPICS,
   Facts,
   GAME_SESSION_TOPIC,
+  GATE_DECISION_TOPIC,
   GOLIVE_TOPIC,
   type GoLiveState,
   type SessionEnd,

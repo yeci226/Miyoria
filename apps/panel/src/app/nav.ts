@@ -1,6 +1,8 @@
 import {
   Activity,
+  CalendarClock,
   Clapperboard,
+  Coins,
   Cpu,
   Database,
   Gauge,
@@ -20,6 +22,8 @@ export type NavPath =
   | "/live"
   | "/character"
   | "/inner"
+  | "/life"
+  | "/economy"
   | "/rules"
   | "/llm"
   | "/eval"
@@ -49,7 +53,24 @@ export const ACTIVITY_TABS = [
 export const CHARACTER_TABS = [
   { tab: "persona", label: "Persona" },
   { tab: "memory", label: "記憶" },
+  { tab: "notebook", label: "筆記本" },
+  { tab: "recent", label: "剛才" },
   { tab: "people", label: "人" },
+] as const;
+
+export const LIFE_TABS = [
+  { tab: "today", label: "今天" },
+  { tab: "reminders", label: "提醒" },
+  { tab: "activities", label: "能做的事" },
+  { tab: "skills", label: "技能" },
+  { tab: "workspace", label: "工作區" },
+] as const;
+
+export const ECONOMY_TABS = [
+  { tab: "health", label: "健康度" },
+  { tab: "commissions", label: "委託" },
+  { tab: "predictions", label: "預測" },
+  { tab: "room", label: "房間" },
 ] as const;
 
 export const INNER_TABS = [
@@ -77,6 +98,8 @@ export const SYSTEM_TABS = [
 
 export type ActivityTab = (typeof ACTIVITY_TABS)[number]["tab"];
 export type CharacterTab = (typeof CHARACTER_TABS)[number]["tab"];
+export type LifeTab = (typeof LIFE_TABS)[number]["tab"];
+export type EconomyTab = (typeof ECONOMY_TABS)[number]["tab"];
 export type SystemTab = (typeof SYSTEM_TABS)[number]["tab"];
 export type InnerTab = (typeof INNER_TABS)[number]["tab"];
 export type LlmTab = (typeof LLM_TABS)[number]["tab"];
@@ -96,6 +119,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { to: "/inner", label: "內心", icon: HeartPulse, tabs: [...INNER_TABS] },
       { to: "/character", label: "角色", icon: UserRound, tabs: [...CHARACTER_TABS] },
+      { to: "/life", label: "生活", icon: CalendarClock, tabs: [...LIFE_TABS] },
       { to: "/rules", label: "規則", icon: Shield },
     ],
   },
@@ -104,6 +128,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { to: "/llm", label: "LLM", icon: Cpu, tabs: [...LLM_TABS] },
       { to: "/system", label: "系統", icon: Server, tabs: [...SYSTEM_TABS] },
+      { to: "/economy", label: "經濟", icon: Coins, tabs: [...ECONOMY_TABS] },
       { to: "/eval", label: "評測", icon: Target },
     ],
   },

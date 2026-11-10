@@ -173,8 +173,10 @@ describe("protocol", () => {
 
 describe("config", () => {
   it("defaults_match_legacy", () => {
-    const { scenes, ...legacy } = StageLinkConfigSchema.parse({});
+    // The scene director and the highlights are sections of their own, not legacy fields.
+    const { scenes, highlights, ...legacy } = StageLinkConfigSchema.parse({});
     expect(scenes).toMatchObject({ director: true, classify_purpose: "fast", roles: {} });
+    expect(highlights).toMatchObject({ enabled: true, song_finished: true, cooldown_secs: 90 });
     expect(legacy).toStrictEqual({
       bind: "127.0.0.1:7882",
       token: "",
@@ -221,6 +223,7 @@ describe("config", () => {
       song_video_dir: "data/songs",
       song_video_lead_ms: 0,
       song_video_resync_ms: 300,
+      replay_buffer: true,
     });
     expect(c.lipsync).toStrictEqual(defaultLipSyncConfig());
     expect(c.lipsync.bind).toBe("127.0.0.1:7883");
@@ -529,6 +532,54 @@ describe("motion", () => {
     // About `body_follow` (0.35) of the head.
     expect(v.MiyoriaBodyX / v.FaceAngleX).toBeGreaterThan(0.2);
     expect(v.MiyoriaBodyX / v.FaceAngleX).toBeLessThan(0.5);
+  });
+
+  it("sways_side_to_side_and_nods_on_the_beat_of_a_song", () => {
+    const still = { idle_amount: 1 };
+    const cfg = MotionConfigSchema.parse({
+      drift_x: 0,
+      drift_y: 0,
+      drift_z: 0,
+      body_drift: 0,
+      saccade_amount: 0,
+      glance_amount: 0,
+      beat_sway_deg: 6,
+      beat_nod_deg: 3,
+    });
+    const m = new IdleMotion(GazeConfigSchema.parse(still), cfg, new Random(3));
+    // 120 BPM, starting half a second in.
+    const times = Array.from({ length: 16 }, (_, i) => 500 + i * 500);
+    m.setBeat(times, 0);
+    expect(m.beating()).toBe(true);
+    const sides: number[] = [];
+    let nod = 0;
+    for (let t = 0; t < 4_000; t += TICK) {
+      const v = m.update(TICK);
+      nod = Math.min(nod, v.FaceAngleY);
+      // Just before each beat the sway has settled on one side.
+      if (times.some((b) => b - t > 0 && b - t <= TICK)) sides.push(Math.sign(v.MiyoriaBodyZ));
+    }
+    expect(nod).toBeLessThan(-1);
+    const settled = sides.slice(1).filter((s) => s !== 0);
+    expect(settled.length).toBeGreaterThan(4);
+    for (let i = 1; i < settled.length; i++) expect(settled[i]).toBe(-(settled[i - 1] as number));
+    // Stopped: the sway settles back.
+    m.setBeat([], 0);
+    let v = m.update(TICK);
+    for (let i = 0; i < 200; i++) v = m.update(TICK);
+    expect(Math.abs(v.MiyoriaBodyZ)).toBeLessThan(0.5);
+    expect(m.beating()).toBe(false);
+  });
+
+  it("the_beat_ends_on_its_own_after_the_last_one", () => {
+    const m = new IdleMotion(
+      GazeConfigSchema.parse({}),
+      MotionConfigSchema.parse({}),
+      new Random(1),
+    );
+    m.setBeat([100, 600], 0);
+    for (let t = 0; t < 3_000; t += TICK) m.update(TICK);
+    expect(m.beating()).toBe(false);
   });
 });
 

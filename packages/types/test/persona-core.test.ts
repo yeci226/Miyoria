@@ -15,7 +15,7 @@ describe("characterCore", () => {
     const lines = core.split("\n");
     expect(lines.length).toBeGreaterThanOrEqual(3);
     expect(lines.length).toBeLessThanOrEqual(5);
-    expect(lines[0]).toBe("你是 DeepSeek 小鯨魚");
+    expect(lines[0]).toBe("你是 DeepSeek-chan");
     expect([...core].length).toBeLessThanOrEqual(CORE_CHARS + 1);
     expect(core).not.toMatch(/silence|<emo|^#/m);
   });

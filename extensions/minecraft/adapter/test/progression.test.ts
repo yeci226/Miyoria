@@ -131,7 +131,7 @@ describe("mod errors", () => {
       '看得到的鐵礦在 14 格外(10, -5, 3),先 goto {"block":"iron_ore"} 走過去再做',
     );
     expect(errorText("missing_items", "missing stick x2, oak_planks+ x3; also needs a crafting_table within reach")).toBe(
-      "材料不夠:還缺 木棒×2、橡木材(或同類)×3,而且要站在工作台旁邊做",
+      "材料不夠:還缺 木棒 stick×2、橡木材 oak_planks(或同類)×3,而且要站在工作台旁邊做",
     );
     expect(errorText("missing_items", "missing fuel x1")).toContain("燃料(煤炭、木炭、木材或原木)");
     expect(errorText("needs_station", "needs a crafting_table within reach; none in sight")).toContain(
@@ -204,7 +204,7 @@ describe("guide", () => {
   it("rides along with the executor's goals", () => {
     const b = new BridgeClient({ endpoint: () => ({ url: "ws://127.0.0.1:1", token: "x" }) });
     const info = new MinecraftAdapter(b).describe();
-    for (const step of ["crafting_table", "wooden_pickaxe", "stone_pickaxe", "furnace", "raw_iron", "鐵鎬", "天黑前"]) {
+    for (const step of ["crafting_table", "wooden_pickaxe", "stone_pickaxe", "furnace", "raw_iron", "鐵鎬", "天黑時", "cooked_beef"]) {
       expect(info.guide, step).toContain(step);
     }
     const description = describeActions(info);

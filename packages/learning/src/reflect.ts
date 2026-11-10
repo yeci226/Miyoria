@@ -228,6 +228,10 @@ const short = (s: string, max: number) => {
   return c.length > max ? `${c.slice(0, max).join("")}…` : c.join("");
 };
 
+/** How often a day's reflection is tried, and the wait between two tries. */
+const DAILY_TRIES = 3;
+const DAILY_RETRY_MS = 30 * MINUTE_MS;
+
 export class Reflector {
   readonly #d: ReflectDeps;
   readonly #handles: HandleDirectory;
@@ -237,6 +241,8 @@ export class Reflector {
   #lastDaily: string | null = null;
   #lastDailyAt: string | null = null;
   #lastLightAt: string | null = null;
+  /** Daily reflections that failed on `day`, and when the next try may start. */
+  #dailyFailed: { day: string; times: number; retryAt: number } | null = null;
   /** People whose bond she already adjusted today (local day). */
   #bondsDay: string | null = null;
   #bondsToday = new Set<PersonId>();
@@ -333,10 +339,12 @@ export class Reflector {
     const cfg = this.#d.config;
     const { day, hour } = localParts(now, cfg.utc_offset_minutes);
     const quiet = now - this.#lastLineMs >= cfg.quiet_mins * MINUTE_MS;
+    const failed = this.#dailyFailed?.day === day ? this.#dailyFailed : null;
     if (
       this.#lastDaily !== day &&
       hour >= cfg.daily_hour &&
-      (quiet || hour >= cfg.daily_hour + 6)
+      (quiet || hour >= cfg.daily_hour + 6) &&
+      (failed === null || now >= failed.retryAt)
     ) {
       return { kind: "daily" };
     }
@@ -387,11 +395,21 @@ export class Reflector {
       tokens: null,
       ms: 0,
     };
+    // The day is marked before the call, so a crash in it is no loop. A call that fails or is cut
+    // off takes the mark back: the day used to go without its reflection for one provider error.
+    const day = localParts(started, d.config.utc_offset_minutes).day;
+    const before = { day: this.#lastDaily, at: this.#lastDailyAt };
+    const unmarkDaily = (): void => {
+      if (kind !== "daily") return;
+      this.#lastDaily = before.day;
+      this.#lastDailyAt = before.at;
+      this.#saveState();
+    };
     try {
       this.cap.record(started);
       this.#linesSince = 0;
       if (kind === "daily") {
-        this.#lastDaily = localParts(started, d.config.utc_offset_minutes).day;
+        this.#lastDaily = day;
         this.#lastDailyAt = run.at;
       } else this.#lastLightAt = run.at;
       this.#saveState();
@@ -419,10 +437,20 @@ export class Reflector {
       );
       run.tokens = result.tokens;
       await this.#apply(result.value, input, kind, context, run);
+      if (kind === "daily") this.#dailyFailed = null;
     } catch (error) {
-      if (signal?.aborted) return null;
+      if (signal?.aborted) {
+        unmarkDaily();
+        return null;
+      }
       run.error = errorMessage(error);
       log.warn({ err: run.error, kind }, "her reflection failed");
+      if (kind === "daily") {
+        const times = (this.#dailyFailed?.day === day ? this.#dailyFailed.times : 0) + 1;
+        this.#dailyFailed = { day, times, retryAt: d.clock.now() + DAILY_RETRY_MS };
+        // After the last try the mark stays: tomorrow's covers today.
+        if (times < DAILY_TRIES) unmarkDaily();
+      }
     } finally {
       this.#running = false;
     }

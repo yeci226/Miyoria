@@ -39,9 +39,10 @@ function categories(registry: CommandRegistry, specs: readonly CommandSpec[]): C
   );
 }
 
-function usage(spec: CommandSpec): string {
+/** `shown` is the path people type (Discord regroups some commands, see `SLASH_REGROUP`). */
+function usage(spec: CommandSpec, shown: readonly string[]): string {
   const args = spec.args.map((a) => (a.required ? `<${a.name}>` : `[${a.name}]`)).join(" ");
-  return `\`/${spec.path.join(" ")}${args === "" ? "" : ` ${args}`}\``;
+  return `\`/${shown.join(" ")}${args === "" ? "" : ` ${args}`}\``;
 }
 
 function selectBlock(list: readonly Category[], current: string | null): CardBlock {
@@ -80,10 +81,16 @@ function overview(list: readonly Category[]): CommandReply {
   );
 }
 
-function categoryPage(list: readonly Category[], name: string): CommandReply {
+function categoryPage(
+  registry: CommandRegistry,
+  list: readonly Category[],
+  name: string,
+): CommandReply {
   const category = list.find((c) => c.name === name);
   if (!category) return overview(list);
-  const lines = category.specs.map((s) => `${usage(s)}\n-# ${s.description}`);
+  const lines = category.specs.map(
+    (s) => `${usage(s, registry.slashPath(s.path))}\n-# ${s.description}`,
+  );
   return cardReply(
     [
       { type: "text", text: `${category.description}\n\n${lines.join("\n")}` },
@@ -116,7 +123,7 @@ export function registerHelp(registry: CommandRegistry): void {
         {
           route: R.category,
           handle: async (inv: ComponentInvocation) =>
-            ComponentResult.update(categoryPage(await list(inv), inv.values[0] ?? "")),
+            ComponentResult.update(categoryPage(registry, await list(inv), inv.values[0] ?? "")),
         },
       ],
     },

@@ -146,6 +146,20 @@ export function startDemo(emit: (m: FeedMessage) => void): () => void {
     setQueue([next, ...queue, { title: SONGS[n % SONGS.length] as string, by: "Mia" }]);
   };
 
+  // Viewers touching the stream: now and then a little burst around her head, face and body, and
+  // one on the plain picture (the demo has no picture; the places are where she stands in `sing`).
+  const SPOTS: [x: number, y: number, part: "head" | "face" | "body" | "screen"][] = [
+    [0.72, 0.22, "head"],
+    [0.74, 0.3, "face"],
+    [0.76, 0.62, "body"],
+    [0.3, 0.45, "screen"],
+  ];
+  const touches = setInterval(() => {
+    const [x, y, part] = SPOTS[Math.floor(Math.random() * SPOTS.length)] as (typeof SPOTS)[number];
+    const jitter = () => (Math.random() - 0.5) * 0.04;
+    emit({ type: "touch", x: Math.min(Math.max(x + jitter(), 0), 1), y: Math.min(Math.max(y + jitter(), 0), 1), part });
+  }, 900);
+
   void (async () => {
     status("Game");
     setQueue(queue);
@@ -173,6 +187,7 @@ export function startDemo(emit: (m: FeedMessage) => void): () => void {
   return () => {
     stopped = true;
     clearInterval(levels);
+    clearInterval(touches);
     for (const t of timers) clearTimeout(t);
     timers.clear();
   };

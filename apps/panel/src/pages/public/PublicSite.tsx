@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Segmented } from "@/components/ui/segmented";
 import { fmtInt } from "@/lib/format";
+import { LiveStage } from "./live/LiveStage";
 import { DAY_MS, localMidnight, MemberActions, MemberActivity, MemberLists, MemberProfile } from "./Member";
 import { WalletMain } from "./Wallet";
 
@@ -270,6 +271,7 @@ export function PublicSite({
               {notice}
             </p>
           )}
+          <LiveStage member={member} />
           <MemberProfile member={member} />
           <div className="grid gap-(--stage-gap) lg:grid-cols-2">
             <MemberActivity />

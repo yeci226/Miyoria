@@ -21,8 +21,15 @@ export const STAGE_STATUS_TOPIC = "stage.status";
 /** `game.director.session` (published by the game director). */
 export const GAME_SESSION_TOPIC = "game.director.session";
 
+/** `gate.decision` (published by the actuator registry): her own web calls mean she is browsing. */
+export const GATE_DECISION_TOPIC = "gate.decision";
+
+/** Capabilities that, called by her on her own, are browsing (v4 §8.1 逛網路). */
+export const BROWSE_CAPABILITIES: readonly string[] = ["web.search", "web.read"];
+
 /** Every topic the manager follows. */
 export const FACT_TOPICS = [
+  GATE_DECISION_TOPIC,
   "voice.joined",
   "voice.left",
   "voice.participants",

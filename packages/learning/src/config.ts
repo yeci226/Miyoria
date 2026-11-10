@@ -90,8 +90,43 @@ export const KnowledgeConfigSchema = z.object({
   said_confidence: z.number().min(0).max(1).default(0.6),
   /** Offer the tool `knowledge_note` in turns. */
   tool: z.boolean().default(true),
+  /**
+   * Put the documents about the people present in the prompt. Not set (`null`), it follows the
+   * person profiles of `memory` (v4 §5.6), which carry these documents' points among the rest:
+   * with profiles the documents step aside (one place per fact about a person, not four), without
+   * them they are shown. `true` or `false` in the config wins over that.
+   */
+  prompt_people: z.boolean().nullable().default(null),
 });
 export type KnowledgeConfig = z.output<typeof KnowledgeConfigSchema>;
+
+/**
+ * Whether the documents about the people present go in the prompt: what the config says, and
+ * when it says nothing, only if the person profiles (which carry the same facts) are not there.
+ */
+export function peopleInPrompt(configured: boolean | null, profilesPresent: boolean): boolean {
+  return configured ?? !profilesPresent;
+}
+
+/**
+ * `[modules.reflect.diary]`: after the daily reflection she writes a short diary entry and posts
+ * it to `channel` (`discord:<guild>:<channel>`; empty = no diary). With a channel, writing it is
+ * also something she can choose to do (capability `diary.write`, the "diary" row of her activity
+ * table), one entry per daily reflection.
+ */
+export const DiaryConfigSchema = z.object({
+  channel: z.string().default(""),
+  /** Longest entry (characters). */
+  max_chars: z.number().int().min(40).max(1500).default(300),
+  /** A line put above every entry (empty = none), e.g. `📔 今天的日記`. */
+  heading: z.string().max(60).default(""),
+  /**
+   * Write it right after the daily reflection. `false`: only when she chooses to (her activity
+   * table suggests it in the evening), from the latest reflection not written yet.
+   */
+  after_reflection: z.boolean().default(true),
+});
+export type DiaryConfig = z.output<typeof DiaryConfigSchema>;
 
 /**
  * `[modules.reflect]`: feedback signals, lessons and her reflections.
@@ -150,6 +185,7 @@ export const ReflectConfigSchema = z.object({
   feedback_days: count().default(14),
   /** Characters of lessons in a turn's prompt. */
   prompt_chars: count().default(600),
+  diary: DiaryConfigSchema.prefault({}),
 });
 export type ReflectConfig = z.output<typeof ReflectConfigSchema>;
 

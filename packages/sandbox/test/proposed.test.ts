@@ -13,6 +13,8 @@ import {
 
 class FakeSandbox implements Sandbox {
   readonly requests: RunRequest[] = [];
+  readonly workspace = null;
+  readonly networkAllow: readonly string[] = [];
   readonly tools = {
     list: async () => [],
     read: async () => null,

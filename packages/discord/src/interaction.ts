@@ -23,6 +23,7 @@ import type { AccountRef, ContextKind } from "@miyoria/types";
 import {
   type APIMessageTopLevelComponent,
   type APIModalInteractionResponseCallbackData,
+  ApplicationCommandType,
   MessageFlags,
 } from "discord.js";
 import {
@@ -124,9 +125,26 @@ export interface AutocompleteInteractionLike {
   respond(choices: { name: string; value: string }[]): Promise<unknown>;
 }
 
+/**
+ * A message or user context menu entry (`MessageContextMenuCommandInteraction`,
+ * `UserContextMenuCommandInteraction`). `commandName` is the entry's name as the menu shows it.
+ */
+export interface ContextMenuInteractionLike extends RepliableLike {
+  commandName: string;
+  /** `ApplicationCommandType.User` (2) or `.Message` (3). */
+  commandType: number;
+  /** The id of the message or user the menu was used on. */
+  targetId: string;
+  /** Message menus: the message (its author, when the gateway delivered it). */
+  targetMessage?: { author?: UserLike | null } | null;
+  /** User menus: who, and their guild member data. */
+  targetUser?: UserLike | null;
+  targetMember?: MemberLike | null;
+}
+
 export type CommandDispatcher = Pick<
   CommandRegistry,
-  "dispatch" | "dispatchComponent" | "autocomplete" | "get"
+  "dispatch" | "dispatchComponent" | "autocomplete" | "get" | "menuByName"
 >;
 
 /** What the interaction handlers share. */
@@ -352,11 +370,72 @@ export async function handleCommandInteraction(
   interaction: CommandInteractionLike,
   kind: ContextKind,
 ): Promise<void> {
-  const invocation = invocationFromInteraction(interaction, kind);
+  await runInvocation(env, interaction, invocationFromInteraction(interaction, kind));
+}
+
+/**
+ * Builds the invocation of a context menu entry: the menu's command path `["menu", id]` with the
+ * clicked message or person as its argument, or `null` when no registered menu has that name.
+ */
+export function invocationFromMenu(
+  registry: Pick<CommandRegistry, "menuByName">,
+  interaction: ContextMenuInteractionLike,
+  kind: ContextKind,
+): InvocationData | null {
+  const target = interaction.commandType === ApplicationCommandType.User ? "user" : "message";
+  const menu = registry.menuByName(target, interaction.commandName);
+  if (!menu) return null;
+  const base = { path: ["menu", menu.id], ...invokerData(interaction, kind) };
+  if (target === "user") {
+    const user = interaction.targetUser;
+    const member = interaction.targetMember ?? null;
+    const resolved: Record<string, ResolvedUser> = {};
+    if (user) {
+      resolved[user.id] = {
+        display_name: displayName(user, memberNick(member)),
+        platform_roles: memberRoleIds(member),
+        is_guild_admin: isGuildAdmin(member),
+      };
+    }
+    return { ...base, args: { target: interaction.targetId }, resolved_users: resolved };
+  }
+  const author = interaction.targetMessage?.author?.id;
+  return {
+    ...base,
+    args: author ? { target: interaction.targetId, author } : { target: interaction.targetId },
+  };
+}
+
+/**
+ * Runs a context menu entry and replies like a slash command (always through the registry, so
+ * the entry's permission, audit and visibility apply). An entry that is no longer registered
+ * answers with a notice. Never throws.
+ */
+export async function handleContextMenuInteraction(
+  env: InteractionEnv,
+  interaction: ContextMenuInteractionLike,
+  kind: ContextKind,
+): Promise<void> {
+  const invocation = invocationFromMenu(env.registry, interaction, kind);
+  if (invocation === null) {
+    await respondError(interaction, notice("warn", MENU_GONE_TEXT));
+    return;
+  }
+  await runInvocation(env, interaction, invocation);
+}
+
+/** Shown when a menu entry was removed while Discord still listed it. */
+export const MENU_GONE_TEXT = "這個選單項目已經不能用了。";
+
+async function runInvocation(
+  env: InteractionEnv,
+  interaction: RepliableLike,
+  invocation: InvocationData,
+): Promise<void> {
   const name = invocation.path.join(" ");
   const declared = env.registry.get(invocation.path)?.ephemeral ?? true;
   const state = new InteractionState();
-  log.debug({ command: name, user: interaction.user.id }, "slash command");
+  log.debug({ command: name, user: interaction.user.id }, "command interaction");
 
   const followUp = async (reply: CommandReply) => {
     await ensureCommandAck(interaction, state, declared);

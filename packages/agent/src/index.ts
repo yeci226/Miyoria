@@ -26,6 +26,7 @@ export {
   ambientScale,
   answersHer,
   assess,
+  conversing,
   decide,
   directReason,
   effectiveTalk,
@@ -82,6 +83,7 @@ export {
   FilesConfigSchema,
   type HistoryConfig,
   HistoryConfigSchema,
+  LOOP_TOOLS,
   MainLineConfigSchema,
   maxDebounceMs,
   modeFor,
@@ -96,6 +98,9 @@ export {
   type VoiceConfig,
   VoiceConfigSchema,
   voiceMaxDebounceMs,
+  WORK_TOOLS,
+  type WorkConfig,
+  WorkConfigSchema,
 } from "./config.js";
 export { Gathered, gather } from "./contributors.js";
 export {
@@ -139,14 +144,20 @@ export { ACTING_ALONE, MainLine, MainTurn } from "./mainline/main.js";
 export { COMMIT_SPEC, STEER_SPEC, slimTool } from "./mainline/output.js";
 export {
   contextData,
+  entryCost,
   estimateTokens,
+  exampleDialogues,
   fitHistory,
+  historyWindow,
   mainMessages,
   mainRules,
   pinnedSection,
   promptTokens,
   proposalData,
+  rotatedExamples,
+  stableHash,
   tailSection,
+  type WindowBudget,
 } from "./mainline/prompt.js";
 export { linkMentions, type MentionTarget } from "./mentions.js";
 export { AgentModule } from "./module.js";
@@ -208,6 +219,7 @@ export {
 export { BARGE_IN_TOPIC, SUBTITLE_TOPIC } from "./runtime.js";
 export {
   activityBlock,
+  feelingCauseBody,
   goalsBlock,
   ledgerBlock,
   moodBlock,
@@ -262,3 +274,20 @@ export {
   type LoadedImage,
   selectImages,
 } from "./vision.js";
+export { allowance, talks } from "./worklane/allow.js";
+export {
+  WORK_LIST_TOOL,
+  WORK_START_TOOL,
+  WORK_STEER_TOOL,
+  workCapabilities,
+} from "./worklane/capabilities.js";
+export { ACTIVITY_TOOLS, asWork, WORK_ACTIVITIES, workBoard } from "./worklane/initiative.js";
+export {
+  type LaneDeps,
+  RESTART_REASON,
+  type StartOutcome,
+  type StartSpec,
+  type SteerSpec,
+  shortId,
+  WorkLaneService,
+} from "./worklane/lane.js";

@@ -16,6 +16,7 @@ import { Field } from "@/components/ui/label";
 import { Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { accountString, fmtDateTime, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
+import { QuestsSection } from "./QuestsSection";
 
 /** Affinity, trust and familiarity over time on one -100..100 axis. */
 export function AffinityChart({ history }: { history: RelationshipDelta[] }) {
@@ -330,6 +331,8 @@ function PersonBody({ detail }: { detail: PersonDetail }) {
         </Section>
 
         <WalletSection personId={detail.person.id} name={detail.person.display_name} />
+
+        <QuestsSection personId={detail.person.id} />
 
         <Section title="帳號">
           <ul className="divide-y divide-line-soft rounded-md border">

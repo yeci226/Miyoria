@@ -26,7 +26,7 @@ export class ReactTool implements Tool {
       properties: {
         emoji: {
           type: "string",
-          description: "一個 emoji,例如 👍、😤、🐋",
+          description: "一個 emoji,例如 👍、😤、🐋;伺服器表情寫 :名字:",
         },
       },
       required: ["emoji"],
@@ -64,7 +64,7 @@ export class KeepNoteTool implements Tool {
   readonly spec: ToolSpec = {
     name: KeepNoteTool.NAME,
     description:
-      "工具結果(搜尋、歌詞、網頁、計算)只有這一回合看得到,下一回合就沒了。之後這段對話還會用到的," +
+      "工具結果(搜尋、歌詞、網頁、計算)的全文下一回合就看不到了,最多剩幾行摘要。之後這段對話還會用到全文的," +
       "用你自己的話記下重點(最多 600 字,例如歌詞的那幾句、查到的數字),之後每一回合都看得到;" +
       `預設留 ${DEFAULT_NOTE_MINUTES} 分鐘,每段對話最多 ${MAX_NOTES} 則,多了最舊的會被擠掉。用不到就不要記。`,
     parameters: {

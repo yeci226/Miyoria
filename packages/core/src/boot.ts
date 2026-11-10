@@ -24,9 +24,11 @@ import {
   CoinLedgerStoreKey,
   DealStoreKey,
   DecisionLogKey,
+  EconomyDocsKey,
   FortuneStoreKey,
   GoalStoreKey,
   IdentityStoreKey,
+  LedgerStatsKey,
   MemberCardStoreKey,
   MemoryRecordStoreKey,
   MessageLogKey,
@@ -218,6 +220,8 @@ export async function buildCoreWith(
   services.provide(k, MessageLogKey, store.messages);
   services.provide(k, MemberCardStoreKey, store.cards);
   services.provide(k, CoinLedgerStoreKey, store.coins);
+  services.provide(k, LedgerStatsKey, store.coins);
+  services.provide(k, EconomyDocsKey, store.economyDocs);
   services.provide(k, DealStoreKey, store.deals);
   services.provide(k, FortuneStoreKey, store.fortunes);
   services.provide(k, GoalStoreKey, store.goals);

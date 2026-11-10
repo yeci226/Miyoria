@@ -4,7 +4,9 @@ import {
   applyPatch,
   checkContent,
   DEFAULT_LIMITS,
+  fitContent,
   getAt,
+  jsonChars,
   outline,
   PatchError,
   parseOps,
@@ -131,5 +133,63 @@ describe("outline", () => {
     const block = dataBlock("knowledge", "你整理的資料", outline(evil).join("\n"));
     expect(block.match(/⟦\/資料⟧/g)).toHaveLength(1);
     expect(block.endsWith("⟦/資料⟧")).toBe(true);
+  });
+});
+
+describe("fitContent", () => {
+  const limits = { ...L, maxStringChars: 20, maxArray: 3, maxKeys: 3, maxKeyChars: 6, maxDepth: 3 };
+
+  it("leaves what fits as it is, and what it returns always passes the check", () => {
+    const fine = { 話題: ["海豚"], 計畫: { Owen: "週三考數學" } };
+    expect(fitContent(fine, L)).toEqual({ content: fine, cut: 0 });
+    const messy = {
+      長: "字".repeat(50),
+      清單: ["一", "二", "三", "四", "五"],
+      很長很長很長的鍵: 1,
+      深: { 深: { 深: { 太深: true } } },
+      多: 1,
+    };
+    const { content, cut } = fitContent(messy, limits);
+    expect(cut).toBeGreaterThan(0);
+    expect(() => checkContent(content, limits)).not.toThrow();
+  });
+
+  it("cuts long texts, keeps the newest of a list and the first keys of an object", () => {
+    const { content } = fitContent(
+      { 長: "字".repeat(50), 清單: ["一", "二", "三", "四", "五"], 第三: 3, 第四: 4 },
+      limits,
+    );
+    expect(content.長).toBe(`${"字".repeat(19)}…`);
+    expect(content.清單).toEqual(["三", "四", "五"]);
+    expect(Object.keys(content)).toEqual(["長", "清單", "第三"]);
+  });
+
+  it("drops forbidden keys and what is not data instead of refusing the rest", () => {
+    const raw = JSON.parse('{"__proto__": {"x": 1}, "constructor": 1, "好": "留著"}');
+    const { content, cut } = fitContent({ ...raw, 壞: Number.NaN, 類別: new Date(0) } as never, L);
+    expect(content).toEqual({ 好: "留著" });
+    expect(cut).toBe(4);
+    expect(({} as { x?: number }).x).toBeUndefined();
+  });
+
+  it("when the whole is too large the largest list gives its oldest items first", () => {
+    const notes = {
+      現在: "在聊晚餐",
+      提過的事: Array.from({ length: 20 }, (_, i) => `第 ${i} 件事,寫得有點長有點長`),
+    };
+    const { content, cut } = fitContent(notes, { ...L, maxChars: 200 });
+    expect(jsonChars(content)).toBeLessThanOrEqual(200);
+    expect(cut).toBeGreaterThan(0);
+    expect(content.現在).toBe("在聊晚餐");
+    const kept = content.提過的事 as string[];
+    expect(kept.at(-1)).toBe(notes.提過的事.at(-1));
+    expect(kept[0]).not.toBe(notes.提過的事[0]);
+  });
+
+  it("a single long text is halved until it fits, and never loops", () => {
+    const { content } = fitContent({ a: "字".repeat(1000) }, { ...L, maxChars: 100 });
+    expect(jsonChars(content)).toBeLessThanOrEqual(100);
+    expect(fitContent({}, { ...L, maxChars: 1 })).toEqual({ content: {}, cut: 0 });
+    expect(fitContent([1, 2] as never, L)).toEqual({ content: {}, cut: 1 });
   });
 });

@@ -41,6 +41,7 @@ import {
   type JsonValue,
   type LogEvent,
   type MemoryOrigin,
+  type MessageExcluded,
   newId,
   type PersonId,
   type ProfileId,
@@ -58,12 +59,14 @@ import {
   type EventReader,
   type EvidenceLine,
   isEventRef,
+  LINE_REF_PREFIX,
   linkLines,
   mergeRefs,
   nameWords,
   summaryOf,
   supporting,
 } from "./evidence.js";
+import { EXCLUDED_KEY, ExclusionList, lineHash, messageKey } from "./exclusion.js";
 import { expired, expiryOf, isPresentState, isStateLifetime, wordingTtlHours } from "./expiry.js";
 import {
   type Extraction,
@@ -178,6 +181,23 @@ export interface Searched extends Recalled {
   vector_score: number | null;
 }
 
+/**
+ * The turn around the line being answered (v4 §5.4). 2026-11-10: the query was only the line
+ * itself and needed a shared word, so a reply like "好啊" recalled nothing at all.
+ */
+export interface TurnQuery {
+  /** The lines before the one answered, joined: they count `context_weight` of the line. */
+  context?: string;
+  /**
+   * The people she is talking with: their `person_points` most important memories may come back
+   * without a shared word. People named in the line or the context are added by the engine.
+   */
+  people?: readonly PersonId[];
+}
+
+/** Score of the text signal given to a person's key memory found without a shared word. */
+const POINT_TEXT = 0.3;
+
 /** Candidate selection and ranking options shared by `recall` and `search`. */
 interface RankOptions {
   /** Keep followups already brought up. */
@@ -190,6 +210,7 @@ interface RankOptions {
    * often is down-weighted.
    */
   forTurn: boolean;
+  turn?: TurnQuery;
 }
 
 export interface ConsolidationReport {
@@ -319,6 +340,8 @@ export class MemoryEngine implements FollowupSource {
   /** Contexts whose last batch was unusable and is being carried over once (key → true). */
   readonly #carried = new Set<string>();
   readonly #repeats: RepeatDamper;
+  /** Messages she was asked not to remember: nothing derived from them is used or kept. */
+  readonly exclusions = new ExclusionList();
   #lastMaintenance: Timestamp | null = null;
   #version = 0;
 
@@ -354,6 +377,46 @@ export class MemoryEngine implements FollowupSource {
   /** The EventLog evidence is checked against, when there is one. */
   get events(): EventReader | null {
     return this.#events;
+  }
+
+  /** The settings store (watermarks; her notebook keeps its pages there too). */
+  get settings(): SettingsStore | null {
+    return this.#settings;
+  }
+
+  /** The handle directory, when there is one. */
+  get handles(): HandleDirectory | null {
+    return this.#handles;
+  }
+
+  /**
+   * Gives vectors to up to `limit` records stored without one (written before embeddings were on,
+   * or while the embedder was down), newest first. Returns how many got one.
+   */
+  async backfillEmbeddings(limit: number, signal?: AbortSignal): Promise<number> {
+    if (!this.embedder.enabled || limit === 0) return 0;
+    const rows = await this.records.list(this.profile, memoryFilter(Math.max(limit * 4, 100)));
+    const missing = rows.filter((r) => r.embedding === null).slice(0, limit);
+    if (missing.length === 0) return 0;
+    let vectors: number[][];
+    try {
+      vectors = await this.embedder.embed(
+        missing.map((r) => r.content),
+        signal,
+      );
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      log.warn({ embedder: this.embedder.name, error: errorMessage(error) }, "backfill failed");
+      return 0;
+    }
+    let done = 0;
+    for (const [i, record] of missing.entries()) {
+      const v = vectors[i];
+      if (!v || v.length === 0) continue;
+      await this.records.upsert({ ...record, embedding: v });
+      done++;
+    }
+    return done;
   }
 
   /** Bumped by every write that can change what is pinned, so cached lines know to go stale. */
@@ -455,10 +518,15 @@ export class MemoryEngine implements FollowupSource {
     }
   }
 
-  async #embedOne(text: string, signal?: AbortSignal): Promise<number[] | null> {
+  /** `query`: a search, which some models embed differently from what is stored (`embedQuery`). */
+  async #embedOne(text: string, signal?: AbortSignal, query = false): Promise<number[] | null> {
     if (!this.embedder.enabled || text.trim() === "") return null;
     try {
-      const v = await this.embedder.embed([text], signal);
+      const embedder = this.embedder;
+      const v =
+        query && embedder.embedQuery !== undefined
+          ? await embedder.embedQuery([text], signal)
+          : await embedder.embed([text], signal);
       const first = v.length === 1 ? v[0] : undefined;
       return first && first.length > 0 ? first : null;
     } catch (error) {
@@ -483,7 +551,13 @@ export class MemoryEngine implements FollowupSource {
       return { type: "refused", reason: "present_state" };
     }
     // A fact nothing said backs is not part of her past (`unknown` is a migrated record).
-    const evidence = mergeRefs(this.config.evidence.max_events, memory.source_events);
+    const cited = mergeRefs(this.config.evidence.max_events, memory.source_events);
+    // What rests on a message she was asked to forget is not evidence; with nothing else
+    // behind it, it is not stored at all.
+    const evidence = cited.filter((ref) => !this.exclusions.hasRef(ref));
+    if (cited.length > 0 && evidence.length === 0) {
+      return { type: "refused", reason: "no_evidence" };
+    }
     if (memory.kind === "fact" && memory.origin !== "unknown" && evidence.length === 0) {
       return { type: "refused", reason: "no_evidence" };
     }
@@ -598,6 +672,7 @@ export class MemoryEngine implements FollowupSource {
     limit: number,
     now: Timestamp,
     signal?: AbortSignal,
+    turn?: TurnQuery,
   ): Promise<Recalled[]> {
     const ranked = await this.#rank(
       scopes,
@@ -606,7 +681,12 @@ export class MemoryEngine implements FollowupSource {
       kinds,
       limit,
       now,
-      { includeDone: false, minScore: this.config.min_score, forTurn: true },
+      {
+        includeDone: false,
+        minScore: this.config.min_score,
+        forTurn: true,
+        ...(turn ? { turn } : {}),
+      },
       signal,
     );
     this.#repeats.note(ranked.map((r) => r.record.tokens));
@@ -660,7 +740,15 @@ export class MemoryEngine implements FollowupSource {
   ): Promise<Searched[]> {
     if (limit === 0 || scopes.length === 0) return [];
     const tokens = tokenize(query);
-    const embedding = await this.#embedOne(query, signal);
+    const context = options.turn?.context?.trim() ?? "";
+    const own = new Set(tokens);
+    const contextTokens = [...new Set(tokenize(context))].filter((t) => !own.has(t));
+    const people = this.#turnPeople(options.turn, `${query}\n${context}`);
+    const embedding = await this.#embedOne(
+      context === "" ? query : `${query}\n${context}`,
+      signal,
+      true,
+    );
     const wanted = (r: MemoryRecord) =>
       hasScope(scopes, r.scope) &&
       kinds.includes(r.kind) &&
@@ -671,12 +759,12 @@ export class MemoryEngine implements FollowupSource {
 
     // id -> (record, backend text score, vector score)
     const candidates = new Map<string, [MemoryRecord, number, number | null]>();
-    if (tokens.length > 0 || embedding !== null) {
+    if (tokens.length + contextTokens.length > 0 || embedding !== null) {
       const hits = await this.records.search({
         profile: this.profile,
         scopes: [...scopes],
         kinds: [...kinds],
-        tokens,
+        tokens: [...tokens, ...contextTokens],
         embedding,
         limit: fetch,
       });
@@ -686,7 +774,7 @@ export class MemoryEngine implements FollowupSource {
         }
       }
     }
-    for (const person of present.slice(0, 16)) {
+    for (const person of [...new Set([...present.slice(0, 16), ...people])]) {
       const records = await this.records.list(
         this.profile,
         memoryFilter(fetch, { subject: person }),
@@ -700,6 +788,15 @@ export class MemoryEngine implements FollowupSource {
 
     let maxText = 0;
     for (const [, t] of candidates.values()) maxText = Math.max(maxText, t);
+    const points = options.forTurn
+      ? this.#points(
+          [...candidates.values()].map(([r]) => r),
+          people,
+          now,
+        )
+      : new Set<string>();
+    // Only the lines before matched: they count for less than the line itself.
+    const backendWeight = tokens.length > 0 ? 1 : this.config.context_weight;
     const ranked: Searched[] = [];
     for (const [record, text, vectorScore] of candidates.values()) {
       const vector =
@@ -707,8 +804,13 @@ export class MemoryEngine implements FollowupSource {
         (embedding !== null && record.embedding !== null
           ? cosine(embedding, record.embedding)
           : null);
-      const backend = maxText > 0 ? text / maxText : 0;
-      const t = Math.max(backend, tokenOverlap(tokens, record.tokens));
+      const backend = maxText > 0 ? (text / maxText) * backendWeight : 0;
+      let t = Math.max(
+        backend,
+        tokenOverlap(tokens, record.tokens),
+        this.config.context_weight * tokenOverlap(contextTokens, record.tokens),
+      );
+      if (t <= 0 && points.has(record.id)) t = POINT_TEXT;
       // Being about someone who is here is not a reason to bring a memory up (and the nearest
       // neighbour of an unrelated query is no match): it has to be about what is being said,
       // by a shared word or a close embedding.
@@ -723,6 +825,49 @@ export class MemoryEngine implements FollowupSource {
     ranked.sort((a, b) => b.score - a.score || ms(b.record.updated_at) - ms(a.record.updated_at));
     ranked.length = Math.min(ranked.length, limit);
     return ranked;
+  }
+
+  /**
+   * The people of a turn: the ones she is talking with, and anyone whose handle is named in what
+   * is being said (a name is a shared word with every memory about them, however it is worded).
+   */
+  #turnPeople(turn: TurnQuery | undefined, text: string): PersonId[] {
+    const out = new Set<PersonId>(turn?.people ?? []);
+    const lower = text.toLowerCase();
+    for (const entry of this.#handles?.list() ?? []) {
+      if (entry.person === null || out.has(entry.person)) continue;
+      const handle = entry.handle.toLowerCase();
+      if ([...handle].length >= 2 && lower.includes(handle)) out.add(entry.person);
+    }
+    return [...out].slice(0, 16);
+  }
+
+  /** Each person's `person_points` most important memories among `records` (ids). */
+  #points(
+    records: readonly MemoryRecord[],
+    people: readonly PersonId[],
+    now: Timestamp,
+  ): Set<string> {
+    const out = new Set<string>();
+    const n = this.config.person_points;
+    if (n === 0) return out;
+    const rank = (r: MemoryRecord) =>
+      r.importance * (0.5 + 0.5 * effectiveConfidence(this.config, r, now));
+    for (const person of people) {
+      records
+        .filter(
+          (r) =>
+            r.subjects.includes(person) &&
+            (r.kind === "fact" || r.kind === "episode") &&
+            r.importance >= this.config.person_point_importance,
+        )
+        .sort((a, b) => rank(b) - rank(a))
+        .slice(0, n)
+        .forEach((r) => {
+          out.add(r.id);
+        });
+    }
+    return out;
   }
 
   static watermarkKey(context: ContextKey): string {
@@ -804,20 +949,29 @@ export class MemoryEngine implements FollowupSource {
       malformed: false,
     };
     const mark = await this.watermark(context);
-    const lines = (
+    const allLines = (
       await messages.recent(this.profile, context, Math.max(1, this.config.max_lines_per_batch))
     ).filter((e) => mark === null || afterMark(e, mark));
-    const last = lines[lines.length - 1];
+    const last = allLines[allLines.length - 1];
     if (!last) return report;
-    report.lines = lines.length;
+    report.lines = allLines.length;
     const nextMark: Watermark = { context, ts: last.ts, id: last.id };
+    // Lines she was asked not to remember are never shown to the extractor nor cited.
+    const linked = await linkLines(this.#events, allLines, this.config.evidence);
+    const kept = allLines.filter(
+      (e, i) =>
+        !this.exclusions.hasLine(context, e.author_name, e.text) &&
+        !this.exclusions.hasRef(linked[i]?.ref ?? `${LINE_REF_PREFIX}${e.id}`) &&
+        !this.exclusions.hasRef(`${LINE_REF_PREFIX}${e.id}`),
+    );
+    const evidence = linked.filter((_, i) => kept.includes(allLines[i] as LogEntry));
+    const lines = kept;
     if (lines.every((e) => e.is_self || e.text.trim() === "")) {
       await this.#setWatermark(nextMark);
       return report;
     }
 
     const speakers = await this.#speakers(lines);
-    const evidence = await linkLines(this.#events, lines, this.config.evidence);
     const priv = isPrivate(context);
     const request: ChatRequest = {
       messages: [
@@ -1410,6 +1564,108 @@ export class MemoryEngine implements FollowupSource {
     }
     report.deleted = report.about + report.derived;
     return report;
+  }
+
+  // ---- messages she was asked not to remember ---------------------------------------------
+
+  /** Reads the stored list; called once at start. */
+  async loadExclusions(): Promise<void> {
+    if (!this.#settings) return;
+    try {
+      this.exclusions.load(await this.#settings.get(this.profile, EXCLUDED_KEY));
+    } catch (error) {
+      log.warn({ error: errorMessage(error) }, "cannot read the list of excluded messages");
+    }
+  }
+
+  /**
+   * A message was excluded: finds what stands for it in the EventLog and the chat log, keeps
+   * that (bounded, persisted), and takes it out of what is already derived. A memory resting
+   * on this message alone is deleted; one with other evidence stays and loses only this
+   * reference. Records that name no evidence cannot be tied to the message and stay.
+   */
+  async excludeMessage(excluded: MessageExcluded): Promise<{ deleted: number; trimmed: number }> {
+    const platform = excluded.message.context.platform;
+    const key = messageKey(platform, excluded.message.id);
+    const refs: string[] = [];
+    const hashes: string[] = [];
+    if (this.#events) {
+      try {
+        const found = await this.#events.query({
+          kinds: ["observation"],
+          attention_key: key,
+          limit: 10,
+        });
+        for (const event of found) {
+          refs.push(event.id);
+          const summary = summaryOf(event);
+          if (summary !== null && !summary.endsWith(":(略過)")) hashes.push(lineHash(summary));
+        }
+      } catch (error) {
+        log.warn({ error: errorMessage(error) }, "cannot look up the excluded message's event");
+      }
+    }
+    if (this.#messages && hashes.length > 0) {
+      try {
+        const lines = await this.#messages.recent(this.profile, excluded.context, 500);
+        for (const line of lines) {
+          if (hashes.includes(lineHash(`${line.author_name}:${line.text}`))) {
+            refs.push(`${LINE_REF_PREFIX}${line.id}`);
+          }
+        }
+      } catch (error) {
+        log.warn({ error: errorMessage(error) }, "cannot look up the excluded message's line");
+      }
+    }
+    this.exclusions.add({
+      c: contextKeyString(excluded.context),
+      key,
+      refs,
+      hashes,
+      at: Date.parse(excluded.at) || this.#clock.now(),
+    });
+    this.#version += 1;
+    if (this.#settings) {
+      try {
+        await this.#settings.set(
+          this.profile,
+          EXCLUDED_KEY,
+          this.exclusions.toJSON() as unknown as JsonValue,
+        );
+      } catch (error) {
+        log.warn({ error: errorMessage(error) }, "cannot save the list of excluded messages");
+      }
+    }
+    return this.#unlearn(new Set(refs));
+  }
+
+  /** Drops `refs` from the evidence of every record; a record left with none is deleted. */
+  async #unlearn(refs: ReadonlySet<string>): Promise<{ deleted: number; trimmed: number }> {
+    const out = { deleted: 0, trimmed: 0 };
+    if (refs.size === 0) return out;
+    let before: Timestamp | null = null;
+    for (;;) {
+      const page = await this.records.list(
+        this.profile,
+        memoryFilter(500, { before, include_superseded: true }),
+      );
+      const oldest = page[page.length - 1];
+      if (!oldest) break;
+      for (const record of page) {
+        const evidence = record.source_events ?? [];
+        if (!evidence.some((r) => refs.has(r))) continue;
+        const rest = evidence.filter((r) => !refs.has(r));
+        if (rest.length === 0) {
+          if (await this.records.delete(record.id)) out.deleted += 1;
+        } else {
+          await this.records.upsert({ ...record, source_events: rest });
+          out.trimmed += 1;
+        }
+      }
+      if (page.length < 500 || (before !== null && ms(before) === ms(oldest.created_at))) break;
+      before = oldest.created_at;
+    }
+    return out;
   }
 
   // ---- FollowupSource ------------------------------------------------------------------

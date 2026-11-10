@@ -1,7 +1,7 @@
 // The three modules: `conversation` (continuous compaction), `knowledge` (her documents) and
 // `reflect` (feedback signals, lessons, daily and light reflections).
 
-import { ActuatorRegistryKey } from "@miyoria/actions";
+import { ActuatorRegistryKey, actuatorsFor } from "@miyoria/actions";
 import {
   defineManifest,
   errorMessage,
@@ -36,6 +36,9 @@ import {
   type KnowledgeSubject,
   LessonsKey,
   type PersonId,
+  PersonProfilesKey,
+  PlatformSinksKey,
+  Principals,
   type ProfileId,
   PromptContributorsKey,
   type PromptRequest,
@@ -44,11 +47,18 @@ import {
   SocialSignalsKey,
 } from "@miyoria/types";
 import type { BudgetState } from "./caps.js";
-import { ConversationConfigSchema, KnowledgeConfigSchema, ReflectConfigSchema } from "./config.js";
+import {
+  ConversationConfigSchema,
+  KnowledgeConfigSchema,
+  peopleInPrompt,
+  ReflectConfigSchema,
+} from "./config.js";
 import { ConversationEngine, FEEDBACK_TOPIC } from "./conversation.js";
+import { DIARY_CAPABILITY, Diary, diaryCapability } from "./diary.js";
 import { FeedbackTracker } from "./feedback.js";
 import { KnowledgeStore } from "./knowledge.js";
 import { LessonStore } from "./lessons.js";
+import { recapAgeNote } from "./recap-age.js";
 import { Reflector } from "./reflect.js";
 import { KNOWLEDGE_TOOL, KnowledgeTool } from "./tool.js";
 
@@ -150,10 +160,15 @@ export class ConversationModule implements Module {
       key: CONVERSATION_CONTRIBUTOR,
       // From memory only: safe on the voice hot path.
       contribute: async (request: PromptRequest) => {
-        const body = engine.render(request.context, config.prompt_chars);
-        return body === null
-          ? []
-          : [{ key: CONVERSATION_CONTRIBUTOR, title: "這段對話的前情提要", body, order: 5 }];
+        const recap = engine.render(request.context, config.prompt_chars);
+        const state = engine.get(request.context);
+        if (recap === null || state === null) return [];
+        // A recap that fell behind says so (v4 §5.7): she reads it as of then, not as of now.
+        const age = recapAgeNote(state, request.now, {
+          offsetMinutes: config.utc_offset_minutes,
+        });
+        const body = age === "" ? recap : `${recap}\n${age}`;
+        return [{ key: CONVERSATION_CONTRIBUTOR, title: "這段對話的前情提要", body, order: 5 }];
       },
     });
     const sub = ctx.subscribe(["platform.message.created", "voice.utterance", "voice.playback"]);
@@ -246,7 +261,8 @@ export class KnowledgeModule implements Module {
     contributors?.register({
       key: KNOWLEDGE_CONTRIBUTOR,
       contribute: async (request: PromptRequest) => {
-        const body = kb.render(subjectsFor(kb, request), {
+        const people = peopleInPrompt(config.prompt_people, s.get(PersonProfilesKey) !== undefined);
+        const body = kb.render(subjectsFor(kb, request, people), {
           context: request.context,
           maxChars: config.prompt_chars,
         });
@@ -279,13 +295,20 @@ export class KnowledgeModule implements Module {
   }
 }
 
-/** The people of the turn (speakers first), this server, topics named in the input, herself. */
-export function subjectsFor(kb: KnowledgeStore, request: PromptRequest): KnowledgeSubject[] {
+/**
+ * The people of the turn (speakers first, unless `people` is off: the person profiles carry
+ * them), this server, topics named in the input, herself.
+ */
+export function subjectsFor(
+  kb: KnowledgeStore,
+  request: PromptRequest,
+  people = true,
+): KnowledgeSubject[] {
   const out: KnowledgeSubject[] = [];
   const speakers = request.participants.filter((p) =>
     request.speakers.some((a) => a.platform === p.account.platform && a.id === p.account.id),
   );
-  for (const p of [...speakers, ...request.participants]) {
+  for (const p of people ? [...speakers, ...request.participants] : []) {
     if (p.person !== null) out.push({ type: "person", person: p.person });
   }
   if (request.context.scope !== null && request.context.kind !== "dm") {
@@ -527,6 +550,42 @@ export class ReflectModule implements Module {
         }
       }
     });
+    const diary = new Diary(config.diary, {
+      router: () => s.get(LlmRouterKey),
+      sinks: () => s.get(PlatformSinksKey),
+      persona: () => (persona ? persona(s) : ""),
+      name: this.options.name ?? "她",
+      store: settings,
+      profile: this.profile,
+    });
+    await loadWithTimeout(ctx, "diary", () => diary.load());
+    // With a channel, writing it is hers to choose too (the "diary" row of her activity table);
+    // without one the capability is not there and the row stays skipped.
+    const actuators = actuatorsFor(ctx);
+    if (diary.where() !== null) {
+      const off = actuators.register(diaryCapability(diary, () => reflector.runs(5)));
+      const cleanup = this.#cleanup;
+      this.#cleanup = () => {
+        off();
+        cleanup?.();
+      };
+    }
+    /** The entry after a daily reflection, through the gate like any of her own actions. */
+    const writeDiary = async (): Promise<void> => {
+      if (diary.where() === null || !config.diary.after_reflection) return;
+      const outcome = await (s.get(ActuatorRegistryKey) ?? actuators).invoke({
+        principal: Principals.self(null),
+        capability: DIARY_CAPABILITY,
+        args: {},
+        why: "每日回顧之後寫日記",
+        turn: null,
+      });
+      if (outcome.status === "denied") {
+        ctx.log.info({ why: outcome.decision.reason }, "no diary entry after the reflection");
+      } else if (outcome.status === "failed") {
+        ctx.log.warn({ error: outcome.error }, "she could not write her diary");
+      }
+    };
     ctx.spawn("reflect", async (signal) => {
       while (!signal.aborted) {
         try {
@@ -546,6 +605,11 @@ export class ReflectModule implements Module {
         );
         if (run) {
           ctx.publish(customEvent("reflect.run", JSON.parse(JSON.stringify(run)) as JsonValue));
+          if (run.kind === "daily") {
+            void writeDiary().catch((error: unknown) => {
+              ctx.log.warn({ error: errorMessage(error) }, "she could not write her diary");
+            });
+          }
           ctx.log.info(
             { kind: run.kind, error: run.error, lessons: run.lessons.length },
             "she reflected",

@@ -50,6 +50,8 @@ export interface GateFacts {
 
 /** What became of the held lines. */
 export interface Settled {
+  /** Held lines that waited because of a claim (or a line before them that claimed). */
+  waited: number;
   release: HeldLine[];
   parked: ParkedLine[];
   /** Say this first: a finished line waits for its result. */
@@ -74,12 +76,20 @@ export function isFinished(text: string): boolean {
 
 export class LineGate {
   readonly #facts: GateFacts;
+  /**
+   * The claim regexes are on (`[modules.agent.corrections] claims`). Off, no line waits and none
+   * is dropped: what she says goes out as she says it, and the outer walls still stand.
+   */
+  readonly #claims: boolean;
   /** Tools may still follow in this stream. */
   #streaming = true;
   #held: HeldLine[] = [];
+  /** A line had to wait for a claim since the last `settle`. */
+  #waiting = false;
 
-  constructor(facts: GateFacts) {
+  constructor(facts: GateFacts, claims = true) {
     this.#facts = facts;
+    this.#claims = claims;
   }
 
   /** A claim of `claim` nothing backs yet. */
@@ -91,6 +101,7 @@ export class LineGate {
 
   /** Whether `text` must wait. */
   #mustWait(text: string): boolean {
+    if (!this.#claims) return false;
     if (finishedClaims(text).some((c) => this.#unbacked(c))) return true;
     return isFinished(text) && (this.#streaming || this.#facts.pending().length > 0);
   }
@@ -98,13 +109,21 @@ export class LineGate {
   /** Lets `line` out now, or keeps it (with everything after it). */
   pass(line: HeldLine): boolean {
     if (this.#held.length === 0 && !this.#mustWait(line.text)) return true;
+    this.#waiting = true;
     this.#held.push(line);
     return false;
   }
 
+  /** Lines are held: whatever comes after them waits too. */
+  holding(): boolean {
+    return this.#held.length > 0;
+  }
+
   /** Whether a text line must wait: it stays in the reply, nothing is kept here. */
   holds(text: string): boolean {
-    return this.#mustWait(text);
+    const wait = this.#mustWait(text);
+    if (wait) this.#waiting = true;
+    return wait;
   }
 
   /** Adds what a text reply still has to say, once the stream ended. */
@@ -115,9 +134,20 @@ export class LineGate {
   /** The stream ended with `actions` (tool names): every held line gets its way. */
   settle(actions: readonly string[]): Settled {
     this.#streaming = false;
-    const out: Settled = { release: [], parked: [], started: false, dropped: [] };
     const held = this.#held;
+    const out: Settled = {
+      waited: this.#waiting ? held.length : 0,
+      release: [],
+      parked: [],
+      started: false,
+      dropped: [],
+    };
     this.#held = [];
+    this.#waiting = false;
+    if (!this.#claims) {
+      out.release = held;
+      return out;
+    }
     const asked = [...actions, ...this.#facts.pending()];
     for (const line of held) {
       const claims = finishedClaims(line.text).filter((c) => this.#unbacked(c));

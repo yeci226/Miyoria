@@ -420,8 +420,11 @@ export type FeedItem = "rice" | "big_bowl" | "dessert";
 export type GiftExpression = "heart" | "blush" | "squint";
 export type Hungry = "full" | "ok" | "hungry" | "starving";
 
+/** What earns coins: the first five from the Core's wallet, the others economy 2.0 added. */
+export type EarnReason = "checkin" | "talked" | "voice" | "song" | "her_gift" | "quest" | "play" | "achievement";
+
 export interface EarnLine {
-  reason: "checkin" | "talked" | "voice" | "song" | "her_gift";
+  reason: EarnReason;
   label: string;
   amount: number;
   earned_today: number;
@@ -987,8 +990,15 @@ export interface E2eStats {
   samples: number;
 }
 
-/** The six segments of `speech_end → first_audio_played`, in the order a listener hears them. */
-export type E2eSegmentName = "endpoint" | "asr" | "llm_first" | "tts_queue" | "tts_first" | "playback";
+/** The segments of `speech_end → first_audio_played`, in the order a listener hears them. */
+export type E2eSegmentName =
+  | "endpoint"
+  | "asr"
+  | "prepare"
+  | "llm_first"
+  | "tts_queue"
+  | "tts_first"
+  | "playback";
 
 /** Replies to human speech over the recent window; incomplete ones are only counted, by reason. */
 export interface VoiceE2eLatency {
@@ -2175,6 +2185,12 @@ export interface DirectorThoughtBody {
   verdict: string | null;
   commentary: string | null;
   busy: boolean | null;
+  /** What she saw when she decided (an older Core does not write it). */
+  observation?: string;
+  /** The goal's success condition: she holds at least `count` of `item`. */
+  want?: { item: string; count: number } | null;
+  /** Methods and goals on hold at the time, one line each: the ones that failed the same way twice. */
+  held?: string[];
 }
 
 export type ThoughtBody = MindThoughtBody | DirectorThoughtBody;
@@ -2266,4 +2282,47 @@ export interface Delivery {
   answered_by: Handle[];
   /** Its `utterance` event. */
   line: Ulid;
+}
+
+// ---- turn metrics (`GET /api/turns/metrics`, mirrors packages/api/src/metrics-turns.ts) -------
+
+/** `sent / total`; `rate` is `null` with no samples, never 0. */
+export interface MetricRatio {
+  sent: number;
+  total: number;
+  rate: number | null;
+}
+
+export interface FollowupStopReasons {
+  anti_spam: number;
+  low_score: number;
+  lost_roll: number;
+  floor: number;
+  passed_silent: number;
+  other: number;
+}
+
+export interface TurnMetricsBucket {
+  turns: number;
+  followup: MetricRatio;
+  ambient: MetricRatio;
+  addressed: MetricRatio;
+  voice_latency: { p50_ms: number | null; p90_ms: number | null; samples: number };
+  voice_origin: { self_started: number; answering: number };
+  outcomes: { sent: number; silence: number; cancelled: number; error: number };
+  followup_stopped: FollowupStopReasons;
+}
+
+export interface TurnMetricsDay extends TurnMetricsBucket {
+  /** Local date, `YYYY-MM-DD`. */
+  day: string;
+}
+
+export interface TurnMetrics {
+  days: number;
+  from: string;
+  /** The read cap was hit inside the window: its oldest day may be partial. */
+  truncated: boolean;
+  overall: TurnMetricsBucket;
+  daily: TurnMetricsDay[];
 }

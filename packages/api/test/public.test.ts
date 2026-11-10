@@ -49,6 +49,7 @@ import {
   DirectivesKey,
   type Envelope,
   type JsonValue,
+  KeepsakesKey,
   ModerationKey,
   newEnvelope,
   type PersonCard,
@@ -648,6 +649,8 @@ describe("the route table", () => {
       "GET /api/health",
       "GET /api/public/board",
       "GET /api/public/card/:serial",
+      "GET /api/public/live",
+      "GET /api/public/live/video/:file",
       "GET /api/public/songs",
       "GET /api/public/status",
       "GET /og/card/:file",
@@ -679,6 +682,7 @@ describe("the route table", () => {
       "POST /api/member/frame",
       "POST /api/member/goals/:id/pledge",
       "POST /api/member/letter",
+      "POST /api/member/live/pat",
       "POST /api/member/screen",
       "POST /api/member/songs",
       "POST /api/member/transfer",
@@ -1624,6 +1628,29 @@ describe("cards she gives", () => {
     expect((await r.get("/api/member/card", bob)).body).toMatchObject({ latest: null, today: 0 });
   });
 
+  it("is given to a command through the Keepsakes service by the same rules", async () => {
+    const r = await rig();
+    const keepsakes = r.sup.services.require(KeepsakesKey);
+    const who = { account: discord(ALICE), name: "Alice", avatar_url: null };
+    const first = await keepsakes.issueCard(who, "k-1");
+    expect(first.ok && first.value.number).toBe(1);
+    const cookie = await r.login("alice");
+    // The member page sees what the command issued, and the other way round.
+    const page = (await r.get("/api/member/card", cookie)).body as { latest: Card; today: number };
+    expect(page.today).toBe(1);
+    expect(page.latest.serial).toBe(first.ok ? first.value.serial : "");
+    expect(await keepsakes.cardsToday(who.account)).toMatchObject({
+      today: 1,
+      per_day: CARDS_PER_DAY,
+    });
+    for (let i = 1; i < CARDS_PER_DAY; i++) await keepsakes.issueCard(who, `k-${i + 1}`);
+    expect(await keepsakes.issueCard(who, "k-last")).toEqual({
+      ok: false,
+      status: 429,
+      message: "今天的卡已經發完了,明天再來",
+    });
+  });
+
   it("runs out after five a day", async () => {
     const r = await rig();
     const cookie = await r.login("alice");
@@ -1811,7 +1838,14 @@ describe("the wallet", () => {
       },
     } as never);
     const economy = new EconomyService({
-      config: EconomyConfigSchema.parse(config),
+      // These tests pin the wallet's own sums: the one-time achievement and quest rewards of
+      // economy 2.0 (a first check-in, a first meal) are tested in the economy package.
+      config: EconomyConfigSchema.parse({
+        achievement_cap: 0,
+        quest_reward: 0,
+        quest_bonus: 0,
+        ...config,
+      }),
       services: s,
       profile: "p",
       clock: { now: () => Date.now() },
@@ -2603,6 +2637,29 @@ describe("between people, the sponsor board and fortune slips", () => {
       expect(await r.balance(ALICE)).toBe(20);
     });
 
+    it("can be drawn from a command through the Keepsakes service, and the page shows the same slip", async () => {
+      const r = await socialRig();
+      await r.fund(ALICE, 30);
+      const keepsakes = r.sup.services.require(KeepsakesKey);
+      const who = { account: discord(ALICE), name: "Alice", avatar_url: null };
+      expect(await keepsakes.fortuneToday(who.account)).toEqual({ fortune: null, price: 10 });
+      const drawn = await keepsakes.drawFortune(who, "c-1");
+      expect(drawn).toMatchObject({ ok: true, charged: 10, balance: 20 });
+      const cookie = await r.login("alice");
+      expect((await r.get("/api/member/fortune", cookie)).body).toEqual({
+        fortune: drawn.ok ? drawn.value : null,
+        price: 10,
+      });
+      const again = await keepsakes.drawFortune(who, "c-2");
+      expect(again).toMatchObject({ ok: true, charged: 0, balance: 20 });
+      // Someone she does not know gets the same words as on the page.
+      const stranger = { account: discord("999"), name: "路人", avatar_url: null };
+      expect(await keepsakes.drawFortune(stranger, "c-3")).toMatchObject({
+        ok: false,
+        status: 403,
+      });
+    });
+
     it("give the payment back when she cannot write, and a retry of that key buys nothing", async () => {
       const r = await socialRig();
       await r.fund(ALICE, 30);
@@ -2758,6 +2815,12 @@ describe("link previews", () => {
     const me = (await r.get("/me", undefined, { ...BOT, ...SHOWN })).text;
     expect(meta(me, "og:title")).toBe("我的頁面 · Miyoria");
     expect(me).toContain('content="noindex, nofollow"');
+    // The public live page is `/watch`, open to search; `/live` is the admin panel's.
+    const watch = (await r.get("/watch", undefined, { ...BOT, ...SHOWN })).text;
+    expect(meta(watch, "og:title")).toBe("現場 · Miyoria");
+    expect(watch).not.toContain('content="noindex, nofollow"');
+    const live = (await r.get("/live", undefined, { ...BOT, ...SHOWN })).text;
+    expect(meta(live, "og:title")).toBe("管理面板 · Miyoria");
   });
 
   it("serves the site's picture as a PNG", async () => {

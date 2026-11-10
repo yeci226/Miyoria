@@ -1,0 +1,47 @@
+# MediaMTX: the hub between OBS and everyone who watches (docs/design/v4-plan.md §9.2 item 4).
+#
+#   OBS --RTMP--> 127.0.0.1:1935/live/miyoria --+--> voice node (Go Live pulls it over RTMP)
+#                                               +--> LL-HLS on 127.0.0.1:8888 --> Core
+#                                                    /api/public/live/video/ --> the live page
+#
+# Everything binds to 127.0.0.1: the public reaches the video only through Core, which decides
+# whether it is on. Keys not set here keep MediaMTX's defaults.
+# Run: workers/mediamtx/mediamtx.exe workers/mediamtx/mediamtx.yml (see README.md).
+
+logLevel: info
+
+# Control API: Core asks it whether OBS is publishing.
+api: true
+apiAddress: 127.0.0.1:9997
+
+# OBS keeps its old settings: server rtmp://127.0.0.1:1935/live, key miyoria.
+rtmp: true
+rtmpAddress: 127.0.0.1:1935
+
+# Low-latency HLS for the browser, through Core's proxy and the tunnel.
+hls: true
+hlsAddress: 127.0.0.1:8888
+hlsAllowOrigins: []
+# Mux as soon as OBS publishes, so the first viewer does not wait for a muxer to start.
+hlsAlwaysRemux: true
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsMuxerCloseAfter: 60s
+# CDN mode: Core's proxy sends `Authorization: Bearer <secret>`, so MediaMTX serves without its
+# session cookies and marks responses cacheable. Set the secret with env MTX_HLSCDNSECRET (the same
+# value as Core's MIYORIA_HLS_SECRET); without it every playlist needs a cookie and the proxy fails.
+
+# Off: RTSP's default UDP ports (8000-8003) are the TTS and ASR workers' ports on this PC.
+rtsp: false
+webrtc: false
+srt: false
+moq: false
+playback: false
+metrics: false
+pprof: false
+
+paths:
+  live/miyoria:
+    source: publisher

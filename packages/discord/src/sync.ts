@@ -1,7 +1,8 @@
 // Keeps Discord's application commands in step with the `CommandRegistry`.
 //
 // What Discord shows is the registry's `slashSpecs()`: the whole command tree plus the panels
-// (`/miyo`, `/song`, and `i` under a command that has subcommands: `/me i`, `/admin i`). Every
+// (`/miyo`, `/song`, and `i` under a command that has subcommands: `/me i`, `/admin i`) and its
+// context menu entries (`menus()`). Every
 // sync is a bulk overwrite, so commands that left the registry disappear from Discord on the
 // next sync. A sync never overwrites with an empty set (a registry that has not been filled
 // yet would wipe the commands).
@@ -15,7 +16,13 @@
 import type { CommandRegistry } from "@miyoria/commands";
 import { errorMessage, getLogger, sleep } from "@miyoria/kernel";
 import { Routes } from "discord.js";
-import { buildTree, type SlashCommandJson, toCreateCommands, validCommands } from "./slash.js";
+import {
+  buildTree,
+  type SlashCommandJson,
+  toContextMenuCommands,
+  toCreateCommands,
+  validCommands,
+} from "./slash.js";
 
 const log = getLogger("discord.sync");
 
@@ -23,7 +30,7 @@ const log = getLogger("discord.sync");
 export const SYNC_DEBOUNCE_MS = 2_000;
 
 /** The registry methods the syncer reads. */
-export type CommandSource = Pick<CommandRegistry, "slashSpecs" | "groupInfo" | "version">;
+export type CommandSource = Pick<CommandRegistry, "slashSpecs" | "groupInfo" | "menus" | "version">;
 
 /** The slice of the REST client the syncer uses (`put` with a body). */
 export interface SyncRest {
@@ -33,7 +40,7 @@ export interface SyncRest {
 /** The JSON bodies of the registry's current commands (invalid ones left out). */
 export function currentCommands(registry: CommandSource): SlashCommandJson[] {
   const tree = buildTree(registry.slashSpecs(), (path) => registry.groupInfo(path) ?? null);
-  return validCommands(toCreateCommands(tree));
+  return validCommands([...toCreateCommands(tree), ...toContextMenuCommands(registry.menus())]);
 }
 
 export interface SyncOptions {

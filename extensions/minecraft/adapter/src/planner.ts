@@ -1,7 +1,12 @@
 // Works backwards from an item she wants to the steps that get it in survival: recipes, smelting,
 // the blocks that drop it and the pickaxe tier each block needs (harvest.ts), the crafting
-// table / furnace each step stands at. Pure: inventory in, steps out. The runner (obtain.ts)
-// executes the first step and plans again from what the game really shows.
+// table / furnace each step stands at, and food: the animals that drop meat (hunting), the
+// furnace that cooks it, the crops a farm gives. Pure: inventory in, steps out. The runner
+// (obtain.ts) executes the first step and plans again from what the game really shows.
+//
+// Food came last (docs/design/v4-plan.md §11.2 item 4): on 2026-11-08 she asked `obtain` for
+// bread, cooked beef, cod and apples dozens of times and it only knew crafting, so every answer
+// was "no recipe" or "missing wheat".
 //
 // Ingredients that any member of a vanilla tag satisfies are groups: `#logs`, `#planks`
 // (`oak_planks` from `oak_log`, ...), `#stone` (cobblestone, cobbled deepslate, blackstone) and
@@ -24,6 +29,39 @@ const GROUPS: Record<string, string[]> = {
   "#planks": [...WOODS, ...STEMS, "bamboo"].map((w) => `${w}_planks`),
   "#stone": ["cobblestone", "cobbled_deepslate", "blackstone"],
   "#coal": ["coal", "charcoal"],
+  /** Raw meat, what hunting any animal gives. */
+  "#meat": ["beef", "porkchop", "mutton", "chicken", "rabbit"],
+  /** Anything worth eating (no rotten flesh, no spider eyes). */
+  "#food": [
+    "cooked_beef",
+    "cooked_porkchop",
+    "cooked_mutton",
+    "cooked_chicken",
+    "cooked_rabbit",
+    "cooked_cod",
+    "cooked_salmon",
+    "bread",
+    "baked_potato",
+    "golden_carrot",
+    "apple",
+    "carrot",
+    "potato",
+    "beetroot",
+    "melon_slice",
+    "sweet_berries",
+    "glow_berries",
+    "dried_kelp",
+    "cookie",
+    "pumpkin_pie",
+    "mushroom_stew",
+    "beef",
+    "porkchop",
+    "mutton",
+    "chicken",
+    "rabbit",
+    "cod",
+    "salmon",
+  ],
 };
 
 /** The planks a log makes (`stripped_birch_wood` → `birch_planks`). */
@@ -69,6 +107,7 @@ const RECIPES: Record<string, Recipe> = {
   shield: recipe(1, [["#planks", 6], ["iron_ingot", 1]]),
   bowl: recipe(4, [["#planks", 3]]),
   ladder: recipe(3, [["stick", 7]]),
+  bread: recipe(1, [["wheat", 3]]),
 };
 
 // Tools and armour of every material.
@@ -102,6 +141,49 @@ const SMELTING: Record<string, string> = {
   glass: "sand",
   stone: "cobblestone",
   smooth_stone: "stone",
+  cooked_beef: "beef",
+  cooked_porkchop: "porkchop",
+  cooked_mutton: "mutton",
+  cooked_chicken: "chicken",
+  cooked_rabbit: "rabbit",
+  cooked_cod: "cod",
+  cooked_salmon: "salmon",
+  baked_potato: "potato",
+  dried_kelp: "kelp",
+};
+
+/** Items she gets by killing animals → the animals that drop them. */
+const HUNTED: Record<string, string[]> = {
+  beef: ["cow", "mooshroom"],
+  porkchop: ["pig"],
+  mutton: ["sheep"],
+  chicken: ["chicken"],
+  rabbit: ["rabbit"],
+  cod: ["cod"],
+  salmon: ["salmon"],
+  leather: ["cow", "mooshroom"],
+  feather: ["chicken"],
+  "#meat": ["cow", "pig", "sheep", "chicken", "rabbit", "mooshroom"],
+};
+
+/** The meat each animal she hunts drops (what `hunt {entity}` is for). */
+export const ANIMAL_DROP: Record<string, string> = {
+  cow: "beef",
+  mooshroom: "beef",
+  pig: "porkchop",
+  sheep: "mutton",
+  chicken: "chicken",
+  rabbit: "rabbit",
+  cod: "cod",
+  salmon: "salmon",
+};
+
+/** Crops a farm harvests (Baritone `farm`: ripe ones only, replanted) → their blocks. */
+const GATHERED: Record<string, string[]> = {
+  wheat: ["wheat"],
+  carrot: ["carrots"],
+  potato: ["potatoes"],
+  beetroot: ["beetroots"],
 };
 
 /** Items mined from blocks (Baritone counts the drops of these blocks in the inventory). */
@@ -125,6 +207,7 @@ const MINED: Record<string, string[]> = {
   gravel: ["gravel"],
   clay_ball: ["clay"],
   obsidian: ["obsidian"],
+  melon_slice: ["melon"],
 };
 
 /** The pickaxe that reaches each tier. */
@@ -149,12 +232,20 @@ export type Step =
   | { kind: "mine"; item: string; blocks: string[]; count: number }
   | { kind: "craft"; item: string; count: number; table: boolean }
   | { kind: "smelt"; item: string; input: string; count: number }
-  | { kind: "place"; item: "crafting_table" | "furnace" };
+  | { kind: "place"; item: "crafting_table" | "furnace" }
+  /** Kill one of `entities` after another until `count` more of `item` dropped. */
+  | { kind: "hunt"; item: string; entities: string[]; count: number }
+  /** Harvest ripe `crops` (and replant) until `count` more of `item`. */
+  | { kind: "gather"; item: string; crops: string[]; count: number };
 
-/** Stations she can already use where she stands (from `observe`'s visible blocks). */
+/** What she can use where she stands (from `observe`'s visible blocks and creatures). */
 export interface World {
   table?: boolean;
   furnace?: boolean;
+  /** Animals in sight (entity types). */
+  animals?: string[];
+  /** Crop blocks in sight. */
+  crops?: string[];
 }
 
 /** The target cannot be planned (unknown item, a loop); the message goes back to her. */
@@ -168,13 +259,37 @@ export function normalizeItem(raw: string): string {
   const id = raw.trim().toLowerCase().replace(/^minecraft:/, "").replace(/\s+/g, "_");
   if (id === "planks" || id === "wood_planks") return "#planks";
   if (id === "log" || id === "logs" || id === "wood") return "#logs";
+  if (id === "food" || id === "食物") return "#food";
+  if (id === "meat" || id === "raw_meat") return "#meat";
   return id;
 }
 
 /** Whether the planner knows how to get `item` at all. */
 export function knows(item: string): boolean {
   if (item in RECIPES || item in SMELTING || item in MINED) return true;
+  if (item in HUNTED || item in GATHERED || item === "#food") return true;
   return item.endsWith("_planks") && planksOf(item) !== undefined;
+}
+
+/** The food the world around her offers most cheaply (what `obtain food` goes for). */
+function foodChoice(inv: Inventory, world: World): string {
+  const cook = world.furnace === true || (inv.furnace ?? 0) > 0;
+  const animal = world.animals?.find((a) => a in ANIMAL_DROP);
+  if (animal !== undefined) {
+    const raw = ANIMAL_DROP[animal] as string;
+    const cooked = Object.keys(SMELTING).find((out) => SMELTING[out] === raw);
+    return cook && cooked !== undefined ? cooked : raw;
+  }
+  if (world.crops?.includes("wheat")) return "bread";
+  if (world.crops?.includes("carrots")) return "carrot";
+  if (world.crops?.includes("potatoes")) return cook ? "baked_potato" : "potato";
+  // Nothing in sight: go hunting (the runner explores until an animal shows up).
+  return "#meat";
+}
+
+/** Why `item` cannot be planned, and what she can do instead. */
+export function unknownText(item: string): string {
+  return `不知道怎麼取得${itemName(item)}(只會砍樹、挖礦、合成、用熔爐燒、打獵和收成)。要吃的用 obtain {item:"food"},或 cooked_beef、cooked_porkchop、bread 這類`;
 }
 
 class Planner {
@@ -263,6 +378,10 @@ class Planner {
   }
 
   #produce(item: string, missing: number, depth: number): void {
+    if (item === "#food") {
+      this.#produce(foodChoice(this.#inv, this.#world), missing, depth);
+      return;
+    }
     // `oak_planks` asked for by name: any planks recipe, crafted as that wood when logs allow.
     const key = item.endsWith("_planks") && planksOf(item) ? "#planks" : item;
     const r = RECIPES[key];
@@ -292,7 +411,21 @@ class Planner {
       this.#add(item, amount);
       return;
     }
-    throw new PlanError(`不知道怎麼取得${zh(item)}(只會砍樹、挖礦、合成和用熔爐燒的東西)`);
+    const animals = HUNTED[item];
+    if (animals) {
+      const amount = this.#amount(item, missing);
+      this.steps.push({ kind: "hunt", item, entities: animals, count: amount });
+      this.#add(item, amount);
+      return;
+    }
+    const crops = GATHERED[item];
+    if (crops) {
+      const amount = this.#amount(item, missing);
+      this.steps.push({ kind: "gather", item, crops, count: amount });
+      this.#add(item, amount);
+      return;
+    }
+    throw new PlanError(unknownText(item));
   }
 }
 
@@ -310,7 +443,14 @@ export function plan(target: string, count: number, inv: Inventory, world: World
   return second.steps;
 }
 
-const GROUP_NAMES: Record<string, string> = { "#logs": "原木", "#planks": "木材", "#stone": "鵝卵石", "#coal": "煤炭" };
+const GROUP_NAMES: Record<string, string> = {
+  "#logs": "原木",
+  "#planks": "木材",
+  "#stone": "鵝卵石",
+  "#coal": "煤炭",
+  "#meat": "生肉",
+  "#food": "食物",
+};
 
 /** Display name of an item or group. */
 export function itemName(item: string): string {
@@ -329,5 +469,9 @@ export function describeStep(step: Step): string {
       return `用熔爐燒${name(step.item)}×${step.count}`;
     case "place":
       return `放下${zh(step.item)}`;
+    case "hunt":
+      return `打${step.entities.slice(0, 3).map(zh).join("、")}拿${name(step.item)}×${step.count}`;
+    case "gather":
+      return `收成${name(step.item)}×${step.count}`;
   }
 }

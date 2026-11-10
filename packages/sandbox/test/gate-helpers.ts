@@ -29,6 +29,7 @@ import {
   v2Payload,
 } from "@miyoria/types";
 import {
+  type PersistentWorkspace,
   ProposedTools,
   type RunRequest,
   type RunResult,
@@ -96,6 +97,9 @@ export class FakeSandbox implements Sandbox {
   readonly requests: RunRequest[] = [];
   stdout = "42\n";
   stderr = "";
+  /** Her workspace (a real one in a temp directory when a test sets it). */
+  workspace: PersistentWorkspace | null = null;
+  networkAllow: readonly string[] = [];
   readonly tools = {
     list: async () => [],
     read: async () => null,

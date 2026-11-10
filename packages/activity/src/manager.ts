@@ -42,6 +42,7 @@ import {
   type HerActivity,
   type HerBroadcast,
   type HerPresence,
+  isJsonObject,
   type JsonObject,
   type JsonValue,
   NOTICE_TOPIC,
@@ -71,7 +72,7 @@ import {
   voiceLane,
 } from "@miyoria/types";
 import { type ActivityConfig, defaultActivityConfig } from "./config.js";
-import { Facts, startedSession } from "./facts.js";
+import { BROWSE_CAPABILITIES, Facts, GATE_DECISION_TOPIC, startedSession } from "./facts.js";
 import { type ActivityPort, failureCode, type PrimaryStep, StepError } from "./port.js";
 import { SteerDesk } from "./steer.js";
 import { answerText, doneText, endedText, failedText, what } from "./texts.js";
@@ -201,6 +202,15 @@ function impliedPrincipal(p: Principal): Principal {
   return p.kind === "command" || p.kind === "panel" ? p : Principals.director(p.context);
 }
 
+/** OBS did not start streaming (`error`: the last attempt's, null when it just did not). */
+function obsFailure(error: unknown): StepError {
+  return new StepError(
+    error === null ? "precondition" : failureCode(error),
+    error === null ? "OBS 沒有開始直播" : `OBS 沒有開始直播:${errorMessage(error)}`,
+    { cause: error ?? undefined },
+  );
+}
+
 export class ActivityService implements ActivityManager, ActivityRouter, TaskSteerService {
   readonly #port: ActivityPort;
   readonly #config: ActivityConfig;
@@ -225,6 +235,9 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
   #restoring: Restoring | null = null;
   #failureTimer: ReturnType<typeof setTimeout> | null = null;
   #chatting = false;
+  /** Browsing the web (v4 §8.1), and what. */
+  #browse: { target: string | null } | null = null;
+  #browseTimer: ReturnType<typeof setTimeout> | null = null;
   #override: SceneOverride | null = null;
   #overrideTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -364,8 +377,15 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
   #refusal(request: ActivityRequest): { code: TaskFailureCode; detail: string } | null {
     if (request.type === "start") {
       switch (request.activity) {
+        // v4 §8.1: browsing is her web reading (`web.search` / `web.read`), not the old Threads
+        // extension; it needs the web module and does not take over a game.
         case "browse":
-          return { code: "precondition", detail: "瀏覽活動(Threads)目前關閉中" };
+          if (!this.#port.has("web.search")) {
+            return { code: "precondition", detail: "網路搜尋沒有啟用,沒辦法逛網路" };
+          }
+          return this.facts.session === null
+            ? null
+            : { code: "precondition", detail: "正在玩遊戲,先停掉遊戲再去逛網路" };
         case "singing":
           return { code: "invalid", detail: "唱歌要用點歌,不是在這裡開始" };
         case "game":
@@ -477,6 +497,9 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
           return already(null);
         }
         if (request.activity === "chatting" && this.#chatting) return already(null);
+        if (request.activity === "browse" && this.#browse?.target === request.target) {
+          return already(null);
+        }
         return fresh();
       }
       case "stop": {
@@ -501,15 +524,71 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
     }
   }
 
-  /** The activity running per the facts (game session, chatting). */
+  /** The activity running per the facts (game session, browsing, chatting). */
   #runningActivity(): Exclude<ActivityType, "idle"> | null {
     if (this.facts.session) return "game";
+    if (this.#browse) return "browse";
     if (this.#chatting) return "chatting";
     return null;
   }
 
+  // ---- browsing ---------------------------------------------------------------------------
+
+  /**
+   * She is browsing `target` (a search, a site) as of now: it shows until `browse_idle_ms` after
+   * her last search or page, or until she stops it or starts something else.
+   */
+  #browsing(target: string | null): void {
+    this.#browse = { target: target ?? this.#browse?.target ?? null };
+    if (this.#browseTimer !== null) clearTimeout(this.#browseTimer);
+    this.#browseTimer = setTimeout(() => {
+      this.#browseTimer = null;
+      this.#endBrowse();
+    }, this.#config.browse_idle_ms);
+    this.#browseTimer.unref?.();
+    this.#changed();
+  }
+
+  #endBrowse(): void {
+    if (this.#browseTimer !== null) clearTimeout(this.#browseTimer);
+    this.#browseTimer = null;
+    if (this.#browse === null) return;
+    this.#browse = null;
+    this.#changed();
+  }
+
+  /** A `gate.decision`: her own web call the gate allowed means she is browsing. */
+  #decision(payload: JsonValue): void {
+    if (!isJsonObject(payload) || payload.allowed !== true) return;
+    const capability = typeof payload.capability === "string" ? payload.capability : "";
+    if (!BROWSE_CAPABILITIES.includes(capability)) return;
+    // What she looks up for someone, or in the middle of a game or a song, is not her browsing.
+    const principal = isJsonObject(payload.principal) ? payload.principal : null;
+    if (principal?.kind !== "self") return;
+    if (this.facts.session !== null || this.facts.song !== null) return;
+    const args = isJsonObject(payload.args) ? payload.args : {};
+    let target: string | null = null;
+    if (typeof args.query === "string" && args.query.trim() !== "") {
+      target = [...args.query.trim()].slice(0, 60).join("");
+    } else if (typeof args.url === "string") {
+      try {
+        target = new URL(args.url).hostname;
+      } catch {
+        target = null;
+      }
+    }
+    this.#browsing(target);
+  }
+
+  /** Her broadcast is up: Go Live, or OBS (unless OBS streams to the hub on its own). */
   #broadcasting(): boolean {
+    if (this.#config.obs_hub) return this.facts.liveGuild() !== null;
     return this.facts.liveGuild() !== null || this.facts.stage.streaming;
+  }
+
+  /** Ending the broadcast stops OBS too (not with `obs_hub`: the website owns OBS streaming). */
+  #obsEndsWithLive(): boolean {
+    return !this.#config.obs_hub && this.facts.stage.streaming && this.#port.has("stage.stream");
   }
 
   /** OBS is streaming, or it is not part of the broadcast. */
@@ -915,6 +994,8 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
     }
     this.#adopted = true;
     this.#changed();
+    // With the hub the node pulls OBS's stream from it: OBS publishes first.
+    const hubNote = this.#config.obs_hub ? await this.#startObsFirst(entry, signal) : "";
     const before = this.facts.goliveLast.get(guild);
     const args: JsonObject = {
       guild,
@@ -928,7 +1009,7 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
     };
     // The node goes live on the source's first frames, so OBS starts while Go Live is `starting`:
     // waiting for `live` first would wait for itself.
-    const note = await this.#startObs(entry, guild, ended, signal);
+    const note = this.#config.obs_hub ? hubNote : await this.#startObs(entry, guild, ended, signal);
     let outcome: "live" | "failed" | "stopped" | null = null;
     const up = await this.#until(
       () => {
@@ -973,6 +1054,38 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
     if (this.facts.stage.streaming) return "";
     const failed = () => ended() !== null;
     await this.#until(failed, this.#config.obs_start_delay_ms, signal);
+    const pressed = await this.#pressObs(entry, failed, signal);
+    if (pressed.streaming) return "";
+    if (failed()) return "";
+    await this.#rollbackGolive(entry, guild);
+    throw obsFailure(pressed.error);
+  }
+
+  /**
+   * OBS's half of a broadcast with `obs_hub`, before Go Live: OBS publishes to the hub, then
+   * `obs_start_delay_ms` passes so the hub has the stream before the node's ffmpeg pulls it.
+   * Nothing to roll back when it fails (Go Live has not started; OBS is the website's).
+   */
+  async #startObsFirst(entry: Entry, signal: AbortSignal): Promise<string> {
+    if (!this.#config.obs || !this.#port.has("stage.stream")) return "";
+    if (!this.facts.stage.connected) return "沒有連上直播機,只有 Go Live";
+    if (!this.facts.stage.obs) throw new StepError("precondition", "OBS 沒開");
+    if (this.facts.stage.streaming) return "";
+    const pressed = await this.#pressObs(entry, () => false, signal);
+    if (!pressed.streaming) throw obsFailure(pressed.error);
+    await this.#until(() => false, this.#config.obs_start_delay_ms, signal);
+    return "";
+  }
+
+  /**
+   * Presses OBS "Start Streaming" up to `obs_attempts` times, until it streams or `failed()`;
+   * `error`: the last attempt's (null when OBS answered but did not stream).
+   */
+  async #pressObs(
+    entry: Entry,
+    failed: () => boolean,
+    signal: AbortSignal,
+  ): Promise<{ streaming: boolean; error: unknown }> {
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= this.#config.obs_attempts && !failed(); attempt++) {
       try {
@@ -986,7 +1099,7 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
           this.facts.stage.streaming;
         if (streaming) {
           this.facts.stage = { ...this.facts.stage, streaming: true };
-          return "";
+          return { streaming: true, error: null };
         }
         lastError = null;
       } catch (error) {
@@ -1002,19 +1115,13 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
         await this.#until(failed, Math.max(this.#config.obs_start_delay_ms, 1_000), signal);
       }
     }
-    if (failed()) return "";
-    await this.#rollbackGolive(entry, guild);
-    throw new StepError(
-      lastError === null ? "precondition" : failureCode(lastError),
-      lastError === null ? "OBS 沒有開始直播" : `OBS 沒有開始直播:${errorMessage(lastError)}`,
-      { cause: lastError ?? undefined },
-    );
+    return { streaming: false, error: lastError };
   }
 
-  /** Stops a half-started broadcast again, OBS first (best effort). */
+  /** Stops a half-started broadcast again, OBS first (best effort; OBS stays with `obs_hub`). */
   async #rollbackGolive(entry: Entry, guild: string): Promise<void> {
     const signal = new AbortController().signal;
-    if (this.facts.stage.streaming && this.#port.has("stage.stream")) {
+    if (this.#obsEndsWithLive()) {
       try {
         await this.#step(entry, "stage.stream", { action: "stop" }, false, signal);
         this.facts.stage = { ...this.facts.stage, streaming: false };
@@ -1030,7 +1137,10 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
     }
   }
 
-  /** Curtain and OBS first, then Go Live (`primary`: the request was `stream.stop` itself). */
+  /**
+   * Curtain and OBS first, then Go Live (`primary`: the request was `stream.stop` itself). With
+   * `obs_hub` OBS keeps streaming (to the website): only Go Live ends.
+   */
   async #stopLive(entry: Entry, primary: boolean, signal: AbortSignal): Promise<string> {
     const guild = this.facts.liveGuild();
     this.#broadcastPhase = {
@@ -1038,7 +1148,7 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
       task: entry.record.id,
     };
     this.#changed();
-    if (this.facts.stage.streaming && this.#port.has("stage.stream")) {
+    if (this.#obsEndsWithLive()) {
       try {
         // `stage.stream stop` shows the ending scene first (the curtain).
         await this.#step(entry, "stage.stream", { action: "stop" }, false, signal);
@@ -1071,9 +1181,15 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
     signal: AbortSignal,
   ): Promise<string> {
     if (request.activity === "chatting") {
+      this.#endBrowse();
       this.#chatting = true;
       return "";
     }
+    if (request.activity === "browse") {
+      this.#browsing(request.target);
+      return "";
+    }
+    this.#endBrowse();
     const target = request.target ?? "";
     if (this.facts.session?.game === target) {
       entry.name = this.facts.session.name;
@@ -1139,6 +1255,10 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
       this.#chatting = false;
       if (request.activity === "chatting") return "";
     }
+    if (request.activity === "browse" || (request.activity === null && this.#browse !== null)) {
+      this.#endBrowse();
+      if (request.activity === "browse") return "";
+    }
     const session = this.facts.session;
     if (session === null) return "本來就沒有在玩";
     entry.name = session.name;
@@ -1192,6 +1312,10 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
         if (event !== null) this.#steering.observeTask(task.owner, event);
         return;
       }
+    }
+    if (env.event.type === "custom" && env.event.data.topic === GATE_DECISION_TOPIC) {
+      this.#decision(env.event.data.payload);
+      return;
     }
     if (!this.facts.apply(env)) return;
     const session = this.facts.session;
@@ -1307,7 +1431,8 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
     const guild = this.facts.liveGuild();
     if (guild !== null) {
       this.#goliveSeen = true;
-      // Go Live came up without a task (the node's own controls): OBS follows it.
+      // Go Live came up without a task (the node's own controls): OBS follows it. With
+      // `obs_hub` OBS normally streams already (the node pulls from it): nothing to adopt.
       if (
         !busy &&
         !this.#adopted &&
@@ -1330,10 +1455,11 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
         );
       }
     } else if (this.#goliveSeen && !busy) {
-      // Go Live ended without a task (failed, the node went away): OBS stops with it.
+      // Go Live ended without a task (failed, the node went away): OBS stops with it (not with
+      // `obs_hub`: OBS keeps streaming to the website).
       this.#goliveSeen = false;
       this.#adopted = false;
-      if (this.facts.stage.streaming && this.#port.has("stage.stream")) {
+      if (this.#obsEndsWithLive()) {
         this.submit(
           {
             request: { type: "stop_live" },
@@ -1555,7 +1681,8 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
       return { type, guild, golive: golive(guild), obs, task: phase.task, since };
     }
     const guild = this.facts.liveGuild();
-    if (guild === null && !obs) return { type: "off" };
+    // With `obs_hub`, OBS streaming without Go Live is the website's, not her broadcast.
+    if (guild === null && (!obs || this.#config.obs_hub)) return { type: "off" };
     const g = guild ?? this.facts.voiceChannel()?.scope ?? "";
     const type =
       guild !== null && this.facts.golive.get(guild)?.state === "starting" ? "starting" : "live";
@@ -1610,6 +1737,18 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
       const target = restoring.game.game;
       const since = this.#stable("activity", `restoring:${target}`);
       return { type: "game", target, phase: "starting", task: null, failure: null, since };
+    }
+    const browse = this.#browse;
+    if (browse !== null) {
+      const since = this.#stable("activity", `browse:${browse.target ?? ""}`);
+      return {
+        type: "browse",
+        target: browse.target,
+        phase: "running",
+        task: null,
+        failure: null,
+        since,
+      };
     }
     if (this.#chatting) {
       const since = this.#stable("activity", "chatting");
@@ -1704,8 +1843,10 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
     for (const e of [...this.#pending]) e.controller.abort(new StepError("cancelled", "正在關閉"));
     if (this.#failureTimer !== null) clearTimeout(this.#failureTimer);
     if (this.#overrideTimer !== null) clearTimeout(this.#overrideTimer);
+    if (this.#browseTimer !== null) clearTimeout(this.#browseTimer);
     this.#failureTimer = null;
     this.#overrideTimer = null;
+    this.#browseTimer = null;
   }
 }
 

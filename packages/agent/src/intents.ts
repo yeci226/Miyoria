@@ -111,6 +111,17 @@ export class AgentIntents implements IntentSink, ImpulseHost {
   async open(impulse: Impulse, signal?: AbortSignal): Promise<ImpulseRun> {
     const talkOnly = impulse.capability === CHAT_START || impulse.capability === CHAT_DM;
     const main = this.agent.mainline;
+    const attention = impulse.attention ?? null;
+    if (main !== null && attention !== null) {
+      // A retry of something a turn is already on (the context answered too late for the first
+      // try, 2026-11-10 11:07) is that turn, not a second one.
+      const live = main.liveTurn(attention);
+      if (live !== null) return { status: "started", turn: live, task: null, detail: "已經在處理" };
+      const promise = /^commitment:(.+)$/.exec(attention.key)?.[1];
+      if (promise !== undefined && !main.commitments.open().some((c) => c.id === promise)) {
+        return { status: "refused", reason: "repeat", detail: "這個承諾已經結束了" };
+      }
+    }
     if (main !== null && impulse.target.context !== null) {
       this.agent.yieldTo(impulse.target.context, claimOf(impulse));
     }

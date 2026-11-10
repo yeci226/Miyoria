@@ -13,6 +13,7 @@
 // | `self.ledger`   | `ArbiterKey.ledger(context)`    | `MindKey.unanswered(context)`          |
 // | `self.notices`  | `agent.notice` events the agent collected                                |
 // | people (data)   | `AffectStateKey` person cards   | `SocialSignalsKey` + `SelfStateKey`    |
+// | feeling (data)  | `AffectStateKey.snapshot()`     | `SelfStateKey`                         |
 //
 // Her own state carries no text other people wrote (emotion causes, names): those stay in the
 // data part. One affinity scale: `relationshipLabel()`.
@@ -26,6 +27,7 @@ import {
   affinityStep,
   type ContextKey,
   EMOTION_LABELS,
+  type EmotionName,
   type EmotionReading,
   type Goal,
   type HerStatus,
@@ -62,6 +64,8 @@ export interface SelfSources {
   goals?: readonly Goal[] | null;
   /** Handles of the people present (goals about them are relevant). */
   present?: readonly string[];
+  /** The people present here, by person (a cause about one of them may be repeated here). */
+  presentPeople?: readonly PersonId[];
   // Fallbacks.
   mood?: Mood | null;
   self?: SelfState | null;
@@ -87,9 +91,25 @@ function clock(ms: number, offsetMinutes: number): string {
   return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
 }
 
-/** `喜、害羞` (names only: causes may quote people). */
-function emotionNames(emotions: readonly EmotionReading[]): string {
-  return emotions.map((e) => EMOTION_LABELS[e.name] ?? e.name).join("、");
+/** The emotions whose label is one literary character: `很喜` does not read. */
+const FELT_WORDS: Partial<Record<EmotionName, string>> = {
+  joy: "開心",
+  anger: "生氣",
+  sorrow: "難過",
+  fear: "害怕",
+  surprise: "驚訝",
+  disgust: "嫌惡",
+};
+
+/** `很開心` (no cause: causes may quote people). */
+function feltWord(e: EmotionReading): string {
+  const degree = e.intensity >= 0.7 ? "很" : e.intensity >= 0.4 ? "有點" : "微微";
+  return `${degree}${FELT_WORDS[e.name] ?? EMOTION_LABELS[e.name] ?? e.name}`;
+}
+
+/** `很開心、有點害羞`. */
+function feltLine(emotions: readonly EmotionReading[]): string {
+  return emotions.map(feltWord).join("、");
 }
 
 /** The drives that stand out, in words. */
@@ -114,12 +134,12 @@ export function moodBlock(src: SelfSources): string {
   let shown: ShownEmotion | null;
   if (snap !== null) {
     lines.push(`你現在的心情:${short(snap.mood_line, 60)}`);
-    if (snap.top.length > 0) lines.push(`心裡最強的感受:${emotionNames(snap.top.slice(0, 3))}`);
+    if (snap.top.length > 0) lines.push(`心裡最強的感受:${feltLine(snap.top.slice(0, 3))}`);
     shown = snap.shown;
   } else {
     if (src.mood) lines.push(`你現在的心情:${moodLine(src.mood)}`);
     const felt = src.self?.emotions().slice(0, 3) ?? [];
-    if (felt.length > 0) lines.push(`心裡最強的感受:${emotionNames(felt)}`);
+    if (felt.length > 0) lines.push(`心裡最強的感受:${feltLine(felt)}`);
     shown = src.self?.shown() ?? null;
     const self = src.self;
     if (self) {
@@ -138,16 +158,47 @@ export function moodBlock(src: SelfSources): string {
   // full, and the feed was refused. The economy refuses under `full_below` (0.15 by default).
   const hunger = src.self?.drives().hunger;
   if (hunger !== undefined) {
-    if (hunger < FULL_BELOW) lines.push("你吃飽了,現在吃不下:別跟人要吃的,有人要餵你也會被擋。");
+    if (hunger < FULL_BELOW) lines.push("你吃飽了,現在吃不下;有人要餵你也會被擋。");
     else if (snap !== null && hunger >= STRONG_DRIVE) lines.push(`你現在${WANTS.hunger}。`);
   }
-  if (shown) lines.push(shownHint(shown));
+  const hint = shown ? shownHint(shown) : "";
+  if (hint !== "") lines.push(hint);
   if (src.crushHere) {
-    lines.push(
-      "你偷偷喜歡的人在場(「在場的人」裡標著)。這是祕密:不要說出來、被問也不承認,只會在小地方露餡。",
-    );
+    lines.push("你偷偷喜歡的人在場(「在場的人」裡標著)。這是你的祕密,你不想讓任何人知道。");
   }
   return lines.join("\n");
+}
+
+const MAX_CAUSE = 80;
+
+/** What the self module stores for a cause it was not told: the emotion's own name. */
+const UNTOLD_CAUSES: ReadonlySet<string> = new Set([
+  ...Object.keys(EMOTION_LABELS),
+  ...Object.values(EMOTION_LABELS),
+  ...Object.values(PERSON_EMOTION_LABELS),
+]);
+
+/**
+ * What stirred her strongest emotion, for the `feeling` data block: a cause may quote people, so
+ * it never goes in `moodBlock`. A reading does not say where it happened and a cause can come
+ * from a DM, so it is repeated only with the person it is about present (in their own DM they
+ * are). Empty otherwise, or when the cause is only the emotion's name: the mood block already
+ * names the emotion.
+ *
+ * `person === null` is not safe either: an appraisal's `toward` can be null (or a name nobody
+ * knows) while its `cause` is the model's own sentence about whatever conversation it read, a
+ * private one included.
+ */
+export function feelingCauseBody(src: SelfSources): string {
+  return safely(() => {
+    const snap = src.affect?.snapshot() ?? null;
+    const top = snap !== null ? snap.top[0] : src.self?.emotions()[0];
+    if (top === undefined) return "";
+    const cause = short(top.cause, MAX_CAUSE);
+    if (cause === "" || UNTOLD_CAUSES.has(cause)) return "";
+    if (top.person === null || !src.presentPeople?.includes(top.person)) return "";
+    return `讓你${feltWord(top)}的事:${cause}`;
+  });
 }
 
 /** `self.activity`: where she is and what she is doing. */
@@ -249,16 +300,21 @@ export function ledgerBlock(src: SelfSources): string {
   const lines: string[] = [];
   const l = view.limits;
   const offset = src.utcOffsetMinutes ?? -new Date(src.now).getTimezoneOffset();
-  const parts = [
-    `今天你自己開了 ${l.initiatives_today} 次話題${l.initiative_cap === null ? "" : `(上限 ${l.initiative_cap})`}`,
-  ];
+  // 「今天你自己開了 0 次話題(上限 12)」 on every turn somebody talked to her was a number with
+  // nothing to do about it: the count is said once she has started something.
+  const parts =
+    l.initiatives_today > 0
+      ? [
+          `今天你自己開了 ${l.initiatives_today} 次話題${l.initiative_cap === null ? "" : `(上限 ${l.initiative_cap})`}`,
+        ]
+      : [];
   if (l.unanswered_streak > 0) parts.push(`最近連續 ${l.unanswered_streak} 次沒人接`);
   if (l.next_initiative_at !== null) {
     parts.push(`下次可以自己開口:${clock(Date.parse(l.next_initiative_at), offset)} 之後`);
   }
   if (l.quiet_hours?.active) parts.push("現在是安靜時段");
   if (l.paused) parts.push("主人暫停了你的自主行動");
-  lines.push(`${parts.join(";")}。`);
+  if (parts.length > 0) lines.push(`${parts.join(";")}。`);
   for (const b of l.blocked.slice(0, 3)) {
     lines.push(`- ${short(b.capability, 30)} 暫時不行:${short(b.reason, 50)}`);
   }

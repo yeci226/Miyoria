@@ -483,6 +483,15 @@ describe("voice.link", () => {
     expect(failed.state).toBe("failed");
     expect(failed.error).toBe("ffmpeg not found");
     expect(link.golive("g1")?.error).toBe("ffmpeg not found");
+
+    // Pulling from a hub (MediaMTX) instead of being the RTMP server is said on the wire.
+    await link.goliveStart({ guild: "g1", source: "rtmp://127.0.0.1:1935/live/x", listen: false });
+    expect(await node.recvJson()).toEqual({
+      type: "golive_start",
+      guild: "g1",
+      source: "rtmp://127.0.0.1:1935/live/x",
+      listen: false,
+    });
   });
 
   it("golive_without_a_node_fails_and_disconnect_stops_it", async () => {

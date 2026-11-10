@@ -4,7 +4,15 @@
 // the Stage node to show (muted) in OBS.
 
 import { isAbsolute, relative, resolve } from "node:path";
-import type { Clock, PlaybackState, PlayChunk, SongCue, VoicePlayer } from "@miyoria/types";
+import {
+  type Clock,
+  type PlaybackState,
+  type PlayChunk,
+  parseSongBeats,
+  type SongBeats,
+  type SongCue,
+  type VoicePlayer,
+} from "@miyoria/types";
 import type { SingWorker, SongMeta } from "./client.js";
 
 export interface PlayerDeps {
@@ -38,6 +46,13 @@ export function songVideoPath(dir: string, song: SongMeta): string | null {
   const full = resolve(root, song.id, file);
   const rel = relative(root, full);
   return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? null : full;
+}
+
+/** The song's beat for the cue (ms), when the worker found one. */
+export function songBeats(song: SongMeta): SongBeats | null {
+  const beats = song.beats;
+  if (!beats) return null;
+  return parseSongBeats({ bpm: beats.bpm, times_ms: beats.times.map((t) => t * 1000) });
 }
 
 /** How long to wait for the node to report a started playback before giving up on lyrics. */
@@ -147,18 +162,15 @@ async function cueLyrics(
   if (signal.aborted || handle.state() !== "started") return;
   const startedAt = d.clock.now();
   const video = d.videoDir === null ? null : songVideoPath(d.videoDir, song);
-  d.cue(
-    video === null
-      ? { state: "started", song: song.id, title: song.title, duration_ms: durationMs }
-      : {
-          state: "started",
-          song: song.id,
-          title: song.title,
-          video,
-          offset_ms: 0,
-          duration_ms: durationMs,
-        },
-  );
+  const beats = songBeats(song);
+  d.cue({
+    state: "started",
+    song: song.id,
+    title: song.title,
+    ...(video === null ? {} : { video, offset_ms: 0 }),
+    duration_ms: durationMs,
+    ...(beats === null ? {} : { beats }),
+  });
   const lines = d.lyrics && song.lyrics?.synced ? song.lyrics.lines : [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];

@@ -45,3 +45,12 @@ pytest-of-*/
 .tmp-build/
 # The owner's panel pictures (background, login): game art, local only
 apps/panel/public/*.local.*
+
+# Live2D Cubism Core and Web Framework, fetched per apps/card-studio/vendor.md (Live2D licences)
+/apps/card-studio/vendor/
+/apps/card-studio/dist/
+
+# MediaMTX binary (downloaded, see workers/mediamtx/README.md)
+workers/mediamtx/mediamtx.exe
+workers/mediamtx/LICENSE
+workers/mediamtx/mediamtx.log

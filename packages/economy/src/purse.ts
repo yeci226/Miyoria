@@ -18,6 +18,7 @@ import {
   BountyStoreKey,
   type CoinEntry,
   type CoinPost,
+  DealStoreKey,
   GoalStoreKey,
 } from "@miyoria/store";
 import {
@@ -335,7 +336,40 @@ export class Purse {
     for (const b of bounties ?? []) {
       parts.push(`你貼的懸賞[${shortId(b.id)}]「${b.task}」${b.reward} ${c.currency}`);
     }
+    for (const line of await this.owedMeals()) parts.push(line);
     return `${parts.join("。")}。`;
+  }
+
+  /**
+   * Who still owes her a meal: they promised a reward for something she did, did not pay in time
+   * (the deal is `broken`) and have not fed her since, for `owe_days` after it broke. She remembers
+   * it as a fact, not a grudge: it changes nothing about how she treats anyone (the deal's own
+   * trust and affinity cost was paid when it broke).
+   */
+  async owedMeals(): Promise<string[]> {
+    const deals = this.e.services.get(DealStoreKey);
+    if (!deals) return [];
+    const c = this.e.config;
+    const now = this.e.now();
+    const since = toTimestamp(now - c.owe_days * DAY_MS);
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const deal of await deals.byStatus(this.e.profile, ["broken"], { since, limit: 50 })) {
+      if (deal.closed_at === null || now - Date.parse(deal.closed_at) > c.owe_days * DAY_MS)
+        continue;
+      const who = await this.e.member(deal.account);
+      if (!who || seen.has(who.person.id)) continue;
+      const fed = await this.e.ledger().entries(this.e.profile, who.wallet, {
+        reasons: ["feed"],
+        limit: 20,
+      });
+      if (fed.some((r) => r.ts > (deal.closed_at as string))) continue;
+      seen.add(who.person.id);
+      out.push(
+        `${safeName(who.name)}欠你一頓飯(他答應「${safeName(deal.task, 40)}」的獎勵沒有付,還沒補)`,
+      );
+    }
+    return out;
   }
 
   /** Writes the purse into her working context when it changed. */

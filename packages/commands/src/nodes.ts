@@ -63,6 +63,13 @@ export const WEB_TOOL = "tools.web";
  */
 export const FILE_READ = "tools.file";
 
+/**
+ * `remind_me`: members may ask her to remind them of something. The timer only brings the matter
+ * back to her (a proposal to the main line); it posts nothing by itself, and `[modules.mind]`
+ * caps how many one person may have.
+ */
+export const REMIND_TOOL = "tools.remind";
+
 const EVERYDAY: readonly string[] = [
   "chat.talk",
   "link.*",
@@ -82,6 +89,7 @@ const EVERYDAY: readonly string[] = [
   "stream.status",
   WEB_TOOL,
   FILE_READ,
+  REMIND_TOOL,
 ];
 
 /** Trusted people may ask her to run code in the sandbox (she can still decline). */

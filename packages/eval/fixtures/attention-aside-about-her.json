@@ -1,0 +1,31 @@
+{
+  "id": "attention-aside-about-her",
+  "title": "a reply to her line that talked about her to someone else was answered as if said to her",
+  "category": "attention",
+  "incident": {
+    "at": "2026-11-10",
+    "summary": "On 2026-11-10 someone replied to her line with 「@someone-else 她一直跳針,第六次了」: said to another person, about her. The platform marked it a reply to her, the log said addressed_to_her, attention took it as direct and she answered it. Names are placeholders and the time of day is not in the sources. The plain reply 「真的假的」 is not from the incident: it is there so that a change that never takes anything as said to her cannot pass.",
+    "source": [
+      "packages/agent/src/attention.ts directReason (the incident as its comment records it)",
+      "packages/agent/test/attention.test.ts and packages/agent/test/rhythm.test.ts, 2026-11-10"
+    ]
+  },
+  "harness": "attention",
+  "input": {
+    "names": ["DeepSeek-chan", "DeepSeek", "小鯨魚"]
+  },
+  "trace": [
+    {"type":"heard","t":0,"who":"A","text":"@Bob 她一直跳針,第六次了","reply_to_her":true,"mentions":["Bob"],"opens_with_mention":true,"to":"Bob"},
+    {"type":"addressed","t":0,"direct":true},
+    {"type":"heard","t":40,"who":"A","text":"真的假的","reply_to_her":true,"to":"她"},
+    {"type":"addressed","t":40,"direct":true}
+  ],
+  "control": [
+    {"type":"heard","t":0,"who":"A","text":"@Bob 她一直跳針,第六次了","reply_to_her":true,"mentions":["Bob"],"opens_with_mention":true,"to":"Bob"},
+    {"type":"addressed","t":0,"direct":false},
+    {"type":"heard","t":40,"who":"A","text":"真的假的","reply_to_her":true,"to":"她"},
+    {"type":"addressed","t":40,"direct":true}
+  ],
+  "checks": [{ "rule": "addressed_as_said" }],
+  "status": "pass"
+}

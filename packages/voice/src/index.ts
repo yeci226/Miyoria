@@ -8,9 +8,11 @@
 //   playback, with barge-in). It registers `join`, `leave` and `voice consent <on|off>`.
 //
 // Latency measurements are published as `custom` events on `voice.latency` with `stage` =
-// `asr` (`asr_ms`, `transcribe_ms`), `tts` (`first_audio_ms`) or `e2e` (`speech_end →
-// first_audio_played`, split into `endpoint`, `asr`, `llm_first`, `tts_queue`, `tts_first` and
-// `playback`); the agent adds `llm` (`first_token_ms`).
+// `asr` (`asr_ms`, `transcribe_ms`), `tts` (`first_audio_ms`), `filler` (a short sound of hers
+// filled a silence) or `e2e` (`speech_end → first_audio_played`, split into `endpoint`, `asr`,
+// `prepare`, `llm_first`, `tts_queue`, `tts_first` and `playback`, with the agent's `parts`); the
+// agent adds `llm` (`first_token_ms`) and `speculation`. The module provides `VoiceTurns`
+// (`VoiceTurnsKey`), through which the agent marks its turns and asks for a filler.
 
 export {
   type BargeDecision,
@@ -30,6 +32,7 @@ export { joinAnnouncement, PATHS, registerCommands, unregisterCommands } from ".
 export {
   type BargeInMode,
   BargeInModeSchema,
+  fillerLines,
   segmenterConfig,
   type VoiceConfig,
   VoiceConfigSchema,
@@ -47,12 +50,21 @@ export {
   E2E_SEGMENTS,
   E2eLatency,
   type E2eMeasure,
+  type E2eParts,
   type E2eReason,
   type E2eRecord,
   type E2eSegment,
   e2eJson,
 } from "./e2e.js";
 export { containment, looksLikeHintEcho, matchCore, SelfEchoGuard } from "./echo.js";
+export {
+  Filler,
+  FillerBank,
+  type FillerBankOptions,
+  type FillerClip,
+  type FillerDeps,
+  trim,
+} from "./filler.js";
 export { Hearing, type HearingDeps, type StreamHearing, StreamHearingKey } from "./hearing.js";
 export {
   type GoLiveState,
@@ -122,6 +134,7 @@ export {
   echoesHint,
   isHallucination,
   isPunctuationOnly,
+  stripEmoji,
   stripTags,
   toTraditional,
 } from "./text.js";

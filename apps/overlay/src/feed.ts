@@ -15,6 +15,10 @@
 //   {"type":"gift","text":"Owen 餵了她一碗白飯"}  the gift line (the Stage merges gifts); "" hides it
 //   {"type":"screen","kind":"message"|"dedication","name":"Owen","text":"加油","song":null|"春日影"}
 //                                               a paid message or song dedication; not merged, queued here
+//   {"type":"touch","x":0..1,"y":0..1,"part":"head"|"face"|"body"|"screen"}
+//                                               a viewer touched the stream; drawn at (x·W, y·H), not kept in state
+
+import { parseTouch, type Touch } from "./touch.js";
 
 export interface Subtitle {
   turn: string;
@@ -109,7 +113,9 @@ export type FeedMessage =
   /** The gift line (already merged by the Stage); `null` hides it. */
   | { type: "gift"; text: string | null }
   /** A paid message or dedication; the reducer queues it. */
-  | { type: "screen"; kind: "message" | "dedication"; name: string; text: string; song: string | null };
+  | { type: "screen"; kind: "message" | "dedication"; name: string; text: string; song: string | null }
+  /** A viewer's touch on the picture: drawn once by the view, never part of the reduced state. */
+  | ({ type: "touch" } & Touch);
 
 /**
  * Everything the reducer accepts: feed messages, the connection state (reported by the transport)
@@ -276,6 +282,10 @@ export function parseMessage(text: string): FeedMessage | null {
         song: dedication ? song : null,
       };
     }
+    case "touch": {
+      const touch = parseTouch(raw);
+      return touch === null ? null : { type: "touch", ...touch };
+    }
     default:
       return null;
   }
@@ -355,6 +365,7 @@ export function reduce(state: OverlayState, action: Action): OverlayState {
     case "subtitle":
       return reduceSubtitle(state, action);
     case "levels":
+    case "touch":
       return state;
   }
 }

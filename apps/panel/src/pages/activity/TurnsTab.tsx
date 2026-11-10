@@ -54,7 +54,7 @@ function SegmentsOf({ record }: { record: E2eRecord }) {
         <span className="text-[13px] text-muted-foreground">說完到第一個聲音</span>
       </p>
       <BarList
-        label="六段延遲"
+        label="各段延遲"
         format={fmtMs}
         items={E2E_SEGMENTS.map(({ name, label }) => ({
           key: name,

@@ -132,6 +132,9 @@ export function pageMeta(path: string, origin: string): PageMeta {
     title = `會員卡 · ${SITE_NAME}`;
     description = "Miyoria 發的會員卡,掃卡上的條碼就能確認它是不是真的。";
     index = false;
+  } else if (first === "/watch") {
+    title = `現場 · ${SITE_NAME}`;
+    description = "Miyoria 現在的直播畫面和她說的話,登入後可以在畫面上摸摸她。";
   } else if (first === "/login") {
     title = `登入 · ${SITE_NAME}`;
     index = false;

@@ -197,6 +197,8 @@ export interface Setup {
   before?: [Module, JsonValue][];
   /** The next model in the `chat` chain, for when the first one fails. */
   second?: ChatProvider;
+  /** Her profile (default: the one-line stub of `profile(mode)`). */
+  profile?: Profile;
 }
 
 export function profile(mode: string): Profile {
@@ -280,12 +282,14 @@ export class Harness {
     );
     for (const [module, cfg] of setup.before ?? []) await sup.register(module, cfg, true);
     const roll = setup.roll ?? 0;
-    const agent = new AgentModule(profile(mode)).withRandom({ nextF32: () => roll }).withImageFetch(
-      setup.fetchImage ??
-        (async () => {
-          throw new Error("no network in tests");
-        }),
-    );
+    const agent = new AgentModule(setup.profile ?? profile(mode))
+      .withRandom({ nextF32: () => roll })
+      .withImageFetch(
+        setup.fetchImage ??
+          (async () => {
+            throw new Error("no network in tests");
+          }),
+      );
     for (const tool of setup.tools ?? []) agent.tools().register(tool);
     await sup.register(agent, config, true);
     for (const [module, cfg] of setup.modules ?? []) await sup.register(module, cfg, true);

@@ -52,7 +52,7 @@ describe("download", () => {
     writeFileSync(`${dest}.part`, "hel");
     let range = "";
     const f = (async (_u: string, init?: RequestInit) => {
-      range = String((init?.headers as Record<string, string>).range);
+      range = String((init?.headers as Record<string, string> | undefined)?.range);
       return new Response("lo", { status: 206, headers: { "content-length": "2" } });
     }) as never;
     await downloadFile(MODEL_FILES[0]?.url as string, dest, f);

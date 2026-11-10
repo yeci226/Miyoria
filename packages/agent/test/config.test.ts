@@ -1,6 +1,6 @@
 import type { ContextKey } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
-import { MainLineConfigSchema } from "../src/config.js";
+import { MainLineConfigSchema, WorkConfigSchema } from "../src/config.js";
 import {
   AgentConfigSchema,
   activenessFor,
@@ -103,7 +103,8 @@ describe("config", () => {
       max_debounce_ms: 4000,
       history_after_fold: 25,
       mainline: MainLineConfigSchema.parse({}),
-      history_limit: 50,
+      work: WorkConfigSchema.parse({}),
+      history_limit: 240,
       prompt_history: 30,
       max_prompt_chars: 16_000,
       max_entry_chars: 2000,
@@ -121,7 +122,7 @@ describe("config", () => {
       tools_enabled: true,
       max_tool_steps: 3,
       tool_timeout_ms: 10_000,
-      max_tool_result_chars: 1000,
+      max_tool_result_chars: 12_500,
       temperature: null,
       max_tokens: null,
       session_idle_ms: 21_600_000,
@@ -129,6 +130,14 @@ describe("config", () => {
       contributor_timeout_ms: 800,
       max_context_chars: 4000,
       budget_notice_interval_ms: 3_600_000,
+      corrections: {
+        tool_text_reask: true,
+        promise_commit: true,
+        claims: true,
+        leak_screen: true,
+        self_talk: true,
+        prohibition_write: true,
+      },
       attention: {
         recent_window: 20,
         max_share_of_recent: null,
@@ -157,6 +166,13 @@ describe("config", () => {
         text_aside: true,
         text_echo: false,
         keep_in_voice: true,
+        debounce_from_speech_end: true,
+        speculate: true,
+        speculate_max_per_min: 4,
+        warm_context: true,
+        warm_contributors: ["notebook", "just_now", "elsewhere"],
+        warm_max_age_ms: 120_000,
+        live_context_ms: 400,
       },
       history: {
         backfill: 20,

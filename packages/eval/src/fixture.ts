@@ -11,14 +11,22 @@ import { z } from "zod";
 import { CheckSchema } from "./checks.js";
 import { TraceEventSchema } from "./trace.js";
 
-export const HARNESSES = ["parser", "guard", "rule", "trace"] as const;
+export const HARNESSES = ["parser", "guard", "rule", "attention", "wish", "trace"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
 export const FixtureSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
     title: z.string(),
-    category: z.enum(["tool_as_text", "game_loop", "owner_rule", "honesty", "repeat", "fault"]),
+    category: z.enum([
+      "tool_as_text",
+      "game_loop",
+      "owner_rule",
+      "honesty",
+      "repeat",
+      "fault",
+      "attention",
+    ]),
     incident: z.object({
       /** Local time of the first event (ISO 8601 with offset). */
       at: z.string(),

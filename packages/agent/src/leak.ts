@@ -29,6 +29,24 @@ const WEAK: readonly RegExp[] = [
   /^(?:所以|那麼|因此).{0,20}(?:對的|正確|沒錯)[。.]?$/,
 ];
 
+/**
+ * Lines she writes to herself about the person she answers, in the third person, with an
+ * instruction to herself (2026-11-08: 「莎露朵在問我上面訊息寫什麼,直接念給她聽就好。」). Only
+ * that line is dropped: the reply around it is hers. A line that speaks to someone (`你`) is never
+ * one of these.
+ */
+const SELF_TALK: readonly RegExp[] = [
+  /(?:在問我|是在問|想問我|要我|叫我|請我).{0,40}(?:就好|就行|就可以了?|就對了|即可)[。.!！]?$/,
+  /^(?:那|那就|所以)?我?(?:直接|先|就)(?:回|回覆|念|唸|告訴|貼|說給|講給|念給|唸給)(?:他|她).{0,20}(?:就好|就行|就可以了?|即可|吧)[。.!！]?$/,
+];
+
+/** Whether `line` is a note to herself about how to answer (see `SELF_TALK`). */
+export function isSelfTalk(line: string): boolean {
+  const text = line.trim();
+  if (text === "" || text.includes("你")) return false;
+  return SELF_TALK.some((r) => r.test(text));
+}
+
 /** 0 for her words, 1 for a line that thinks aloud, 2 for one that plans the reply. */
 export function reasoningScore(line: string): number {
   const text = line.trim();
@@ -66,20 +84,41 @@ export class ReasoningGuard {
 /**
  * Lines on their way to the chat: the first one waits for the second (or the end of the reply),
  * so a leak that starts with an innocent line takes that line with it.
+ *
+ * Off (`[modules.agent.corrections] leak_screen = false`) every line goes out as it comes: no
+ * first line waits and nothing is dropped. A note to herself (`isSelfTalk`) is a correction of
+ * its own (`self_talk`): it is left out, line by line, whether the leak screen is on or not.
  */
 export class ReplyScreen<T extends { text: string }> {
   readonly #guard = new ReasoningGuard();
+  readonly #on: boolean;
+  readonly #selfTalk: boolean;
   #first: T | null = null;
   #started = false;
   /** Set once the response was judged a leak. */
   dropped = false;
+  /** Lines this screen dropped (the held first line it took back included). */
+  droppedLines = 0;
+  /** Notes to herself left out of the reply (`isSelfTalk`). */
+  selfTalk = 0;
+
+  constructor(on = true, selfTalk = true) {
+    this.#on = on;
+    this.#selfTalk = selfTalk;
+  }
 
   /** What may be sent now; `retracted` is set when it took the held first line back. */
   push(item: T): { send: T[]; retracted: boolean } {
+    if (this.#selfTalk && !this.dropped && isSelfTalk(item.text)) {
+      this.selfTalk += 1;
+      return { send: [], retracted: false };
+    }
+    if (!this.#on) return { send: [item], retracted: false };
     if (this.#guard.drops(item.text)) {
       const retracted = this.#first !== null;
       this.#first = null;
       this.dropped = true;
+      this.droppedLines += retracted ? 2 : 1;
       return { send: [], retracted };
     }
     if (!this.#started) {

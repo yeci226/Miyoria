@@ -166,6 +166,9 @@ describe("MinecraftAdapter", () => {
       "farm",
       "build",
       "obtain",
+      "hunt",
+      "shelter",
+      "recover",
       "place",
       "chat",
       "stop",
@@ -369,10 +372,18 @@ describe("tasks with an older mod (no task ids)", () => {
   it("an open-ended goal is done at the end of its budget", async () => {
     const { mod: m, adapter } = await setup();
     const tasks = taskEvents(adapter);
-    await adapter.tasks.start(spec("x1", "explore", {}, 1));
+    await adapter.tasks.start(spec("f1", "follow", { entity: "cow" }, 1));
     await waitFor(() => ends(tasks).length === 1, 3000);
-    expect(ends(tasks)).toEqual([["x1", "done"]]);
-    await waitFor(() => m.requests.at(-1)?.type === "stop");
+    expect(ends(tasks)).toEqual([["f1", "done"]]);
+    await waitFor(() => m.requests.some((r) => r.type === "stop"));
+    // An explore that only ran out its time is done too, but says it saw nothing new.
+    await adapter.tasks.start(spec("x1", "explore", {}, 1));
+    await waitFor(() => ends(tasks).length === 2, 3000);
+    expect(ends(tasks).at(-1)).toEqual(["x1", "done"]);
+    expect(tasks.find((e) => e.task === "x1" && e.type === "done")).toMatchObject({
+      data: { outcome: { progressed: false } },
+    });
+    expect(m.requests.some((r) => r.type === "stop")).toBe(true);
   });
 
   it("an interrupting reflex or a death ends the job with busy / died", async () => {
@@ -425,7 +436,8 @@ describe("tasks with an older mod (no task ids)", () => {
     m.emit("baritone_idle", { process: "Custom Goal", goal: null, cancelled: true });
     await waitFor(() => ends(tasks).length === 1);
     expect(ends(tasks)).toEqual([["a1", "cancelled"]]);
-    expect(m.requests.some((r) => r.type === "observe")).toBe(false);
+    // One look measured the inventory before it started; none asked AltoClef.
+    expect(m.requests.filter((r) => r.type === "observe")).toHaveLength(1);
   });
 });
 

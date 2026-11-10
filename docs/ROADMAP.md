@@ -182,6 +182,23 @@ Phase 0–8 先用 Rust 寫成原型(留在 git 歷史裡),之後整個改寫成
 - [ ] Minecraft 換方法(另外討論)
 - [ ] 決定中日雙語語音是否保留;speculative 生成;Silero VAD
 
+## v4(程式在分支 `v4-int`,還沒上線)
+
+從「管住她」到「讓她有能力」:agent 迴圈和 context、人格重寫、開口節奏、她自己的生活、一起玩、經濟 2.0、遊戲。實測數字、原因、分階段和目前 PR 的處理見 [design/v4-plan.md](design/v4-plan.md)。
+
+v4 新增的模組(設定見 `miyoria.example.toml`):
+
+- [x] 網路:搜尋與讀網頁(一頁最多 12,000 字,內容當資料不當指令),Stage 的 `browse` 場景
+- [x] 沙箱:有名字的工作區(寫檔、讀檔、跑程式)和只准連白名單的網路
+- [x] 筆記本與記憶:最近對話、每個人的資料、她自己的筆記本頁,本機 embedding(`provider = "local"`)
+- [x] 技能:她自己寫、自己存、之後再用的做法(`[modules.skills]`)
+- [x] 直播頁(`[modules.live]`)與一起玩(`[modules.party]`):觀眾點單、投票、獎勵與權限
+- [x] 主線預算(`[modules.agent.mainline]`)與推理分級(`chat_tools` / `chat_question`)
+- [x] 她自己的生活:mind 的日程與每日貼文(`[modules.mind.daily_posts]`),經濟 2.0(卡片、歌、螢幕、轉帳、錢包、目標、懸賞)
+- [x] 提醒(`tools.remind`):一般成員可用
+- [x] 評測:人格盲測(`pnpm --filter @miyoria/eval blind`)、十個多步驟工具任務、方法守門的重放
+- [ ] 實測:人格盲測要真的模型和新舊兩份人設
+
 ## 後續可以考慮
 
 更多遊戲 adapter、Telegram / LINE adapter、唱歌進階(和聲、即時翻唱、自己寫詞)、記憶視覺化、她自己寫日記 / 發社群貼文、影像理解(看觀眾貼的圖)、vLLM-Omni 的 WebSocket 文字串流輸入(邊生成邊合成)。

@@ -47,9 +47,29 @@ function hear(utterance = "u1"): void {
   });
 }
 
+/**
+ * The agent's 500 ms from the transcript to the first text, as it marks them: 100 waiting, 10
+ * deciding, 150 reading memory and contributors, 40 building the prompt (`prepare` 300), then 150
+ * to the first token and 50 to the end of the first sentence (`llm_first` 200).
+ */
+function agent(utterance = "u1", turn = "t1"): void {
+  const focus = [ref(utterance)];
+  for (const [ms, mark] of [
+    [100, "started"],
+    [10, "decided"],
+    [150, "context"],
+    [40, "request"],
+    [150, "first_token"],
+  ] as const) {
+    clock.advance(ms);
+    e2e.mark(turn, focus, mark, clock.t);
+  }
+  clock.advance(50);
+}
+
 /** Drives a reply to the point where the first audio is audible. */
 function reply(utterance = "u1", turn = "t1"): E2eMeasure {
-  clock.advance(500); // LLM
+  agent(utterance, turn);
   e2e.textReady([ref(utterance)]);
   clock.advance(80); // translation, scheduler, waiting for a TTS slot
   const requestAt = clock.t;
@@ -63,7 +83,7 @@ function reply(utterance = "u1", turn = "t1"): E2eMeasure {
 }
 
 describe("e2e latency", () => {
-  it("measures the six segments of a reply to speech", () => {
+  it("measures the seven segments of a reply to speech", () => {
     hear();
     const m = reply();
     m.played();
@@ -78,7 +98,8 @@ describe("e2e latency", () => {
     expect(r.segments).toEqual({
       endpoint: 700,
       asr: 450,
-      llm_first: 500,
+      prepare: 300,
+      llm_first: 200,
       tts_queue: 80,
       tts_first: 300,
       playback: 120,
@@ -86,6 +107,86 @@ describe("e2e latency", () => {
     expect(r.total_ms).toBe(2150);
     expect(r.unattributed_ms).toBe(0);
     expect(e2e.size).toBe(0);
+  });
+
+  it("splits the agent's two segments by its marks, and the parts add up", () => {
+    hear();
+    reply().played();
+    const r = out[0] as E2eRecord;
+    expect(r.parts).toEqual({
+      prepare: { wait: 100, decide: 10, context: 150, prompt: 40 },
+      llm_first: { first_token: 150, held: 0, first_sentence: 50 },
+    });
+    expect(r.speculative).toBe(false);
+    const sum = (o: Record<string, number | null>) =>
+      Object.values(o).reduce<number>((s, v) => s + (v ?? 0), 0);
+    expect(sum(r.parts?.prepare ?? {})).toBe(r.segments.prepare);
+    expect(sum(r.parts?.llm_first ?? {})).toBe(r.segments.llm_first);
+    expect(e2eJson(r).parts).toEqual(r.parts);
+  });
+
+  it("a turn started early: the wait for its confirmation is a part of its own", () => {
+    hear();
+    const focus = [ref("u1")];
+    e2e.mark("t1", focus, "started", clock.t);
+    e2e.mark("t1", focus, "decided", clock.t);
+    clock.advance(100);
+    e2e.mark("t1", focus, "context", clock.t);
+    e2e.mark("t1", focus, "request", clock.t);
+    clock.advance(200);
+    e2e.mark("t1", focus, "first_token", clock.t);
+    clock.advance(150); // the person might still go on
+    e2e.mark("t1", focus, "confirmed", clock.t);
+    clock.advance(30);
+    e2e.textReady(focus);
+    const m = e2e.begin(ctxKey, "t1", focus) as E2eMeasure;
+    m.tts({ requestAt: clock.t, firstAudioAt: clock.t + 300 }, false, "fake-tts");
+    clock.advance(400);
+    m.played();
+    const r = out[0] as E2eRecord;
+    expect(r.speculative).toBe(true);
+    expect(r.parts?.prepare.wait).toBe(0);
+    expect(r.parts?.llm_first).toEqual({ first_token: 200, held: 150, first_sentence: 30 });
+    expect(r.segments.llm_first).toBe(380);
+  });
+
+  it("keeps the marks of a turn that started early and was dropped out of the one that speaks", () => {
+    hear();
+    const focus = [ref("u1")];
+    e2e.mark("dropped", focus, "started", clock.t);
+    e2e.mark("dropped", focus, "request", clock.t + 5);
+    clock.advance(300);
+    reply("u1", "t1").played();
+    const r = out[0] as E2eRecord;
+    expect(r.parts?.prepare.wait).toBe(400);
+  });
+
+  it("without the agent's marks its two segments are unattributed", () => {
+    hear();
+    clock.advance(500);
+    e2e.textReady([ref("u1")]);
+    const m = e2e.begin(ctxKey, "t1", [ref("u1")]) as E2eMeasure;
+    m.tts({ requestAt: clock.t, firstAudioAt: clock.t + 300 }, false, "fake-tts");
+    clock.advance(300);
+    m.played();
+    const r = out[0] as E2eRecord;
+    expect(r.segments.prepare).toBeNull();
+    expect(r.segments.llm_first).toBeNull();
+    expect(r.unattributed_ms).toBe(500);
+    expect(r.parts).toBeUndefined();
+  });
+
+  it("reports when a filler sound of hers filled the silence", () => {
+    hear();
+    const focus = [ref("u1")];
+    e2e.mark("t1", focus, "started", clock.t);
+    clock.advance(600);
+    e2e.filler("t1", clock.t);
+    e2e.filler("t1", clock.t + 999); // only the first one counts
+    reply("u1", "t1").played();
+    const r = out[0] as E2eRecord;
+    expect(r.filler_ms).toBe(700 + 450 + 600);
+    expect(e2eJson(r).filler_ms).toBe(1750);
   });
 
   it("makes the segments add up to the total", () => {
@@ -98,7 +199,7 @@ describe("e2e latency", () => {
 
   it("keeps the sum exact when a prefetched line started before the first text was seen", () => {
     hear();
-    clock.advance(500);
+    agent();
     const early = clock.t - 50; // a prefetch of the same line was already under way
     e2e.textReady([ref("u1")]);
     clock.advance(200);
@@ -147,7 +248,8 @@ describe("e2e latency", () => {
     // What was measured before it stopped is kept; what was not stays null.
     expect(r.segments.endpoint).toBe(700);
     expect(r.segments.asr).toBe(450);
-    expect(r.segments.llm_first).toBe(500);
+    expect(r.segments.prepare).toBe(300);
+    expect(r.segments.llm_first).toBe(200);
     expect(r.segments.tts_first).toBe(300);
     expect(r.segments.playback).toBeNull();
     expect(e2e.size).toBe(0);
@@ -155,7 +257,7 @@ describe("e2e latency", () => {
 
   it("records a TTS failure as incomplete without TTS segments", () => {
     hear();
-    clock.advance(500);
+    agent();
     e2e.textReady([ref("u1")]);
     clock.advance(40);
     const m = e2e.begin(ctxKey, "t1", [ref("u1")]) as E2eMeasure;
@@ -168,7 +270,8 @@ describe("e2e latency", () => {
     expect(r.segments).toEqual({
       endpoint: 700,
       asr: 450,
-      llm_first: 500,
+      prepare: 300,
+      llm_first: 200,
       tts_queue: null,
       tts_first: null,
       playback: null,

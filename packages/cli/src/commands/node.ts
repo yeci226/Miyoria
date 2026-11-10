@@ -30,7 +30,7 @@ function setLogLevel(config: Config, fallback?: CoreLogLevel): void {
  * Points `MIYORIA_PANEL_DIR` at the panel bundled with the npm package (`dist/panel`) when
  * neither the variable nor `[modules.api] panel_dir` leads to a built panel.
  */
-function useBundledPanel(config: Config): void {
+function preferBundledPanel(config: Config): void {
   if (process.env.MIYORIA_PANEL_DIR?.trim()) return;
   const section = config.module("api").config;
   const configured =
@@ -45,7 +45,7 @@ function useBundledPanel(config: Config): void {
 export async function core(configPath: string): Promise<void> {
   const config = await loadConfig(configPath);
   setLogLevel(config);
-  useBundledPanel(config);
+  preferBundledPanel(config);
   const { buildCore, runUntilSignal } = await import("@miyoria/core");
   const node = await buildCore(config, { baseDir: dirname(resolve(configPath)) });
   await runUntilSignal(node);

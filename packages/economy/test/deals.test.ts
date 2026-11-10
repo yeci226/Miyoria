@@ -211,7 +211,7 @@ async function rig(config: Record<string, JsonValue> = {}): Promise<Rig> {
       }),
     );
   }
-  const economyConfig = EconomyConfigSchema.parse(config);
+  const economyConfig = EconomyConfigSchema.parse({ achievement_cap: 0, ...config });
   const make = () =>
     new EconomyService({
       config: economyConfig,

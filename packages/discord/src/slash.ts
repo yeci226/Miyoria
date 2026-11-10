@@ -6,10 +6,17 @@
 // Server). Every body is validated before the bulk overwrite, because Discord rejects the whole
 // request for one bad command.
 
-import type { ArgSpec, CommandSpec, GroupInfo } from "@miyoria/commands";
+import {
+  type ArgSpec,
+  type CommandSpec,
+  type GroupInfo,
+  MAX_MENUS_PER_TARGET,
+  type MenuSpec,
+} from "@miyoria/commands";
 import { getLogger } from "@miyoria/kernel";
 import {
   ApplicationCommandOptionType,
+  ApplicationCommandType,
   ApplicationIntegrationType,
   InteractionContextType,
   PermissionFlagsBits,
@@ -42,6 +49,11 @@ export type SlashKind =
 
 /** JSON body of one application command (what the REST API accepts). */
 export interface SlashCommandJson {
+  /**
+   * Absent for a slash command (chat input); `User` or `Message` for a context menu entry,
+   * which has no description and no options.
+   */
+  type?: ApplicationCommandType.User | ApplicationCommandType.Message;
   name: string;
   description: string;
   options: SlashOptionJson[];
@@ -157,6 +169,23 @@ export function toCreateCommands(tree: readonly SlashNode[]): SlashCommandJson[]
     contexts: node.guildOnly
       ? [InteractionContextType.Guild]
       : [InteractionContextType.Guild, InteractionContextType.BotDM],
+    integration_types: [ApplicationIntegrationType.GuildInstall],
+  }));
+}
+
+/**
+ * The context menu entries as application commands. Discord shows them for servers only (a
+ * menu acts on a message or a member of a guild) and takes no description or options; the entry
+ * is told apart from a slash command of the same name by its type.
+ */
+export function toContextMenuCommands(menus: readonly MenuSpec[]): SlashCommandJson[] {
+  return menus.map((menu) => ({
+    type: menu.target === "message" ? ApplicationCommandType.Message : ApplicationCommandType.User,
+    name: menu.name,
+    description: "",
+    options: [],
+    default_member_permissions: null,
+    contexts: [InteractionContextType.Guild],
     integration_types: [ApplicationIntegrationType.GuildInstall],
   }));
 }
@@ -310,6 +339,15 @@ function checkOptions(
 /** Problems Discord would reject one command body for; empty when it is fine. */
 export function validateCommand(command: SlashCommandJson): string[] {
   const problems: string[] = [];
+  if (command.type !== undefined) {
+    // A context menu entry: any case and spaces, 1 to 32 characters, nothing else.
+    const where = `menu ${command.name}`;
+    if (len(command.name) < 1 || len(command.name) > 32)
+      problems.push(`${where}: name must be 1-32 characters`);
+    if (command.options.length > 0) problems.push(`${where}: a menu takes no options`);
+    if (command.contexts.length === 0) problems.push(`${where}: no contexts`);
+    return problems;
+  }
   const where = `/${command.name}`;
   checkName(command.name, where, problems);
   checkDescription(command.description, where, problems);
@@ -331,16 +369,24 @@ export function validateCommand(command: SlashCommandJson): string[] {
 
 /** The commands that pass `validateCommand` (others are logged and left out). */
 export function validCommands(commands: readonly SlashCommandJson[]): SlashCommandJson[] {
+  // Names are unique per type: a slash command and a menu entry may share one.
   const names = new Set<string>();
+  const menus = new Map<number, number>();
   const out: SlashCommandJson[] = [];
   for (const command of commands) {
     const problems = validateCommand(command);
-    if (names.has(command.name)) problems.push(`/${command.name}: duplicate command`);
+    const key = `${command.type ?? 1}:${command.name}`;
+    if (names.has(key)) problems.push(`/${command.name}: duplicate command`);
+    if (command.type !== undefined) {
+      const count = menus.get(command.type) ?? 0;
+      if (count >= MAX_MENUS_PER_TARGET) problems.push(`menu ${command.name}: too many menus`);
+      else menus.set(command.type, count + 1);
+    }
     if (problems.length > 0) {
       log.error({ command: command.name, problems }, "invalid slash command left out of the sync");
       continue;
     }
-    names.add(command.name);
+    names.add(key);
     out.push(command);
   }
   return out;

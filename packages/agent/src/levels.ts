@@ -6,11 +6,19 @@
 // its rules; without it by the agent). All numbers are here.
 //
 // Voice contexts have no ceiling: the voice numbers (`[modules.agent.voice]`) apply as before.
+//
+// The rhythm of text channels under the main line (v4 §7.2, §7.3) is here too, as numbers the
+// owner sets (`[modules.agent.rhythm]`, `RhythmConfigSchema`) and the per-channel ledger that
+// holds them (`Rhythm`): how many looks she takes an hour, how often she may react with an emoji,
+// and how her several short messages are spaced.
 
 import type { ContextKey } from "@miyoria/types";
+import { z } from "zod";
 import type { ChannelMode } from "./config.js";
+import { contextId } from "./util.js";
 
 const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
 
 /** What a level allows her in one text channel. */
 export interface Ceiling {
@@ -31,6 +39,11 @@ export interface Ceiling {
    * Arbiter applies it as one of its rules).
    */
   startGapMs: number;
+  /**
+   * Multiplier of `rhythm.looks_per_hour` here (then × her `talkFactor`): with the defaults about
+   * 2 looks an hour in `quiet`, 6 in `normal`, 18 in `lively`.
+   */
+  looks: number;
 }
 
 const QUIET: Ceiling = {
@@ -42,6 +55,7 @@ const QUIET: Ceiling = {
   minScore: 0.45,
   maxShare: 0.15,
   startGapMs: 3 * 60 * MINUTE_MS,
+  looks: 0.5,
 };
 
 const NORMAL: Ceiling = {
@@ -52,6 +66,7 @@ const NORMAL: Ceiling = {
   minScore: 0,
   maxShare: 1,
   startGapMs: 0,
+  looks: 1,
 };
 
 const LIVELY: Ceiling = {
@@ -62,6 +77,7 @@ const LIVELY: Ceiling = {
   minScore: 0,
   maxShare: 1,
   startGapMs: 0,
+  looks: 2,
 };
 
 /** The ceiling of each joining-in level. */
@@ -154,5 +170,122 @@ export function modeDescription(mode: ChannelMode): string {
       return "比較常加入對話,也比較常主動開話題";
     case "always":
       return "每則訊息都回覆(測試用)";
+  }
+}
+
+/**
+ * `[modules.agent.rhythm]`: her rhythm in text channels under the main line (v4 §7.2, §7.3).
+ * Read on its own section by the agent (`Agent.rhythm`).
+ */
+export const RhythmConfigSchema = z.object({
+  /**
+   * Looks an hour per channel at the `normal` level, as usual talkative (× the level's `looks`,
+   * × her `talkFactor`). Each look is a model call on the cached prefix; 0: none.
+   */
+  looks_per_hour: z.number().nonnegative().default(6),
+  /** A question standing this long (s) with nobody answering is worth a look. */
+  question_secs: z.number().int().positive().default(20),
+  /** The first line after this long a silence (minutes) starts a new topic: worth a look. */
+  topic_gap_mins: z.number().positive().default(15),
+  /** Someone she likes at least this much (affinity, -100..100) talking is worth a look. */
+  close_affinity: z.number().min(-100).max(100).default(40),
+  /** Emoji reactions per channel per hour (they are not lines: the Floor's budget skips them). */
+  reactions_per_hour: z.number().int().nonnegative().default(20),
+  /** At least this long between two of her reactions in one channel. */
+  reaction_gap_ms: z.number().int().nonnegative().default(3000),
+  /**
+   * Several short messages of one reply go out spaced by their length, with typing shown in
+   * between: this long per character of the next one, within `pace_min_ms`..`pace_max_ms`.
+   */
+  pace_ms_per_char: z.number().nonnegative().default(40),
+  pace_min_ms: z.number().int().nonnegative().default(300),
+  pace_max_ms: z.number().int().nonnegative().default(1800),
+});
+export type RhythmConfig = z.output<typeof RhythmConfigSchema>;
+
+/** The agent's section as far as the rhythm goes (`ModuleContext.config` strips the rest). */
+export const RhythmSectionSchema = z.object({ rhythm: RhythmConfigSchema.prefault({}) });
+
+/** How long the next of several messages waits after the one before (typing meanwhile). */
+export function paceMs(config: RhythmConfig, text: string): number {
+  const ms = [...text.trim()].length * config.pace_ms_per_char;
+  return Math.round(Math.min(Math.max(ms, config.pace_min_ms), config.pace_max_ms));
+}
+
+/** Times in the last hour per context, oldest first. */
+class HourLog {
+  readonly #at = new Map<string, number[]>();
+
+  recent(context: ContextKey, now: number): number[] {
+    const id = contextId(context);
+    const kept = (this.#at.get(id) ?? []).filter((t) => now - t < HOUR_MS);
+    if (kept.length === 0) this.#at.delete(id);
+    else this.#at.set(id, kept);
+    return kept;
+  }
+
+  add(context: ContextKey, now: number): void {
+    this.#at.set(contextId(context), [...this.recent(context, now), now]);
+  }
+}
+
+/** Message ids she already took a turn on, remembered at most. */
+const TAKEN_MAX = 256;
+
+/**
+ * The per-channel ledger of her rhythm: the looks she took (the cap per hour), the messages a turn
+ * already answered or looked at (a question is not looked at twice) and her emoji reactions, which
+ * have their own limit: they are not lines, so the Floor's budget and her share do not hold them.
+ * In memory only.
+ */
+export class Rhythm {
+  readonly #looks = new HourLog();
+  readonly #reactions = new HourLog();
+  readonly #taken = new Set<string>();
+
+  constructor(
+    readonly config: RhythmConfig,
+    readonly now: () => number,
+  ) {}
+
+  /** Looks taken in `context` in the last hour. */
+  looksUsed(context: ContextKey): number {
+    return this.#looks.recent(context, this.now()).length;
+  }
+
+  noteLook(context: ContextKey): void {
+    this.#looks.add(context, this.now());
+  }
+
+  /** A turn answered or looked at these messages. */
+  took(ids: readonly string[]): void {
+    for (const id of ids) {
+      this.#taken.delete(id);
+      this.#taken.add(id);
+    }
+    while (this.#taken.size > TAKEN_MAX) {
+      const oldest = this.#taken.values().next().value;
+      if (oldest === undefined) break;
+      this.#taken.delete(oldest);
+    }
+  }
+
+  taken(id: string): boolean {
+    return this.#taken.has(id);
+  }
+
+  /** Why she may not react in `context` now, or `null`: then the reaction is booked. */
+  takeReaction(context: ContextKey): string | null {
+    const now = this.now();
+    const recent = this.#reactions.recent(context, now);
+    if (recent.length >= this.config.reactions_per_hour) {
+      return `這個頻道這一小時已經按了 ${recent.length} 個表情,先不要再按`;
+    }
+    const last = recent.at(-1);
+    if (last !== undefined && now - last < this.config.reaction_gap_ms) {
+      return "剛剛才按過表情,等一下再按";
+    }
+    this.#reactions.add(context, now);
+    return null;
   }
 }

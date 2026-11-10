@@ -249,7 +249,7 @@ describe("voice", () => {
     expect(msgs[2]?.role).toBe("user");
     expect(msgs[2]?.content).toContain("標題=語音頻道裡的人⟧\nOwen、阿明");
     // The voice rules are part of the fixed system part.
-    expect(msgs[0]?.content ?? "").toContain("一到兩句");
+    expect(msgs[0]?.content ?? "").toContain("有人在聽");
     // Spoken replies start right away: no reasoning (`[llm.reasoning] chat_voice`).
     expect(requests[0]?.reasoning_purpose).toBe("chat_voice");
     expect(requests[0]?.thinking).toBe(false);
@@ -461,7 +461,9 @@ describe("voice", () => {
     expect(msgs[2]).toMatchObject({ role: "assistant", content: "欸,真的嗎?那走吧!" });
     const prompt = JSON.stringify(paced.requests[0]?.messages);
     expect(prompt).toContain("每一句先寫 <voice>");
-    expect(prompt).toContain("用 Japanese 念出來");
+    // The setting's language, named in Chinese.
+    expect(prompt).toContain("用日文念出來");
+    expect(prompt).not.toContain("Japanese");
     subtitles.close();
   });
 

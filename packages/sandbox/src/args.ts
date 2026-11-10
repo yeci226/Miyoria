@@ -22,6 +22,7 @@ export const NAME_PREFIX = "miyoria-sbx-";
 export const WORK_DIR = "/work";
 export const CODE_DIR = "/code";
 export const TOOLS_DIR = "/tools";
+export const WORKSPACE_DIR = "/workspace";
 
 /** Program file per language, inside `CODE_DIR`. */
 export const ENTRY_FILE: Record<Language, string> = { python: "main.py", node: "main.mjs" };
@@ -83,6 +84,13 @@ export interface ContainerSpec {
   codeDir: string;
   /** Host directory mounted read-only at `/tools`, or `null`. */
   toolsDir: string | null;
+  /** Host directory mounted read-write at `/workspace` (her persistent workspace), or `null`. */
+  workspaceDir?: string | null;
+  /**
+   * Docker network. Default `"none"` (no interfaces but loopback). Only the egress network
+   * (an `--internal` one whose only neighbour is the allowlist proxy) is ever passed here.
+   */
+  network?: string;
   /** `uid:gid`, never root. */
   user: string;
   limits: SandboxLimits;
@@ -101,7 +109,9 @@ export class InvalidSpecError extends Error {
 
 const CONTAINER_NAME = /^[a-z0-9][a-z0-9_.-]{0,127}$/;
 const LABEL_KEY = /^[a-z0-9][a-z0-9._-]{0,127}$/;
-const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
+// Lower case too: `http_proxy` / `https_proxy` are what curl, pip and Python's urllib read.
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const NETWORK_NAME = /^[a-z0-9][a-z0-9_.-]{0,127}$/;
 const USER = /^[1-9][0-9]*(:[1-9][0-9]*)?$/;
 
 /**
@@ -145,6 +155,12 @@ export function buildRunArgs(spec: ContainerSpec): string[] {
     throw new InvalidSpecError(`bad user \`${spec.user}\` (must be a non-root uid[:gid])`);
   }
   if (spec.command.length === 0) throw new InvalidSpecError("empty command");
+  const network = spec.network ?? "none";
+  // `host`, `bridge` and `container:` networks give a run a way out; only `none` and the
+  // sandbox's own (prefixed) egress network are allowed.
+  if (network !== "none" && !(NETWORK_NAME.test(network) && network.startsWith(NAME_PREFIX))) {
+    throw new InvalidSpecError(`bad network \`${network}\``);
+  }
   const { limits } = spec;
   const args = ["run", "--rm", spec.detached ? "-d" : "-i", "--name", spec.name];
   for (const [key, value] of Object.entries(spec.labels)) {
@@ -159,7 +175,7 @@ export function buildRunArgs(spec: ContainerSpec): string[] {
     "--log-driver",
     "none",
     "--network",
-    "none",
+    network,
     "--read-only",
     "--tmpfs",
     `/tmp:rw,noexec,nosuid,nodev,size=${limits.tmpfs_mb}m`,
@@ -169,6 +185,7 @@ export function buildRunArgs(spec: ContainerSpec): string[] {
     bind(spec.codeDir, CODE_DIR, true),
   );
   if (spec.toolsDir !== null) args.push("--mount", bind(spec.toolsDir, TOOLS_DIR, true));
+  if (spec.workspaceDir) args.push("--mount", bind(spec.workspaceDir, WORKSPACE_DIR, false));
   args.push(
     "--workdir",
     WORK_DIR,

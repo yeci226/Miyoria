@@ -124,6 +124,53 @@ export const SandboxFilesSchema = z.object({
 export type SandboxFiles = z.output<typeof SandboxFilesSchema>;
 
 /**
+ * `[modules.sandbox.workspace]`: her own directory, kept between runs and sessions
+ * (`<root>/profiles/<profile>/workspace`, mounted read-write at `/workspace` on request). The
+ * quotas hold for what she writes through the tools; what a program leaves there is checked
+ * right after the run and what is over a quota is removed (see `PersistentWorkspace.enforce`).
+ */
+export const SandboxWorkspaceSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** All files together, in MiB. */
+  max_mb: z.number().int().min(1).default(64),
+  /** Files at most. */
+  max_files: z.number().int().min(1).default(500),
+  /** One file at most, in KiB. */
+  max_file_kb: z.number().int().min(1).default(1024),
+  /**
+   * Characters of a file `workspace_read` returns at once (the rest is read with `offset`).
+   * Keep it below `[modules.agent] max_tool_result_chars` (4000), which cuts a tool result.
+   */
+  read_chars: z.number().int().min(200).default(3900),
+  /** Output files (`outputs/<run id>.txt`, full output of runs whose result was cut) kept. */
+  keep_outputs: z.number().int().min(0).default(20),
+});
+export type SandboxWorkspace = z.output<typeof SandboxWorkspaceSchema>;
+
+/** A host name or `*.suffix`: no scheme, port, path or bare wildcard. */
+export const ALLOWED_HOST =
+  /^(\*\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * `[modules.sandbox.network]`: what a run may reach when it asks for the network. Closed by
+ * default (`allow = []`): every run is `--network none`. With hosts listed, a run that asks
+ * gets a Docker network without a route out and an egress proxy (a container of the node
+ * image) as its only way out, which lets through only these hosts on ports 80 and 443 and never
+ * to a private address. Needs a real Docker run to verify (see README).
+ */
+export const SandboxNetworkSchema = z.object({
+  allow: z
+    .array(z.string().toLowerCase().regex(ALLOWED_HOST, "a host name or `*.example.com`"))
+    .max(32)
+    .default([]),
+  /** Port the proxy listens on, inside its container. */
+  proxy_port: z.number().int().min(1024).max(65535).default(3128),
+  /** Memory of the proxy container, in MiB. */
+  proxy_memory_mb: z.number().int().min(32).default(128),
+});
+export type SandboxNetwork = z.output<typeof SandboxNetworkSchema>;
+
+/**
  * `[modules.sandbox]` config section. The module is opt-in: it only runs with
  * `enabled = true` (see the core's `OPT_IN_MODULES`).
  *
@@ -170,6 +217,8 @@ export const SandboxConfigSchema = z.object({
   caps: SandboxCapsSchema.prefault({}),
   sessions: SandboxSessionsSchema.prefault({}),
   files: SandboxFilesSchema.prefault({}),
+  workspace: SandboxWorkspaceSchema.prefault({}),
+  network: SandboxNetworkSchema.prefault({}),
   /**
    * Started, idle containers kept ready per language image, so a fresh run skips the container
    * start. Each serves exactly one run, then it is destroyed and replaced. Default 0 (off):
@@ -182,9 +231,9 @@ export const SandboxConfigSchema = z.object({
   max_proposed_tools: z.number().int().min(0).default(50),
   /**
    * Characters of a run's output (stdout + stderr, framed as untrusted data) she gets back from
-   * `code.run` and her own tools. Keep it below `[modules.agent] max_tool_result_chars` (1000).
+   * `code.run` and her own tools. Keep it below `[modules.agent] max_tool_result_chars` (4000).
    */
-  result_chars: z.number().int().min(200).default(900),
+  result_chars: z.number().int().min(200).default(3900),
   /**
    * Timeout of one call of an approved tool she wrote, in milliseconds. Such a call is an
    * ordinary tool call, so keep it below `[modules.agent] tool_timeout_ms` (10 000).

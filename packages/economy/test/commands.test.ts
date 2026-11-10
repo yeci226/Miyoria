@@ -109,6 +109,11 @@ function fake(): Fake {
         return { accepted: false, charged: 0, balance: 120, message: "現在沒有開台" };
       return { accepted: true, charged: 30, balance: 90, message: "留言送上大螢幕了" };
     },
+    letter: async (_a: AccountRef, text: string, key: string) => {
+      calls.push(`letter:${text}:${key}`);
+      if (state.fail) throw state.fail;
+      return { accepted: true, charged: 20, balance: 100, message: "信送出去了,她有空會看" };
+    },
     goals: async () => state.goals,
     pledge: async (_a: AccountRef, goal: string, amount: number, key: string) => {
       calls.push(`pledge:${goal}:${amount}:${key}`);
@@ -333,6 +338,17 @@ describe("wallet commands", () => {
     state.fail = new EconomyError(429, "10 分鐘內只能留一則");
     expect((await run(registry, "me screen", { text: "嗨" })).tone).toBe("info");
     expect((await run(registry, "me screen", { text: "  " })).tone).toBe("warn");
+  });
+
+  it("letter_is_private_and_a_stranger_or_empty_text_gets_plain_information", async () => {
+    const { registry, calls, state } = setup();
+    expect(registry.get(["me", "letter"])?.ephemeral).toBe(true);
+    const reply = await run(registry, "me letter", { text: " 謝謝你 " });
+    expect(reply.text).toContain("信送出去了,她有空會看，花了 20 魚幣，剩 100");
+    expect(calls[0]).toMatch(/^letter:謝謝你:discord:/);
+    expect((await run(registry, "me letter", { text: " " })).tone).toBe("warn");
+    state.fail = new EconomyError(403, "她還不認識你");
+    expect((await run(registry, "me letter", { text: "嗨" })).tone).toBe("info");
   });
 
   it("goals_show_the_open_one_with_my_pledge_and_quick_buttons", async () => {

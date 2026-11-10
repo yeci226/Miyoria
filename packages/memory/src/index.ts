@@ -36,6 +36,7 @@ export {
   wipePlan,
 } from "./commands.js";
 export {
+  DEFAULT_LOCAL_MODEL,
   type DedupeConfig,
   DedupeConfigSchema,
   type EmbeddingConfig,
@@ -50,8 +51,14 @@ export {
   type MemoryConfig,
   MemoryConfigSchema,
   memoryConfig,
+  type NotebookConfig,
+  NotebookConfigSchema,
   type PinnedConfig,
   PinnedConfigSchema,
+  type ProfilesConfig,
+  ProfilesConfigSchema,
+  type RecentConfig,
+  RecentConfigSchema,
   type RepeatConfig,
   RepeatConfigSchema,
   type Weights,
@@ -66,6 +73,9 @@ export {
   type Readable,
   readable,
   SECTION_TITLE,
+  speakingPeople,
+  TURN_LINES,
+  turnOf,
 } from "./contributor.js";
 export { Curator } from "./curate.js";
 export {
@@ -94,6 +104,7 @@ export {
   type Stored,
   storedId,
   strongerOrigin,
+  type TurnQuery,
   toFollowup,
   WATERMARK_PREFIX,
   type Watermark,
@@ -109,6 +120,7 @@ export {
   nameWords,
   supporting,
 } from "./evidence.js";
+export { EXCLUDED_KEY, ExclusionList, lineHash, MAX_EXCLUDED, messageKey } from "./exclusion.js";
 export {
   expired,
   expiryOf,
@@ -129,6 +141,8 @@ export {
   systemPrompt,
   transcript,
 } from "./extract.js";
+// v4 §5: what she can find and connect.
+export { LocalEmbedder, prefixesOf, resolveRuntime } from "./local-embed.js";
 export {
   type Activity,
   ActivityTracker,
@@ -136,8 +150,62 @@ export {
   MemoryModuleError,
   type MemoryModuleOptions,
 } from "./module.js";
+export {
+  cleanBody,
+  cleanPath,
+  indexText,
+  NotebookError,
+  NotebookStore,
+  originOf,
+  PAGE_PREFIX,
+  type PageOrigin,
+  PERSON_FOLDER,
+  pageText,
+  readableFrom,
+  type WriteMode,
+  type WriteResult,
+} from "./notebook.js";
+export {
+  NOTEBOOK_DELETE,
+  NOTEBOOK_READ,
+  NOTEBOOK_TOOLS,
+  NOTEBOOK_WRITE,
+  NotebookDeleteTool,
+  NotebookReadTool,
+  NotebookWriteTool,
+} from "./notebook-tools.js";
 export { PersonNotes } from "./person-note.js";
 export { PINNED_TITLE, PinnedReader } from "./pinned.js";
+export { type Disclosure, disclose, PRIVATE_MARK, placeRef, type Viewer } from "./places.js";
+export { excludeOf, type ProfileSources, Profiles, profileLine } from "./profiles.js";
+export {
+  clockOf,
+  entryLine,
+  fitNewest,
+  OtherPlaces,
+  type RecentDeps,
+  Timeline,
+  viewerFor,
+} from "./recent.js";
+export {
+  ELSEWHERE_CONTRIBUTOR,
+  ELSEWHERE_TITLE,
+  JUST_NOW_CONTRIBUTOR,
+  JUST_NOW_TITLE,
+  NOTEBOOK_CONTRIBUTOR,
+  NOTEBOOK_TITLE,
+  RecentPast,
+  whereaboutsOf,
+} from "./recent-install.js";
+export {
+  type Happening,
+  type Her,
+  parseWindow,
+  RecentLog,
+  type RecentReader,
+  type Said,
+  type Window,
+} from "./recent-log.js";
 export { RepeatDamper } from "./repeat.js";
 export { MemoryRetriever } from "./retrieval.js";
 export {
@@ -163,5 +231,14 @@ export {
   signals,
   tokenOverlap,
 } from "./score.js";
+export {
+  questionLine,
+  questionOf,
+  questions,
+  type RawQuestion,
+  sameQuestion,
+  Threads,
+  visibleQuestion,
+} from "./threads.js";
 export { normalizeForCompare, textSimilarity, tokenize, tokenString } from "./tokenize.js";
 export { MemoryToolError, RECALL, REMEMBER, RecallTool, RememberTool } from "./tools.js";

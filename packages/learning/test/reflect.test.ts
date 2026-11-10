@@ -261,6 +261,50 @@ describe("daily reflection", () => {
     expect(lessons.all()).toEqual([]);
     expect(curator.insights).toEqual([]);
   });
+
+  it("a daily reflection that failed is tried again later, three times a day at most", async () => {
+    const start = Date.parse("2026-11-02T22:00:00.000Z"); // 06:00 local
+    vi.setSystemTime(start);
+    const { reflector, provider } = setup("今天好累,不想寫 JSON");
+    expect(reflector.due(start, "ok")).toEqual({ kind: "daily" });
+    expect((await reflector.reflect("daily", null))?.error).toContain("unusable");
+    // Not at once: the provider may be down.
+    expect(reflector.due(start + 60_000, "ok")).toBeNull();
+    const second = start + 31 * 60_000;
+    vi.setSystemTime(second);
+    expect(reflector.due(second, "ok")).toEqual({ kind: "daily" });
+    await reflector.reflect("daily", null);
+    const third = second + 31 * 60_000;
+    vi.setSystemTime(third);
+    expect(reflector.due(third, "ok")).toEqual({ kind: "daily" });
+    await reflector.reflect("daily", null);
+    // Three tries: the day is left alone.
+    const later = third + 3 * 60 * 60_000;
+    vi.setSystemTime(later);
+    expect(reflector.due(later, "ok")).toBeNull();
+    expect(provider.requests().length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("a daily reflection that worked is not run again that day", async () => {
+    const start = Date.parse("2026-11-02T22:00:00.000Z");
+    vi.setSystemTime(start);
+    const { reflector } = setup(JSON.stringify({ summary: "今天還不錯" }));
+    expect((await reflector.reflect("daily", null))?.error).toBeNull();
+    expect(reflector.due(start + 2 * 60 * 60_000, "ok")).toBeNull();
+  });
+
+  it("a daily reflection cut off (she was stopped) is still owed", async () => {
+    const start = Date.parse("2026-11-02T22:00:00.000Z");
+    vi.setSystemTime(start);
+    // The call ends in an error while she is being stopped.
+    const { reflector } = setup("講到一半");
+    const controller = new AbortController();
+    controller.abort();
+    expect(await reflector.reflect("daily", null, controller.signal)).toBeNull();
+    const later = start + 31 * 60_000;
+    vi.setSystemTime(later);
+    expect(reflector.due(later, "ok")).toEqual({ kind: "daily" });
+  });
 });
 
 describe("feedback signals", () => {
@@ -429,9 +473,9 @@ describe("reflection writes only stable names", () => {
     ]);
     for (const l of all) expect(ephemeralHandlesIn(l.text)).toEqual([]);
     // Only the lessons that are about how much she talks carry a `talk`.
-    const talk = Object.fromEntries(all.map((l) => [l.text, l.talk]));
-    expect(talk["別一直重複同一個梗"]).toBeNull();
-    expect(talk["這裡可以更活潑一點"]).toBe(0.6);
+    const talk = new Map(all.map((l) => [l.text, l.talk]));
+    expect(talk.get("別一直重複同一個梗")).toBeNull();
+    expect(talk.get("這裡可以更活潑一點")).toBe(0.6);
     // ...and it is scoped to the place she named by its full string.
     expect(all.find((l) => l.text.includes("活潑"))?.scope).toBe("discord:g1:c1");
   });

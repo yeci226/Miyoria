@@ -45,7 +45,7 @@ const E2E: E2eRecord = {
   complete: true,
   reason: null,
   total_ms: 4800,
-  segments: { endpoint: 600, asr: 1364, llm_first: 1900, tts_queue: 300, tts_first: 520, playback: 116 },
+  segments: { endpoint: 600, asr: 1364, prepare: 400, llm_first: 1900, tts_queue: 300, tts_first: 520, playback: 116 },
   unattributed_ms: 0,
   prefetched: false,
   provider: "gpt-sovits",
@@ -111,8 +111,8 @@ describe("回合", () => {
       return undefined;
     });
     renderRoute(`/activity?tab=turns&turn=${TURN}`);
-    const bars = await screen.findByRole("list", { name: "六段延遲" });
-    expect(within(bars).getAllByRole("listitem")).toHaveLength(6);
+    const bars = await screen.findByRole("list", { name: "各段延遲" });
+    expect(within(bars).getAllByRole("listitem")).toHaveLength(7);
     const asked = fetch.mock.calls.map(([u]) => new URL(String(u), "http://x")).filter((u) => u.pathname === "/api/facts/events");
     expect(asked).toHaveLength(1);
     expect(asked[0]?.searchParams.get("turn")).toBe(TURN);
@@ -130,7 +130,7 @@ describe("回合", () => {
     expect(asked[1]?.searchParams.get("since")).not.toBeNull();
   });
 
-  it("shows the six segments of a reply the panel measured", async () => {
+  it("shows the segments of a reply the panel measured", async () => {
     serve();
     const { queryClient } = renderRoute(`/activity?tab=turns&turn=${TURN}`);
     await screen.findByRole("list", { name: "她說的話" });
@@ -138,11 +138,12 @@ describe("回合", () => {
 
     queryClient.setQueryData(queryKeys.turnE2e(TURN), E2E);
 
-    const bars = await screen.findByRole("list", { name: "六段延遲" });
+    const bars = await screen.findByRole("list", { name: "各段延遲" });
     const rows = within(bars).getAllByRole("listitem");
     expect(rows.map((r) => r.textContent)).toEqual([
       "判斷說完600 ms",
       "辨識1.36 s",
+      "準備400 ms",
       "LLM 首字1.90 s",
       "TTS 排隊300 ms",
       "TTS 合成520 ms",
@@ -158,7 +159,7 @@ describe("回合", () => {
     await screen.findByRole("list", { name: "她說的話" });
     queryClient.setQueryData(queryKeys.turnE2e(TURN), { ...E2E, complete: false, reason: "barge_in", total_ms: null });
     expect(await screen.findByText("沒有量完:被打斷")).toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "六段延遲" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "各段延遲" })).not.toBeInTheDocument();
   });
 
   it("has honest empty lines when the log holds nothing of the turn", async () => {

@@ -15,6 +15,13 @@
 //
 // The claim order is `FLOOR_CLAIMS`. The queue around it (coalescing, retries, the decision trail)
 // is the Arbiter's: under `pipeline = "v3"` it asks this class instead of its own V2 rules.
+//
+// One decision on what she starts herself (v4 §7.6). Before, five limiters overlapped: the
+// Arbiter's gaps between her starts, this class's wait after lines nobody answered, the channel
+// level's start gap, mind's `SelfStarts` and the V2 `max_unanswered` of `unanswered.ts`. A wish
+// could pass one and be held by the next with another reason and another time. Now `check` is the
+// one place: every one of those waits is an input (`StartFacts`, read from the Arbiter's books and
+// the channel level), the latest of them is the answer, with one reason and one retry time.
 
 import {
   type ArbiterReason,
@@ -71,6 +78,32 @@ export interface FloorEnv {
   talk?(context: ContextKey): number;
   /** What her feelings lean her talkativeness (`AffectBiases.talkativeness`, 0: nothing). */
   feeling?(context: ContextKey): number;
+  /** `context` is the channel her daily posts go to (`DailyPostsKey`): posting there needs nobody. */
+  postsTo?(context: ContextKey): boolean;
+}
+
+/**
+ * What the waits on her own starts depend on, from the Arbiter's books and the channel's level.
+ * Times are epoch ms; a gap of 0 is no gap.
+ */
+export interface StartFacts {
+  /** Her last own start anywhere, and in this place. */
+  lastAnywhere: number | null;
+  lastHere: number | null;
+  /** Between any two of her starts (`min_gap_secs`). */
+  minGapMs: number;
+  /** The gap here before misses (`gap_text_secs` / `gap_voice_secs`). */
+  baseGapMs: number;
+  /** The gap here now: the base doubled per start nobody picked up, up to `max_backoff`. */
+  placeGapMs: number;
+  /** Her starts here in a row nobody picked up. */
+  misses: number;
+  /** The channel level's gap between her starts here (`start_gap_ms`). */
+  levelGapMs: number;
+  /** She just spoke here: her own starts wait until then (`after_speech_*_secs`). */
+  afterSpeechUntil: number | null;
+  /** Formats a time for her (`clockText`). */
+  clock(at: number): string;
 }
 
 /** Why a claim may not take the mic. */
@@ -294,6 +327,8 @@ export class FloorCore implements FloorService, Projection {
   /** People are around to hear something she starts herself. */
   #someoneThere(context: ContextKey, place: Place): boolean {
     if (context.kind === "dm") return true;
+    // Her daily posts have a channel of their own (§8.4): a post is read later, by whoever comes.
+    if (this.#env.postsTo?.(context) === true) return true;
     const humans = this.#env.humans?.(context) ?? null;
     if (humans !== null) return humans > 0;
     // A text channel has no roll call. Someone there not long ago is the nearest thing to it, and
@@ -308,7 +343,12 @@ export class FloorCore implements FloorService, Projection {
    * Whether `kind` may have the mic in `context` now. `addressed`, `reply`, `result` and `urgent`
    * always may: someone waits, or it cannot wait.
    */
-  check(kind: FloorClaimKind, context: ContextKey, hint?: string | null): FloorRefusal | null {
+  check(
+    kind: FloorClaimKind,
+    context: ContextKey,
+    hint?: string | null,
+    start?: StartFacts | null,
+  ): FloorRefusal | null {
     if (!spendsBudget(kind)) return null;
     const now = this.#now();
     const place = this.#place(placeKey(context));
@@ -331,14 +371,8 @@ export class FloorCore implements FloorService, Projection {
         retryAt,
       };
     }
-    const until = this.#backoffUntil(place);
-    if (until !== null && now < until) {
-      return {
-        reason: "unanswered",
-        detail: `你剛才連續 ${place.unanswered} 次開口沒人回應,再等一下`,
-        retryAt: until,
-      };
-    }
+    const wait = this.#wait(kind, place, start ?? null, now);
+    if (wait !== null) return wait;
     if (kind === "wish") {
       if (!this.#someoneThere(context, place)) {
         return { reason: "nobody", detail: "現在沒有真人在場,不對空氣說話", retryAt: null };
@@ -356,6 +390,43 @@ export class FloorCore implements FloorService, Projection {
 
   refuses(kind: FloorClaimKind, context: ContextKey, hint?: string | null): string | null {
     return this.check(kind, context, hint)?.detail ?? null;
+  }
+
+  /**
+   * The one wait before a claim of `kind` (`null`: none): after lines nobody answered, for every
+   * claim that spends her budget; and for a wish of hers with `start`, the gap since her last
+   * start anywhere, the gap here (doubled per start nobody picked up), the channel level's gap and
+   * the moment after she spoke. The latest of them decides, so she hears one reason and one time.
+   */
+  #wait(
+    kind: FloorClaimKind,
+    place: Place,
+    start: StartFacts | null,
+    now: number,
+  ): FloorRefusal | null {
+    const waits: FloorRefusal[] = [];
+    const backoff = this.#backoffUntil(place);
+    if (backoff !== null) {
+      waits.push({
+        reason: "unanswered",
+        detail: `你剛才連續 ${place.unanswered} 次開口沒人回應,再等一下`,
+        retryAt: backoff,
+      });
+    }
+    if (kind === "wish" && start !== null) waits.push(...startWaits(start));
+    let latest: FloorRefusal | null = null;
+    for (const w of waits) {
+      if (w.retryAt === null || w.retryAt <= now) continue;
+      if (latest === null || (latest.retryAt ?? 0) < w.retryAt) latest = w;
+    }
+    return latest;
+  }
+
+  /** When a wish of hers with `start` may come in `context` (`null`: now). */
+  startsAt(context: ContextKey, start: StartFacts): number | null {
+    const now = this.#now();
+    const place = this.#place(placeKey(context));
+    return this.#wait("wish", place, start, now)?.retryAt ?? null;
   }
 
   // ---- narration dedupe -----------------------------------------------------------------------
@@ -481,4 +552,40 @@ export class FloorCore implements FloorService, Projection {
         return;
     }
   }
+}
+
+/** The waits of a start of hers that only depend on her books and the channel level. */
+function startWaits(s: StartFacts): FloorRefusal[] {
+  const out: FloorRefusal[] = [];
+  if (s.lastAnywhere !== null && s.minGapMs > 0) {
+    const at = s.lastAnywhere + s.minGapMs;
+    out.push({ reason: "cooldown", detail: `剛主動開過話題,${s.clock(at)} 之後`, retryAt: at });
+  }
+  if (s.afterSpeechUntil !== null) {
+    out.push({
+      reason: "cooldown",
+      detail: "你剛在這裡講完話,等一下再自己開話題",
+      retryAt: s.afterSpeechUntil,
+    });
+  }
+  if (s.lastHere !== null) {
+    const at = s.lastHere + s.placeGapMs;
+    const missed = s.misses > 0 && s.placeGapMs > s.baseGapMs;
+    out.push({
+      reason: missed ? "unanswered" : "cooldown",
+      detail: missed
+        ? `你在這裡主動開的話題最近連續 ${s.misses} 次沒人接,下次可主動在 ${s.clock(at)} 之後`
+        : `你剛在這裡主動開過話題,下次可主動在 ${s.clock(at)} 之後`,
+      retryAt: at,
+    });
+    if (s.levelGapMs > 0) {
+      const level = s.lastHere + s.levelGapMs;
+      out.push({
+        reason: "ceiling",
+        detail: `這個頻道的等級限制:${s.clock(level)} 之後才能再自己開話題`,
+        retryAt: level,
+      });
+    }
+  }
+  return out;
 }

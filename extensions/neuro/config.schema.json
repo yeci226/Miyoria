@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Neuro Game SDK bridge",
+  "type": "object",
+  "properties": {
+    "serve": {
+      "type": "boolean",
+      "default": false,
+      "description": "開不開伺服器。false(預設)= 擴充載入了但不綁任何 port。host 的 enabled 預設是 true,所以要另外用這個開關"
+    },
+    "host": {
+      "type": "string",
+      "default": "127.0.0.1",
+      "description": "綁定位址。預設只有本機;綁到其他位址,任何連得到的人都能對她的遊戲介面送資料"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "default": 8000,
+      "description": "遊戲要連的 port(0 = 系統挑)"
+    },
+    "games": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "只接受這些遊戲名稱(startup 的 game);空 = 不限"
+    },
+    "character_id": {
+      "type": "string",
+      "default": "neuro",
+      "description": "startup 回覆裡的 characterId(相容用;不影響她是誰)"
+    },
+    "display_name": {
+      "type": "string",
+      "default": "Miyoria",
+      "description": "startup 回覆裡的 displayName"
+    },
+    "result_timeout_s": {
+      "type": "number",
+      "minimum": 0.1,
+      "default": 20,
+      "description": "等遊戲回 action/result 最久幾秒(規格:約 20 秒),逾時算失敗"
+    },
+    "force_timeout_s": {
+      "type": "number",
+      "minimum": 0.1,
+      "default": 120,
+      "description": "強制選擇沒人答最久留幾秒"
+    },
+    "force_max_attempts": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 5,
+      "description": "強制選擇一直失敗時最多試幾次"
+    },
+    "context_keep": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 12,
+      "description": "觀察裡保留最近幾則 context"
+    },
+    "max_actions": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 48,
+      "description": "同時註冊的動作上限(host 的上限是 64)"
+    },
+    "ping_interval_ms": {
+      "type": "integer",
+      "minimum": 100,
+      "default": 15000,
+      "description": "多久 ping 一次;兩輪沒回就斷線,讓死掉的連線騰出位子"
+    }
+  },
+  "additionalProperties": false
+}

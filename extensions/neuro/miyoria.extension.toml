@@ -1,0 +1,23 @@
+# Neuro Game SDK 相容橋接:開一個本機 WebSocket 伺服器,整合了 Neuro Game SDK 的遊戲連上來,
+# 它的動作、情境和強制選擇就變成她的遊戲介面(game.neuro)。
+# 預設不開:要在 [extensions."miyoria.neuro"] 設 serve = true 才會綁 port(說明見 README.md)。
+# 建置:先 `pnpm build` packages/sdk 和 packages/types,再在這裡 `pnpm install && pnpm build`。
+id = "miyoria.neuro"
+version = "0.1.0"
+name = "Neuro Game SDK"
+description = "Neuro Game SDK 相容橋接:整合了該 SDK 的遊戲連上來,動作和情境變成她的遊戲介面"
+kind = ["game-adapter"]
+game = "neuro"
+runtime = "node"
+entry = "dist/index.js"
+placement = "any"
+
+[permissions]
+# voice.playback:她講完話時回 speech_finished 給遊戲。
+events = ["voice.playback"]
+tools = false
+# 這個擴充是伺服器,遊戲連進來;預設只綁 127.0.0.1。
+network = ["127.0.0.1:8000"]
+
+[config]
+schema = "config.schema.json"

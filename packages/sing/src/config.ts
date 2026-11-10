@@ -102,6 +102,20 @@ export const SingConfigSchema = z.object({
   video_dir: z.string().default("data/songs"),
   /** Her mouth follows the converted vocal stem instead of the whole mix. */
   lip_sync_vocals: z.boolean().default(true),
+  /**
+   * Songs she prepares for herself (`practice`, v4 §8.1) at once. They are never sung on their
+   * own and do not count toward anyone's limit.
+   */
+  max_practice: z.number().int().nonnegative().default(2),
+  /**
+   * Song clips for the party game that guesses songs (`SongClipsKey`): off = the game is off.
+   * `clip_wait_ms`: a clip starts after she finished the line she is saying, or this long after
+   * it was asked for if she says nothing. `clip_refresh_secs`: how often the worker's library is
+   * read again.
+   */
+  clips: z.boolean().default(true),
+  clip_wait_ms: z.number().int().nonnegative().default(1500),
+  clip_refresh_secs: z.number().positive().default(60),
   /** Finished songs kept in the list. */
   history: z.number().int().nonnegative().default(10),
   /** `[modules.queue]` items of this kind are sung when they are called (`/queue manage next`). */

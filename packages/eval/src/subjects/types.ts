@@ -8,7 +8,7 @@ export interface SubjectContext {
   live: boolean;
 }
 
-/** A part of the code asked what it does with a fixture's stimulus. */
+/** A part of the code asked what it does with a fixture's stimulus (some answer later). */
 export interface Subject {
-  run(fixture: Fixture, ctx: SubjectContext): Trace;
+  run(fixture: Fixture, ctx: SubjectContext): Trace | Promise<Trace>;
 }

@@ -371,6 +371,56 @@
   }
 }
 
+/* A touch on her picture (LivePlayer.tsx): the hand presses in, the heart floats up and goes. */
+@keyframes spot-hand {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.5);
+  }
+  25% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+}
+
+@keyframes spot-heart {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -30%) scale(0.6);
+  }
+  20% {
+    opacity: 1;
+    transform: translate(-50%, -90%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--dx, 0px)), -260%) scale(0.9);
+  }
+}
+
+.spot-hand {
+  animation: spot-hand 1.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.spot-heart {
+  animation: spot-heart 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* They simply stay where she was touched until they are taken away. */
+  .spot-hand,
+  .spot-heart {
+    animation: none;
+  }
+}
+
 /* The digital card (HoloCard.tsx): it tilts toward the pointer and catches light. The variables are
    written each frame: --rx/--ry the turn, --mx/--my and --px/--py where the pointer is, --hyp how far
    from the middle (0 to 1), --on how lit it is, --s its size. Radii are the SVG's 26 of 630 x 880. */

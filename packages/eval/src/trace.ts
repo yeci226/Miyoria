@@ -15,6 +15,14 @@ export const TraceEventSchema = z.discriminatedUnion("type", [
     text: z.string().optional(),
     /** The owner told her to stop doing something (`prohibition`) or to start again (`release`). */
     intent: z.enum(["prohibition", "release"]).optional(),
+    /** A platform reply to a line of hers (the log's `addressed_to_her` came from this). */
+    reply_to_her: z.boolean().optional(),
+    /** Others the line @-mentions, in order. */
+    mentions: z.array(z.string()).optional(),
+    /** The line opens with an @-mention of someone else. */
+    opens_with_mention: z.boolean().optional(),
+    /** Whom the line is said to, as a person reads it: `她` for her, else the name. */
+    to: z.string().optional(),
   }),
   /** One line she said or wrote (what people saw or heard, after the parser). */
   z.object({
@@ -22,6 +30,23 @@ export const TraceEventSchema = z.discriminatedUnion("type", [
     t: At,
     channel: z.enum(["voice", "text"]),
     text: z.string(),
+    /** The person a question of hers is for (her asking them something). */
+    to: z.string().optional(),
+  }),
+  /** Something of hers that holds a wish to ask someone (a proposal, a commitment, a goal). */
+  z.object({
+    type: z.literal("wish"),
+    t: At,
+    person: z.string(),
+    text: z.string(),
+    /** The store and entry that holds it (`proposal:…`, `commitment:…`, `goal:…`). */
+    holder: z.string(),
+  }),
+  /** What attention made of the line heard at `t`: said to her (`direct`) or not. */
+  z.object({
+    type: z.literal("addressed"),
+    t: At,
+    direct: z.boolean(),
   }),
   /** A tool she called (`native`) or only wrote down as text (`native: false`). */
   z.object({

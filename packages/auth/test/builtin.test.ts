@@ -56,15 +56,44 @@ describe("built-in roles", () => {
       const legacy = LEGACY_BUILTIN_GRANTS[name] ?? [];
       expect(legacy.length, name).toBeGreaterThan(0);
       for (const old of legacy) {
-        expect(old, name).not.toContain("tools.file");
+        // Only the step just before `tools.remind` already has the file node.
+        if (old.includes("tools.file")) {
+          expect(old, name).toEqual(current.grants.filter((g) => g !== "tools.remind"));
+        }
         expect(builtinStatus({ ...current, grants: [...old] }), name).toBe("upgrade");
       }
-      // Before the file node (the latest), and before the web node (the one before it).
-      expect(legacy.at(-1), name).toEqual(current.grants.filter((g) => g !== "tools.file"));
-      expect(legacy.at(-2), name).toEqual(
-        current.grants.filter((g) => g !== "tools.web" && g !== "tools.file"),
-      );
+      // Before the file node, and before the web node (neither node had `tools.remind` yet).
+      const minus = (...nodes: string[]) => current.grants.filter((g) => !nodes.includes(g));
+      expect(legacy, name).toContainEqual(minus("tools.file", "tools.remind"));
+      expect(legacy, name).toContainEqual(minus("tools.web", "tools.file", "tools.remind"));
       expect(builtinStatus(current), name).toBe("current");
+    }
+  });
+
+  test("tools_remind_for_trusted_and_above_and_a_stored_role_from_before_it_is_upgraded", () => {
+    const roles = builtinRoles();
+    const get = (n: string) => roles.find((r) => r.name === n) as RoleDefinition;
+    for (const name of [ADMIN, MODERATOR, TRUSTED]) {
+      expect(allows(get(name), "tools.remind"), name).toBe(true);
+    }
+    expect(allows(get(RESTRICTED), "tools.remind")).toBe(false);
+    expect(allows(get(BLOCKED), "tools.remind")).toBe(false);
+    for (const name of [ADMIN, MODERATOR, TRUSTED, USER]) {
+      const current = get(name);
+      const without = current.grants.filter((g) => g !== "tools.remind");
+      // A role stored before the node existed is an earlier version of the role (and so is
+      // upgraded) exactly when the role carries the node now; a role that never listed it
+      // (trusted and above: `tools.*`) is simply current.
+      const listed = current.grants.includes("tools.remind");
+      expect(builtinStatus({ ...current, grants: without }), name).toBe(
+        listed ? "upgrade" : "current",
+      );
+      // No stored version lists it: older versions come from before it, and the current one is
+      // never in the legacy lists.
+      for (const old of LEGACY_BUILTIN_GRANTS[name] ?? []) {
+        expect(old, name).not.toContain("tools.remind");
+        expect(builtinStatus({ ...current, grants: [...old] }), name).toBe("upgrade");
+      }
     }
   });
 

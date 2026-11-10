@@ -77,6 +77,7 @@ export function percentile(sorted: readonly number[], p: number): number | null 
 const E2E_SEGMENTS: readonly E2eSegmentName[] = [
   "endpoint",
   "asr",
+  "prepare",
   "llm_first",
   "tts_queue",
   "tts_first",

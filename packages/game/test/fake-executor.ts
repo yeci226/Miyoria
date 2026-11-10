@@ -24,7 +24,7 @@ import {
 } from "@miyoria/types";
 
 export type FakeEnd =
-  | { type: "done"; detail: string }
+  | { type: "done"; detail: string; data?: JsonValue }
   | { type: "failed"; code: TaskFailureCode; detail: string };
 
 const goal = (name: string, description: string, budget_s: number | null = null): TaskGoalSpec => ({
@@ -127,9 +127,9 @@ export class FakeExecutor implements RegisteredTaskExecutor {
       this.#end(id, { type: "failed", code: "cancelled", detail: "cancelled" });
   }
 
-  /** Ends `id` (default: the last start) with `done`. */
-  done(detail = "好了", id: TaskId = this.last().id): void {
-    this.#end(id, { type: "done", detail });
+  /** Ends `id` (default: the last start) with `done` (and `data`, e.g. an `outcome`). */
+  done(detail = "好了", id: TaskId = this.last().id, data: JsonValue = null): void {
+    this.#end(id, { type: "done", detail, data });
   }
 
   /** Ends `id` (default: the last start) with `failed` / `code`. */
@@ -146,7 +146,7 @@ export class FakeExecutor implements RegisteredTaskExecutor {
     this.running.delete(id);
     this.emit(
       end.type === "done"
-        ? { type: "done", task: id, detail: end.detail, data: null, at: this.#at() }
+        ? { type: "done", task: id, detail: end.detail, data: end.data ?? null, at: this.#at() }
         : { type: "failed", task: id, code: end.code, detail: end.detail, at: this.#at() },
     );
   }

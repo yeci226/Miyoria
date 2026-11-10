@@ -198,7 +198,7 @@ export interface Speaker {
 }
 
 /** Why not, when `principal` is not a person talking to her (her own turn, a game, the panel). */
-function noSpeaker(principal: Principal): string | null {
+export function noSpeaker(principal: Principal): string | null {
   return principal.kind === "user" && principal.requester !== null ? null : NO_SPEAKER;
 }
 
@@ -218,7 +218,7 @@ export function speakerOf(ctx: ExecContext): Speaker {
 }
 
 /** The ledger key of what one message (or utterance) paid for. */
-function messageKey(context: MessageRef["context"], id: string): string {
+export function messageKey(context: MessageRef["context"], id: string): string {
   return `say:${contextKeyString(context)}:${id}`;
 }
 
@@ -277,7 +277,7 @@ export class VoiceOffers {
   }
 }
 
-function refusal(
+export function refusal(
   what: string,
   reason: WalletRefusal,
   message: string,
@@ -289,7 +289,7 @@ function refusal(
   };
 }
 
-function reasonOf(error: EconomyError): WalletRefusal {
+export function reasonOf(error: EconomyError): WalletRefusal {
   if (error instanceof DealRefusal) return "forbidden";
   if (error.message === NO_DEAL) return "no_deal";
   if (error.message === OPEN_DEAL) return "open_deal";

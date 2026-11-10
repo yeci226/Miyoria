@@ -1,0 +1,28 @@
+{
+  "name": "@miyoria/ext-neuro",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Neuro Game SDK compatible bridge: a WebSocket server games connect to, mapped onto the game executor",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -w -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miyoria/sdk": "workspace:*",
+    "@miyoria/types": "workspace:*",
+    "ws": "^8.19.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.1",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

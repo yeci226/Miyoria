@@ -14,7 +14,7 @@ export const BUDGET_TOPIC = "llm.budget";
  * What she says (at most once per context per notice interval) when the LLM budget is
  * exhausted. Constant: no model is involved.
  */
-export const EXHAUSTED_LINE = "哼……今天的能量用完了啦,才、才不是想偷懶!明天再陪你們聊。";
+export const EXHAUSTED_LINE = "今天的能量用完了……伺服器繁忙,明天再陪你們聊。";
 
 /**
  * State of the LLM budget as reported on `llm.budget`.
@@ -63,13 +63,24 @@ export function unansweredHint(topics: readonly RaisedTopic[]): string {
   return `你最近在這裡自己提過、沒人接的話題:${lines.map((l) => `「${l}」`).join("、")}。一陣子內不要再提(換句話說也一樣);沒人接就放下,跟著大家現在聊的事,或換個話題。`;
 }
 
+/** The feelings she would rather keep to herself when her display rules mask them. */
+const KEPT_TO_HERSELF: ReadonlySet<string> = new Set([
+  "shy",
+  "missing",
+  "lonely",
+  "gratitude",
+  "jealousy",
+  "guilt",
+]);
+
 /**
- * What she shows of her emotion (the `self` module's display rules), so her lines and her
- * `<emo:…>` tags follow it rather than what she really feels. Only fixed text: no names.
+ * What she shows of her emotion (the `self` module's display rules), as a fact about her: only
+ * that she would rather not show a soft feeling, when the rules mask one. Never how it shows (the
+ * rules' `style`) nor which `<emo:…>` it is: in the last system message every turn, 「兇回去、嫌棄
+ * 對方,但臉紅了」 or 「接近 <emo:smug>」 was a script she played on every line, the very formula
+ * the persona dropped (persona-v4.md §7). Joy, pride, anger and surprise show as they are: the
+ * mood line already names them. Only fixed text: no names. Empty when there is nothing to say.
  */
 export function shownHint(shown: ShownEmotion): string {
-  const tag = /^[a-z_]{1,32}$/.test(shown.tag) ? shown.tag : "neutral";
-  const style = neutralize(shown.style).replace(/\s+/g, " ").trim().slice(0, 80);
-  const hide = shown.masked ? ";心裡真正的感受藏起來,不要直接說出來" : "";
-  return `你現在表現出來的樣子:${style}。台詞和 <emo:…> 照這個走(多半是 <emo:${tag}>)${hide}`;
+  return shown.masked && KEPT_TO_HERSELF.has(shown.from) ? "這份感受你不太想讓人看出來。" : "";
 }

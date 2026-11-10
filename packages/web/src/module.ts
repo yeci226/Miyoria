@@ -21,7 +21,11 @@ export class WebModule implements Module {
 
   async start(ctx: ModuleContext): Promise<void> {
     const config = ctx.config(WebConfigSchema);
-    const web = new WebService({ config, clock: ctx.clock });
+    const web = new WebService({
+      config,
+      clock: ctx.clock,
+      note: (detail) => ctx.log.warn({ detail }, "a web search failed"),
+    });
     const actuators = actuatorsFor(ctx);
     const off = webCapabilities(web).map((capability) => actuators.register(capability));
     this.#unregister = () => {

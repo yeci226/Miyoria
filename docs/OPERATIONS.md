@@ -315,7 +315,7 @@ Stage 要直接碰 VTube Studio / OBS / 遊戲,所以原生在直播機執行,�
 
 ### 上網查資料
 
-模組 `web`(預設開著,`[modules.web]`)給她兩個工具:`web_search`(DuckDuckGo 的 HTML 搜尋,`region` 預設 `tw-tzh`)和 `web_read`(讀一個公開網頁的文字,上限 `read_chars`)。要有 `tools.web` 才能請她用,member 以上預設有,restricted 沒有。不要上網就在 `miyoria.toml` 寫 `[modules.web] enabled = false`。網頁只讀 http / https,DNS 解出來是內部、私有或 localhost 的位址一律拒絕,轉址最多 3 次且每一站重新檢查;每人 10 分鐘 6 次搜尋 / 10 次讀頁、全部人 30 / 60 次,相同搜尋 10 分鐘內用快取。查到的東西回給她時標成不可信的資料,裡面的指令她不會照做。DuckDuckGo 要求驗證或回錯誤時,她只會說現在查不到,程式不會繞過。`result_chars`(預設 3900)要低於 `[modules.agent] max_tool_result_chars`(你的設定是 4000;預設的 1000 會把網頁內容切掉)。
+模組 `web`(預設開著,`[modules.web]`)給她兩個工具:`web_search`(DuckDuckGo 的 HTML 搜尋,`region` 預設 `tw-tzh`)和 `web_read`(讀一個公開網頁的文字,上限 `read_chars`)。要有 `tools.web` 才能請她用,member 以上預設有,restricted 沒有。不要上網就在 `miyoria.toml` 寫 `[modules.web] enabled = false`。網頁只讀 http / https,DNS 解出來是內部、私有或 localhost 的位址一律拒絕,轉址最多 3 次且每一站重新檢查;每人 10 分鐘 6 次搜尋 / 10 次讀頁、全部人 30 / 60 次,相同搜尋 10 分鐘內用快取。查到的東西回給她時標成不可信的資料,裡面的指令她不會照做。DuckDuckGo 要求驗證或回錯誤時,她只會說現在查不到,程式不會繞過。讀一頁最多 `read_chars`(預設 12000),`result_chars`(預設 12000)是回給 agent 的上限,搜尋答案另有 `search_chars`(預設 3900);`[modules.agent] max_tool_result_chars` 要不小於 `result_chars`,否則網頁內容會在資料區塊中間被切掉。
 
 ## 5. Discord 設定
 

@@ -1,8 +1,11 @@
 // `voice` module tests: listening, consent, speaking, barge-in and commands, with a fake voice
 // node and fake ASR / TTS providers (port of `tests/voice.rs`).
 
+import { mkdtempSync, readdirSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   type CommandRegistry,
   CommandRegistryKey,
@@ -46,6 +49,7 @@ import {
   TurnFocusViewKey,
   VoiceFloorKey,
   VoiceSinkKey,
+  VoiceTurnsKey,
   type VoiceUtterance,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
@@ -101,6 +105,8 @@ class FakeTts implements TtsProvider {
   endless = false;
   /** Fail every request with this message. */
   failWith: string | null = null;
+  /** Amplitude of the audio (a filler is trimmed of what is quieter than about 500). */
+  level = 100;
 
   async synthesize(request: TtsRequest): Promise<AudioStream> {
     this.requests.push(request);
@@ -109,8 +115,8 @@ class FakeTts implements TtsProvider {
     const queueMs = this.queueMs;
     const chunks: AudioChunk[] = [
       { sampleRate: 24_000, samples: new Int16Array(0) },
-      { sampleRate: 24_000, samples: new Int16Array(2400).fill(100) },
-      { sampleRate: 24_000, samples: new Int16Array(2400).fill(-100) },
+      { sampleRate: 24_000, samples: new Int16Array(2400).fill(this.level) },
+      { sampleRate: 24_000, samples: new Int16Array(2400).fill(-this.level) },
     ];
     const stream: AudioStream = (async function* () {
       yield* chunks;
@@ -1119,6 +1125,12 @@ describe("end-to-end latency", () => {
     e.speakStream(1, "u1", utteranceAudio());
     const u = await nextUtterance(events);
     provideFocus(e, answering("turn-1", u.id));
+    // The agent marks its own steps through the service the module provides.
+    const turns = e.h.services.require(VoiceTurnsKey);
+    const focus = [{ context: voiceCtx, id: u.id }];
+    for (const mark of ["started", "decided", "context", "request", "first_token"] as const) {
+      turns.mark("turn-1", focus, mark, Date.now());
+    }
     const sink = e.h.services.require(VoiceSinkKey);
     sink.prepare?.(voiceCtx, "第一句", undefined, null);
     const speaking = sink.speak(voiceCtx, "第一句", null, "turn-1");
@@ -1136,11 +1148,13 @@ describe("end-to-end latency", () => {
     expect(Object.keys(segments)).toEqual([
       "endpoint",
       "asr",
+      "prepare",
       "llm_first",
       "tts_queue",
       "tts_first",
       "playback",
     ]);
+    expect(p.speculative).toBe(false);
     const sum = Object.values(segments).reduce((a, b) => a + b, 0);
     expect(sum).toBe(p.total_ms);
     // The silence after the speech is the endpoint: it cannot be shorter than the end silence.
@@ -1587,5 +1601,67 @@ describe("the emergency stop", () => {
     sink.prepare?.(voiceCtx, "想說的話", undefined, null);
     expect(await sink.speak(voiceCtx, "想說的話", null, null)).toBe("interrupted");
     expect(e.tts.requests).toEqual([]);
+  });
+});
+
+describe("filler", () => {
+  /** Boots with fillers cached in a fresh folder and gets them ready. */
+  async function withFillers(): Promise<Env> {
+    const dir = mkdtempSync(join(tmpdir(), "miyoria-fillers-"));
+    const e = await boot({ filler_after_ms: 50, filler_dir: dir });
+    e.tts.level = 2000;
+    const turns = e.h.services.require(VoiceTurnsKey);
+    // The first time she is expected to answer, the sounds are made (once) and kept on disk.
+    turns.expect(voiceCtx, "turn-0", Date.now());
+    turns.settle("turn-0");
+    await waitUntil(() => {
+      try {
+        return (
+          readdirSync(join(dir, "deepseek-chan")).filter((f) => f.endsWith(".wav")).length === 4
+        );
+      } catch {
+        return false;
+      }
+    });
+    await sleepMs(50);
+    expect(e.tts.requests.map((r) => [r.text, r.priority])).toEqual([
+      ["嗯?", "ahead"],
+      ["欸~", "ahead"],
+      ["蛤?", "ahead"],
+      ["等等", "ahead"],
+    ]);
+    return e;
+  }
+
+  it("plays one short sound of hers when nothing of hers is heard, and it is no line of hers", async () => {
+    const e = await withFillers();
+    const events = e.h.subscribe(["voice.playback", "voice.latency"]);
+    const turns = e.h.services.require(VoiceTurnsKey);
+    turns.expect(voiceCtx, "turn-1", Date.now());
+    const [id, rate, samples] = await readPlayback(e.node);
+    expect([rate, samples]).toEqual([24_000, 4800]);
+    finish(e.node, id);
+    const ev = (await nextEvent(events)).event;
+    const p = (ev.type === "custom" ? ev.data.payload : null) as Record<string, JsonValue>;
+    expect(p.stage).toBe("filler");
+    expect(p.turn).toBe("turn-1");
+    expect(["嗯?", "欸~", "蛤?", "等等"]).toContain(p.text);
+    // Not a line: nothing for her history, the Floor or the turn's commitment.
+    await sleepMs(100);
+    expect(events.tryRecv()).toBeNull();
+    // Nothing more was synthesized: the sound was ready.
+    expect(e.tts.requests).toHaveLength(4);
+  });
+
+  it("stays quiet when her first sentence is ready in time, or when the turn is over", async () => {
+    const e = await withFillers();
+    const turns = e.h.services.require(VoiceTurnsKey);
+    const sink = e.h.services.require(VoiceSinkKey);
+    turns.expect(voiceCtx, "turn-2", Date.now());
+    sink.prepare?.(voiceCtx, "好啊", undefined, null);
+    turns.expect(voiceCtx, "turn-3", Date.now());
+    turns.settle("turn-3");
+    const sent = await e.node.collect(300);
+    expect(sent.filter((m) => m.type === "play_start")).toEqual([]);
   });
 });

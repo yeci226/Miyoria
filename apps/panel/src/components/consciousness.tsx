@@ -9,6 +9,7 @@ import type { LogEvent } from "@/api/types";
 import { useFactChain, useFactEffects, useFactWindow } from "@/app/queries";
 import { ChartEmpty } from "@/components/charts/charts";
 import { ConsciousnessAxis } from "@/components/charts/consciousness-axis";
+import { DirectorTrace } from "@/components/director-trace";
 import { Facts, JsonView } from "@/components/json-view";
 import { ErrorLine, SkeletonRows } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import {
   KIND_LABEL,
   LANES,
   laneOf,
+  thoughtBody,
   turnOf,
 } from "@/lib/consciousness";
 import { contextShort, fmtDateTime, fmtTime } from "@/lib/format";
@@ -50,8 +52,15 @@ function useAxisRange(): [AxisRange, (r: AxisRange) => void] {
   ];
 }
 
+/** The director's trace of a `game.director` line, when its body has the shape. */
+function directorOf(e: LogEvent) {
+  const t = e.source === "game.director" ? thoughtBody(e) : null;
+  return t !== null && "trigger" in t ? t : null;
+}
+
 /** One event in full: its facts and its whole body. */
 export function LogEventSheet({ event, onClose }: { event: LogEvent | null; onClose: () => void }) {
+  const trace = event ? directorOf(event) : null;
   return (
     <Sheet open={event !== null} onOpenChange={(o) => !o && onClose()}>
       <SheetContent>
@@ -65,6 +74,7 @@ export function LogEventSheet({ event, onClose }: { event: LogEvent | null; onCl
             </SheetHeader>
             <SheetBody className="grid content-start gap-5">
               <p className="text-sm break-words">{describe(event).title}</p>
+              {trace && <DirectorTrace body={trace} />}
               <Facts
                 items={{
                   "時間": fmtDateTime(event.at),

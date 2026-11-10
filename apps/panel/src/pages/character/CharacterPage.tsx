@@ -3,9 +3,11 @@ import { CHARACTER_TABS, type CharacterTab } from "@/app/nav";
 import { Page, PageHeader } from "@/components/page";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MemoryTab } from "./MemoryTab";
+import { NotebookTab } from "./NotebookTab";
 import { PeopleTab } from "./PeopleTab";
 import { PersonaTab } from "./PersonaTab";
 import { PersonSheet } from "./PersonSheet";
+import { RecentTab } from "./RecentTab";
 
 const route = getRouteApi("/character");
 
@@ -28,6 +30,12 @@ export function CharacterPage() {
         </TabsContent>
         <TabsContent value="memory">
           <MemoryTab />
+        </TabsContent>
+        <TabsContent value="notebook">
+          <NotebookTab />
+        </TabsContent>
+        <TabsContent value="recent">
+          <RecentTab />
         </TabsContent>
         <TabsContent value="people">
           <PeopleTab onOpen={(id) => void navigate({ to: "/character", search: { tab: "people", person: id } })} />

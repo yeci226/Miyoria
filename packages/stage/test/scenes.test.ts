@@ -174,6 +174,7 @@ describe("scene roles", () => {
       "starting",
       "ending",
       "sing",
+      "browse",
       "intermission",
     ]);
 
@@ -364,6 +365,21 @@ describe("scene director", () => {
     await ms(10_000); // past the minimum gap between automatic switches
     expect(t.switches).toEqual(["threads", "game"]);
     expect(t.scene()).toBe("Gameplay");
+    t.director.stop();
+  });
+
+  it("a stage that connects late still gets the sing scene", async () => {
+    const t = await rig({ roles: { sing: "Camera" } });
+    t.allow.value = false;
+    t.director.onStatus(null); // the node is gone
+    t.director.onSong(true);
+    await ms(100);
+    expect(t.switches).toEqual([]);
+    t.allow.value = true;
+    t.show("Just Chatting");
+    await ms(100);
+    expect(t.switches).toEqual(["sing"]);
+    expect(t.scene()).toBe("Camera");
     t.director.stop();
   });
 

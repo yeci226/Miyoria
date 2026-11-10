@@ -3,9 +3,14 @@
 // turn in flight (`TurnFocusBoard`, provided as `TurnFocusViewKey`), turn outcomes
 // (`agent.turn.outcome`), saved prompts, notices waiting to be told and the subtitles of
 // lines she spoke before writing them.
+//
+// It also keeps her rhythm in text channels (`Rhythm`, levels.ts: looks, reactions, pacing) and
+// provides `MessageActionsKey` for the context menus: "要她回這則" opens an addressed turn on that
+// message, "不要記住這個" hides it from her prompts and tells the rest of her memory
+// (`agent.message.excluded`).
 
 import { errorMessage, type Logger, type ModuleContext, type Subscription } from "@miyoria/kernel";
-import type { ToolRegistry } from "@miyoria/tools";
+import type { Tool, ToolContext, ToolRegistry } from "@miyoria/tools";
 import {
   ACTION_SETTLED_TOPIC,
   ACTIVITY_DONE_TOPIC,
@@ -38,6 +43,13 @@ import {
   inspectInput,
   isJsonObject,
   type JsonValue,
+  MESSAGE_EXCLUDED_TOPIC,
+  type MessageActionOutcome,
+  type MessageActionRequest,
+  type MessageActions,
+  MessageActionsKey,
+  type MessageExcluded,
+  type MessageRef,
   type Mood,
   MoodSignalsKey,
   NOTICE_TOPIC,
@@ -57,6 +69,7 @@ import {
   TURN_OUTCOME_TOPIC,
   type TurnId,
   type TurnOutcomeRecord,
+  toTimestamp,
   type VoiceParticipant,
   type VoiceUtterance,
   v2Event,
@@ -70,12 +83,19 @@ import { Coordinator } from "./coordinator.js";
 import { TurnFocusBoard } from "./focus.js";
 import type { AgentHandle } from "./handle.js";
 import { startBackfill } from "./history.js";
-import { type Ceiling, ceilingFor, UNCAPPED_INITIATIVES } from "./levels.js";
+import {
+  type Ceiling,
+  ceilingFor,
+  Rhythm,
+  RhythmSectionSchema,
+  UNCAPPED_INITIATIVES,
+} from "./levels.js";
 import { type Chain, heardPart, heardShare, MainLine } from "./mainline/main.js";
 import { agentTurns } from "./metrics.js";
 import type { PersonaHandle } from "./persona.js";
-import { Session } from "./session.js";
+import { type HistoryEntry, Session } from "./session.js";
 import { BUDGET_TOPIC, parseBudgetState } from "./signals.js";
+import { ReactTool } from "./tools.js";
 import { accountId, contextId } from "./util.js";
 import { type FetchLike, ImageLoader } from "./vision.js";
 
@@ -259,6 +279,15 @@ export class Agent {
   readonly #subtitles = new Map<TurnId, Map<string, string>>();
   /** `pipeline = "v3"`: the one foreground decider. `null`: the V2 paths. */
   readonly mainline: MainLine | null;
+  /** Her rhythm in text channels: looks, reactions, pacing (`[modules.agent.rhythm]`). */
+  readonly rhythm: Rhythm;
+  /** Messages people asked her not to remember, by context id (bounded). */
+  readonly #excluded = new Map<string, Set<string>>();
+  /** The context menus' requests (`MessageActionsKey`). */
+  readonly messageActions: MessageActions = {
+    replyTo: (request) => Promise.resolve(this.#replyTo(request)),
+    dontRemember: (request) => Promise.resolve(this.#dontRemember(request)),
+  };
 
   constructor(
     readonly ctx: ModuleContext,
@@ -279,6 +308,12 @@ export class Agent {
     );
     this.prompts = new SavedPrompts(config.prompt.saved);
     this.mainline = pipelineOf(ctx.services) === "v3" ? new MainLine(this) : null;
+    this.rhythm = new Rhythm(ctx.config(RhythmSectionSchema).rhythm, () => ctx.clock.now());
+    // An emoji is the cheapest rung of joining in (v4 §7.2). It is no line, so neither the Floor's
+    // budget nor her share counts it: it has a limit of its own per channel.
+    const react = tools.get(ReactTool.NAME);
+    if (react !== undefined) tools.register(new LimitedReact(react, this.rhythm));
+    ctx.provide(MessageActionsKey, this.messageActions);
   }
 
   get log(): Logger {
@@ -487,13 +522,108 @@ export class Agent {
    * has the channel's own id, so the voice context is the same channel with kind `voice`.
    */
   #voiceTextChat(msg: IncomingMessage): IncomingMessage {
-    const context = msg.id.context;
+    const room = this.#roomOf(msg.id.context);
+    return room === null ? msg : { ...msg, id: { ...msg.id, context: room } };
+  }
+
+  /**
+   * The voice context a text chat belongs to (`#voiceTextChat`), or `null`. Only while someone
+   * in the voice channel can hear her (v4 §7.4: nobody listening, nothing is said aloud): with
+   * nobody there, she answers the text chat in writing.
+   */
+  #roomOf(context: ContextKey): ContextKey | null {
     if (!this.config.voice.text_chat || context.kind !== "channel" || context.scope === null) {
-      return msg;
+      return null;
     }
     const room = this.handle.voiceContext(context.platform, context.scope);
-    if (room === null || room.channel !== context.channel) return msg;
-    return { ...msg, id: { ...msg.id, context: room } };
+    if (room === null || room.channel !== context.channel) return null;
+    const session = this.#existing(room)?.session;
+    if (session !== undefined && session.voiceMembers().length > 0) {
+      if (session.listeners().length === 0) return null;
+    }
+    return room;
+  }
+
+  // ---- the context menus (`MessageActionsKey`) ------------------------------------------------
+
+  /** Where she knows the message `ref` names: its session and entry, if she has it. */
+  #find(ref: MessageRef): { handle: ContextHandle; entry: HistoryEntry } | null {
+    for (const context of [this.#roomOf(ref.context), ref.context]) {
+      if (context === null) continue;
+      const handle = this.#existing(context);
+      const entry = handle?.session.entry(ref.id);
+      if (handle !== undefined && entry !== undefined) return { handle, entry };
+    }
+    return null;
+  }
+
+  /**
+   * "要她回這則": a turn on that message as if it had called her. The channel's mode still holds
+   * (`off`: she does not talk there), and so do the owner's rules, her budget and the Floor: the
+   * turn is an addressed one like any other and she may still choose silence.
+   */
+  #replyTo(request: MessageActionRequest): MessageActionOutcome {
+    if (this.muted) return { ok: false, reason: "她現在暫停中。" };
+    if (this.isBlocked(request.requested_by)) return { ok: false, reason: "這個功能現在不能用。" };
+    const found = this.#find(request.message);
+    if (found === null) return { ok: false, reason: "她現在看不到這則訊息。" };
+    const { handle, entry } = found;
+    if (entry.isSelf) return { ok: false, reason: "這是她自己說的話。" };
+    if (this.isBlocked(entry.account)) return { ok: false, reason: "這個功能現在不能用。" };
+    if (this.#isExcluded(handle.session.context, request.message.id)) {
+      return { ok: false, reason: "這則訊息已經請她不要記住了。" };
+    }
+    const context = handle.session.context;
+    if (this.handle.channelMode(context) === "off") {
+      return { ok: false, reason: "她在這個頻道不說話。" };
+    }
+    this.log.debug(
+      { context: contextId(context), message: request.message.id, by: request.requested_by.id },
+      "asked to answer a message",
+    );
+    const pushed = handle.inbox.push({ type: "message", message: entryMessage(context, entry) });
+    return pushed ? { ok: true } : { ok: false, reason: "沒有成功,請稍後再試。" };
+  }
+
+  /**
+   * "不要記住這個": what lives in the agent. The message (and every quote of it) reads as
+   * `EXCLUDED_LINE` in the conversation her prompts show from now on, a turn cannot be opened on
+   * it, and `agent.message.excluded` tells the rest of her memory, which keeps its own copies.
+   */
+  #dontRemember(request: MessageActionRequest): MessageActionOutcome {
+    const found = this.#find(request.message);
+    const context = found?.handle.session.context ?? request.message.context;
+    const id = request.message.id;
+    let set = this.#excluded.get(contextId(context));
+    if (set === undefined) {
+      set = new Set();
+      this.#excluded.set(contextId(context), set);
+    }
+    set.add(id);
+    while (set.size > MAX_EXCLUDED) {
+      const oldest = set.values().next().value;
+      if (oldest === undefined) break;
+      set.delete(oldest);
+    }
+    if (found !== null) {
+      for (const entry of found.handle.session.history()) {
+        if (entry.id === id) hideEntry(entry);
+        for (const parent of entry.parents) if (parent.id === id) hideEntry(parent);
+      }
+    }
+    const body: MessageExcluded = {
+      context,
+      message: { context, id },
+      author: request.author ?? found?.entry.account ?? null,
+      requested_by: request.requested_by,
+      at: new Date(this.ctx.clock.now()).toISOString(),
+    };
+    this.ctx.publish(customEvent(MESSAGE_EXCLUDED_TOPIC, body as unknown as JsonValue));
+    return { ok: true };
+  }
+
+  #isExcluded(context: ContextKey, id: string): boolean {
+    return this.#excluded.get(contextId(context))?.has(id) ?? false;
   }
 
   /**
@@ -929,7 +1059,7 @@ export class Agent {
       last_spoke_at: this.#existing(context)?.session.lastSelfAt() ?? null,
       humans:
         context.kind === "voice" && this.inVoice(context)
-          ? (this.#existing(context)?.session.voiceMembers().length ?? 0)
+          ? (this.#existing(context)?.session.listeners().length ?? 0)
           : null,
     };
   }
@@ -1114,6 +1244,54 @@ export class Agent {
     this.log.debug({ context: contextId(context) }, "ignoring voice event for a non-voice context");
     return false;
   }
+}
+
+/** `react` with its own limit per channel (`Rhythm.takeReaction`): she hears why when it is spent. */
+class LimitedReact implements Tool {
+  readonly spec;
+  readonly permission;
+
+  constructor(
+    readonly inner: Tool,
+    readonly rhythm: Rhythm,
+  ) {
+    this.spec = inner.spec;
+    this.permission = inner.permission ?? null;
+  }
+
+  async call(ctx: ToolContext, args: JsonValue): Promise<string> {
+    const why = this.rhythm.takeReaction(ctx.context);
+    if (why !== null) throw new Error(why);
+    return await this.inner.call(ctx, args);
+  }
+}
+
+/** What stands in her history for a message someone asked her not to remember. */
+export const EXCLUDED_LINE = "[這則訊息有人請你不要記住]";
+
+/** Excluded message ids remembered per context (older ones live on in memory's own list). */
+const MAX_EXCLUDED = 500;
+
+/** The entry keeps its place (the cached prefix moves once) but says nothing of what it said. */
+function hideEntry(entry: HistoryEntry): void {
+  entry.text = EXCLUDED_LINE;
+  entry.attachments = [];
+  entry.flagged = null;
+  entry.parents = [];
+}
+
+/** A history entry as turn input again (the "要她回這則" menu): it calls her now. */
+function entryMessage(context: ContextKey, entry: HistoryEntry): IncomingMessage {
+  return {
+    id: { context, id: entry.id ?? "" },
+    author: { account: entry.account, display_name: entry.author, is_bot: entry.isBot },
+    text: entry.text,
+    mentions_self: true,
+    reply_to_self: false,
+    attachments: [...entry.attachments],
+    ts: toTimestamp(entry.ts),
+    reply_to: entry.replyTo === null ? null : { context, id: entry.replyTo },
+  };
 }
 
 /** A voice utterance as turn input. Its `MessageRef` names the utterance, not a message. */

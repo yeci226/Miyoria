@@ -11,6 +11,7 @@ import { type Gift, GiftMerger } from "./gifts.js";
 import { closeOnAbort, type ServeResult } from "./lipsync.js";
 import { formatAddress, HttpServer } from "./net.js";
 import type { Activity, CoreMessage, SpeakingState, StageStatus } from "./protocol.js";
+import { type Touch, TouchThrottle } from "./touch.js";
 
 const log = getLogger("stage.overlay");
 
@@ -41,6 +42,7 @@ export class OverlayHub {
   };
   readonly #now: () => number;
   readonly #gifts = new GiftMerger();
+  readonly #touches = new TouchThrottle();
   #giftTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** `now`: the clock a song's `elapsed_ms` is moved on with for new clients (ms). */
@@ -119,6 +121,13 @@ export class OverlayHub {
   screen(card: Extract<CoreMessage, { type: "screen" }>): void {
     const { kind, name, text, song } = card;
     this.#send(JSON.stringify({ type: "screen", kind, name, text, song }));
+  }
+
+  /** A viewer's touch, passed on (at most a few a second; the rest are dropped). Not kept for new clients. */
+  touch(touch: Touch): void {
+    if (this.#listeners.size === 0 || !this.#touches.allow(this.#now())) return;
+    const { x, y, part } = touch;
+    this.#send(JSON.stringify({ type: "touch", x, y, part }));
   }
 
   speaking(state: SpeakingState): void {

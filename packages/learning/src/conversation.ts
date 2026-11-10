@@ -53,7 +53,7 @@ import { z } from "zod";
 import { type BudgetState, CallCap } from "./caps.js";
 import type { ConversationConfig } from "./config.js";
 import { applyDrafts, DRAFT_FORMAT, DraftSchema, type RefTable } from "./drafts.js";
-import { checkContent, outline } from "./json-doc.js";
+import { checkContent, fitContent, type JsonLimits, outline } from "./json-doc.js";
 import { dropStale, staleness, touchUnits } from "./threads.js";
 
 /** Settings key prefix of conversation states. */
@@ -108,9 +108,9 @@ export function parseState(value: JsonValue): ConversationState | null {
   };
 }
 
-/** A fold's structured reply. */
-export function foldSchema(config: ConversationConfig, knowledge: boolean) {
-  const limits = {
+/** The size limits of her notes. */
+export function noteLimits(config: ConversationConfig): JsonLimits {
+  return {
     maxDepth: 5,
     maxStringChars: 600,
     maxKeyChars: 48,
@@ -118,18 +118,28 @@ export function foldSchema(config: ConversationConfig, knowledge: boolean) {
     maxArray: 30,
     maxChars: config.max_notes_chars,
   };
+}
+
+/**
+ * A fold's structured reply. Notes over a limit are sent back once to be made shorter by her;
+ * what is still too long after that is accepted and cut by `fitContent`, never refused: a
+ * refused fold kept nothing and was fed the same lines again two minutes later.
+ */
+export function foldSchema(config: ConversationConfig, knowledge: boolean) {
+  const limits = noteLimits(config);
+  let asked = false;
   return z.object({
-    recap: z
-      .string()
-      .min(1)
-      .max(config.max_recap_chars * 2),
+    // Cut to `max_recap_chars` when it is kept.
+    recap: z.string().min(1),
     notes: z
       .record(z.string(), z.json())
       .default({})
       .superRefine((v, ctx) => {
+        if (asked) return;
         try {
           checkContent(v as JsonObject, limits);
         } catch (error) {
+          asked = true;
           ctx.addIssue({ code: "custom", message: `notes: ${errorMessage(error)}(請精簡)` });
         }
       }),
@@ -153,7 +163,7 @@ const SYSTEM = `你正在整理自己對一段對話的筆記,讓你之後就算
 
 把新的對話併進之前的筆記(更新,不要重寫全部):
 - "recap":幾句話的前情提要(你的角度),涵蓋到目前為止最重要的事。
-- "notes":你自己的結構化筆記,形狀由你決定(JSON 物件,值可以是文字(可用 Markdown)、清單或物件)。值得記的通常有:現在在聊什麼、誰在場或活躍、還沒回答的問題與懸而未決的事、計畫、決定與承諾(包括你自己的)、提到的事實、梗、氣氛;不需要的就不寫,過時的就刪。保持精簡。
+- "notes":你自己的結構化筆記,形狀由你決定(JSON 物件,值可以是文字(可用 Markdown)、清單或物件)。值得記的通常有:現在在聊什麼、誰在場或活躍、還沒回答的問題與懸而未決的事、計畫、決定與承諾(包括你自己的)、提到的事實、梗、氣氛;不需要的就不寫,過時的就刪。保持精簡:整份 notes 的 JSON 不超過 {notesChars} 個字,快滿了就先刪已經結束的、最舊的;超過的部分會從最舊的開始被裁掉。
 - "feedback":別人明確對你表達的正面或負面反應(例如叫你閉嘴、說你很吵、稱讚你),沒有就給空陣列;by 填他的名字(逐字稿裡的名字)。
 - 提到人一律寫名字(逐字稿裡的名字,例如 Owen、Owen#2),不要用 u1、p1 這類代號:筆記會留著給以後的你看,代號每次都會變。
 - 沒有新進展的筆記請原樣保留,不要改寫措辭;改寫會讓舊話題看起來像剛聊過。
@@ -185,7 +195,13 @@ interface Activity {
   lastFoldMs: number | null;
   sessionLines: number;
   retryAtMs: number | null;
+  /** Folds that failed in a row: each waits twice as long as the one before. */
+  failures: number;
 }
+
+/** The wait after a failed fold, and the longest it grows to. */
+const RETRY_MS = 120_000;
+const MAX_RETRY_MS = 60 * 60_000;
 
 /** Why a fold did not happen. */
 export type FoldSkip = "nothing new" | "too few lines" | "no model" | "capped" | "budget";
@@ -246,7 +262,15 @@ export class ConversationEngine implements ConversationStates {
     const key = contextKeyString(context);
     let a = this.#activity.get(key);
     if (!a) {
-      a = { context, pending: 0, lastMs: atMs, lastFoldMs: null, sessionLines: 0, retryAtMs: null };
+      a = {
+        context,
+        pending: 0,
+        lastMs: atMs,
+        lastFoldMs: null,
+        sessionLines: 0,
+        retryAtMs: null,
+        failures: 0,
+      };
       this.#activity.set(key, a);
     }
     if (atMs > 0 && atMs - a.lastMs > this.#d.config.session_gap_mins * 60_000) a.sessionLines = 0;
@@ -391,14 +415,11 @@ export class ConversationEngine implements ConversationStates {
         d.log.warn({ context: key }, "a fold wrote a per-call code into its recap");
       }
       reply.recap = repaired ?? previous?.recap ?? "";
-      const checked = checkContent(reply.notes as JsonObject, {
-        maxDepth: 5,
-        maxStringChars: 600,
-        maxKeyChars: 48,
-        maxKeys: 30,
-        maxArray: 30,
-        maxChars: cfg.max_notes_chars,
-      });
+      const fitted = fitContent(reply.notes as JsonObject, noteLimits(cfg));
+      if (fitted.cut > 0) {
+        d.log.info({ context: key, cut: fitted.cut }, "her notes were over their limits: cut");
+      }
+      const checked = fitted.content;
       const updated = toTimestamp(d.clock.now());
       // Rewording does not refresh a thread's age; threads nobody mentions for hours go.
       const touched = touchUnits(previous, checked, updated, previous?.updated_at ?? null);
@@ -429,6 +450,7 @@ export class ConversationEngine implements ConversationStates {
       activity.pending = Math.max(0, unfolded.length - lines.length);
       activity.lastFoldMs = d.clock.now();
       activity.retryAtMs = null;
+      activity.failures = 0;
       activity.sessionLines += lines.length;
       // Documents and feedback she noticed while folding.
       if (kb && Array.isArray(reply.documents) && reply.documents.length > 0) {
@@ -467,7 +489,10 @@ export class ConversationEngine implements ConversationStates {
       d.publish(customEvent(CONVERSATION_FOLDED_TOPIC, JSON.parse(JSON.stringify(folded))));
       return structuredClone(state);
     } catch (error) {
-      activity.retryAtMs = d.clock.now() + 120_000;
+      // The same lines would fail the same way: every failure in a row waits twice as long.
+      activity.retryAtMs =
+        d.clock.now() + Math.min(RETRY_MS * 2 ** activity.failures, MAX_RETRY_MS);
+      activity.failures += 1;
       throw error;
     } finally {
       this.#folding.delete(key);
@@ -482,12 +507,14 @@ export class ConversationEngine implements ConversationStates {
     kb: KnowledgeBase | undefined,
   ) {
     const cfg = this.#d.config;
-    const system = SYSTEM.replace(
-      "{documents}",
-      kb
-        ? `\n${DRAFT_FORMAT}\n只記值得長期記住的事(關於人、伺服器或主題;關於你自己的文件只在反思時更新);沒有就不要。\n`
-        : "",
-    ).replace("{documentsShape}", kb ? `"documents": [], ` : "");
+    const system = SYSTEM.replace("{notesChars}", String(cfg.max_notes_chars))
+      .replace(
+        "{documents}",
+        kb
+          ? `\n${DRAFT_FORMAT}\n只記值得長期記住的事(關於人、伺服器或主題;關於你自己的文件只在反思時更新);沒有就不要。\n`
+          : "",
+      )
+      .replace("{documentsShape}", kb ? `"documents": [], ` : "");
     const blocks: string[] = [];
     const place =
       context.kind === "dm"

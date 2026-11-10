@@ -32,8 +32,9 @@ import {
 } from "@miyoria/kernel";
 import { tokenize } from "@miyoria/memory";
 import { SettingsStoreKey } from "@miyoria/store";
-import { ActivityManagerKey, SONG_TOPIC } from "@miyoria/types";
+import { ActivityManagerKey, KeepsakesKey, SONG_TOPIC } from "@miyoria/types";
 import { z } from "zod";
+import { KeepsakeService } from "./keepsakes.js";
 import { MONITOR_TOPICS, Monitor } from "./monitor.js";
 import { DiscordOAuthConfigSchema, OAuth, recheckMs, sessionTtlMs } from "./oauth.js";
 import { PANEL_DIR_ENV, pickDir } from "./panel.js";
@@ -246,6 +247,8 @@ export class ApiModule implements Module {
       publicSide,
       this.#random,
     );
+    // The same cards and slips the member page gives, for a command in chat.
+    ctx.provide(KeepsakesKey, new KeepsakeService(state));
     const app = createApp(state, { metricsPublic: config.metrics_public });
     const server = createAdaptorServer({ fetch: app.fetch });
     let address: AddressInfo;

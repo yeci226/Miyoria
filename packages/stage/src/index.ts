@@ -81,7 +81,9 @@ export {
   SUBTITLE_TOPIC,
 } from "./link/forward.js";
 export { type GoLiveFollow, goliveFollow, VOICE_GOLIVE_TOPIC } from "./link/golive.js";
+export { Highlights, type HighlightsConfig, HighlightsConfigSchema } from "./link/highlights.js";
 export {
+  CLIP_TOPIC,
   DEFAULT_BIND,
   ERROR_TOPIC,
   STATUS_TOPIC,
@@ -241,6 +243,18 @@ export {
   StageError,
 } from "./runtime.js";
 export { SongVideo, type SongVideoDeps, type SongVideoPlay, songVideoFile } from "./song-video.js";
+export {
+  parseTouch,
+  TOUCH_OVERLAY_PER_S,
+  TOUCH_PARTS,
+  TOUCH_TOPIC,
+  type Touch,
+  type TouchConfig,
+  TouchConfigSchema,
+  type TouchPart,
+  TouchReaction,
+  TouchThrottle,
+} from "./touch.js";
 export {
   API_NAME,
   API_VERSION,

@@ -12,6 +12,7 @@ import {
 import type WebSocket from "ws";
 import { z } from "zod";
 import {
+  CLIP_REASON_MAX,
   CLOSE,
   type CoreMessage,
   defaultStageStatus,
@@ -27,6 +28,7 @@ import {
 } from "../protocol.js";
 import { type Unsubscribe, Watch } from "../watch.js";
 import { Conn, checkHello } from "./conn.js";
+import { HighlightsConfigSchema } from "./highlights.js";
 import { ScenesConfigSchema } from "./scenes.js";
 
 const log = getLogger("stage.link");
@@ -38,6 +40,8 @@ const log = getLogger("stage.link");
 export const STATUS_TOPIC = "stage.status";
 /** Topic of errors reported by the Stage node (`{message}`). */
 export const ERROR_TOPIC = "stage.error";
+/** Topic of a highlight the Stage node saved (`{reason, path}`; the path is on the streaming PC). */
+export const CLIP_TOPIC = "stage.clip";
 
 export const DEFAULT_BIND = "127.0.0.1:7882";
 
@@ -66,6 +70,8 @@ export const StageLinkConfigSchema = z.object({
   golive_start_delay_ms: z.number().int().nonnegative().default(3_000),
   /** Scene roles, transitions and the scene director (`[modules."stage.link".scenes]`). */
   scenes: ScenesConfigSchema.prefault({}),
+  /** Highlights saved from OBS's replay buffer while she streams (`[modules."stage.link".highlights]`). */
+  highlights: HighlightsConfigSchema.prefault({}),
 });
 export type StageLinkConfig = z.output<typeof StageLinkConfigSchema>;
 
@@ -169,6 +175,19 @@ export class StageLink {
    */
   expression(expression: GiftExpression, seconds: number): Promise<StageStatus> {
     return this.#request((id) => ({ type: "avatar_expression", expression, seconds, id }));
+  }
+
+  /**
+   * Saves a highlight (OBS's replay buffer) with `reason` noted next to it. Resolves once saved
+   * (the file arrives as a `CLIP_TOPIC` event); rejects when OBS saved nothing.
+   */
+  clip(reason: string): Promise<StageStatus> {
+    const text = [...reason.trim()].slice(0, CLIP_REASON_MAX).join("");
+    // OBS writes the file in the background; the node waits up to 10 s for it.
+    return this.#request(
+      (id) => ({ type: "clip", reason: text, id }),
+      this.#timings.requestTimeoutMs * 2,
+    );
   }
 
   /** Asks the node for a fresh status. */
@@ -366,6 +385,10 @@ export class StageLink {
         }
         return;
       }
+      case "clip_saved":
+        log.info({ reason: msg.reason, path: msg.path }, "highlight saved");
+        this.#publish(customEvent(CLIP_TOPIC, { reason: msg.reason, path: msg.path }));
+        return;
       case "error": {
         log.warn({ message: msg.message, id: msg.id ?? null }, "stage node error");
         if (msg.id !== undefined) {

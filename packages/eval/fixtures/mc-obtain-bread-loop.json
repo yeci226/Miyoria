@@ -413,7 +413,5 @@
       "target": "bread"
     }
   ],
-  "status": "xfail",
-  "reason": "the failure guard withholds only goto, mine, look and attack: obtain is not guarded, so every retry of `obtain bread` runs",
-  "flips_with": "game: task loop (same error code twice means another method or goal), or `obtain` in guarded_actions"
+  "status": "pass"
 }

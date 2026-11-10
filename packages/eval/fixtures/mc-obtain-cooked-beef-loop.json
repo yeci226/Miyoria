@@ -413,7 +413,5 @@
       "target": "cooked_beef"
     }
   ],
-  "status": "xfail",
-  "reason": "the failure guard withholds only goto, mine, look and attack: obtain is not guarded, and nothing treats an invalid-parameter answer as final",
-  "flips_with": "game: task loop (same error code twice means another method or goal), or `obtain` in guarded_actions"
+  "status": "pass"
 }

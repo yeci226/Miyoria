@@ -8,27 +8,31 @@ import {
   type Health,
   type Module,
   type ModuleContext,
+  sleep,
 } from "@miyoria/kernel";
 import { contextSession, LlmRouterKey } from "@miyoria/llm";
-import { SpeechServiceKey } from "@miyoria/speech";
+import { type SpeechService, SpeechServiceKey } from "@miyoria/speech";
 import { SettingsStoreKey } from "@miyoria/store";
 import {
   customEvent,
   type JsonObject,
   type ProfileId,
+  SpeechPauseKey,
   VOICE_BARGE_IN_TOPIC,
   VoiceFloorKey,
   VoiceSinkKey,
+  VoiceTurnsKey,
   WorldStateKey,
 } from "@miyoria/types";
 import { voiceCapabilities } from "./actions.js";
 import { BargeIn } from "./barge.js";
 import { ClipRecorder } from "./clips.js";
 import { registerCommands, unregisterCommands } from "./commands.js";
-import { VoiceConfigSchema, VoiceProfile } from "./config.js";
+import { fillerLines, type VoiceConfig, VoiceConfigSchema, VoiceProfile } from "./config.js";
 import { Consent } from "./consent.js";
 import { E2eLatency, e2eJson } from "./e2e.js";
 import { SelfEchoGuard } from "./echo.js";
+import { Filler, FillerBank } from "./filler.js";
 import { Hearing, StreamHearingKey } from "./hearing.js";
 import { type VoiceLink, VoiceLinkKey } from "./link/link.js";
 import { VoiceLinkModule } from "./link/module.js";
@@ -41,6 +45,10 @@ import { SpeechTranslator } from "./translate.js";
 import { HttpTurnJudge, TurnGate } from "./turn.js";
 import { Semaphore } from "./util.js";
 import { registerVadEngine } from "./vad.js";
+
+/** Tries at synthesizing the filler sounds (TTS may come up after Core), a minute apart. */
+const FILLER_ATTEMPTS = 30;
+const FILLER_RETRY_MS = 60_000;
 
 /**
  * Module `voice`: listens in voice channels (VAD → ASR → `voice_utterance`) and speaks
@@ -64,6 +72,7 @@ export class VoiceModule implements Module {
   readonly #voice: JsonObject | null;
   readonly #names: readonly string[];
   #barge: BargeIn | null = null;
+  #fillerTimer: Filler | null = null;
   #e2e: E2eLatency | null = null;
   #link: VoiceLink | null = null;
   #commands: CommandMount | null = null;
@@ -146,6 +155,19 @@ export class VoiceModule implements Module {
             reason: record.reason,
             total_ms: record.total_ms,
             ...record.segments,
+            // The agent's parts, so one log line reads the whole timeline.
+            ...(record.parts
+              ? {
+                  wait: record.parts.prepare.wait,
+                  decide: record.parts.prepare.decide,
+                  context: record.parts.prepare.context,
+                  prompt: record.parts.prepare.prompt,
+                  first_token: record.parts.llm_first.first_token,
+                  held: record.parts.llm_first.held,
+                  speculative: record.speculative === true,
+                }
+              : {}),
+            ...(record.filler_ms === undefined ? {} : { filler_ms: record.filler_ms }),
           },
           "voice e2e latency",
         );
@@ -187,10 +209,28 @@ export class VoiceModule implements Module {
     });
     ctx.provide(VoiceSinkKey, speaker);
 
+    let listener: Listener | null = null;
+    const filler = this.#filler(
+      ctx,
+      config,
+      profile,
+      speech,
+      speaker,
+      barge,
+      translator,
+      () => listener,
+    );
+    this.#fillerTimer = filler;
+    ctx.provide(VoiceTurnsKey, {
+      mark: (turn, focus, mark, at) => e2e.mark(turn, focus, mark, at),
+      expect: (context, turn, startedAt) => filler?.expect(context, turn, startedAt),
+      settle: (turn) => filler?.settle(turn),
+    });
+
     if (speech.hasAsr()) {
       const asrSlots = new Semaphore(Math.max(1, config.asr_concurrency));
       ctx.provide(StreamHearingKey, new Hearing({ speech, consent, asrSlots, config }));
-      const listener = new Listener({
+      listener = new Listener({
         ctx,
         link,
         speech,
@@ -216,7 +256,8 @@ export class VoiceModule implements Module {
             : new ClipRecorder(config.clip_dir, (message) => ctx.log.warn(message)),
       });
       const audio = link.subscribeAudio(ctx.signal);
-      ctx.spawn("listen", (signal) => listener.run(audio, signal));
+      const running = listener;
+      ctx.spawn("listen", (signal) => running.run(audio, signal));
     } else {
       ctx.log.warn("no ASR provider configured: she cannot listen");
     }
@@ -225,7 +266,7 @@ export class VoiceModule implements Module {
     const actuators = actuatorsFor(ctx);
     this.#capabilities = voiceCapabilities(
       link,
-      () => config.golive_source,
+      () => ({ source: config.golive_source, listen: config.golive_listen }),
       () => ctx.services.get(WorldStateKey),
       () => ctx.services.get(VoiceFloorKey),
     ).map((c) => actuators.register(c));
@@ -248,7 +289,94 @@ export class VoiceModule implements Module {
     );
   }
 
+  /**
+   * The filler (filler.ts): its sounds are read from the cache, the missing ones synthesized in the
+   * background once TTS answers. `null` when off, without TTS, or with no lines for the language.
+   */
+  #filler(
+    ctx: ModuleContext,
+    config: VoiceConfig,
+    profile: VoiceProfile,
+    speech: SpeechService,
+    speaker: Speaker,
+    barge: BargeIn,
+    translator: SpeechTranslator | null,
+    listener: () => Listener | null,
+  ): Filler | null {
+    const language = translator?.language ?? config.tts_language;
+    const lines = config.filler ? fillerLines(config, language) : [];
+    if (lines.length === 0 || !speech.hasTts()) return null;
+    const bank = new FillerBank({
+      dir: config.filler_dir,
+      voice: profile.voice,
+      language,
+      lines,
+      maxMs: config.filler_max_ms,
+      synthesize: async (text, signal) => {
+        const request = {
+          text,
+          language,
+          emotion: null,
+          instruct: null,
+          voice: profile.voice,
+          priority: "ahead" as const,
+        };
+        const [, stream] = await speech.synthesize(request, signal);
+        const parts: Int16Array[] = [];
+        let sampleRate = 0;
+        for await (const chunk of stream) {
+          if (chunk.samples.length === 0) continue;
+          sampleRate = chunk.sampleRate;
+          parts.push(chunk.samples);
+        }
+        const samples = new Int16Array(parts.reduce((n, p) => n + p.length, 0));
+        let at = 0;
+        for (const p of parts) {
+          samples.set(p, at);
+          at += p.length;
+        }
+        return { sampleRate, samples };
+      },
+      warn: (message) => ctx.log.debug(message),
+    });
+    // Read or made when she is first expected to answer in voice: no GPU work for a Core that
+    // never joins a channel, and that first turn is the only one without a filler.
+    let loading = false;
+    const load = () => {
+      if (loading) return;
+      loading = true;
+      ctx.spawn("filler", async (signal) => {
+        for (let attempt = 0; attempt < FILLER_ATTEMPTS && !signal.aborted; attempt++) {
+          // The GPU is lent to a song: TTS has no model now.
+          if (ctx.services.get(SpeechPauseKey)?.paused() == null) {
+            const missing = await bank.load(signal);
+            if (missing === 0) {
+              ctx.log.info({ fillers: bank.clips().map((c) => c.text) }, "filler sounds ready");
+              return;
+            }
+          }
+          await sleep(FILLER_RETRY_MS, signal).catch(() => undefined);
+        }
+        if (!signal.aborted) ctx.log.warn("filler sounds could not all be synthesized");
+      });
+    };
+    return new Filler({
+      load,
+      now: () => ctx.clock.now(),
+      afterMs: config.filler_after_ms,
+      clips: () => bank.clips(),
+      quiet: (guild, since) => speaker.quiet(guild, since),
+      talking: (guild) => listener()?.talking(guild) ?? false,
+      stopped: (guild, turn) => barge.isStopped(guild, turn),
+      play: (context, turn, clip) => speaker.playFiller(context, turn, clip),
+      random: Math.random,
+      skipped: (turn, reason) => ctx.log.debug({ turn, reason }, "no filler"),
+    });
+  }
+
   async stop(): Promise<void> {
+    this.#fillerTimer?.close();
+    this.#fillerTimer = null;
     this.#barge?.close();
     this.#barge = null;
     this.#e2e?.clear();

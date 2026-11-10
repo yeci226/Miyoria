@@ -192,6 +192,8 @@ export class Singer implements VoiceFloor, SpeechPause {
   readonly #lastTyped = new Map<string, ContextKey>();
   /** Her speech playbacks running per guild. */
   readonly #speaking = new Map<string, number>();
+  /** Song clips of a party game playing per guild: not her singing, but nothing starts over them. */
+  readonly #clips = new Map<string, number>();
   readonly #turnsDone: TurnId[] = [];
   #closed = false;
   /** JSON of the set list last stored. */
@@ -252,6 +254,18 @@ export class Singer implements VoiceFloor, SpeechPause {
       .map((e) => ({ no: e.no, label: songLabel(e), ready: e.state === "ready" }));
   }
 
+  /** A song clip (`SingClips`) is playing in `guild` (+1) or ended (-1). */
+  clipping(guild: string, delta: 1 | -1): void {
+    const n = Math.max(0, (this.#clips.get(guild) ?? 0) + delta);
+    if (n === 0) this.#clips.delete(guild);
+    else this.#clips.set(guild, n);
+  }
+
+  /** Her speech or a clip is playing in `guild` right now. */
+  noisy(guild: string): boolean {
+    return (this.#speaking.get(guild) ?? 0) + (this.#clips.get(guild) ?? 0) > 0;
+  }
+
   /** The song started is waiting for her to finish talking. */
   starting(): boolean {
     return this.#playing !== null && !this.#playing.audible;
@@ -274,7 +288,14 @@ export class Singer implements VoiceFloor, SpeechPause {
     const same = this.list.findOpen(query, req.key, req.backing ?? "keep");
     if (same) {
       if (req.forced) same.forced = true;
+      // Somebody else wants the song she was only practising: it is theirs now.
+      if (req.practice !== true) same.practice = false;
       return same;
+    }
+    if (req.practice === true && this.list.practicing().length >= this.cfg.max_practice) {
+      throw new SingError(
+        `already preparing ${this.cfg.max_practice} songs for yourself; sing one of them first`,
+      );
     }
     const { ticket, dedication, ...plain } = req;
     const dedicationText = dedication?.trim() || null;
@@ -549,6 +570,8 @@ export class Singer implements VoiceFloor, SpeechPause {
   }
 
   #mindDecides(entry: SongEntry): boolean {
+    // A song she prepared for herself is hers to sing or not: it never starts on its own.
+    if (entry.practice === true) return this.ctx.services.get(MindKey)?.accepting === true;
     if (this.cfg.start === "auto") return false;
     const gaming = this.#game() !== null;
     // An owner's command overrides; a request from the queue waits while she plays.
@@ -572,6 +595,15 @@ export class Singer implements VoiceFloor, SpeechPause {
     this.#remind(entry);
   }
 
+  /**
+   * Whether her mind is reminded of `e` once more: the first notice plus `max_reminders` (while
+   * she plays, until it starts). A song she practised gets the first notice only.
+   */
+  #remindsMore(e: SongEntry, gaming: boolean): boolean {
+    if (e.practice === true) return e.reminders < 1;
+    return gaming || e.reminders <= this.cfg.max_reminders;
+  }
+
   /** Tells her mind the song is ready (again). */
   #remind(entry: SongEntry): void {
     const mind = this.ctx.services.get(MindKey);
@@ -585,8 +617,11 @@ export class Singer implements VoiceFloor, SpeechPause {
         ? ""
         : `你正在玩 ${game}:想先唱就唱(唱完再回去玩),想先玩完就跟${entry.requester_name}說一聲等一下。`;
     const hint =
-      `${entry.requester_name} 點的${songLabel(entry)}已經準備好了(#${entry.no}${dedicationNote(entry)})。` +
-      `想唱就用 sing.play(song = ${entry.no}),opening 寫一句開場;現在不想唱也可以晚點再唱。${voice}${busy}`;
+      entry.practice === true
+        ? `你自己練的${songLabel(entry)}準備好了(#${entry.no}),還沒唱給誰聽。` +
+          `有人在語音、你想唱的時候用 sing.play(song = ${entry.no}),opening 寫一句開場;不用急,之後也可以跟大家提一下新歌。${voice}${busy}`
+        : `${entry.requester_name} 點的${songLabel(entry)}已經準備好了(#${entry.no}${dedicationNote(entry)})。` +
+          `想唱就用 sing.play(song = ${entry.no}),opening 寫一句開場;現在不想唱也可以晚點再唱。${voice}${busy}`;
     const ok = mind?.suggest({
       source: "sing",
       reason: REASONS.ready,
@@ -600,7 +635,7 @@ export class Singer implements VoiceFloor, SpeechPause {
   /** Starts the next song that should start on its own, when she is in voice and free. */
   #autoStart(): void {
     if (this.#playing || this.#closed) return;
-    const next = this.list.ready().find((e) => !this.#mindDecides(e));
+    const next = this.list.ready().find((e) => e.practice !== true && !this.#mindDecides(e));
     if (!next) return;
     const where = this.voiceContext(next.context?.scope ?? null) ?? this.voiceContext();
     if (where === null || where.scope === null) return;
@@ -625,7 +660,7 @@ export class Singer implements VoiceFloor, SpeechPause {
       const due = (e.last_reminder_ms ?? now) + every * 1000;
       // The first notice plus `max_reminders` (while she plays, every few minutes until it
       // starts), only while she is in voice (she can sing then).
-      const more = gaming || e.reminders <= this.cfg.max_reminders;
+      const more = this.#remindsMore(e, gaming);
       if (more && now >= due && this.voiceContext() !== null) this.#remind(e);
     }
     this.#autoStart();
@@ -675,7 +710,7 @@ export class Singer implements VoiceFloor, SpeechPause {
       const both = AbortSignal.any([signal, stop.signal]);
       let outcome: PlaybackState | "error" = "interrupted";
       try {
-        await this.#waitQuiet(guild, turn, expectMs, both);
+        await this.waitQuiet(guild, turn, expectMs, both);
         if (!both.aborted) outcome = await this.#sing(entry, guild, both);
       } catch (error) {
         log.warn({ no: entry.no, err: errorMessage(error) }, "could not sing");
@@ -916,32 +951,38 @@ export class Singer implements VoiceFloor, SpeechPause {
 
   // ----- her speech, so a song starts after she finished talking -----
 
-  async #waitQuiet(
+  /**
+   * Resolves once the turn `turn` is over (when given) and her speech in `guild` had a quiet
+   * moment: right after she spoke, or when she did not start within `expectMs`. `false` when
+   * `signal` aborted or `announce_max_secs` ran out first.
+   */
+  async waitQuiet(
     guild: string,
     turn: TurnId | null,
     expectMs: number,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const clock = this.ctx.clock;
     const deadline = clock.now() + this.cfg.announce_max_secs * 1000;
     while (turn !== null && !this.#turnsDone.includes(turn) && clock.now() < deadline) {
       await sleep(TICK_MS, signal);
-      if (signal.aborted) return;
+      if (signal.aborted) return false;
     }
     const t0 = clock.now();
     let spoke = false;
     let quietSince: number | null = null;
     while (clock.now() < deadline && !signal.aborted) {
       const now = clock.now();
-      if ((this.#speaking.get(guild) ?? 0) > 0) {
+      if (this.noisy(guild)) {
         spoke = true;
         quietSince = null;
       } else if (spoke || now - t0 >= expectMs) {
         quietSince ??= now;
-        if (now - quietSince >= this.cfg.quiet_ms) return;
+        if (now - quietSince >= this.cfg.quiet_ms) return true;
       }
       await sleep(TICK_MS, signal);
     }
+    return false;
   }
 
   // ----- events -----
@@ -953,7 +994,7 @@ export class Singer implements VoiceFloor, SpeechPause {
         this.#voices = [c, ...this.#voices.filter((v) => !contextKeyEquals(v, c))];
         // Now she can sing: ready songs she decides about are brought up again.
         for (const e of this.list.ready()) {
-          if (this.#mindDecides(e) && e.reminders <= this.cfg.max_reminders) this.#remind(e);
+          if (this.#mindDecides(e) && this.#remindsMore(e, false)) this.#remind(e);
         }
         this.#autoStart();
         return;

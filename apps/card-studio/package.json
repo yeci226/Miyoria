@@ -1,0 +1,21 @@
+{
+  "name": "@miyoria/card-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Draws her Live2D model to a PNG for a card, in a headless browser on the machine (the model never leaves it)",
+  "exports": {
+    ".": "./src/render.ts"
+  },
+  "scripts": {
+    "build": "vite build",
+    "sample": "tsx scripts/sample.ts"
+  },
+  "dependencies": {
+    "playwright-core": "1.64.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^7.0.0"
+  }
+}

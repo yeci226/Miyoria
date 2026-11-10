@@ -186,6 +186,37 @@ export const VoiceConfigSchema = z.object({
    * posted to a text channel. Replies to people stay where they were asked.
    */
   keep_in_voice: z.boolean().default(true),
+  /**
+   * The debounces above count from the person's last sound (the utterance's end), not from when
+   * its transcript arrived. The voice node's silence and ASR were already part of that wait: on
+   * 2026-11-07 to 11-10 they took about a second, then 400 to 700 ms more were waited for the
+   * same question. `false`: count from the transcript, as before.
+   */
+  debounce_from_speech_end: z.boolean().default(true),
+  /**
+   * When someone calls her and part of the wait is still left, her turn starts at once: memory,
+   * the prompt and the model run while the wait ends; nothing of it is said or done before it
+   * does. Someone going on drops it (its work is counted in `agent_voice_speculation_total`) and
+   * the merged turn starts over.
+   */
+  speculate: z.boolean().default(true),
+  /** Dropped early starts per voice channel per minute; past that she waits as before. */
+  speculate_max_per_min: z.number().int().nonnegative().default(4),
+  /**
+   * What a voice turn's prompt needs that does not depend on the line she answers is kept per
+   * voice channel and read without waiting (`warm_contributors`, her skills, pinned memory, the
+   * profiles of the people here), then refreshed in the background for the next turn.
+   */
+  warm_context: z.boolean().default(true),
+  /** Contributors kept warm: their sections may be one turn old (at most `warm_max_age_ms`). */
+  warm_contributors: z.array(z.string()).default(["notebook", "just_now", "elsewhere"]),
+  /** A warm value older than this is not used. Default 120 000. */
+  warm_max_age_ms: z.number().int().positive().default(120_000),
+  /**
+   * What depends on the line she answers (memory retrieval, the other contributors) is waited
+   * for this long in voice, then left out. Default 400 (text waits `contributor_timeout_ms`).
+   */
+  live_context_ms: z.number().int().nonnegative().default(400),
 });
 export type VoiceConfig = z.output<typeof VoiceConfigSchema>;
 
@@ -279,9 +310,32 @@ export const PromptConfigSchema = z.object({
 export type PromptConfig = z.output<typeof PromptConfigSchema>;
 
 /**
+ * Tools that answer at once (a lookup, a note, a short program): they run inside the turn and she
+ * reads the result in the same call chain (docs/design/v4-plan.md §4.2). Everything else (games,
+ * songs, going live, joining voice) stays with the hands and comes back in a turn of its own.
+ */
+export const LOOP_TOOLS: readonly string[] = [
+  "web_search",
+  "web_read",
+  "recall",
+  "remember",
+  "check_coins",
+  "keep_note",
+  "drop_note",
+  "code_run",
+  "voice_status",
+  // The work lane answers these at once; `work_start` only gets a task going, so it stays with
+  // the hands, which follow the task and tell her when it ends.
+  "work_list",
+  "work_steer",
+];
+
+/**
  * `[modules.agent.mainline]`: the main line of `pipeline = "v3"` (docs/design/v3-architecture.md
  * §10). The prompt has no token cap by default (2026-11-08: 4000 left her with no conversation);
- * each part keeps its own character budget.
+ * each part keeps its own character budget. The budgets are the ones of docs/design/v4-plan.md
+ * §4.1: the history sits in the cached prefix, so a long one costs little once the layout keeps
+ * that prefix the same from turn to turn (11-07's 4000-token target was set before it did).
  */
 export const MainLineConfigSchema = z.object({
   /** A cap on the prompt (null: none); over it the oldest history gives way. */
@@ -289,16 +343,85 @@ export const MainLineConfigSchema = z.object({
   /** Her own state in the tail of the prompt. */
   self_chars: z.number().int().nonnegative().default(1600),
   /** What contributors add to the data part, together. */
-  data_chars: z.number().int().nonnegative().default(4000),
+  data_chars: z.number().int().nonnegative().default(12_000),
   /** History lines shown at most, and their characters. */
-  history_lines: z.number().int().nonnegative().default(30),
-  history_chars: z.number().int().nonnegative().default(4000),
+  history_lines: z.number().int().nonnegative().default(200),
+  history_chars: z.number().int().nonnegative().default(20_000),
+  /**
+   * A history over its budget is cut back to this share of it in one go, not a line per turn: the
+   * first line of the history then stays where it is for many turns, and so does the cached prefix.
+   */
+  history_trim: z.number().gt(0).lte(1).default(0.6),
   /** The newest lines kept even when the prompt is over `prompt_tokens`. */
   history_floor: z.number().int().nonnegative().default(8),
   /** One history entry. */
   entry_chars: z.number().int().nonnegative().default(600),
-  /** Example dialogues in the data part (0: none). */
-  examples_chars: z.number().int().nonnegative().default(0),
+  /** Memories retrieved per turn (the memory module's `recall_limit` when 0). */
+  memory_lines: z.number().int().nonnegative().default(20),
+  /**
+   * Example dialogues, before the history (0: none). Which of them she sees turns over from one
+   * session to the next and stays the same within one, so the prefix does too.
+   */
+  examples_chars: z.number().int().nonnegative().default(2000),
+  /** Tools that run inside the turn (`LOOP_TOOLS`); the rest go to the hands. */
+  loop_tools: z.array(z.string()).default([...LOOP_TOOLS]),
+  /** Calls of the loop run per round; more in one response are refused (she hears so). */
+  loop_calls: z.number().int().positive().default(4),
+  /**
+   * What the loop's results of one round add to the messages, together. One result may be a whole
+   * page now (`max_tool_result_chars`), so the bound a round had before (four calls of 4,000) is
+   * kept here: a result past it is cut shorter, never the turn's prompt made four pages longer.
+   */
+  loop_round_chars: z.number().int().positive().default(16_000),
+  /**
+   * All the loop's tools of one turn together, in text: the turn holds the Floor meanwhile. Spent,
+   * a call of the loop is not run and further calls go to the hands.
+   */
+  loop_budget_ms: z.number().int().positive().default(30_000),
+  /** The same in voice, where someone waits in silence. */
+  voice_loop_budget_ms: z.number().int().positive().default(12_000),
+  /** Lines before the one she answers that retrieval reads too (v4 §5.4: 「好啊」 finds nothing). */
+  memory_recent_lines: z.number().int().nonnegative().default(4),
+  /**
+   * The profiles of the people here (`PersonProfiles`), before the history (v4 §4.1, §5.6). They
+   * are written again only when who is here or who talks with her changes, or after
+   * `people_refresh_mins`: in between the block reads the same and the prefix stays cached.
+   */
+  people_chars: z.number().int().nonnegative().default(2400),
+  people_refresh_mins: z.number().nonnegative().default(30),
+  /**
+   * 「今天的她」 (`LifeLog.summary`, v4 §6.2), before the history: it changes when she has done
+   * something new, a few times a day, not every turn.
+   */
+  life_chars: z.number().int().nonnegative().default(800),
+  /** Her skills, a name and a line each (`SkillIndex`), before the history. */
+  skills_chars: z.number().int().nonnegative().default(800),
+  /** The index of her notebook (contributor `notebook`), before the history. */
+  notebook_chars: z.number().int().nonnegative().default(600),
+  /**
+   * The server's custom emoji and their meanings (contributor `server_emoji`, Discord), before
+   * the history: they change when someone adds or renames one, not every turn.
+   */
+  emoji_chars: z.number().int().nonnegative().default(1200),
+  /** What she did just now, across every place (contributor `just_now`), after the history. */
+  just_now_chars: z.number().int().nonnegative().default(1200),
+  /** What is going on in the other places she is in (contributor `elsewhere`), after it. */
+  elsewhere_chars: z.number().int().nonnegative().default(900),
+  /**
+   * What her tools of the loop brought back in a turn, a few lines kept beside her reply in the
+   * history (v4 §4.2), so the next turn knows what she looked up: all calls of a turn together,
+   * and one call's result.
+   */
+  trace_chars: z.number().int().nonnegative().default(600),
+  trace_result_chars: z.number().int().nonnegative().default(160),
+  /** Turns whose trace a conversation keeps (the window shows the ones beside its lines). */
+  traces: z.number().int().nonnegative().default(12),
+  /**
+   * A tool's description as offered, and one argument's (v4 §4.2: the full text again, the fixed
+   * prefix is cached). Longer ones are cut at a sentence.
+   */
+  tool_chars: z.number().int().nonnegative().default(600),
+  tool_arg_chars: z.number().int().nonnegative().default(200),
   /** Lines of "最近講過" in the tail. */
   recent_lines: z.number().int().nonnegative().default(4),
   /** Untrusted working-context entries in the data part. */
@@ -320,6 +443,109 @@ export const MainLineConfigSchema = z.object({
 });
 export type MainLineConfig = z.output<typeof MainLineConfigSchema>;
 
+/**
+ * Tools a work-lane task may be given (v4 §4.3 "能用的": the web, the sandbox, her notebook, her
+ * memory, reading files). Never more than the Directives' filter offers where the task started,
+ * and never a tool that says something to someone, whatever is listed here (`worklane/allow.ts`).
+ */
+export const WORK_TOOLS: readonly string[] = [
+  "web_search",
+  "web_read",
+  "recall",
+  "code_run",
+  "workspace_list",
+  "workspace_read",
+  "workspace_write",
+  "workspace_run",
+  "workspace_save_script",
+  "skill_list",
+  "skill_read",
+  "skill_write",
+  "notebook_read",
+  "notebook_write",
+];
+
+/** `[modules.agent.work]`: the work lane (docs/design/v4-plan.md §4.3). */
+export const WorkConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** Tasks running at once (one or two); more wait in the queue. */
+  max_running: z.number().int().min(1).max(4).default(1),
+  /** Tasks waiting at most; a start past it is refused (she hears so). */
+  max_queued: z.number().int().nonnegative().default(4),
+  /** Model calls one task may make. */
+  max_steps: z.number().int().positive().default(12),
+  /** Tool calls one model call may make; more are refused (it hears so). */
+  calls_per_step: z.number().int().positive().default(4),
+  /** How long one task may run, from its first step. */
+  max_minutes: z.number().positive().default(10),
+  /** Tokens one task may spend (prompt and completion). */
+  max_tokens: z.number().int().positive().default(80_000),
+  /** Tokens all tasks together may spend in a day (UTC), the game director's steps too. */
+  daily_tokens: z.number().int().positive().default(600_000),
+  /** Tools a task may be given (`WORK_TOOLS`). */
+  tools: z.array(z.string()).default([...WORK_TOOLS]),
+  /** One tool call. */
+  tool_timeout_ms: z.number().int().positive().default(30_000),
+  /** One tool result in its transcript (a page is 12,000). */
+  tool_result_chars: z.number().int().positive().default(12_500),
+  /**
+   * Its transcript, all the results together: past it the oldest results are cut to a line, so a
+   * long task keeps what it concluded, not every page it read.
+   */
+  transcript_chars: z.number().int().positive().default(48_000),
+  /** Her conclusion, as the main line is told it. */
+  result_chars: z.number().int().positive().default(1200),
+  /** Lines of "what it did" the main line is told. */
+  did_lines: z.number().int().positive().default(6),
+  /** Ended tasks kept for `work_list` and the panel. */
+  keep_ended: z.number().int().nonnegative().default(20),
+  /**
+   * Her own wish to do something that is work (§8.2: browse, code, tidy her notebook, improve a
+   * skill) is proposed as a work-lane task, not as a one-line call.
+   */
+  initiative: z.boolean().default(true),
+  /** Model calls a task she starts on her own may make. */
+  initiative_steps: z.number().int().positive().default(8),
+});
+export type WorkConfig = z.output<typeof WorkConfigSchema>;
+
+/**
+ * `[modules.agent.corrections]`: the after-the-fact corrections of her output that v4 §4.5 steps
+ * 2 to 4 retire once they are measured (docs/design/v4-patches.md says what count over what
+ * period justifies switching each off). Every one is on by default; switching one off removes
+ * only that correction, never an outer wall (owner rules, the action gate, the delivery ledger,
+ * output moderation, the Floor's limits).
+ */
+export const CorrectionsConfigSchema = z.object({
+  /** A tool written as text instead of called: she is asked once more to call it. */
+  tool_text_reask: z.boolean().default(true),
+  /**
+   * A promise in her words ("我等一下進語音") or a tool written as text that no call followed
+   * becomes a commitment, so it cannot just evaporate.
+   */
+  promise_commit: z.boolean().default(true),
+  /**
+   * The claim regexes (claims.ts): a line that says something only a tool does, or that work is
+   * done, waits for the action or its result, is dropped without one, and she is asked once more.
+   */
+  claims: z.boolean().default(true),
+  /** The reply screen (leak.ts): lines that are her reasoning are dropped before they are sent. */
+  leak_screen: z.boolean().default(true),
+  /**
+   * A note to herself about how to answer, in the third person (leak.ts `isSelfTalk`,
+   * 2026-11-08 「莎露朵在問我上面訊息寫什麼,直接念給她聽就好。」), is left out of the reply and
+   * not said aloud. Only that line: the rest of the reply is hers.
+   */
+  self_talk: z.boolean().default(true),
+  /**
+   * The owner said plainly "don't play <game>" and she did not call `directive_add`: the rule is
+   * written for her at the end of the turn, as the person who said it (prohibition.ts); the
+   * directive service still decides whether that person may.
+   */
+  prohibition_write: z.boolean().default(true),
+});
+export type CorrectionsConfig = z.output<typeof CorrectionsConfigSchema>;
+
 /** `[modules.agent]` config section. */
 export const AgentConfigSchema = z.object({
   /** Quiet time after the last message before a turn starts. */
@@ -328,8 +554,11 @@ export const AgentConfigSchema = z.object({
   typing_extend_ms: z.number().int().nonnegative().default(2500),
   /** Upper bound on the total debounce of one turn. */
   max_debounce_ms: z.number().int().nonnegative().default(4000),
-  /** Messages kept per conversation context. */
-  history_limit: z.number().int().nonnegative().default(50),
+  /**
+   * Messages kept per conversation context. More than the main line's `history_lines`, so the
+   * oldest line it shows is never the one that falls out.
+   */
+  history_limit: z.number().int().nonnegative().default(240),
   /** Messages of history included in the prompt. */
   prompt_history: z.number().int().nonnegative().default(30),
   /**
@@ -378,14 +607,25 @@ export const AgentConfigSchema = z.object({
   typing_refresh_ms: z.number().int().nonnegative().default(8000),
   /** The main line of `pipeline = "v3"`. */
   mainline: MainLineConfigSchema.prefault({}),
+  /** The work lane (v4 §4.3). */
+  work: WorkConfigSchema.prefault({}),
+  /** The after-the-fact corrections that may be switched off once measured (v4 §4.5). */
+  corrections: CorrectionsConfigSchema.prefault({}),
   /** Offer registered tools to the model. */
   tools_enabled: z.boolean().default(true),
-  /** Rounds of tool calls per turn before she must answer. */
+  /**
+   * Rounds of tool calls per turn before she must answer. Under the main line: rounds of
+   * `mainline.loop_tools` inside one turn, and how long a chain of result turns may get.
+   */
   max_tool_steps: z.number().int().nonnegative().default(3),
   /** Time limit for one tool call. */
   tool_timeout_ms: z.number().int().nonnegative().default(10_000),
-  /** Tool results are truncated to this many characters. */
-  max_tool_result_chars: z.number().int().nonnegative().default(1000),
+  /**
+   * Tool results are truncated to this many characters (v4 §4.2: a page read is 12,000 with its
+   * block markers, `[modules.web] result_chars`; a little more for a moderation note before it).
+   * What one round of the loop adds together stays bounded by `mainline.loop_round_chars`.
+   */
+  max_tool_result_chars: z.number().int().nonnegative().default(12_500),
   temperature: z.number().nullable().default(null),
   max_tokens: z.number().int().nonnegative().nullable().default(null),
   /** A context with no activity for this long forgets its session. */

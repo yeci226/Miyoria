@@ -1,6 +1,6 @@
 # Minecraft:為什麼幾乎不能玩(調查筆記)
 
-狀態:**暫停**(2026-11-08)。已做的是昨晚那場的資料重建和別人的做法對照;讀程式碼找原因做到一半就停了,下面的原因都還是**從資料推的,沒有對照程式碼確認**。
+狀態:**已照 V4 §11.2 修了程式,還沒實際玩過**(2026-11-10)。§1 到 §5 是 11-08 那場的資料重建和推測(原因後來在 `docs/design/v4-plan.md` §11.1 對照程式碼確認);改了什麼見 §6,只有實際玩一場才看得出來的見 §7。
 
 ## 1. 昨晚那場(2026-11-08 00:08–02:21)
 
@@ -73,4 +73,35 @@
 
 - [moeru-ai/airi services/minecraft](https://github.com/moeru-ai/airi/tree/57be907359e162dc0dce071be29bd42c6040c10b/services/minecraft)、[airi-minecraft(封存)](https://github.com/moeru-ai/airi-minecraft)
 - [Neuro Game SDK API README](https://raw.githubusercontent.com/VedalAI/neuro-game-sdk/main/API/README.md)、[規格](https://raw.githubusercontent.com/VedalAI/neuro-game-sdk/main/API/SPECIFICATION.md)、[最佳實踐](https://raw.githubusercontent.com/VedalAI/neuro-game-sdk/main/API/BEST_PRACTICES.md)
-- 昨晚的整理腳本和匯出:`C:\Users\owenl\AppData\Local\Temp\claude\7c9b4a3fb3bcf931\21133156-8dd1-418f-b1ce-c02de590be57\scratchpad\mc-logs\`(暫存資料夾,可能會被清掉;要重做就照 §1 的資料來源重查)
+- 11-08 的整理腳本和匯出:`C:\Users\owenl\AppData\Local\Temp\claude\7c9b4a3fb3bcf931\21133156-8dd1-418f-b1ce-c02de590be57\scratchpad\mc-logs\`(暫存資料夾,可能會被清掉;要重做就照 §1 的資料來源重查)
+
+## 6. 改了什麼(2026-11-10,V4 §11.2)
+
+每一項對應 §11.1 確認的原因;遊戲裡還沒跑過,驗證都是單元測試(假執行器、假模組、11-08 的紀錄)。
+
+| §11.2 | 改法 | 在哪裡 |
+|---|---|---|
+| 1 導演有紀錄 | 導演記得這場每一步:動作、結果(有進展 / 沒有進展 / 失敗 / 被打斷)、失敗碼、遊戲的說明,每次決定都看得到,和事件分開一欄。**還沒做**:變成工作車道上的任務(多輪紀錄、工具迴圈),工作車道還沒有 | `packages/game/src/record.ts`、`director.ts` |
+| 2 目標有成功條件 | 決定多了 `want: {item, count}`(`obtain` 沒給就用它的物品);背包有了才算完成,她說完成但背包沒有不算。失敗一次不再結束目標(自己的目標也是),`max_attempts` 3 次、`max_goal_steps` 8 步、`max_goal_secs` 600 秒 | `decision.ts`、`director.ts`、`config.ts` |
+| 3 做完要有變化 | adapter 每個用身體的任務前後各看一次背包(加上 `item_picked`),`done` 帶 `data.outcome`;導演把沒有進展的 `done` 當一次失敗。空的 `mine`、拿已經有的東西、`explore` 沒看到新東西都是沒有進展。`stop` 變成即時動作,不是目標也不算成功 | `packages/types/src/game-outcome.ts`、adapter `progress.ts` |
+| 4 食物 | `obtain` 認得食物:打獵(跟著動物、準心對到就打)、熔爐烤熟、`farm` 收小麥再做麵包、`{item:"food"}` 挑附近最容易的;另有 `hunt {entity}` | adapter `planner.ts`、`obtain.ts` |
+| 5 換方法 | 同一個做法(動作 + 物品,例如 `obtain:bread`)同一個失敗碼兩次就暫停 10 分鐘;`invalid` 的物品做法整場不再用;用完次數的目標也暫停。別的做法成功不會解除。用 11-08 的紀錄重播:`obtain bread` 32 次裡只會放行 9 次,每 10 分鐘最多兩次 | `methods.ts`、`test/methods.test.ts` |
+| 6 少叫醒她 | `hostile_near`、`reflex_end` 不再觸發決定;失敗紀錄是獨立一欄(第 1 項) | `config.ts` |
+| 7 天黑和死掉 | adapter 從快照看出黃昏就送 `night_started`;導演自己開始 `shelter`(有床就睡,沒有就往下挖三格、從裡面封頂,等到天亮)。死掉記住位置和身上的東西,5 秒後自己開始 `recover` 走回去撿。被打斷的目標結束後回來 | adapter `survival.ts`、`adapter.ts`;`director.ts` |
+| 8 技能 | 有 `want` 的目標達成時,這個目標裡有進展的步驟存成技能,下次同樣的東西放進 prompt,也發 `game.director.skill`。**還沒做**:存下來跨重開(§8.3 的工作區),現在只活在模組裡 | `skills.ts` |
+| 9 紀錄和推理 | 決定的 trace 多了看到的狀態摘要、`want`、暫停中的做法;決定用 `reasoning: "low"`;11-08 的紀錄是測試。**還沒做**:`packages/eval` 的 `guard` 題目還是舊的防呆,要換成新的才會翻過來 | `director.ts`、`config.ts` |
+
+模組(Java)沒有改。
+
+PR 8 同時寫了另一個重複保護(同一個目標用參數字串當鍵,連續失敗兩次暫停 10 分鐘,`invalid` 整場暫停,她的提示詞列出暫停的目標)。合進 `v4-int` 時留下第 5 項的做法,沒有兩個保護一起跑:暫停的目標本來就由 `methods.ts` 的 `lines` 列進提示詞,被擋時也會催她換一次。它的設定名 `repeat_failure_limit` / `repeat_guard_secs` 當成 `method_repeat_limit` / `method_hold_secs` 的舊名,兩個都寫時以新名為準。
+
+## 7. 只有實際玩一場才能確認的
+
+- 打獵:模組的 `nearby_entities` 沒有座標,只能靠 Baritone `follow` 走到旁邊時準心剛好對到動物,不然往下看 25 度再試。會不會一直打空要實際看;打不到的話,模組在 `nearby_entities` 加上 `position`,adapter 已經會直接瞄準。
+- 收成:Baritone `farm` 在附近沒有成熟作物時會不會馬上閒下來(adapter 靠這個判斷「附近沒有」)。
+- 避難:Baritone 會不會真的直直往下挖三格(底下是洞穴、水、岩漿時);從坑底看牆面右鍵放方塊會不會剛好封在頭頂;`select_slot` 只找快捷列,方塊在背包上半部時封不了頂。床:`place` 放床、看著它右鍵能不能睡、附近有怪時多久放棄。
+- 天黑:黃昏送 `night_started` 時她來不來得及躲好(殭屍 13000 tick 才生);早上她爬不爬得出坑。
+- 撿東西:死後 5 秒開始是否已經重生;死在水裡、岩漿或很遠時 `goto` 走不走得到;撿到的東西靠 `item_picked` 和背包差算,掉的東西是死前最後一次快照的背包,可能舊。
+- 進展:任務結束後等 1 秒再看一次背包,夠不夠等撿東西的反射。
+- 新的 prompt(紀錄、暫停的做法、`want`)加上 low 推理後,她會不會真的換做法,還是換說法;決定一次的延遲和花費。
+- 驗收:用 11-08 的開頭重玩一場(晚上、海裡、8 血),看木鎬要多久、目標有進展的比例、`obtain bread` 這種重複還有沒有。

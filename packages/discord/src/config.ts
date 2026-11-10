@@ -30,6 +30,30 @@ const Snowflake = z.union([z.string(), z.number()]).transform((value, ctx) => {
   return BigInt(trimmed).toString();
 });
 
+/**
+ * `[modules."platform.discord.bot".emoji]`: the server's custom emoji (docs/design/server-emoji.md).
+ *
+ *   [modules."platform.discord.bot".emoji]
+ *   descriptions = { fanfan = "一碗白飯,討飯用" }
+ */
+export const EmojiConfigSchema = z.object({
+  /** Show her the server's custom emoji and turn her `:name:` into them. */
+  enabled: z.boolean().default(true),
+  /** The owner's meaning per emoji name; wins over the written one. */
+  descriptions: z.record(z.string(), z.string()).default({}),
+  /** Have the image model write a line for emoji without one (once each, kept). */
+  auto_describe: z.boolean().default(true),
+  /** Emoji listed in her prompt, at most (ones with a meaning first). */
+  max_listed: z.number().int().nonnegative().default(40),
+  /** Server emoji in one message, at most. */
+  per_message: z.number().int().nonnegative().default(1),
+  /** Of her last `window_messages` messages in a channel, at most `max_in_window` carry one. */
+  window_messages: z.number().int().positive().default(3),
+  max_in_window: z.number().int().nonnegative().default(1),
+});
+
+export type EmojiConfig = z.output<typeof EmojiConfigSchema>;
+
 export const DiscordConfigSchema = z.object({
   /** Bot token. Keep it in the environment, not in the file. */
   token: z.string(),
@@ -61,6 +85,7 @@ export const DiscordConfigSchema = z.object({
   ambient_text: z.enum(["allowlist", "tiers"]).default("allowlist"),
   /** Channels (or the channels threads belong to) where she may follow ambient chat. */
   ambient_channels: z.array(Snowflake).default([]),
+  emoji: EmojiConfigSchema.prefault({}),
 });
 
 export type DiscordConfig = z.output<typeof DiscordConfigSchema>;

@@ -28,7 +28,7 @@ describe("picking a stream in a thought", () => {
     const provider = new MockProvider("p").reply(
       JSON.stringify({
         thought: "阿華在玩的那個我想看",
-        intents: [{ action: "watch.start", person: "u2", why: "好奇" }],
+        impulses: [{ kind: "act", capability: "watch.start", person: "阿華", why: "好奇" }],
       }),
     );
     const r = await rig(provider, { withIntents: false });

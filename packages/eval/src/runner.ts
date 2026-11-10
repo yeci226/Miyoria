@@ -43,7 +43,10 @@ export interface RunOptions {
   live?: boolean;
 }
 
-export function runFixture(fixture: Fixture, options: RunOptions = {}): FixtureResult {
+export async function runFixture(
+  fixture: Fixture,
+  options: RunOptions = {},
+): Promise<FixtureResult> {
   const k = options.k ?? 3;
   const live = options.live ?? false;
   const base = {
@@ -89,7 +92,7 @@ export function runFixture(fixture: Fixture, options: RunOptions = {}): FixtureR
   const subject = SUBJECTS[fixture.harness];
   const attempts: Attempt[] = [];
   for (let attempt = 0; attempt < k; attempt++) {
-    const failed = runChecks(fixture.checks, subject.run(fixture, { attempt, live })).filter(
+    const failed = runChecks(fixture.checks, await subject.run(fixture, { attempt, live })).filter(
       (r) => !r.ok,
     );
     attempts.push({ ok: failed.length === 0, failed });
@@ -120,8 +123,12 @@ export interface Scorecard {
   ok: boolean;
 }
 
-export function runSuite(fixtures: readonly Fixture[], options: RunOptions = {}): Scorecard {
-  const results = fixtures.map((f) => runFixture(f, options));
+export async function runSuite(
+  fixtures: readonly Fixture[],
+  options: RunOptions = {},
+): Promise<Scorecard> {
+  const results: FixtureResult[] = [];
+  for (const f of fixtures) results.push(await runFixture(f, options));
   const totals: Record<Verdict, number> = { pass: 0, xfail: 0, FAIL: 0, XPASS: 0, BROKEN: 0 };
   for (const r of results) totals[r.verdict] += 1;
   const runnable = results.filter((r) => r.passK !== null);

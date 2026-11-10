@@ -17,12 +17,16 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "eval": "tsx --conditions=@miyoria/source src/cli.ts",
-    "extract": "node scripts/extract-incidents.mjs"
+    "extract": "node scripts/extract-incidents.mjs",
+    "blind": "tsx --conditions=@miyoria/source src/blind-cli.ts"
   },
   "dependencies": {
     "@miyoria/agent": "workspace:*",
     "@miyoria/directive": "workspace:*",
     "@miyoria/game": "workspace:*",
+    "@miyoria/kernel": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@miyoria/profile": "workspace:*",
     "zod": "^4.6.7"
   },
   "devDependencies": {

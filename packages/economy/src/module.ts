@@ -8,7 +8,7 @@ import {
   type ModuleContext,
 } from "@miyoria/kernel";
 import { SongPaymentsKey } from "@miyoria/sing";
-import { type ProfileId, SONG_TOPIC } from "@miyoria/types";
+import { ParticipationKey, PartyRewardsKey, type ProfileId, SONG_TOPIC } from "@miyoria/types";
 import { agencyCapabilities } from "./agency-tools.js";
 import { EconomyCommands } from "./commands.js";
 import { EconomyConfigSchema } from "./config.js";
@@ -17,6 +17,8 @@ import { EconomyService } from "./economy.js";
 import { songPayments } from "./songs.js";
 import { giveCapability, speakerCapabilities } from "./tools.js";
 import { EconomyKey } from "./types.js";
+import { v2Capabilities } from "./v2-tools.js";
+import { Economy2Key } from "./v2-types.js";
 
 /** How often a finished voice window is paid when nobody speaks to end it. */
 const VOICE_TICK_MS = 30_000;
@@ -28,7 +30,9 @@ const VOICE_TICK_MS = 30_000;
  * `economy.accept_food` / `economy.checkin` / `economy.look` and her deals `economy.make_deal` /
  * `economy.deal_done` / `economy.cancel_deal` (tools.ts, deals.ts), and her own money's tools
  * (`economy.treat`, `buy_self`, `propose_goal`, `cancel_goal`, `post_bounty`, `award_bounty`,
- * `cancel_bounty`; agency-tools.ts, purse.ts, goals.ts, bounties.ts). Uses `CoinLedgerStore`,
+ * `cancel_bounty`; agency-tools.ts, purse.ts, goals.ts, bounties.ts). Also provides `Participation`
+ * (the web page's head-pats) and `PartyRewards` (party games, party.ts). Uses `EconomyDocs` (collection,
+ * bets, commissions, her room) and `LedgerStats` (the health table) when the app provides them, and `CoinLedgerStore`,
  * `DealStore`, `RelationshipEffects` (a hair of affinity per gift), `PersonNoteWriter`, `Directives`,
  * `PeopleStore`, `SocialSignals` / `AffectState` (who is blocked), `SelfState` (her hunger),
  * `Singer`, `CommandRegistry`, `ActuatorRegistry` (`stage.expression`), `Moderation` and `EventLog` when present.
@@ -74,11 +78,20 @@ export class EconomyModule implements Module {
       giveCapability(economy, ctx.services),
       ...speakerCapabilities(economy, ctx.clock),
       ...agencyCapabilities(economy),
+      ...v2Capabilities(economy),
     ].map((capability) => actuators.register(capability));
     this.#unregister = () => {
       for (const f of off) f();
     };
     ctx.provide(EconomyKey, economy);
+    ctx.provide(ParticipationKey, economy.v2.play);
+    ctx.provide(Economy2Key, economy.v2);
+    ctx.provide(PartyRewardsKey, economy.v2.party);
+    if (!economy.docsAreDurable) {
+      ctx.log.warn(
+        "no store provides EconomyDocs: collection, bets, commissions and the room are kept in memory only",
+      );
+    }
     ctx.provide(SongPaymentsKey, songPayments(economy));
     const mount = () => {
       const registry = ctx.services.get(CommandRegistryKey);
@@ -110,6 +123,11 @@ export class EconomyModule implements Module {
           await economy.bountyDesk.sweep();
         } catch (error) {
           ctx.log.warn({ err: errorMessage(error) }, "the goal and bounty sweep failed");
+        }
+        try {
+          await economy.v2.sweep();
+        } catch (error) {
+          ctx.log.warn({ err: errorMessage(error) }, "the economy 2.0 sweep failed");
         }
       }
     });

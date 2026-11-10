@@ -113,7 +113,13 @@ export function describe(e: LogEvent): Described {
       if (t === null) return { title: e.source, detail: null };
       if ("trigger" in t) {
         const goal = text(t.goal);
-        return { title: text(t.commentary) ?? (goal ? `目標:${goal}` : (Array.isArray(t.trigger) ? text(t.trigger.join(" ")) : undefined) ?? e.source), detail: e.source };
+        const want = t.want ? `${t.want.item}${t.want.count > 1 ? `×${t.want.count}` : ""}` : null;
+        const held = Array.isArray(t.held) && t.held.length > 0 ? `${t.held.length} 個方法被擋` : null;
+        const extra = [want ? `要 ${want}` : null, held].filter(Boolean).join(" · ");
+        return {
+          title: text(t.commentary) ?? (goal ? `目標:${goal}` : (Array.isArray(t.trigger) ? text(t.trigger.join(" ")) : undefined) ?? e.source),
+          detail: extra ? `${e.source} · ${extra}` : e.source,
+        };
       }
       return { title: text(t.thought) ?? text(t.error) ?? e.source, detail: e.source };
     }

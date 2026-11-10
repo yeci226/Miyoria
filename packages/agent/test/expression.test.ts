@@ -72,13 +72,36 @@ describe("expression", () => {
       text("好!"),
     ];
     expect(parseChunks([whole])).toEqual(expected);
+    // A span that arrives in pieces is announced once; what it says is the same.
+    const lines = (segments: Segment[]) => segments.filter((s) => s.type !== "spoken_start");
     for (let i = 0; i <= whole.length; i++) {
-      expect(parseChunks([whole.slice(0, i), whole.slice(i)]), `split at ${i}`).toEqual(expected);
+      const got = parseChunks([whole.slice(0, i), whole.slice(i)]);
+      expect(lines(got), `split at ${i}`).toEqual(expected);
+      expect(got.length - lines(got).length, `split at ${i}`).toBeLessThanOrEqual(1);
     }
     // Unterminated at the end: still the spoken line. A stray closing tag says nothing.
-    expect(parseChunks(["<voice>途中"])).toEqual([spoken("途中")]);
+    expect(lines(parseChunks(["<voice>途中"]))).toEqual([spoken("途中")]);
     expect(parseChunks(["好</voice>啊"])).toEqual([text("好啊")]);
     expect(Expression.parse("<voice>はい</voice>好").text).toBe("好");
+  });
+
+  it("an_opening_voice_span_says_the_text_before_it_is_complete", () => {
+    const p = new ExpressionParser();
+    expect(p.push("<voice>はい</voice>好。")).toEqual([
+      { type: "spoken", text: "はい" },
+      text("好。"),
+    ]);
+    // The tag itself may still be anything: nothing yet.
+    expect(p.push("<voi")).toEqual([]);
+    expect(p.push("ce>じゃ")).toEqual([{ type: "spoken_start" }]);
+    // Once per span, however many chunks it takes.
+    expect(p.push("あ行")).toEqual([]);
+    expect(p.push("こう</voice>走吧。")).toEqual([
+      { type: "spoken", text: "じゃあ行こう" },
+      text("走吧。"),
+    ]);
+    expect(p.push("<voice>次")).toEqual([{ type: "spoken_start" }]);
+    expect(p.finish()).toEqual([{ type: "spoken", text: "次" }]);
   });
 
   it("malformed_tags_are_text", () => {

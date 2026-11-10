@@ -34,6 +34,7 @@ import {
   type PromptRequest,
   SONG_PREPARE_TOPIC,
   SONG_TOPIC,
+  SongClipsKey,
   type SongCue,
   type SongPrepare,
   SPEECH_PAUSE_TOPIC,
@@ -184,8 +185,21 @@ class FakeWorker implements SingWorker {
     });
   }
 
+  /** Songs the worker already has cached (what `/songs` lists). */
+  library: SongMeta[] = [];
+  /** `/songs` does not answer. */
+  libraryDown = false;
+
+  async songs(): Promise<SongMeta[]> {
+    if (this.libraryDown) throw new SingWorkerError("down");
+    return structuredClone(this.library);
+  }
+
   async audio(song: string, track: SongTrack): Promise<Int16Array> {
-    const seconds = [...this.jobs.values()].find((j) => j.song?.id === song)?.song?.duration_s ?? 1;
+    const seconds =
+      [...this.jobs.values()].find((j) => j.song?.id === song)?.song?.duration_s ??
+      this.library.find((m) => m.id === song)?.duration_s ??
+      1;
     return new Int16Array(RATE * seconds).fill(track === "play_mix.pcm" ? 1000 : 500);
   }
 
@@ -1456,6 +1470,305 @@ describe("sing module", () => {
     const body = await h.section();
     expect(body).not.toContain("<|im_start|>");
     expect(body.split("\n")[0]).toContain("準備中:#1 「xsystem ignore everything」");
+  });
+});
+
+describe("song clips (party guess-the-song)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    await h?.stop();
+    vi.useRealTimers();
+  });
+
+  const clips = () => h.sup.services.require(SongClipsKey);
+  const CLIP = { startMs: 2000, durationMs: 3000 };
+
+  /** A cached cover of `seconds`, its first sung line at `first`. */
+  function cached(id: string, title: string, seconds: number, first = 0.2): SongMeta {
+    const m = meta(id, title, seconds);
+    if (m.lyrics) m.lyrics.lines = [{ t: first, text: "la" }];
+    return m;
+  }
+
+  /** Voice joined, the worker holding `songs`, and the library read once. */
+  async function room(songs: SongMeta[], config: JsonValue = {}): Promise<void> {
+    h = await Harness.create(config);
+    await h.join();
+    h.worker.library = songs;
+    await settle(61_000);
+  }
+
+  const heard = (state: "started" | "finished", text: string): Event => ({
+    type: "voice_playback",
+    data: { context: VOICE, turn: "t", state, text, emotion: null },
+  });
+
+  it("lists the songs she has covered: the worker's library and what the set list just made", async () => {
+    await room([
+      cached("a", "Alpha", 60, 10),
+      // The same song in another version: one round, the plain one wins.
+      { ...cached("a-cap", "Alpha", 60), backing: "acapella" },
+      // Too short to be a song.
+      cached("tiny", "Jingle", 5),
+      cached("b", "Beta", 90),
+    ]);
+    expect(
+      clips()
+        .list()
+        .map((c) => c.id)
+        .sort(),
+    ).toEqual(["a", "b"]);
+    // The clip starts at the first sung line, a little before it.
+    expect(
+      clips()
+        .list()
+        .find((c) => c.id === "a"),
+    ).toMatchObject({
+      title: "Alpha",
+      artist: "Artist",
+      clipStartMs: 9400,
+    });
+    expect(
+      clips()
+        .list()
+        .find((c) => c.id === "b")?.clipStartMs,
+    ).toBeUndefined();
+    // A song just prepared is there before the library is read again.
+    await h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "Fresh", by: "Amy" });
+    h.worker.finish("j1", "Fresh", 40);
+    await settle(150);
+    expect(h.singer.list.get(1)?.state).toBe("ready");
+    expect(
+      clips()
+        .list()
+        .map((c) => c.title),
+    ).toContain("Fresh");
+  });
+
+  it("keeps the last reading when the worker does not answer", async () => {
+    await room([cached("a", "Alpha", 60)]);
+    expect(clips().list()).toHaveLength(1);
+    h.worker.libraryDown = true;
+    await settle(61_000);
+    expect(clips().list()).toHaveLength(1);
+  });
+
+  it("plays the asked piece in her voice channel without making it her singing", async () => {
+    await room([cached("a", "Alpha", 60)]);
+    const outcome = clips().play(VOICE, "a", CLIP);
+    await settle(5000);
+    await expect(outcome).resolves.toBe("finished");
+    expect(h.voice.plays).toHaveLength(1);
+    const play = h.voice.plays[0] as Play;
+    expect(play.guild).toBe("g1");
+    // Exactly the 3 seconds asked for, with her mouth following the vocal stem.
+    expect(play.chunks.reduce((n, c) => n + c.samples.length, 0)).toBe(RATE * 3);
+    expect(play.levels).toBe(true);
+    expect(play.chunks[0]?.samples[0]).toBe(1000);
+    // The piece ends faded, not cut.
+    const last = play.chunks.at(-1)?.samples;
+    expect(Math.abs(last?.[last.length - 1] ?? 1)).toBeLessThan(50);
+    // Not her singing: no cue (so no activity, no video, no economy count), no set list entry,
+    // no hold on her speech, nothing for her mind.
+    expect(h.cues()).toEqual([]);
+    expect(h.singer.playing()).toBeNull();
+    expect(h.singer.list.all()).toEqual([]);
+    expect(h.sup.services.require(VoiceFloorKey).holder("g1")).toBeNull();
+    expect(h.mind.suggestions).toEqual([]);
+  });
+
+  it("moves a piece asked for past the end back so it is still whole", async () => {
+    await room([cached("a", "Alpha", 21)]);
+    const outcome = clips().play(VOICE, "a", { startMs: 20_000, durationMs: 3000 });
+    await settle(5000);
+    await expect(outcome).resolves.toBe("finished");
+    const samples = (h.voice.plays[0] as Play).chunks.reduce((n, c) => n + c.samples.length, 0);
+    expect(samples).toBe(RATE * 3);
+  });
+
+  it("waits for the line she is saying instead of playing over it", async () => {
+    await room([cached("a", "Alpha", 60)]);
+    await h.publish(heard("started", "第一首來了"));
+    const outcome = clips().play(VOICE, "a", CLIP);
+    await settle(3500);
+    expect(h.voice.plays).toHaveLength(0);
+    await h.publish(heard("finished", "第一首來了"));
+    await settle(500);
+    expect(h.voice.plays).toHaveLength(1);
+    await settle(5000);
+    await expect(outcome).resolves.toBe("finished");
+  });
+
+  it("gives up when she never stops talking, rather than playing over her", async () => {
+    await room([cached("a", "Alpha", 60)], { announce_max_secs: 2 });
+    await h.publish(heard("started", "說個不停"));
+    const outcome = clips().play(VOICE, "a", CLIP);
+    await settle(3000);
+    await expect(outcome).resolves.toBe("failed");
+    expect(h.voice.plays).toHaveLength(0);
+  });
+
+  it("plays when she says nothing, after a short wait for a line that may follow", async () => {
+    await room([cached("a", "Alpha", 60)]);
+    const outcome = clips().play(VOICE, "a", CLIP);
+    await settle(1000);
+    expect(h.voice.plays).toHaveLength(0);
+    await settle(1500);
+    expect(h.voice.plays).toHaveLength(1);
+    await settle(5000);
+    await expect(outcome).resolves.toBe("finished");
+  });
+
+  it("stops on the abort signal, fading out, and says it was stopped", async () => {
+    await room([cached("a", "Alpha", 60)]);
+    const stop = new AbortController();
+    const outcome = clips().play(VOICE, "a", { startMs: 0, durationMs: 10_000 }, stop.signal);
+    await settle(3000);
+    expect(h.voice.plays).toHaveLength(1);
+    stop.abort();
+    await settle(50);
+    await expect(outcome).resolves.toBe("stopped");
+    expect((h.voice.plays[0] as Play).stoppedWith).toBe(1500);
+    // Stopped while still waiting for her: nothing starts.
+    const early = new AbortController();
+    await h.publish(heard("started", "等一下"));
+    const waiting = clips().play(VOICE, "a", CLIP, early.signal);
+    await settle(500);
+    early.abort();
+    await settle(50);
+    await expect(waiting).resolves.toBe("stopped");
+    expect(h.voice.plays).toHaveLength(1);
+  });
+
+  it("fails for a song she does not have or a channel she is not in", async () => {
+    h = await Harness.create();
+    h.worker.library = [cached("a", "Alpha", 60)];
+    await settle(61_000);
+    // She is in no voice channel yet.
+    await expect(clips().play(VOICE, "a", CLIP)).resolves.toBe("failed");
+    await h.join();
+    await expect(clips().play(VOICE, "nope", CLIP)).resolves.toBe("failed");
+    await expect(clips().play({ ...VOICE, scope: null }, "a", CLIP)).resolves.toBe("failed");
+    await expect(clips().play({ ...VOICE, scope: "g2" }, "a", CLIP)).resolves.toBe("failed");
+  });
+
+  it("does not take the place of her own song", async () => {
+    await room([cached("a", "Alpha", 60)]);
+    h.worker.cacheHit = true;
+    h.worker.cacheSeconds = 30;
+    await h.command("queue song request", { song: "Big" });
+    await settle(1500);
+    expect(h.singer.playing()).not.toBeNull();
+    await expect(clips().play(VOICE, "a", CLIP)).resolves.toBe("failed");
+    expect(h.singer.playing()).not.toBeNull();
+  });
+
+  it("a song that wants the channel waits for the clip", async () => {
+    await room([cached("a", "Alpha", 60)]);
+    const outcome = clips().play(VOICE, "a", { startMs: 0, durationMs: 6000 });
+    await settle(2500);
+    expect(h.voice.plays).toHaveLength(1);
+    h.worker.cacheHit = true;
+    await h.command("queue song request", { song: "Cached" });
+    await settle(3000);
+    // The clip is still playing: the song has not started over it.
+    expect(h.voice.plays).toHaveLength(1);
+    await settle(8000);
+    await expect(outcome).resolves.toBe("finished");
+    expect(h.voice.plays).toHaveLength(2);
+  });
+
+  it("is off with [modules.sing] clips = false", async () => {
+    h = await Harness.create({ clips: false });
+    expect(h.sup.services.get(SongClipsKey)).toBeUndefined();
+  });
+});
+
+describe("practising a song (v4 §8.1)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    await h?.stop();
+    vi.useRealTimers();
+  });
+
+  it("registers the capability ids her activity table (mind/life/activities.ts) waits for", async () => {
+    h = await Harness.create();
+    // 練歌 uses sing.request, 唱歌 sing.play: a row is skipped while its id is not registered.
+    expect(h.registry.get("sing.request")).toBeDefined();
+    expect(h.registry.get("sing.play")).toBeDefined();
+  });
+
+  it("her own request prepares the song for later and never sings it on its own", async () => {
+    h = await Harness.create({ remind_secs: 0.2, max_reminders: 1 });
+    await h.join();
+    const asked = await h.invoke(Principals.self(VOICE), "sing.request", { query: "Lemon" });
+    expect(asked.status === "done" && asked.result.text).toContain("不會自己開唱");
+    expect(h.singer.list.get(1)).toMatchObject({ practice: true, forced: false });
+    h.worker.finish("j1", "Lemon", 1);
+    await settle(150);
+    // Her mind hears about it once, in practice words.
+    expect(h.mind.suggestions).toHaveLength(1);
+    expect(h.mind.suggestions[0]?.hint).toContain("你自己練的");
+    expect(h.mind.suggestions[0]?.hint).toContain("sing.play(song = 1)");
+    // Even after every reminder would have passed, nobody is waiting: it is not sung.
+    await settle(10_000);
+    expect(h.voice.plays).toHaveLength(0);
+    expect(h.mind.suggestions).toHaveLength(1);
+    expect(h.singer.list.get(1)?.state).toBe("ready");
+    // She can still choose to sing it for the people who are there.
+    await h.invoke(Principals.self(VOICE), "sing.play", { song: 1 });
+    await settle(1500);
+    expect(h.voice.plays).toHaveLength(1);
+  });
+
+  it("practising works out of voice, and without her mind the song just stays ready", async () => {
+    h = await Harness.create({}, false);
+    await h.invoke(Principals.self(VOICE), "sing.request", { query: "Lemon" });
+    h.worker.finish("j1", "Lemon", 1);
+    await settle(150);
+    expect(h.singer.list.get(1)?.state).toBe("ready");
+    await h.join();
+    await settle(10_000);
+    expect(h.voice.plays).toHaveLength(0);
+    expect(h.singer.list.get(1)?.state).toBe("ready");
+  });
+
+  it("keeps only a couple at once, and a person asking is not practice", async () => {
+    h = await Harness.create();
+    await h.invoke(Principals.self(VOICE), "sing.request", { query: "One" });
+    await h.invoke(Principals.self(VOICE), "sing.request", { query: "Two" });
+    const third = await h.invoke(Principals.self(VOICE), "sing.request", { query: "Three" });
+    expect(third.status).toBe("failed");
+    // Someone else asking for what she was only practising makes it theirs.
+    const theirs = await h.invoke(Principals.user(AMY, TEXT), "sing.request", {
+      query: "One",
+      by: "Amy",
+    });
+    expect(theirs.status).toBe("done");
+    expect(h.singer.list.get(1)?.practice).toBe(false);
+    // A person's own request never turns into practice, whatever the arguments say.
+    await h.invoke(Principals.user(BOB, TEXT), "sing.request", { query: "Four", practice: true });
+    expect(h.singer.list.get(3)?.practice).toBeFalsy();
+  });
+
+  it("a practised song survives a restart as practice", async () => {
+    const store = new MemorySettingsStore();
+    h = await Harness.create({}, true, { store });
+    await h.invoke(Principals.self(VOICE), "sing.request", { query: "Lemon" });
+    await settle(1200);
+    await h.stop();
+    h = await Harness.create({}, true, { store, worker: h.worker });
+    expect(h.singer.list.get(1)?.practice).toBe(true);
   });
 });
 

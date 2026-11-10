@@ -22,11 +22,13 @@ import {
   type ContextKey,
   contextKeyEquals,
   contextKeyString,
+  DailyPostsKey,
   DeliveryLedgerKey,
   type Envelope,
   EventLogKey,
   FloorKey,
   FollowupSourceKey,
+  HandleDirectoryKey,
   type Impulse,
   ImpulseHostKey,
   type ImpulseRun,
@@ -38,6 +40,8 @@ import {
   newImpulse,
   type Observation,
   type ObservationBody,
+  PartyStatusKey,
+  PersonThreadsKey,
   Principals,
   type ProfileId,
   ProposalBoardKey,
@@ -49,6 +53,7 @@ import {
   TURN_OUTCOME_TOPIC,
   toTimestamp,
   v2Payload,
+  WishesKey,
 } from "@miyoria/types";
 import { z } from "zod";
 import { ArbiterCore } from "./arbiter.js";
@@ -57,6 +62,7 @@ import { FloorCore } from "./floor.js";
 import { LedgerSnapshotSchema } from "./ledger.js";
 import { ProducerSnapshotSchema, Producers } from "./producers.js";
 import { humanResponse } from "./unanswered.js";
+import { WishBook } from "./wishes.js";
 
 const log = getLogger("arbiter");
 
@@ -72,8 +78,12 @@ const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
 /** Her talkativeness that means the budget as configured. */
 const USUAL_TALK = 0.5;
-/** Writers of observations that may ask for the mic (§6). Everything else she only knows. */
-const CLAIMING = /^(?:game\.|world\.greeting$|mainline\.commitment$)/;
+/**
+ * Writers of observations that may ask for the mic (§6). Everything else she only knows. Pats
+ * from the live page only claim when `[modules.live] pat_salience = "notable"`: an ambient batch
+ * is written silent and never gets here.
+ */
+const CLAIMING = /^(?:game\.|world\.greeting$|mainline\.commitment$|live\.pat$)/;
 
 const StateSchema = z.object({
   ledger: LedgerSnapshotSchema.prefault({}),
@@ -148,7 +158,14 @@ export class ArbiterModule implements Module {
     const clock = this.#clock ?? ctx.clock;
     const services = ctx.services;
     const floor = pipelineOf(services) === "v3" ? floorOf(ctx, config, clock) : null;
+    const wishes = new WishBook(config.wishes, {
+      now: () => clock.now(),
+      log: () => services.get(EventLogKey) ?? null,
+      threads: () => services.get(PersonThreadsKey) ?? null,
+      handles: () => services.get(HandleDirectoryKey) ?? null,
+    });
     const core = new ArbiterCore(config, {
+      wishes,
       now: () => clock.now(),
       publish: (event) => ctx.publish(event),
       paused: () => services.get(ActuatorRegistryKey)?.paused ?? false,
@@ -163,7 +180,9 @@ export class ArbiterModule implements Module {
     const store = services.get(SettingsStoreKey);
     if (store) await restore(store, core, producers, clock.now());
     ctx.provide(ArbiterKey, core);
+    ctx.provide(WishesKey, wishes);
     if (floor !== null) ctx.provide(FloorKey, floor);
+    await this.#followWishes(ctx, config, clock, wishes);
 
     const runner = new Runner(ctx, core, producers, this.#profile, clock, store, floor);
     if (floor !== null) await this.#follow(ctx, config, clock, floor, runner);
@@ -216,6 +235,19 @@ export class ArbiterModule implements Module {
     this.#stopFollowing.push(await log.project({ apply: (event) => runner.onLog(event) }));
   }
 
+  /** What she wanted to ask whom is rebuilt from the log, and follows it. */
+  async #followWishes(
+    ctx: ModuleContext,
+    config: ArbiterConfig,
+    clock: Clock,
+    wishes: WishBook,
+  ): Promise<void> {
+    const log = ctx.services.get(EventLogKey);
+    if (!log) return;
+    const since = toTimestamp(clock.now() - config.wishes.keep_hours * 60 * MINUTE_MS);
+    this.#stopFollowing.push(await log.project(wishes, { since }));
+  }
+
   async stop(): Promise<void> {
     for (const stop of this.#stopFollowing.splice(0)) stop();
   }
@@ -230,6 +262,8 @@ function floorOf(ctx: ModuleContext, config: ArbiterConfig, clock: Clock): Floor
     log: () => services.get(EventLogKey) ?? null,
     humans: (context) => services.get(ImpulseHostKey)?.facts(context).humans ?? null,
     performing: (context) => {
+      // Hosting a party game is a show too: it must not run out of lines halfway through a round.
+      if ((services.get(PartyStatusKey)?.running(context) ?? null) !== null) return true;
       const manager = services.get(ActivityManagerKey);
       if (!manager) return false;
       const snapshot = manager.snapshot();
@@ -242,6 +276,10 @@ function floorOf(ctx: ModuleContext, config: ArbiterConfig, clock: Clock): Floor
     talk: (context) =>
       (services.get(SelfStateKey)?.talkativeness(context)?.level ?? USUAL_TALK) / USUAL_TALK,
     feeling: () => services.get(AffectStateKey)?.snapshot().biases.talkativeness ?? 0,
+    postsTo: (context) => {
+      const posts = services.get(DailyPostsKey)?.channel() ?? null;
+      return posts !== null && contextKeyEquals(posts, context);
+    },
   });
 }
 
@@ -485,9 +523,13 @@ class Runner {
       return;
     }
     const social = this.ctx.services.get(SocialSignalsKey) ?? null;
+    const handles = this.ctx.services.get(HandleDirectoryKey) ?? null;
     for (const followup of due) {
       if (this.#failedMarks.has(followup.id)) continue;
-      const impulse = this.producers.followup(now, followup, social);
+      // About someone: one wish with the same topic held elsewhere (a birthday of memory's dates
+      // and a followup written in consolidation are said once, not by each).
+      const person = followup.person === null ? null : (handles?.ofPerson(followup.person) ?? null);
+      const impulse = this.producers.followup(now, followup, social, person);
       if (!impulse) continue;
       if (this.floor !== null) {
         await this.#propose(impulse, followup.id);

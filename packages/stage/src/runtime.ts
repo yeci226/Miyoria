@@ -27,6 +27,7 @@ import {
   VERSION,
 } from "./protocol.js";
 import { SongVideo } from "./song-video.js";
+import { TouchConfigSchema } from "./touch.js";
 import {
   ApiError,
   ERROR_USER_DENIED,
@@ -68,6 +69,7 @@ export const StageConfigSchema = z.object({
   blink: BlinkConfigSchema.prefault({}),
   emotion: EmotionConfigSchema.prefault({}),
   gesture: GestureConfigSchema.prefault({}),
+  touch: TouchConfigSchema.prefault({}),
 });
 export type StageConfigSection = z.output<typeof StageConfigSchema>;
 
@@ -345,6 +347,16 @@ class Stage {
         this.#overlay.activity(activity);
         return;
       }
+      case "beat":
+        this.#avatar?.beat(msg.times_ms, msg.offset_ms);
+        return;
+      case "clip":
+        this.#answer(msg.id, async () => {
+          const path = await this.#obsOrThrow().clip(msg.reason);
+          if (path === null) throw new StageError("OBS saved no replay (is its replay buffer on?)");
+          this.replies?.({ type: "clip_saved", reason: msg.reason, path });
+        });
+        return;
       case "song_video":
         if (msg.action === "play") this.#songVideo?.play(msg);
         else this.#songVideo?.stop(msg.song);
@@ -375,6 +387,10 @@ class Stage {
         return;
       case "screen":
         this.#overlay.screen(msg);
+        return;
+      case "touch":
+        this.#overlay.touch(msg);
+        this.#avatar?.touch(msg.part);
         return;
       case "status_request":
         this.#answer(msg.id, () => this.#refreshHotkeys());

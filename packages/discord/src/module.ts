@@ -28,9 +28,24 @@ import {
   type ModuleManifest,
   withTimeout,
 } from "@miyoria/kernel";
-import { PlatformHistoriesKey, PlatformSinksKey } from "@miyoria/types";
+import { LlmRouterKey, userMessage, withLlmTag } from "@miyoria/llm";
+import { SettingsStoreKey } from "@miyoria/store";
+import {
+  PlatformHistoriesKey,
+  PlatformSinksKey,
+  ProfileIdKey,
+  PromptContributorsKey,
+} from "@miyoria/types";
 import { Client, Events, GatewayIntentBits, Options, Partials } from "discord.js";
 import { DiscordConfigSchema, validateDiscordConfig } from "./config.js";
+import { emojiContributor } from "./emoji.js";
+import {
+  DESCRIBE_PROMPT,
+  DESCRIPTION_PREFIX,
+  type Describe,
+  type DescriptionStore,
+  EmojiDescriber,
+} from "./emoji-describe.js";
 import { GatewayBridge, Shared } from "./handler.js";
 import { PLATFORM, parseUserIds } from "./mapping.js";
 
@@ -57,6 +72,8 @@ export function intents(options: { presence?: boolean } = {}): number {
     GatewayIntentBits.GuildMessageTyping |
     GatewayIntentBits.DirectMessageTyping |
     GatewayIntentBits.GuildVoiceStates |
+    // Custom emoji added, renamed or removed (the server emoji table; not privileged).
+    GatewayIntentBits.GuildExpressions |
     // Reactions to her messages are feedback she learns from (not privileged).
     GatewayIntentBits.GuildMessageReactions |
     GatewayIntentBits.DirectMessageReactions;
@@ -99,6 +116,7 @@ export class DiscordBotModule implements Module {
   });
 
   #running: Shared | null = null;
+  #unregister: (() => void)[] = [];
 
   async start(ctx: ModuleContext): Promise<void> {
     const config = ctx.config(DiscordConfigSchema);
@@ -114,12 +132,42 @@ export class DiscordBotModule implements Module {
     this.#running = shared;
     const client = createClient({ presence: config.presence_intents });
     new GatewayBridge(ctx, shared).attach(client);
+    this.#startEmoji(ctx, shared);
     // The token stays in this closure; it is never logged or put in an error message.
     const token = config.token;
     ctx.spawn("gateway", (signal) => runGateway(client, token, shared, ctx, signal));
   }
 
+  /** The server emoji block, and meanings written for new emoji in the background. */
+  #startEmoji(ctx: ModuleContext, shared: Shared): void {
+    const config = shared.config.emoji;
+    const describer = new EmojiDescriber(descriptionStore(ctx), describeWithModel(ctx));
+    const owner = (name: string): string | undefined =>
+      config.descriptions[name]?.trim() || undefined;
+    const contributors = ctx.services.get(PromptContributorsKey);
+    const contributor = emojiContributor(
+      shared.emoji,
+      { owner, described: (id) => describer.get(id) },
+      { max_listed: config.max_listed, enabled: () => config.enabled },
+    );
+    contributors?.register(contributor);
+    this.#unregister.push(() => contributors?.unregister(contributor.key));
+    void describer.load();
+    if (!config.enabled || !config.auto_describe) return;
+    const controller = new AbortController();
+    this.#unregister.push(() => controller.abort());
+    const off = shared.emoji.onChange(() => {
+      void describer.describeMissing(
+        shared.emoji.all().filter((e) => e.available),
+        (e) => owner(e.name) !== undefined,
+        controller.signal,
+      );
+    });
+    this.#unregister.push(off);
+  }
+
   async stop(): Promise<void> {
+    for (const undo of this.#unregister.splice(0)) undo();
     const shared = this.#running;
     this.#running = null;
     if (shared) {
@@ -135,6 +183,49 @@ export class DiscordBotModule implements Module {
     if (shared === null) return { status: "unhealthy", reason: "not running" };
     return shared.ready ? HEALTHY : { status: "degraded", reason: "connecting to Discord" };
   }
+}
+
+/** Written emoji meanings in the settings store; `null` without one. */
+function descriptionStore(ctx: ModuleContext): DescriptionStore | null {
+  const store = ctx.services.get(SettingsStoreKey);
+  const profile = ctx.services.get(ProfileIdKey);
+  if (!store || profile === undefined) return null;
+  return {
+    async load() {
+      const out = new Map<string, string>();
+      for (const [key, value] of await store.list(profile, DESCRIPTION_PREFIX)) {
+        if (typeof value === "string") out.set(key.slice(DESCRIPTION_PREFIX.length), value);
+      }
+      return out;
+    },
+    save: (id, line) => store.set(profile, `${DESCRIPTION_PREFIX}${id}`, line),
+  };
+}
+
+/** The chat model looks at an emoji, when it takes images; `null` otherwise. */
+function describeWithModel(ctx: ModuleContext): Describe | null {
+  return async (dataUrl, name, signal) => {
+    const router = ctx.services.get(LlmRouterKey);
+    if (router?.takesImages("chat") !== true) return null;
+    const response = await withLlmTag({ module: "discord", label: "emoji" }, () =>
+      router.complete(
+        "chat",
+        {
+          messages: [
+            userMessage([
+              { type: "text", text: DESCRIBE_PROMPT(name) },
+              { type: "image_url", image_url: { url: dataUrl, detail: "low" } },
+            ]),
+          ],
+          max_tokens: 80,
+          thinking: false,
+          reasoning_purpose: "emoji",
+        },
+        signal,
+      ),
+    );
+    return response.text;
+  };
 }
 
 /**

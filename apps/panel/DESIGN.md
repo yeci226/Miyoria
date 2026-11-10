@@ -145,7 +145,7 @@ Navigation is four levels, each visible at once:
 
 | Level | Where |
 |---|---|
-| Group | Sidebar labels: 現場 (總覽, 直播, 動態), 她 (內心, 角色), 運作 (LLM, 系統), 管理 (權限, 資料, 設定) |
+| Group | Sidebar labels: 現場 (總覽, 直播, 動態), 她 (內心, 角色, 生活, 規則), 運作 (LLM, 系統, 經濟, 評測), 管理 (權限, 資料, 設定) |
 | Page | Sidebar items; the header shows `分類 / 頁面` |
 | Tab | The underlined row under the header, from `nav.ts` |
 | Block | Block title 15, inner title 13, rail title 13 |
@@ -176,6 +176,36 @@ Navigation is four levels, each visible at once:
 - LLM (`/llm`): 概況, 呼叫 (the call inspector), 價格與用量. Detail sheets (`sm:max-w-3xl`) for an
   LLM call and a thought live in the URL (`?call=`, `?thought=`), so one links to the other.
 
+## V4 pages
+
+What V4 added, in the same blocks as everything else: `Page`, `Card` with a named section,
+hairline rows, `ChartBlock` for the one chart, no tiles. Every one reads through `ModuleQuery`
+(`app/v4-queries.ts`, `api/v4-endpoints.ts`): loading is a skeleton, a 503 is one `OffLine` row
+("<module>沒有啟動") with 重新檢查, a 404 on the route is "這個 Core 還沒有這項功能", and an empty
+answer is one plain line. Nothing here is invented: a number the Core does not send is not shown.
+
+- 生活 (`/life`, group 她): five tabs from `LIFE_TABS`.
+  - 今天: `ChartBlock` 最近七天做的事 (columns, a day each), then 今天 and 她自己記得的 as hairline rows.
+  - 提醒: 她設的提醒, with a cancel in `RowActions` behind a confirm.
+  - 能做的事: 她能做的事 as a `SegmentBar` with the counts in its legend.
+  - 技能: 她的技能 as a list of names and descriptions; one opens its body and files in a `Sheet`.
+    Skills are read through the skills module, not from the files.
+  - 工作區: 她的工作區 as a table of files and sizes, a `Meter` for how full it is (brand only from 90%).
+- 經濟 (`/economy`, group 運作): four tabs from `ECONOMY_TABS`. Amounts carry the currency name
+  the Core sends.
+  - 健康度: 這七天回收率 as one `ChartBlock` with a `TimeChart` of what went out and came back,
+    怎麼算 as a `dl`, and 每天 as a table.
+  - 委託: 等她做的委託 as a table. 預測: each question with its bets. 房間: 她的房間 as a table
+    with a `Meter` for how much of the price is funded.
+  - No ranking of people. Someone's own quests show in their page under 角色 / 人.
+- 評測 (`/eval`): the participation metrics under 參與度指標, `ChartBlock`s 回合怎麼結束 and
+  沒接話的原因 (a `SegmentBar` each, counts in the legend). Words for outcomes, never a score.
+- 派對遊戲 (a card on 直播): from `GET /api/party`. Running games first (a pulsing brand dot, the
+  game, the channel, how many are there, when it began, the scores when the game scores), then 最近的結果
+  with why it ended and the final standings. "現在沒有人在玩" is an empty snapshot; the module being
+  off is the `OffLine` row. It never shows what a game keeps hidden (an answer, the soup's bottom).
+  The recent list lives in memory, so a restart empties it.
+
 ## Public site
 
 What `/` shows to anyone who is not an admin. `App.tsx` picks it after `GET /api/auth/session`
@@ -196,6 +226,29 @@ token form stays at `#/login`, with no link to it from the page.
 - 現在, 今天 and the bands of 她眼中的你 are strips of facts, label over value, at 14. Never tiles.
 - Words, not numbers, for anything she feels: 好感, 信任 and 熟悉 arrive as bands from the Core.
 - No ranking of people, anywhere.
+- The logged-in page also holds the keepsakes (`CardSection`, `FortuneSlip`, `HoloCard`): the member
+  card and today's fortune slip, the same things `/me card` and `/me fortune` give on Discord,
+  through the same service, so both read alike. The card and the slip are the only decorated
+  surfaces on the site; the rest stays flat, and the card's motion stops under reduced motion.
+  Letters to her are written from the shop (`Wallet`) or with `/me letter`.
+- 她 (the public live page at `/watch`, `LIVE_PAGE` in `pages/public/live`; `/live` stays the admin 直播 page): anyone with the link may watch, and
+  patting her head needs a Discord login that returns there. No admin shell, no admin route. While
+  OBS publishes (`snapshot.video.on`) the stage is the real OBS picture, never a model the page
+  draws: `LivePlayer`, a 16:9 player on the Core's LL-HLS proxy (hls.js, loaded on demand; native
+  HLS only where there is no Media Source, i.e. iOS Safari). It starts muted with an 開啟聲音
+  button (the choice and the volume are remembered in `localStorage`), a live dot, play, volume
+  and fullscreen in a bar under the picture, outside the touch layer. A network or media error is
+  recovered; when it will not come back, or OBS stops, the stage falls back to the drawn figure
+  (`Mascot`, an original figure, never her Live2D model), and tries the picture again after 20 s.
+  Her state line, her lines and the pat button sit under the picture.
+  Touch: a member with pats open clicks or taps the picture, and the page posts `{x, y}`, 0..1
+  on the picture itself (`touch.ts` maps the click through `object-fit: contain`; a click on a bar
+  is nothing). A hand and a heart show at once at the spot; other viewers' pats that carry a spot
+  show as small hands there. A visitor sees a 登入後摸摸她 hint on hover and the click goes to the
+  login; while pats are closed the picture takes no touch. The 摸摸頭 button stays for the
+  keyboard and posts `{}`. Over the drawn figure a pat is a hand and hearts and the face follows
+  her emotion. Her lines come as they are said, with a cursor until a line is final. All motion is
+  CSS and stops under `prefers-reduced-motion` (the hands and hearts just stay a moment).
 - 請她忘記我 confirms with what goes and what stays, in the words `/me memory forget` uses.
 
 ## Charts

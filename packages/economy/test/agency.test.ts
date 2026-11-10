@@ -179,7 +179,8 @@ async function rig(config: Record<string, JsonValue> = {}): Promise<Rig> {
     }),
   );
   const economy = new EconomyService({
-    config: EconomyConfigSchema.parse(config),
+    // Achievement coins are tested in achievements.test.ts; off here so these sums stay exact.
+    config: EconomyConfigSchema.parse({ achievement_cap: 0, ...config }),
     services,
     profile: "p",
     clock: { now: () => clock.at },

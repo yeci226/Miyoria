@@ -1,0 +1,40 @@
+{
+  "name": "@miyoria/skills",
+  "version": "0.1.0",
+  "description": "Her skills: small named how-to documents kept in her workspace and loaded on demand",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "@miyoria/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miyoria/actions": "workspace:*",
+    "@miyoria/kernel": "workspace:*",
+    "@miyoria/sandbox": "workspace:*",
+    "@miyoria/types": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@miyoria/commands": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@miyoria/store": "workspace:*",
+    "@miyoria/tools": "workspace:*",
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

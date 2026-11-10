@@ -11,11 +11,20 @@ export const ActivityConfigSchema = z.object({
   obs: z.boolean().default(true),
   /**
    * Wait this long after Go Live is up before pressing OBS "Start Streaming" (the voice node's
-   * ffmpeg binds its listener first).
+   * ffmpeg binds its listener first). With `obs_hub`: wait this long after OBS streams before
+   * starting Go Live (the hub has the publisher before ffmpeg pulls).
    */
   obs_start_delay_ms: z.number().int().nonnegative().default(3_000),
   /** OBS start attempts before the broadcast fails (and Go Live is stopped again). */
   obs_attempts: z.number().int().positive().default(3),
+  /**
+   * OBS publishes to a hub (MediaMTX, `workers/mediamtx/`) that the voice node pulls from
+   * (`[modules.voice] golive_listen = false`), and the website shows it on its own. Then OBS
+   * starts first (Go Live waits `obs_start_delay_ms` after it streams), and ending Go Live
+   * (stop, rollback, leaving voice, Go Live ending by itself) never stops OBS: OBS streaming
+   * alone is not her broadcast. Off (default): OBS follows Go Live and stops with it.
+   */
+  obs_hub: z.boolean().default(false),
   /** How long a join / leave may take to be confirmed by the voice node. */
   voice_timeout_ms: z.number().int().positive().default(20_000),
   /** Leaving waits for the turn that asked to finish speaking, at most this long. */
@@ -32,6 +41,11 @@ export const ActivityConfigSchema = z.object({
   restore_poll_ms: z.number().int().positive().default(5_000),
   /** How long an executor may take to accept a steer (a change of a running task's goal). */
   steer_timeout_ms: z.number().int().positive().default(10_000),
+  /**
+   * Browsing (v4 §8.1 逛網路) shows while she searches or reads the web on her own, and ends
+   * this long after her last search or page.
+   */
+  browse_idle_ms: z.number().int().positive().default(300_000),
   /** Ended tasks remembered (`tasks()`, `task(id)`). */
   task_history: z.number().int().positive().default(50),
 });

@@ -61,6 +61,18 @@ function readable(m: FetchedLike): boolean {
   return (m.type === MessageType.Default || m.type === MessageType.Reply) && hasContent(m);
 }
 
+/**
+ * A message someone replied to: also the answer to a slash command (her cards, a receipt), which
+ * people reply to like any message.
+ */
+function readableParent(m: FetchedLike): boolean {
+  return (
+    readable(m) ||
+    ((m.type === MessageType.ChatInputCommand || m.type === MessageType.ContextMenuCommand) &&
+      hasContent(m))
+  );
+}
+
 export class DiscordHistory implements PlatformHistory {
   readonly platform: PlatformId = PLATFORM;
 
@@ -102,11 +114,19 @@ export class DiscordHistory implements PlatformHistory {
     try {
       found = manager.cache.get(ref.id) ?? (await manager.fetch(ref.id));
     } catch (error) {
-      log.debug({ message: ref.id, error: errorMessage(error) }, "cannot fetch message");
+      // Why a reply came without the line it answers (docs/design/backlog.md): say it.
+      log.warn(
+        { channel: ref.context.channel, message: ref.id, error: errorMessage(error) },
+        "cannot fetch the replied-to message",
+      );
       return null;
     }
     signal?.throwIfAborted();
-    if (isList(found) || !readable(found)) return null;
+    if (isList(found)) return null;
+    if (!readableParent(found)) {
+      log.info({ message: ref.id, type: found.type }, "the replied-to message has nothing to read");
+      return null;
+    }
     return this.#map(found, ref.context, manager);
   }
 

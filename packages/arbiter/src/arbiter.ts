@@ -59,9 +59,10 @@ import {
   type TurnOutcomeRecord,
   toTimestamp,
   v2Event,
+  type Wishes,
 } from "@miyoria/types";
 import { type ArbiterConfig, isContextDisabled } from "./config.js";
-import type { FloorCore } from "./floor.js";
+import type { FloorCore, StartFacts } from "./floor.js";
 import { Ledger, type Place, placeOf } from "./ledger.js";
 import { clockText, hasQuietHours, inQuietHours, nextDayStart, quietEndsAt } from "./time.js";
 import { startsTalk } from "./unanswered.js";
@@ -87,6 +88,8 @@ export interface ArbiterEnv {
   act?(impulse: Impulse, signal?: AbortSignal): Promise<ImpulseRun>;
   /** `pipeline = "v3"`: the Floor decides instead of the V2 narration and `max_unanswered` rules. */
   floor?: FloorCore;
+  /** What she wants to ask whom, and whether it was asked or answered (`wishes.ts`). */
+  wishes?: Wishes;
 }
 
 /** A capability she may not use on her own until `until` (epoch ms). */
@@ -310,7 +313,31 @@ export class ArbiterCore implements Arbiter {
       if (floor.retryAt === null || floor.retryAt <= at) return null;
       at = floor.retryAt;
     }
+    // Under the Floor the gaps are its one wait (`FloorCore.check`), not rules of this class.
+    const floor = this.#env.floor;
+    if (floor && place?.context) {
+      const waits = floor.startsAt(place.context, this.#startFacts(place, facts));
+      if (waits !== null && waits > at) at = waits;
+    }
     return at > now ? toTimestamp(at) : null;
+  }
+
+  /** What the Floor's wait on a start of hers in `place` reads from these books. */
+  #startFacts(place: Place | null, facts: ConversationFacts): StartFacts {
+    const now = this.#now();
+    const cfg = this.#cfg;
+    const spoke = place === null ? null : this.#afterSpeech(place.context, facts);
+    return {
+      lastAnywhere: this.book.lastStart(),
+      lastHere: place === null ? null : this.book.lastStart(place.key),
+      minGapMs: cfg.min_gap_secs * 1000,
+      baseGapMs: place === null ? 0 : this.book.baseGapMs(place.kind),
+      placeGapMs: place === null ? 0 : this.book.gapMs(place, now),
+      misses: place === null ? 0 : this.book.misses(place.key, now),
+      levelGapMs: facts.start_gap_ms,
+      afterSpeechUntil: spoke,
+      clock: (at) => clockText(at, cfg),
+    };
   }
 
   // ---- deciding ---------------------------------------------------------------------------------
@@ -334,6 +361,11 @@ export class ArbiterCore implements Arbiter {
         return this.#decision(impulse, "rejected", floor.reason, floor.detail, floor.retryAt);
       }
       return this.#final(impulse, "rejected", floor.reason, floor.detail, floor.retryAt);
+    }
+    // 2026-11-10: the same question ten times to one person. Asked and answered is never again.
+    const wished = await this.#wish(impulse, signal);
+    if (wished !== null) {
+      return this.#final(impulse, "rejected", "repeat", wished.why, wished.until);
     }
     const talk = isSelfTalk(impulse);
     const place = this.#placeOf(impulse);
@@ -601,7 +633,7 @@ export class ArbiterCore implements Arbiter {
     // Only speaking needs her there: `voice.join` is how she gets in.
     if (!facts.present && impulse.kind === "speak") return no("denied", "你不在那個語音頻道");
     if (this.#env.floor) {
-      const refused = this.#floorClaim(impulse, this.#env.floor);
+      const refused = this.#floorClaim(impulse, this.#env.floor, facts);
       if (refused !== null) return refused;
     } else if (impulse.kind === "speak" && startsTalk(impulse)) {
       const quiet = !isSelfInitiated(source);
@@ -626,6 +658,8 @@ export class ArbiterCore implements Arbiter {
         facts,
         now,
         isSelfTalk(impulse),
+        // Under the Floor the gaps are part of its one decision (`#floorClaim`).
+        !this.#env.floor,
       );
       if (rules !== null) return rules;
     }
@@ -638,8 +672,11 @@ export class ArbiterCore implements Arbiter {
     return null;
   }
 
-  /** V3: narration dedupe through the ledger, then the claim order and her budget. */
-  #floorClaim(impulse: Impulse, floor: FloorCore): Floor | null {
+  /**
+   * V3: narration dedupe through the ledger, then the claim order, her budget and, for her own
+   * starts, every wait on them as the Floor's one decision.
+   */
+  #floorClaim(impulse: Impulse, floor: FloorCore, facts: ConversationFacts): Floor | null {
     if (impulse.kind !== "speak") return null;
     const quiet = !isSelfInitiated(impulse.source);
     const attention = impulse.attention ?? null;
@@ -649,8 +686,38 @@ export class ArbiterCore implements Arbiter {
     }
     const context = impulse.target.context;
     if (context === null) return null;
-    const refused = floor.check(claimOf(impulse), context, impulse.hint);
+    const start =
+      isSelfInitiated(impulse.source) && isSelfTalk(impulse)
+        ? this.#startFacts(this.#placeOf(impulse), facts)
+        : null;
+    const refused = floor.check(claimOf(impulse), context, impulse.hint, start);
     return refused === null ? null : { ...refused, defer: false, quiet };
+  }
+
+  /**
+   * What `impulse` would raise with someone, when it is a wish of hers (a due commitment, a
+   * proposal, a timer, a goal): asked already or answered means not again (`wishes.ts`).
+   */
+  async #wish(
+    impulse: Impulse,
+    signal: AbortSignal | undefined,
+  ): Promise<{ why: string; until: number | null } | null> {
+    const wishes = this.#env.wishes;
+    if (!wishes || OWNER.has(impulse.source)) return null;
+    const keys = [impulse.attention?.key ?? null, `proposal:${impulse.id}`];
+    const holder = keys.find((k) => k !== null && wishes.of(k) !== null) ?? null;
+    const person = impulse.target.person;
+    const raises = isSelfInitiated(impulse.source) || impulse.source === "followup";
+    if (holder === null && (person === null || !raises)) return null;
+    const verdict = await wishes.screen(
+      { person, text: (impulse.hint ?? "").trim() || impulse.why, holder },
+      signal,
+    );
+    if (verdict.raise) return null;
+    return {
+      why: verdict.why,
+      until: verdict.until === null ? null : Date.parse(verdict.until),
+    };
   }
 
   /** Until when she just spoke in `context` (`null`: she has not spoken there). */
@@ -674,6 +741,7 @@ export class ArbiterCore implements Arbiter {
     facts: ConversationFacts,
     now: number,
     talk = true,
+    gaps = !this.#env.floor,
   ): Floor | null {
     const cfg = this.#cfg;
     const no = (reason: ArbiterReason, detail: string, retryAt: number | null): Floor => ({
@@ -720,6 +788,7 @@ export class ArbiterCore implements Arbiter {
         );
       }
     }
+    if (!gaps) return null;
     const last = this.book.lastStart();
     if (last !== null && now < last + cfg.min_gap_secs * 1000) {
       const at = last + cfg.min_gap_secs * 1000;

@@ -253,14 +253,27 @@ describe("goalNote and config", () => {
       "select",
       "place",
       "respawn",
+      "stop",
     ]);
     // Completion is not read from event names any more: no reached / failed event lists.
     expect(cfg).not.toHaveProperty("reached_events");
     expect(cfg).not.toHaveProperty("failed_events");
     expect(cfg).not.toHaveProperty("settle_secs");
-    expect(cfg.trigger_events).toContain("hostile_near");
-    expect(cfg.trigger_events).toContain("reflex_end");
+    // Enemies and reflexes are the reflexes' business, not a reason to re-plan (§11.2 item 6).
+    expect(cfg.trigger_events).not.toContain("hostile_near");
+    expect(cfg.trigger_events).not.toContain("reflex_end");
+    expect(cfg.trigger_events).toContain("death");
     expect(cfg.trigger_events).not.toContain("goal_reached");
+    expect(cfg).toMatchObject({
+      max_goal_steps: 8,
+      record_attempts: 10,
+      method_repeat_limit: 2,
+      method_hold_secs: 600,
+      night_action: "shelter",
+      death_action: "recover",
+      death_action_delay_secs: 5,
+      reasoning: "low",
+    });
     expect(cfg.directed_games).toEqual(["minecraft"]);
     expect(cfg).toMatchObject({
       auto_launch: true,

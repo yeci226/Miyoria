@@ -22,7 +22,7 @@ import {
   type TurnReason,
   timestampMs,
 } from "@miyoria/types";
-import { isQuestion } from "./attention.js";
+import { type Aside, isQuestion, openingCall } from "./attention.js";
 import { contextId } from "./util.js";
 
 /** How one message relates to her. */
@@ -31,7 +31,16 @@ export type CallKind =
   | "address"
   /** It replies to one of her messages. */
   | "reply"
+  /** It answers her line but is said to someone else, about her (attention's `Aside`). */
+  | "about"
+  /** It answers her line with only a reaction for the room. */
+  | "reaction"
   | null;
+
+/** The kinds that call for her: she is addressed or answered. */
+export function callsHer(kind: CallKind): boolean {
+  return kind === "address" || kind === "reply";
+}
 
 /** What is known about a voice context when classifying its utterances. */
 export interface VoiceCallFacts {
@@ -41,23 +50,31 @@ export interface VoiceCallFacts {
   questionWindowMs: number;
   /** People in the channel besides her (`null`: unknown). */
   others: number | null;
+  /** Their display names: a question that opens with one of them is for that person. */
+  roster?: readonly string[];
+  /** Her names. */
+  names?: readonly string[];
 }
 
 /**
  * How `msg` relates to her. `direct` is attention's `directReason` (mention, name, reply, DM);
- * in voice a question right after she spoke, or anything said one-on-one, also calls her.
+ * in voice a question right after she spoke, or anything said one-on-one, also calls her, but not
+ * a question that opens by calling someone else (`openingCall`). `aside`: attention's `asideOf`.
  */
 export function callKind(
   msg: IncomingMessage,
   direct: string | null,
   voice: VoiceCallFacts | null,
+  aside: Aside | null = null,
 ): CallKind {
   if (direct === "reply") return "reply";
   if (direct !== null) return "address";
+  if (aside !== null) return aside.kind === "about_her" ? "about" : "reaction";
   if (voice === null) return null;
   if (voice.others === 1) return "address";
   const last = voice.lastSelfAt;
-  if (last !== null && isQuestion(msg.text.toLowerCase())) {
+  const called = openingCall(msg.text, voice.roster ?? [], voice.names ?? []);
+  if (last !== null && called === null && isQuestion(msg.text.toLowerCase())) {
     const gap = timestampMs(msg.ts) - last;
     if (gap >= -voice.questionWindowMs && gap <= voice.questionWindowMs) return "address";
   }
@@ -85,7 +102,8 @@ export interface FocusSelection {
  *   called her on; everyone else's are background. `reason` is `addressed` (or `reply_to_her`
  *   when every call was a reply).
  * - Nobody did but `followsHer` (someone answering what she just said): the last speaker's
- *   messages, `reply_to_her`.
+ *   messages, `reply_to_her`, unless those only react to her line or are said to someone else
+ *   (`about`, `reaction`): then nobody waits for her and the turn is `ambient`.
  * - Otherwise `ambient`: the last speaker's messages, nobody in `addressed`.
  */
 export function selectFocus(
@@ -98,8 +116,8 @@ export function selectFocus(
   const firstCall = new Map<string, number>();
   let anyAddress = false;
   inputs.forEach((m, i) => {
-    const kind = kinds[i];
-    if (kind === null || kind === undefined) return;
+    const kind = kinds[i] ?? null;
+    if (!callsHer(kind)) return;
     if (kind === "address") anyAddress = true;
     const key = authorKey(m.author.account);
     if (!firstCall.has(key)) {
@@ -117,7 +135,13 @@ export function selectFocus(
     };
   } else {
     const last = inputs.at(-1);
-    reason = followsHer && last !== undefined ? "reply_to_her" : "ambient";
+    const aside = inputs.some(
+      (m, i) =>
+        last !== undefined &&
+        sameAccount(m.author.account, last.author.account) &&
+        (kinds[i] === "about" || kinds[i] === "reaction"),
+    );
+    reason = followsHer && last !== undefined && !aside ? "reply_to_her" : "ambient";
     if (reason === "reply_to_her" && last) addressed.push(last.author);
     take = (m) => last !== undefined && sameAccount(m.author.account, last.author.account);
   }
@@ -145,6 +169,9 @@ function authorKey(account: AccountRef): string {
 
 /** How the focus block introduces a message (`Owen 問你:…`). */
 export function focusVerb(kind: CallKind, first: boolean): string {
+  // Said to someone else, about her: she may join, but it was not said to her.
+  if (kind === "about") return "跟別人講到你(不是對你說,真的需要才插話)";
+  if (kind === "reaction") return "對你的話反應(不用回也可以)";
   if (!first) return "接著說";
   if (kind === "address") return "問你";
   if (kind === "reply") return "回你";

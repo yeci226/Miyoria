@@ -19,6 +19,14 @@
 // Tasks that use her body supersede each other (a new one ends the old with `superseded`);
 // `chat` runs alongside. A cancelled or timed-out task stops the mod's work (`stop`).
 //
+// Progress (docs/design/v4-plan.md §11.2): every body task is measured (progress.ts) and its
+// `done` carries `data.outcome`, so a `done` that changed nothing is not a success; `explore`
+// counts only what is new in sight. Food goes through `obtain` (hunting, cooking, harvest) and
+// `hunt`; `shelter` gets her through the night (a bed, else dug in under a roof) and `recover`
+// takes her back to where she died (survival.ts). The adapter tells night has come from the
+// snapshots too (`night_started` at dusk, once per night), not only from the mod's event at
+// 13000 ticks, which never comes when she joins a world at night.
+//
 // Steer (v3 §10.6): the executor can change the target of a running `obtain` plan (`item`,
 // `count`) without losing what it already got. The step boundary is the adapter's, not the mod's:
 // the mod only runs one job at a time (a Baritone job, one craft, one smelt) and reports when it
@@ -44,10 +52,41 @@ import { BridgeError, type BridgeClient, type BridgeEvent } from "./bridge.js";
 import { type EventOptions, mapEvent } from "./events.js";
 import { GUIDE } from "./guide.js";
 import { LaunchError, type Launcher } from "./launcher.js";
+import { zh } from "./names.js";
 import { ObtainRunner, parsePlanPatch, type RunnerOptions, STEP_EVENTS, worldOf } from "./obtain.js";
-import { PlanError, countOf, describeStep, itemName, knows, normalizeItem, plan } from "./planner.js";
+import {
+  ANIMAL_DROP,
+  PlanError,
+  countOf,
+  describeStep,
+  itemName,
+  knows,
+  normalizeItem,
+  plan,
+  unknownText,
+} from "./planner.js";
+import {
+  type Counts,
+  ITEM_GOALS,
+  type Outcome,
+  PLACE_GOALS,
+  exploreOutcome,
+  itemsText,
+  outcomeOf,
+  sightings,
+} from "./progress.js";
 import { type SteerRequest, SteerableTasks } from "./steer.js";
 import { type Snapshot, compactState, summarize } from "./summary.js";
+import {
+  DIG_DEPTH,
+  type Death,
+  RECOVER_WINDOW_MS,
+  bedOf,
+  isNight,
+  roofAims,
+  roofBlock,
+  secsSince,
+} from "./survival.js";
 
 export const GAME_ID = "minecraft";
 
@@ -67,7 +106,20 @@ export interface AdapterOptions extends EventOptions {
   reflexWaitMs?: number;
   /** How often `launch` checks whether the world finished loading. */
   launchPollMs?: number;
+  /** How often `explore` looks at what she sees. */
+  explorePollMs?: number;
+  /** A task that gained nothing looks once more after this (drops still being picked up). */
+  progressSettleMs?: number;
+  /** How long `recover` waits where she died for the pickups. */
+  recoverPickupMs?: number;
+  /** How often `shelter` checks whether the night is over. */
+  shelterPollMs?: number;
+  /** How long `shelter` waits for a bed to skip the night. */
+  bedWaitMs?: number;
 }
+
+/** Goals whose outcome is measured around the task (`explore` and `shelter` measure their own). */
+const MEASURED = new Set([...ITEM_GOALS, ...PLACE_GOALS]);
 
 /** Goals that are done once the mod accepted them. */
 const INSTANT = new Set(["chat", "look", "attack", "use", "select", "respawn", "place", "stop"]);
@@ -175,6 +227,16 @@ export class MinecraftAdapter implements GameAdapter {
   readonly #watches = new Set<Watch>();
   /** Wakes `launch` when the mod connects. */
   readonly #connectWaiters = new Set<() => void>();
+  /** What `item_picked` reported to each measured task while it runs. */
+  readonly #meters = new Set<Counts>();
+  /** Her inventory in the last snapshot (what a death drops). */
+  #lastInventory: Counts = {};
+  /** The last death, until `recover` got the things back or they are gone. */
+  #death: Death | null = null;
+  /** Deaths seen (a shelter notices one while it waits). */
+  #deaths = 0;
+  /** `night_started` was reported for this night already. */
+  #nightNoted = false;
   /** The task executor (the core's only way to drive the game). */
   readonly tasks: SteerableTasks;
 
@@ -216,6 +278,18 @@ export class MinecraftAdapter implements GameAdapter {
 
   #onEvent(raw: BridgeEvent): void {
     if (raw.name === "reflex_end") for (const wake of [...this.#reflexWaiters]) wake();
+    if (raw.name === "item_picked") {
+      const items = raw.data.items;
+      if (typeof items === "object" && items !== null) {
+        for (const meter of this.#meters) {
+          for (const [id, n] of Object.entries(items)) {
+            if (typeof n === "number") meter[id] = (meter[id] ?? 0) + n;
+          }
+        }
+      }
+    }
+    if (raw.name === "death") this.#died(raw.data);
+    if (raw.name === "night_started") this.#nightNoted = true;
     const runner = this.#runner;
     if (runner) runner.feed(raw);
     for (const w of [...this.#watches]) {
@@ -259,10 +333,19 @@ export class MinecraftAdapter implements GameAdapter {
     }
     try {
       const snapshot = (await this.#bridge.request("observe")) as Snapshot;
+      this.#seen(snapshot);
       const caps = this.#bridge.hello?.capabilities;
       const state = compactState(snapshot);
       if (caps) state.capabilities = { baritone: !!caps.baritone, altoclef: !!caps.altoclef };
       let summary = summarize(snapshot);
+      const death = this.#recentDeath();
+      if (death) {
+        const p = death.position;
+        const secs = secsSince(death, Date.now());
+        state.last_death = { x: p.x, y: p.y, z: p.z, dimension: death.dimension, secs_ago: secs, lost: death.lost };
+        const lost = Object.keys(death.lost).length ? `,掉了 ${itemsText(death.lost)}` : "";
+        summary += `\n上次死在 (${p.x}, ${p.y}, ${p.z}),${secs} 秒前${lost};東西約 5 分鐘後消失`;
+      }
       const runner = this.#runner;
       if (runner) {
         const p = runner.status();
@@ -295,7 +378,10 @@ export class MinecraftAdapter implements GameAdapter {
       case "quit":
         return this.#quit();
       case "obtain":
-        return { ok: false, code: "invalid", message: "obtain 是一個任務(由執行器開始)" };
+      case "hunt":
+      case "shelter":
+      case "recover":
+        return { ok: false, code: "invalid", message: `${action.name} 是一個任務(由執行器開始)` };
     }
     // Anything but talking replaces a running plan (she chose to do something else).
     if (action.name !== "chat") this.#cancelPlan();
@@ -363,7 +449,42 @@ export class MinecraftAdapter implements GameAdapter {
     const goal = spec.goal;
     const known = ACTIONS.some((a) => a.name === goal) || HIDDEN_ACTIONS.some((a) => a.name === goal);
     if (!known) throw new TaskFailure("invalid", `沒有「${goal}」這個動作`);
+    if (!MEASURED.has(goal)) return this.#runGoal(spec, task);
+    // What it changed is measured around it: her inventory before and after, and what was
+    // picked up meanwhile.
+    const picked: Counts = {};
+    this.#meters.add(picked);
+    try {
+      const before = await this.#snapshot();
+      const result = await this.#runGoal(spec, task);
+      const met = (result.data as { met?: unknown } | null | undefined)?.met === true;
+      let after = await this.#snapshot();
+      let outcome = outcomeOf(goal, before, after, picked, met);
+      if (outcome && !outcome.progressed && !task.signal.aborted) {
+        // The last drops may still be on their way (the pickup reflex starts after the job).
+        await pause(this.#opts.progressSettleMs ?? 1_000, task.signal).catch(() => undefined);
+        after = await this.#snapshot();
+        outcome = outcomeOf(goal, before, after, picked, met) ?? outcome;
+      }
+      if (outcome === null) return result;
+      if (goal === "recover" && outcome.progressed) this.#death = null;
+      return withOutcome(result, outcome);
+    } finally {
+      this.#meters.delete(picked);
+    }
+  }
+
+  async #runGoal(spec: TaskSpec, task: TaskContext): Promise<TaskResult> {
+    const goal = spec.goal;
     switch (goal) {
+      case "hunt":
+        return this.#runHunt(spec, task);
+      case "explore":
+        return this.#runExplore(spec, task);
+      case "shelter":
+        return this.#runShelter(spec, task);
+      case "recover":
+        return this.#runRecover(spec, task);
       case "launch":
         return this.#runLaunch(task);
       case "quit": {
@@ -584,13 +705,12 @@ export class MinecraftAdapter implements GameAdapter {
       : null;
   }
 
-  async #runPlan(item: string, count: number, task: TaskContext): Promise<TaskResult> {
-    if (!knows(item)) {
-      throw new TaskFailure(
-        "invalid",
-        `不知道怎麼取得${itemName(item)}(只會砍樹、挖礦、合成和用熔爐燒的東西)`,
-      );
-    }
+  /**
+   * An `obtain` plan for `count` of `item` (`more`: `count` more than she has now, what
+   * `hunt` asks for).
+   */
+  async #runPlan(item: string, wanted: number, task: TaskContext, more = false): Promise<TaskResult> {
+    if (!knows(item)) throw new TaskFailure("invalid", unknownText(item));
     let snapshot: Snapshot;
     try {
       snapshot = (await this.#bridge.request("observe")) as Snapshot;
@@ -599,8 +719,11 @@ export class MinecraftAdapter implements GameAdapter {
       throw error;
     }
     const inv = snapshot.inventory ?? {};
+    const count = more ? Math.min(countOf(inv, item) + wanted, 2304) : wanted;
     const want = `${itemName(item)}${count > 1 ? `×${count}` : ""}`;
-    if (countOf(inv, item) >= count) return { detail: `背包裡已經有${want}了` };
+    if (countOf(inv, item) >= count) {
+      return { detail: `背包裡已經有${want}了`, data: { target: item, count, met: true } };
+    }
     let steps: ReturnType<typeof plan>;
     try {
       steps = plan(item, count, inv, worldOf(snapshot));
@@ -632,7 +755,7 @@ export class MinecraftAdapter implements GameAdapter {
       if (result.cancelled) throw task.signal.reason ?? new TaskFailure("cancelled", result.message);
       if (!result.ok) throw new TaskFailure(result.code ?? "internal", result.message);
       // A steer may have changed what she was getting.
-      return { detail: result.message, data: { target: runner.item, count: runner.count } };
+      return { detail: result.message, data: { target: runner.item, count: runner.count, met: true } };
     } finally {
       task.signal.removeEventListener("abort", onAbort);
       if (this.#runner === runner) {
@@ -647,6 +770,232 @@ export class MinecraftAdapter implements GameAdapter {
     if (!runner) return;
     this.#runner = null;
     runner.cancel();
+  }
+
+  // ---- food, exploring, night and death (§11.2) ---------------------------------------------
+
+  /** `hunt {entity, count}`: an `obtain` plan for `count` more of the meat that animal drops. */
+  async #runHunt(spec: TaskSpec, task: TaskContext): Promise<TaskResult> {
+    const entity = normalizeItem(typeof spec.args.entity === "string" ? spec.args.entity : "");
+    const drop = ANIMAL_DROP[entity];
+    if (drop === undefined) {
+      throw new TaskFailure("invalid", `不會打「${zh(entity)}」:只打牛、豬、羊、雞、兔子(怪物交給反擊的本能)`);
+    }
+    const n = Number(spec.args.count ?? 1);
+    const count = Math.min(64, Math.max(1, Math.round(Number.isFinite(n) ? n : 1)));
+    if (!this.#bridge.ready) throw new TaskFailure("disconnected", errorText("not_connected", ""));
+    return this.#runPlan(drop, count, task, true);
+  }
+
+  /**
+   * `explore`: Baritone explores until the budget runs out (or Baritone stops); `find` ends it
+   * as soon as one of those blocks or creatures is in sight. Its outcome is what is new in sight
+   * (progress.ts), polled while it runs.
+   */
+  async #runExplore(spec: TaskSpec, task: TaskContext): Promise<TaskResult> {
+    const raw = spec.args.find;
+    const find = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [])
+      .filter((f): f is string => typeof f === "string")
+      .map(normalizeItem)
+      .filter((f) => f !== "");
+    const before = await this.#snapshot();
+    const known = sightings(before);
+    const fresh = new Set<string>();
+    let found: string | null = null;
+    const look = (s: Snapshot | null): void => {
+      const now = sightings(s);
+      for (const id of now) if (!known.has(id)) fresh.add(id);
+      found ??= find.find((f) => now.has(f)) ?? null;
+    };
+    const ended = this.#watch(jobEnd("explore", spec.id, this.modTasks), task);
+    this.#stopOnAbort(task);
+    const { find: _find, ...args } = spec.args;
+    const result = await this.act({ name: "explore", args }, task.signal, spec.id);
+    if (!result.ok) {
+      ended.cancel();
+      fail(result);
+    }
+    const started = Date.now();
+    const left = Math.max(task.remainingMs() - 500, 0);
+    const timer = setTimeout(() => ended.finish({ detail: "時間到了" }), left);
+    let polling = false;
+    const poll = setInterval(() => {
+      if (polling) return;
+      polling = true;
+      void this.#snapshot()
+        .then((s) => {
+          look(s);
+          if (found !== null) ended.finish({ detail: `找到${zh(found)}了` });
+        })
+        .finally(() => {
+          polling = false;
+        });
+    }, this.#opts.explorePollMs ?? 5_000);
+    try {
+      await ended.done;
+    } finally {
+      clearTimeout(timer);
+      clearInterval(poll);
+      if (!task.signal.aborted) await this.#bridge.request("stop").catch(() => undefined);
+    }
+    const after = await this.#snapshot();
+    look(after);
+    const secs = Math.round((Date.now() - started) / 1000);
+    const outcome = exploreOutcome(before, after, fresh, found);
+    return withOutcome({ detail: `探索了 ${secs} 秒,${outcome.note}` }, outcome);
+  }
+
+  /**
+   * `shelter`: through the night. A bed is put down and slept in (that also sets her spawn);
+   * without one (or when monsters keep her awake) she digs three blocks straight down and puts a
+   * block over her head from inside, then waits for the day. Her reflexes still fight whatever
+   * gets in.
+   */
+  async #runShelter(spec: TaskSpec, task: TaskContext): Promise<TaskResult> {
+    const start = await this.#snapshot();
+    if (!start) throw new TaskFailure("disconnected", errorText("not_connected", ""));
+    const quiet = (note: string): TaskResult =>
+      withOutcome({ detail: note }, { progressed: false, gained: {}, lost: {}, inventory: start.inventory ?? null, note });
+    if (start.dimension !== undefined && start.dimension !== "overworld") return quiet("這裡沒有日夜,不用躲");
+    if (!isNight(start)) return quiet("現在不是晚上,不用躲");
+    const deaths = this.#deaths;
+    const bed = bedOf(start.inventory);
+    let how: string | null = null;
+    if (bed !== null && (await this.#sleepInBed(bed, task))) how = `放下${zh(bed)}睡了一覺`;
+    if (how === null) {
+      const feet = start.block_position;
+      if (!feet) throw new TaskFailure("internal", "不知道自己站在哪裡");
+      // Straight down: Baritone digs the shaft (it never digs into lava or water).
+      await this.#runJob({ name: "goto", args: { x: feet.x, y: feet.y - DIG_DEPTH, z: feet.z } }, spec, task);
+      how = (await this.#roof(task)) ? "往下挖了三格、封了頂" : "往下挖了三格(沒有方塊可以封頂)";
+    }
+    const poll = this.#opts.shelterPollMs ?? 10_000;
+    for (;;) {
+      if (this.#deaths !== deaths) throw new TaskFailure("died", "躲著的時候死掉了");
+      const s = await this.#snapshot();
+      if (s && !isNight(s)) break;
+      if (task.remainingMs() < poll + 2_000) break;
+      await pause(poll, task.signal);
+    }
+    const end = await this.#snapshot();
+    const morning = end !== null && !isNight(end);
+    const note = `${how},${morning ? "天亮了" : "還沒天亮,先出來"}`;
+    return withOutcome({ detail: note }, { progressed: true, gained: {}, lost: {}, inventory: end?.inventory ?? null, note });
+  }
+
+  /** Puts `bed` down, looks at it and lies down; true when the night was skipped. */
+  async #sleepInBed(bed: string, task: TaskContext): Promise<boolean> {
+    try {
+      const placed = await this.#request("place", { item: bed }, task.signal);
+      const p = placed.position as { x: number; y: number; z: number } | undefined;
+      if (!p) return false;
+      await this.#request("look", { at: { x: p.x + 0.5, y: p.y + 0.3, z: p.z + 0.5 }, smooth: false }, task.signal);
+      await this.#request("use", {}, task.signal);
+    } catch (error) {
+      if (error instanceof BridgeError) return false;
+      throw error;
+    }
+    const until = Date.now() + (this.#opts.bedWaitMs ?? 8_000);
+    while (Date.now() < until) {
+      await pause(500, task.signal);
+      const s = await this.#snapshot();
+      if (s && !isNight(s)) return true;
+    }
+    // Monsters nearby (or someone else awake on a server): no sleep tonight.
+    return false;
+  }
+
+  /** At the bottom of the shaft: a block over her head, from inside. True when one took. */
+  async #roof(task: TaskContext): Promise<boolean> {
+    const s = await this.#snapshot();
+    const block = roofBlock(s?.inventory);
+    const feet = s?.block_position;
+    if (!block || !feet) return false;
+    const have = s?.inventory?.[block] ?? 0;
+    try {
+      // `select_slot` finds only what is in the hotbar; `place` would put it at her feet.
+      await this.#request("select_slot", { item: block }, task.signal);
+    } catch (error) {
+      if (error instanceof BridgeError) return false;
+      throw error;
+    }
+    for (const at of roofAims(feet)) {
+      try {
+        await this.#request("look", { at, smooth: false }, task.signal);
+        await this.#request("use", {}, task.signal);
+      } catch (error) {
+        if (error instanceof BridgeError) continue;
+        throw error;
+      }
+      await pause(300, task.signal);
+      const now = await this.#snapshot();
+      if ((now?.inventory?.[block] ?? have) < have) return true;
+    }
+    return false;
+  }
+
+  /** `recover`: back to where she died, then a moment for the pickups. */
+  async #runRecover(spec: TaskSpec, task: TaskContext): Promise<TaskResult> {
+    const death = this.#death;
+    if (death === null) throw new TaskFailure("precondition", "最近沒有死掉,沒有東西要撿");
+    if (Date.now() - death.at > RECOVER_WINDOW_MS) {
+      this.#death = null;
+      throw new TaskFailure("not_found", `死掉超過 ${Math.round(RECOVER_WINDOW_MS / 60_000)} 分鐘了,東西應該已經消失`);
+    }
+    const here = await this.#snapshot();
+    if (here?.dimension && death.dimension && here.dimension !== death.dimension) {
+      throw new TaskFailure("precondition", `東西掉在${zh(death.dimension)},她現在在${zh(here.dimension)}`);
+    }
+    const p = death.position;
+    await this.#runJob({ name: "goto", args: { x: p.x, y: p.y, z: p.z, near: 1 } }, spec, task);
+    await pause(this.#opts.recoverPickupMs ?? 4_000, task.signal);
+    return { detail: `回到死掉的地方 (${p.x}, ${p.y}, ${p.z}) 了` };
+  }
+
+  /** A snapshot, or `null` when the game cannot be asked. */
+  async #snapshot(): Promise<Snapshot | null> {
+    if (!this.#bridge.ready) return null;
+    try {
+      const s = (await this.#bridge.request("observe")) as Snapshot;
+      this.#seen(s);
+      return s;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Keeps what a snapshot tells about later events: her inventory, and whether night came. */
+  #seen(s: Snapshot): void {
+    if (s.inventory) this.#lastInventory = { ...s.inventory };
+    if (s.time_phase === undefined && s.is_night === undefined) return;
+    if (!isNight(s)) {
+      this.#nightNoted = false;
+    } else if (!this.#nightNoted) {
+      this.#nightNoted = true;
+      const text = s.time_phase === "dusk" ? "天快黑了" : "天黑了";
+      this.#queue.push({ type: "night_started", data: { time_of_day: s.time_of_day ?? null, text } });
+    }
+  }
+
+  #died(data: Record<string, unknown>): void {
+    this.#deaths += 1;
+    const p = data.position as { x?: unknown; y?: unknown; z?: unknown } | undefined;
+    const coords = [p?.x, p?.y, p?.z].map((v) => (typeof v === "number" ? Math.round(v) : null));
+    const [x, y, z] = coords;
+    if (x == null || y == null || z == null) return;
+    this.#death = {
+      position: { x, y, z },
+      dimension: typeof data.dimension === "string" ? data.dimension : null,
+      at: Date.now(),
+      lost: this.#lastInventory,
+    };
+  }
+
+  /** The last death while its things may still be there. */
+  #recentDeath(): Death | null {
+    const d = this.#death;
+    if (d !== null && Date.now() - d.at > RECOVER_WINDOW_MS) this.#death = null;
+    return this.#death;
   }
 
   /** The running plan (tests). */
@@ -678,6 +1027,12 @@ export class MinecraftAdapter implements GameAdapter {
 
 /** Request types that start work the mod can report a task for. */
 const JOB_REQUESTS = new Set(["baritone", "altoclef", "craft", "smelt"]);
+
+/** `result` with `outcome` in its data (the core reads `data.outcome`). */
+function withOutcome(result: TaskResult, outcome: Outcome): TaskResult {
+  const data = typeof result.data === "object" && result.data !== null && !Array.isArray(result.data) ? result.data : {};
+  return { ...result, data: { ...data, outcome } };
+}
 
 function strategyOf(value: unknown): ObtainStrategy | null {
   return typeof value === "string" && (OBTAIN_STRATEGIES as readonly string[]).includes(value) ? (value as ObtainStrategy) : null;

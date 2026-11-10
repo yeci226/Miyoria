@@ -3,7 +3,13 @@
 
 import { MockProvider } from "@miyoria/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { looksLikeReasoning, ReasoningGuard, reasoningScore } from "../src/leak.js";
+import {
+  isSelfTalk,
+  looksLikeReasoning,
+  ReasoningGuard,
+  ReplyScreen,
+  reasoningScore,
+} from "../src/leak.js";
 import { channel, Harness, mention, noCheck } from "./harness.js";
 
 beforeEach(() => {
@@ -50,6 +56,38 @@ describe("reasoning that is not a reply", () => {
     expect(guard.leaking).toBe(true);
     // Everything after it goes too.
     expect(guard.drops("好啦，答案對了。")).toBe(true);
+  });
+});
+
+describe("notes to herself", () => {
+  it("a third-person instruction to herself is one, words to someone are not", () => {
+    expect(isSelfTalk("莎露朵在問我上面訊息寫什麼,直接念給她聽就好。")).toBe(true);
+    expect(isSelfTalk("直接念給她聽就好。")).toBe(true);
+    expect(isSelfTalk("Owen 要我幫他查天氣，查完回他就好")).toBe(true);
+    for (const line of [
+      "你直接念給她聽就好。",
+      "他在問我要不要一起玩，我說好啊！",
+      "她叫我唱歌我就唱了。",
+      "上面寫的是「明天見」。",
+    ]) {
+      expect(isSelfTalk(line), line).toBe(false);
+    }
+  });
+
+  it("only that line is left out of the reply", () => {
+    const screen = new ReplyScreen<{ text: string }>();
+    const sent: string[] = [];
+    for (const text of [
+      "莎露朵在問我上面訊息寫什麼,直接念給她聽就好。",
+      "上面寫的是「明天見」。",
+      "就這樣～",
+    ]) {
+      sent.push(...screen.push({ text }).send.map((i) => i.text));
+    }
+    sent.push(...screen.flush().map((i) => i.text));
+    expect(sent).toEqual(["上面寫的是「明天見」。", "就這樣～"]);
+    expect(screen.selfTalk).toBe(1);
+    expect(screen.dropped).toBe(false);
   });
 });
 

@@ -105,6 +105,42 @@ describe("scene rule", () => {
     expect(scene(snap({ activity: GAME, override }), T0 + 61_000)).toBe("Gameplay");
   });
 
+  it("web browsing takes the browse scene, the old threads scene, or the game scene, in that order", async () => {
+    const BROWSE = {
+      type: "browse" as const,
+      target: "鯨魚的資料",
+      phase: "running" as const,
+      task: null,
+      failure: null,
+      since: at(0),
+    };
+    const sceneFor = async (
+      activity: ActivitySnapshot["activity"],
+      over: Record<string, string>,
+    ) => {
+      const cfg = config({ roles: over });
+      const r = await roles(cfg);
+      const facts = factsOf(snap({ activity }), T0);
+      return pickScene(
+        sceneWants(facts, MEMORY, cfg, (x) => r.roleOf(x), T0),
+        (role) => r.resolve(role),
+      )?.scene;
+    };
+    // The target is a search, not a game name: it names no role.
+    expect(factsOf(snap({ activity: BROWSE }), T0)).toMatchObject({
+      playing: true,
+      game: null,
+      browsing: true,
+    });
+    expect(await sceneFor(BROWSE, { browse: "Camera", threads: "Karaoke" })).toBe("Camera");
+    expect(await sceneFor(BROWSE, { threads: "Karaoke" })).toBe("Karaoke");
+    expect(await sceneFor(BROWSE, {})).toBe("Gameplay");
+    // A browse target that happens to look like a role name does not pick that role.
+    expect(await sceneFor({ ...BROWSE, target: "karaoke" }, { karaoke: "Karaoke" })).toBe(
+      "Gameplay",
+    );
+  });
+
   it("a broadcast that is only being started is not live yet (no starting/ending flap)", () => {
     const starting = snap({
       broadcast: {

@@ -23,13 +23,18 @@ import { z } from "zod";
  */
 export const OWN_NAMES = ["Miyoria", "Miyo", "米優", "みよ"] as const;
 
-/** The line that tells her so; `persona` is the persona's display name. */
+/**
+ * The line that tells her so; `persona` is the persona's display name. A fact about her names,
+ * not a frame: 「那是你演的樣子」 told the model, first thing, that the persona was a role it played,
+ * the very distance that reads as 「很 AI」 (docs/design/persona-v4.md §7).
+ */
 export function ownIdentity(persona: string): string {
-  const role =
-    persona.trim() !== "" && persona.trim().toLowerCase() !== "miyoria"
-      ? `現在的角色設定是「${persona.trim()}」,但那是你演的樣子;`
-      : "";
-  return `你的本名是 Miyoria,大家也叫你 Miyo(米優、みよ)。${role}不管用哪個角色設定,有人叫 Miyoria 或 Miyo 都是在叫你,問你叫什麼,你也知道自己叫 Miyoria。`;
+  const name = persona.trim();
+  const also =
+    name !== "" && name.toLowerCase() !== "miyoria"
+      ? `「${name}」也是你,是大家在這裡認識的你;有人叫 Miyoria、Miyo 或 ${name} 都是在叫你。`
+      : "有人叫 Miyoria 或 Miyo 都是在叫你。";
+  return `你的本名是 Miyoria,大家也叫你 Miyo(米優、みよ)。${also}問你叫什麼,你知道自己叫 Miyoria。`;
 }
 
 export class ProfileError extends Error {

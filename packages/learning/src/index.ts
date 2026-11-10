@@ -18,6 +18,7 @@ export {
   type KnowledgeConfig,
   KnowledgeConfigSchema,
   knowledgeConfig,
+  peopleInPrompt,
   type ReflectConfig,
   ReflectConfigSchema,
   reflectConfig,
@@ -55,10 +56,12 @@ export {
   checkContent,
   cleanJson,
   DEFAULT_LIMITS,
+  fitContent,
   formatPointer,
   getAt,
   isUnder,
   type JsonLimits,
+  jsonChars,
   type OutlineOptions,
   outline,
   PatchError,
@@ -90,6 +93,7 @@ export {
   ReflectModule,
   subjectsFor,
 } from "./modules.js";
+export { RECAP_STALE_MINS, recapAgeNote } from "./recap-age.js";
 export {
   MAX_PUBLIC_FEELING,
   MAX_STANCE,

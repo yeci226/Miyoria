@@ -60,6 +60,11 @@ const NEEDS: Readonly<Record<string, (scope: ToolScope) => boolean>> = {
   stream_stop: (s) => s.live,
   voice_leave: (s) => s.inVoice,
   voice_status: (s) => s.inVoice,
+  // Party games are played in her voice channel (v4 §9.1).
+  party_start: (s) => s.inVoice,
+  party_host: (s) => s.inVoice,
+  party_play: (s) => s.inVoice,
+  party_ask: (s) => s.inVoice,
 };
 
 /** A game adapter's raw tool that slipped into the registry (never a capability tool). */

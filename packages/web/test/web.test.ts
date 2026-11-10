@@ -17,6 +17,8 @@ function rig(
   pages: Parameters<typeof fakeTransport>[0] = {},
 ) {
   const sent: Sent[] = [];
+  const waits: number[] = [];
+  const notes: string[] = [];
   const clock = { at: 1_000_000 };
   const fetchFake = (async (url: string | URL | Request, init?: RequestInit) => {
     sent.push({ url: String(url), init: init ?? {} });
@@ -27,10 +29,15 @@ function rig(
     config: WebConfigSchema.parse(over),
     clock: { now: () => clock.at },
     fetch: fetchFake,
+    sleep: async (ms) => {
+      waits.push(ms);
+      clock.at += ms;
+    },
+    note: (detail) => notes.push(detail),
     resolve: resolver(),
     transport,
   });
-  return { web, sent, clock, transport };
+  return { web, sent, clock, transport, waits, notes };
 }
 
 const signal = () => new AbortController().signal;
@@ -108,6 +115,31 @@ describe("web_search", () => {
         message: SEARCH_DOWN,
       });
     }
+  });
+
+  it("spaces DuckDuckGo searches apart, and leaves it alone for a while after a challenge", async () => {
+    const r = rig({ ddg_gap_ms: 4000, ddg_cooldown_s: 600 });
+    await r.web.search(ALICE, "one", 5, signal());
+    await r.web.search(ALICE, "two", 5, signal());
+    expect(r.waits).toEqual([4000]);
+
+    let challenged = true;
+    const c = rig({ ddg_cooldown_s: 600 }, () =>
+      challenged
+        ? new Response("", { status: 202 })
+        : new Response(fixture("ddg-results.html"), { status: 200 }),
+    );
+    await expect(c.web.search(ALICE, "a", 5, signal())).rejects.toMatchObject({
+      reason: "duckduckgo challenge",
+    });
+    challenged = false;
+    await expect(c.web.search(ALICE, "b", 5, signal())).rejects.toMatchObject({
+      reason: "duckduckgo resting after a challenge",
+    });
+    expect(c.sent).toHaveLength(1);
+    c.clock.at += 600_000;
+    await expect(c.web.search(ALICE, "c", 5, signal())).resolves.toMatchObject({});
+    expect(c.sent).toHaveLength(2);
   });
 
   it("says plainly when nothing was found", async () => {
@@ -209,12 +241,24 @@ describe("web_read", () => {
     expect(out.text.trimEnd().endsWith(`${DATA_OPEN}/資料${DATA_CLOSE}`)).toBe(true);
   });
 
-  it("keeps the whole answer within result_chars, closing mark included", async () => {
+  it("keeps the whole answer within result_chars (12,000 by default), closing mark included", async () => {
     const long = `<main><p>${"x".repeat(30_000)}</p></main>`;
     const r = rig({}, undefined, pages(long));
     const out = await r.web.read(ALICE, PAGE, signal());
-    expect([...out.text].length).toBeLessThanOrEqual(3900);
+    expect([...out.text].length).toBeLessThanOrEqual(12_000);
+    expect([...out.text].length).toBeGreaterThan(11_000);
     expect(out.text.trimEnd().endsWith(`${DATA_OPEN}/資料${DATA_CLOSE}`)).toBe(true);
+    // Lowered to what the agent allows, the answer follows.
+    const small = rig({ result_chars: 3900 }, undefined, pages(long));
+    const cut = await small.web.read(ALICE, PAGE, signal());
+    expect([...cut.text].length).toBeLessThanOrEqual(3900);
+    expect(cut.text.trimEnd().endsWith(`${DATA_OPEN}/資料${DATA_CLOSE}`)).toBe(true);
+  });
+
+  it("caps a search answer at search_chars, not at result_chars", async () => {
+    const r = rig({ search_chars: 400, result_chars: 12_000 });
+    const out = await r.web.search(ALICE, "鯨魚", 5, signal());
+    expect([...out.text].length).toBeLessThanOrEqual(400);
   });
 
   it("refuses internal addresses before any request is made", async () => {

@@ -113,6 +113,115 @@ export function checkContent(content: JsonValue, limits: JsonLimits): JsonObject
   return clean;
 }
 
+/** A text value this short is dropped whole rather than cut again. */
+const MIN_CUT_CHARS = 80;
+
+const cutTo = (s: string, max: number): string =>
+  `${[...s].slice(0, Math.max(max - 1, 0)).join("")}…`;
+
+/**
+ * `content` made to fit `limits`, for notes a model keeps rewriting: what is over a limit is cut
+ * instead of the whole document being refused. A refusal loses everything the reply had and the
+ * next attempt is fed the same lines again (2026-11-07 to 11-10: a fold over `max_notes_chars`
+ * failed, was retried every two minutes and failed the same way).
+ *
+ * Long texts and keys are cut, a long list keeps its last items, an object its first keys, and
+ * what is not plain data or nested too deep goes. If the whole is still too large, the largest
+ * part gives until it fits: a list loses its oldest item, a long text its second half, anything
+ * else goes whole. `cut` counts what was changed (0: `content` was fine as it was).
+ */
+export function fitContent(
+  content: JsonValue,
+  limits: JsonLimits,
+): { content: JsonObject; cut: number } {
+  let cut = 0;
+  const trim = (value: unknown, depth: number): JsonValue | undefined => {
+    if (value === null || typeof value === "boolean") return value;
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) return value;
+      cut += 1;
+      return undefined;
+    }
+    if (typeof value === "string") {
+      const s = escapeData(value);
+      if (chars(s) <= limits.maxStringChars) return s;
+      cut += 1;
+      return cutTo(s, limits.maxStringChars);
+    }
+    const plain =
+      typeof value === "object" &&
+      (Array.isArray(value) ||
+        Object.getPrototypeOf(value) === Object.prototype ||
+        Object.getPrototypeOf(value) === null);
+    if (!plain || depth > limits.maxDepth) {
+      cut += 1;
+      return undefined;
+    }
+    if (Array.isArray(value)) {
+      if (value.length > limits.maxArray) cut += 1;
+      return value
+        .slice(-limits.maxArray)
+        .map((v) => trim(v, depth + 1))
+        .filter((v): v is JsonValue => v !== undefined);
+    }
+    const out: JsonObject = Object.create(null);
+    let kept = 0;
+    for (const [rawKey, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v === undefined) continue;
+      const clean = cleanKey(rawKey);
+      const key =
+        chars(clean) > limits.maxKeyChars
+          ? [...clean].slice(0, limits.maxKeyChars).join("")
+          : clean;
+      if (key === "" || FORBIDDEN_KEYS.has(key) || kept >= limits.maxKeys) {
+        cut += 1;
+        continue;
+      }
+      if (key !== clean) cut += 1;
+      const child = trim(v, depth + 1);
+      if (child === undefined) continue;
+      out[key] = child;
+      kept += 1;
+    }
+    return { ...out };
+  };
+  const root = content !== null && typeof content === "object" && !Array.isArray(content);
+  const doc = (root ? trim(content, 1) : undefined) as JsonObject | undefined;
+  if (doc === undefined) return { content: {}, cut: cut + (root ? 0 : 1) };
+  while (jsonChars(doc) > limits.maxChars && shrink(doc)) cut += 1;
+  return { content: doc, cut };
+}
+
+/** Makes the largest part of `node` smaller. `false`: there is nothing left to take. */
+function shrink(node: JsonObject | JsonValue[]): boolean {
+  if (Array.isArray(node)) {
+    if (node.length === 0) return false;
+    // The oldest item of a list is its first.
+    if (node.length > 1) {
+      node.shift();
+      return true;
+    }
+  }
+  const members: [string | number, JsonValue][] = Array.isArray(node)
+    ? node.map((v, i) => [i, v])
+    : Object.entries(node);
+  let largest: [string | number, JsonValue] | undefined;
+  for (const m of members) {
+    if (largest === undefined || jsonChars(m[1]) > jsonChars(largest[1])) largest = m;
+  }
+  if (largest === undefined) return false;
+  const [key, value] = largest;
+  const slots = node as Record<string | number, JsonValue>;
+  if (isContainer(value) && shrink(value)) return true;
+  if (typeof value === "string" && chars(value) > MIN_CUT_CHARS) {
+    slots[key] = cutTo(value, Math.ceil(chars(value) / 2));
+    return true;
+  }
+  if (Array.isArray(node)) node.splice(key as number, 1);
+  else delete slots[key];
+  return true;
+}
+
 // ---- pointers -----------------------------------------------------------------------------
 
 /** RFC 6901 tokens of a pointer (`""` = root). */

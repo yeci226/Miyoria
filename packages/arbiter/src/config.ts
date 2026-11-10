@@ -156,6 +156,19 @@ export const ArbiterConfigSchema = z.object({
   /** How often followups are polled, unanswered topics settled and the state saved. */
   tick_secs: z.number().int().positive().default(30),
 
+  // --- one wish, asked once (`wishes.ts`) ---
+  wishes: z
+    .object({
+      /**
+       * A question to someone that is not answered may be raised once more, no sooner than this
+       * after she asked; never a second time, and never once they answered.
+       */
+      followup_hours: z.number().positive().default(12),
+      /** What she wanted to ask someone is remembered this long after it was made or closed. */
+      keep_hours: z.number().positive().default(48),
+    })
+    .prefault({}),
+
   // --- pipeline = "v3" ---
   floor: FloorConfigSchema.prefault({}),
 });

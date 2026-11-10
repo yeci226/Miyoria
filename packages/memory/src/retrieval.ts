@@ -8,8 +8,9 @@ import type {
   RetrievedKind,
   RetrievedMemory,
   Timestamp,
+  TurnRetrievalQuery,
 } from "@miyoria/types";
-import { lineOf, PROMPT_KINDS } from "./contributor.js";
+import { lineOf, PROMPT_KINDS, turnOf } from "./contributor.js";
 import type { MemoryEngine } from "./engine.js";
 import { visibleScopes } from "./scope.js";
 import { effectiveConfidence } from "./score.js";
@@ -21,9 +22,14 @@ export class MemoryRetriever implements MemoryRetrieval {
     this.#engine = engine;
   }
 
-  async retrieve(query: RetrievalQuery, signal?: AbortSignal): Promise<RetrievedMemory[]> {
+  /** Reads `recent` and `talking_with` too when given (`TurnRetrievalQuery`). */
+  async retrieve(
+    query: RetrievalQuery | TurnRetrievalQuery,
+    signal?: AbortSignal,
+  ): Promise<RetrievedMemory[]> {
     const engine = this.#engine;
     const scopes = visibleScopes(query.context, query.accounts ?? [], query.present);
+    const turn = "recent" in query || "talking_with" in query ? query : null;
     const recalled = await engine.recall(
       scopes,
       query.present,
@@ -32,6 +38,7 @@ export class MemoryRetriever implements MemoryRetrieval {
       query.limit ?? engine.config.recall_limit,
       query.now,
       signal,
+      turn === null ? undefined : turnOf(turn.recent, turn.talking_with),
     );
     return recalled.map(({ record, score }) => ({
       id: record.id,

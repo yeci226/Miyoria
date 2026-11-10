@@ -15,7 +15,7 @@ import { EconomyError, EconomyKey, STRANGER } from "@miyoria/economy";
 import { errorMessage, getLogger } from "@miyoria/kernel";
 import { LlmRouterKey } from "@miyoria/llm";
 import { FortuneStoreKey } from "@miyoria/store";
-import { accountRefString } from "@miyoria/types";
+import { type AccountRef, accountRefString } from "@miyoria/types";
 import { z } from "zod";
 import { ApiError } from "./errors.js";
 import { readJson } from "./extract.js";
@@ -23,7 +23,7 @@ import { type FortuneHolder, fortuneOfDay, keepFortune, writeFortune } from "./f
 import {
   accountsOf,
   cardView,
-  loadMember,
+  loadMemberOf,
   type MemberContext,
   namesFor,
   shown,
@@ -33,6 +33,7 @@ import { localDay, tooMany } from "./public.js";
 import { json, type Route } from "./route.js";
 import type { SessionRecord } from "./session.js";
 import type { ApiContext, ApiState } from "./state.js";
+import type { IssuedFortune } from "./types.js";
 import { keyOf } from "./wallet.js";
 
 const log = getLogger("api.fortune");
@@ -47,18 +48,26 @@ const FortuneSchema = z.strictObject({});
 
 const session = (c: ApiContext): SessionRecord => c.get("member");
 
-function holderOf(c: ApiContext, who: MemberContext): FortuneHolder {
-  return { account: session(c).account, accounts: accountsOf(who), person: who.person?.id ?? null };
+function holderOf(account: AccountRef, who: MemberContext): FortuneHolder {
+  return { account, accounts: accountsOf(who), person: who.person?.id ?? null };
 }
 
 const today = (state: ApiState): number =>
   localDay(state.now(), state.publicSide.config.utc_offset_minutes);
 
-async function fortuneToday(state: ApiState, c: ApiContext): Promise<Response> {
-  const who = await loadMember(state, c);
+/** Today's slip of `account` or `null`, and what drawing one costs. */
+export async function fortuneTodayOf(
+  state: ApiState,
+  account: AccountRef,
+): Promise<{ fortune: IssuedFortune | null; price: number }> {
+  const who = await loadMemberOf(state, account);
   const economy = state.optional(EconomyKey);
-  const found = who.hidden ? null : await fortuneOfDay(state, holderOf(c, who), today(state));
-  return json({ fortune: found, price: economy?.price("fortune").price ?? 0 });
+  const found = who.hidden ? null : await fortuneOfDay(state, holderOf(account, who), today(state));
+  return { fortune: found, price: economy?.price("fortune").price ?? 0 };
+}
+
+async function fortuneToday(state: ApiState, c: ApiContext): Promise<Response> {
+  return json(await fortuneTodayOf(state, session(c).account));
 }
 
 async function draw(state: ApiState, c: ApiContext): Promise<Response> {
@@ -66,22 +75,41 @@ async function draw(state: ApiState, c: ApiContext): Promise<Response> {
   await readJson(c, FortuneSchema);
   const key = keyOf(c);
   const { account, name } = session(c);
-  const actor = accountRefString(account);
   // Each draw asks a model: the same hourly allowance as the other heavy things.
-  const wait = state.publicSide.admitHeavy(`fortune:${actor}`);
+  const wait = state.publicSide.admitHeavy(`fortune:${accountRefString(account)}`);
   if (wait !== null) return tooMany(wait);
+  return json(await drawFortune(state, { account, name }, key));
+}
+
+/** What a draw answers (`POST /api/member/fortune`). */
+export interface FortuneDrawn {
+  fortune: IssuedFortune;
+  charged: number;
+  balance: number;
+}
+
+/**
+ * Pays for today's slip, has it written and keeps it; refusals are `ApiError`s with the words to
+ * show. Shared by the route and by the Discord command (`KeepsakesKey`).
+ */
+export async function drawFortune(
+  state: ApiState,
+  { account, name }: { account: AccountRef; name: string },
+  key: string,
+): Promise<FortuneDrawn> {
+  const actor = accountRefString(account);
   const economy = state.optional(EconomyKey);
   if (!economy || !state.optional(FortuneStoreKey) || !state.optional(LlmRouterKey)) {
     throw ApiError.unavailable(NO_FORTUNE);
   }
-  const who = await loadMember(state, c);
+  const who = await loadMemberOf(state, account);
   if (who.hidden || who.person === null) throw new ApiError(403, STRANGER);
-  const holder = holderOf(c, who);
+  const holder = holderOf(account, who);
   const day = today(state);
 
   const had = await fortuneOfDay(state, holder, day);
   if (had) {
-    return json({ fortune: had, charged: 0, balance: (await economy.wallet(account)).balance });
+    return { fortune: had, charged: 0, balance: (await economy.wallet(account)).balance };
   }
 
   let bought: Awaited<ReturnType<typeof economy.purchase>>;
@@ -137,14 +165,14 @@ async function draw(state: ApiState, c: ApiContext): Promise<Response> {
     await economy.refund(account, bought.entry_id).catch(() => false);
     const standing = await fortuneOfDay(state, holder, day);
     if (standing === null) throw ApiError.unavailable(NO_FORTUNE);
-    return json({
+    return {
       fortune: standing,
       charged: 0,
       balance: (await economy.wallet(account)).balance,
-    });
+    };
   }
   await state.auditAs(actor, "member.fortune", actor, { id: kept.id, rank: kept.rank }, true);
-  return json({ fortune: kept, charged: bought.charged, balance: bought.balance });
+  return { fortune: kept, charged: bought.charged, balance: bought.balance };
 }
 
 /** Runs `handler` unless this account has been asking too much. */

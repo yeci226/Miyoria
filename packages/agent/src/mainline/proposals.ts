@@ -3,6 +3,11 @@
 // or act. Writing one also asks the Floor for a turn, because what she wants should not have to
 // wait for someone to talk to her (§21 失去主動), but the main line decides what becomes of it, and
 // it stays on the board, in her prompt, until it expires.
+//
+// A proposal to ask or tell someone something is a wish (`@miyoria/types` `wish.ts`): it joins
+// the wish about that person and topic, is dropped before it reaches the Floor when that was
+// answered or asked already (2026-11-10: memory, a commitment and her Plan raised the same
+// question again and again), and leaves the board once she asked, whichever turn did it.
 
 import type { ServiceLookup } from "@miyoria/kernel";
 import {
@@ -32,6 +37,10 @@ import {
   type ProposalState,
   type TurnId,
   timestampMs,
+  WISH_SOURCE,
+  type WishBody,
+  WishesKey,
+  wishHolder,
 } from "@miyoria/types";
 
 /** The capability of a proposal that means talking, whatever it says. */
@@ -129,6 +138,19 @@ export class Proposals implements ProposalBoard, Projection {
       this.settle(proposal.id, "dropped", verdict.reason, null);
       return { id: proposal.id, state: "dropped", detail: verdict.reason, turn: null };
     }
+    const wishes = this.#d.services.get(WishesKey);
+    if (wishes && proposal.person !== null) {
+      const holder = wishHolder("proposal", proposal.id);
+      wishes.hold(proposal.person, proposal.what, holder);
+      const wished = await wishes.screen(
+        { person: proposal.person, text: proposal.what, holder },
+        signal,
+      );
+      if (!wished.raise) {
+        this.settle(proposal.id, "dropped", wished.why, null);
+        return { id: proposal.id, state: "dropped", detail: wished.why, turn: null };
+      }
+    }
     const arbiter = this.#d.services.get(ArbiterKey);
     if (!arbiter) {
       return { id: proposal.id, state: "open", detail: "等主線下次開口", turn: null };
@@ -181,6 +203,10 @@ export class Proposals implements ProposalBoard, Projection {
   }
 
   apply(event: LogEvent): void {
+    if (event.kind === "decision" && event.source === WISH_SOURCE) {
+      this.#wished(event);
+      return;
+    }
     if (event.kind === "proposal" && isJsonObject(event.body)) {
       const { proposal } = event.body as unknown as Partial<ProposalBody>;
       if (isJsonObject(proposal ?? null) && typeof proposal?.id === "string") {
@@ -192,5 +218,26 @@ export class Proposals implements ProposalBoard, Projection {
       const { proposal, state } = event.body as unknown as Partial<ProposalResultBody>;
       if (typeof proposal === "string" && typeof state === "string") this.#open.delete(proposal);
     }
+  }
+
+  /** She asked what a proposal wanted asked, or it was answered: it leaves the board. */
+  #wished(event: LogEvent): void {
+    if (!isJsonObject(event.body)) return;
+    const { wish } = event.body as unknown as Partial<WishBody>;
+    if (!wish || wish.state === "open" || wish.end === "expired") return;
+    const ids = (wish.holders ?? []).flatMap((h) =>
+      h.startsWith("proposal:") ? [h.slice("proposal:".length)] : [],
+    );
+    if (!ids.some((id) => this.#open.has(id))) return;
+    const asked = wish.end === null || wish.end === "asked";
+    const detail = asked
+      ? "問過了"
+      : wish.end === "answered"
+        ? "對方已經回答了"
+        : "對方說問過了,不要再問";
+    // Not in the middle of this event's delivery: the others must see it first.
+    queueMicrotask(() => {
+      for (const id of ids) this.settle(id, asked ? "taken" : "dropped", detail, null);
+    });
   }
 }

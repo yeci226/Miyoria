@@ -163,7 +163,11 @@ function isBlocked(state: ApiState, account: AccountRef, card: PersonCard | null
 }
 
 async function member(state: ApiState, c: ApiContext): Promise<Member> {
-  const { account } = record(c);
+  return memberOf(state, record(c).account);
+}
+
+/** Who `account` is to her, for the member page and for the commands that do what it does. */
+async function memberOf(state: ApiState, account: AccountRef): Promise<Member> {
   const people = state.optional(PeopleStoreKey);
   const person = (await people?.personByAccount(account)) ?? null;
   const card = person ? (state.optional(AffectStateKey)?.card(person.id) ?? null) : null;
@@ -484,7 +488,12 @@ async function requestSong(state: ApiState, c: ApiContext): Promise<Response> {
 }
 
 function holderOf(c: ApiContext, who: Member): CardHolder {
-  return { session: record(c), accounts: accountsOf(who), person: who.person?.id ?? null };
+  return cardHolder(record(c), who);
+}
+
+/** Whose cards these are: the session's account and name and every account of the person. */
+export function cardHolder(session: CardHolder["session"], who: Member): CardHolder {
+  return { session, accounts: accountsOf(who), person: who.person?.id ?? null };
 }
 
 async function cardsMine(state: ApiState, c: ApiContext): Promise<Response> {
@@ -497,9 +506,9 @@ async function cardsMine(state: ApiState, c: ApiContext): Promise<Response> {
  * What she writes on a card, for the card routes: only for someone she knows (a hidden person's
  * card stays a stranger's and says nothing),.
  */
-async function cardWords(
+export async function cardWords(
   state: ApiState,
-  c: ApiContext,
+  name: string,
   who: Member,
   view: MemberCard,
   poses: readonly string[],
@@ -509,7 +518,7 @@ async function cardWords(
   return writeCard(
     state,
     {
-      name: record(c).name,
+      name,
       view,
       memories: (await shownMemories(state, who, names)).slice(0, 5).map((m) => m.text),
       poses,
@@ -536,7 +545,13 @@ async function issueMine(state: ApiState, c: ApiContext): Promise<Response> {
     view,
     async () =>
       (await canIssue(state, holder))
-        ? cardWords(state, c, who, view, pose !== null ? [pose] : posesFor(view.affinity))
+        ? cardWords(
+            state,
+            record(c).name,
+            who,
+            view,
+            pose !== null ? [pose] : posesFor(view.affinity),
+          )
         : null,
     { pose, foil, key: keyOf(c) },
   );
@@ -555,7 +570,7 @@ async function rerollMine(state: ApiState, c: ApiContext): Promise<Response> {
     state,
     holderOf(c, who),
     view,
-    () => cardWords(state, c, who, view, posesFor(view.affinity)),
+    () => cardWords(state, record(c).name, who, view, posesFor(view.affinity)),
     keyOf(c),
   );
   const actor = accountRefString(record(c).account);
@@ -614,4 +629,12 @@ export function memberRoutes(state: ApiState): Route[] {
 
 // What `fortune-routes.ts` builds a slip from: the same views the page and the cards use.
 export type { Member as MemberContext };
-export { accountsOf, cardView, member as loadMember, namesFor, shown, shownMemories };
+export {
+  accountsOf,
+  cardView,
+  member as loadMember,
+  memberOf as loadMemberOf,
+  namesFor,
+  shown,
+  shownMemories,
+};

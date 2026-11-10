@@ -20,6 +20,7 @@ import {
   SCREEN_SONG_MAX,
   SCREEN_TEXT_MAX,
 } from "../protocol.js";
+import { parseTouch, TOUCH_TOPIC } from "../touch.js";
 
 /** Topic of the agent's emotion markers. */
 export const EMOTION_TOPIC = "agent.emotion";
@@ -79,6 +80,12 @@ interface SongVideo {
   sentAt: number;
 }
 
+/** The beat of the song playing: its `beat` message, and when that was sent. */
+interface SongBeat {
+  msg: Extract<CoreMessage, { type: "beat" }>;
+  sentAt: number;
+}
+
 const clampIntensity = (i: unknown): number =>
   typeof i === "number" && Number.isFinite(i) ? Math.min(Math.max(i, 0), 1) : 1;
 
@@ -103,7 +110,8 @@ const clampIntensity = (i: unknown): number =>
  * spoken in it without a marker of its own shows it as strongly as she feels it.
  *
  * Songs (`SONG_TOPIC`) with a video also send `song_video` `play` when they start and `stop`
- * when they end; a node that connects mid-song gets the `play` again (`resumeSongVideo`).
+ * when they end; a node that connects mid-song gets the `play` again (`resumeSongVideo`). Songs
+ * with a known beat send `beat` the same way (empty `times_ms` at the end; `resumeBeat`).
  */
 export class Forwarder {
   readonly #textTurns: boolean;
@@ -112,6 +120,7 @@ export class Forwarder {
   readonly #singScene: () => string | null;
   readonly #now: () => number;
   #video: SongVideo | null = null;
+  #beat: SongBeat | null = null;
   #resting: PendingEmotion | null = null;
 
   constructor(textTurns: boolean, options: ForwarderOptions = {}) {
@@ -126,6 +135,16 @@ export class Forwarder {
     if (v === null) return null;
     const offset = (v.msg.offset_ms ?? 0) + Math.max(this.#now() - v.sentAt, 0);
     return { ...v.msg, offset_ms: Math.round(offset) };
+  }
+
+  /** The `beat` of the song still playing, for a node that just connected. */
+  resumeBeat(): CoreMessage | null {
+    const b = this.#beat;
+    if (b === null) return null;
+    return {
+      ...b.msg,
+      offset_ms: Math.round(b.msg.offset_ms + Math.max(this.#now() - b.sentAt, 0)),
+    };
   }
 
   /** Her resting face, for a node that just connected. */
@@ -217,6 +236,7 @@ export class Forwarder {
         if (event.data.topic === SUBTITLE_TOPIC) return this.#onWritten(event.data.payload);
         if (event.data.topic === VOICE_UPCOMING_TOPIC) return this.#onUpcoming(event.data.payload);
         if (event.data.topic === GIFT_TOPIC) return giftMessage(event.data.payload);
+        if (event.data.topic === TOUCH_TOPIC) return touchMessage(event.data.payload);
         if (event.data.topic === SCREEN_TOPIC) return screenMessage(event.data.payload);
         if (event.data.topic === AFFECT_CHANGED_TOPIC) return this.#onAffect(event.data.payload);
         return event.data.topic === EMOTION_TOPIC ? this.#onEmotion(event.data.payload) : [];
@@ -367,6 +387,18 @@ export class Forwarder {
           this.#video = { msg, sentAt: this.#now() };
           out.push(msg);
         }
+        this.#beat = null;
+        if (cue.beats !== undefined) {
+          const msg: SongBeat["msg"] = {
+            type: "beat",
+            song: cue.song,
+            bpm: cue.beats.bpm,
+            times_ms: cue.beats.times_ms,
+            offset_ms: cue.offset_ms ?? 0,
+          };
+          this.#beat = { msg, sentAt: this.#now() };
+          out.push(msg);
+        }
         return out;
       }
       case "line":
@@ -379,6 +411,10 @@ export class Forwarder {
         if (this.#video?.msg.song === cue.song) {
           this.#video = null;
           out.push({ type: "song_video", action: "stop", song: cue.song });
+        }
+        if (this.#beat?.msg.song === cue.song) {
+          this.#beat = null;
+          out.push({ type: "beat", song: cue.song, bpm: 0, times_ms: [], offset_ms: 0 });
         }
         return out;
       }
@@ -411,6 +447,11 @@ function giftMessage(payload: JsonValue): CoreMessage[] {
       label: label.slice(0, GIFT_LABEL_MAX),
     },
   ];
+}
+
+function touchMessage(payload: JsonValue): CoreMessage[] {
+  const touch = parseTouch(payload);
+  return touch === null ? [] : [{ type: "touch", ...touch }];
 }
 
 function screenMessage(payload: JsonValue): CoreMessage[] {

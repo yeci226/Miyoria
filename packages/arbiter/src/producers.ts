@@ -16,6 +16,7 @@ import {
   contextKeyString,
   type Event,
   type Followup,
+  type Handle,
   type Impulse,
   newImpulse,
   type SocialSignals,
@@ -208,9 +209,16 @@ export class Producers {
 
   /**
    * Where a due followup can be brought up now (the person is around, or the place it belongs
-   * to had people talking lately), as an impulse; `null` when not now.
+   * to had people talking lately), as an impulse; `null` when not now. `person`: the handle of
+   * the person it is about, so it is one wish with whatever else holds the same topic about them
+   * (wishes.ts): said once, not again by another store.
    */
-  followup(now: number, followup: Followup, social: SocialSignals | null): Impulse | null {
+  followup(
+    now: number,
+    followup: Followup,
+    social: SocialSignals | null,
+    person: Handle | null = null,
+  ): Impulse | null {
     if (!this.#cfg.followup) return null;
     const active = this.#cfg.followup_active_secs * 1000;
     const cands: [ContextKey, AccountRef | null, number][] = [];
@@ -247,6 +255,7 @@ export class Producers {
         source: "followup",
         context,
         account,
+        person,
         ttlMs: this.#cfg.impulse_ttl_secs * 1000,
         why: "之前說好要問的",
         hint: followup.about,

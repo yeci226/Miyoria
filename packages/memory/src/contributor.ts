@@ -3,13 +3,15 @@
 import type { MemoryKind, MemoryRecord } from "@miyoria/store";
 import {
   type MemoryOrigin,
+  type PersonId,
   type PromptContributor,
   type PromptRequest,
   type PromptSection,
   safeName,
+  sameAccount,
   type Timestamp,
 } from "@miyoria/types";
-import type { MemoryEngine, Recalled } from "./engine.js";
+import type { MemoryEngine, Recalled, TurnQuery } from "./engine.js";
 import { presentPeople, requestScopes } from "./scope.js";
 import { relativeDate } from "./score.js";
 
@@ -29,17 +31,15 @@ export class MemoryContributor implements PromptContributor {
   async contribute(request: PromptRequest, signal?: AbortSignal): Promise<PromptSection[]> {
     const scopes = requestScopes(request);
     const present = presentPeople(request);
-    let query = request.query;
-    const last = request.recent[request.recent.length - 1];
-    if (last !== undefined) query += `\n${last}`;
     const recalled = await this.#engine.recall(
       scopes,
       present,
-      query,
+      request.query,
       PROMPT_KINDS,
       this.#engine.config.recall_limit,
       request.now,
       signal,
+      turnOf(request.recent, speakingPeople(request)),
     );
     if (recalled.length === 0) return [];
     return [
@@ -51,6 +51,28 @@ export class MemoryContributor implements PromptContributor {
       },
     ];
   }
+}
+
+/** Lines before the one being answered that a query reads (v4 §5.4: three to five). */
+export const TURN_LINES = 4;
+
+/** The turn around a line: its last `TURN_LINES` lines before it, and who is talking with her. */
+export function turnOf(
+  recent: readonly string[] | undefined,
+  people: readonly PersonId[] | undefined,
+): TurnQuery {
+  const lines = (recent ?? []).slice(-TURN_LINES);
+  return { context: lines.join("\n"), people: [...(people ?? [])] };
+}
+
+/** The people behind the speakers of a prompt request. */
+export function speakingPeople(request: PromptRequest): PersonId[] {
+  const out: PersonId[] = [];
+  for (const account of request.speakers) {
+    const p = request.participants.find((x) => sameAccount(x.account, account));
+    if (p?.person && !out.includes(p.person)) out.push(p.person);
+  }
+  return out;
 }
 
 /** What a line of memory needs to be read back (a record or a retrieved memory). */

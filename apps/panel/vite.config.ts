@@ -1,13 +1,24 @@
-/// <reference types="vitest/config" />
 import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import type { InlineConfig } from "vitest/node";
 
 // The Core listens on 127.0.0.1:7878 by default (`[modules.api] bind`).
 const core = process.env.MIYORIA_CORE_URL ?? "http://127.0.0.1:7878";
 
-export default defineConfig({
+// Vitest resolves its own copy of vite (7) while the panel builds with vite 6, so their
+// `UserConfig` types do not line up: `defineConfig` from either one rejects the other's fields.
+// The test block is typed by Vitest and added next to the vite config instead of inside it.
+const test: InlineConfig = {
+  environment: "jsdom",
+  globals: true,
+  setupFiles: ["./src/test/setup.ts"],
+  css: false,
+  restoreMocks: true,
+};
+
+const config = defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -37,11 +48,6 @@ export default defineConfig({
     // (React's exports were read before its chunk had run, so the page stayed blank).
     chunkSizeWarningLimit: 1500,
   },
-  test: {
-    environment: "jsdom",
-    globals: true,
-    setupFiles: ["./src/test/setup.ts"],
-    css: false,
-    restoreMocks: true,
-  },
 });
+
+export default { ...config, test };

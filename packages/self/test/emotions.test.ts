@@ -1,4 +1,4 @@
-import type { EmotionReading } from "@miyoria/types";
+import { EMOTION_NAMES, type EmotionReading } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { selfConfig } from "../src/config.js";
 import { shownEmotion } from "../src/display.js";
@@ -116,9 +116,9 @@ describe("display rules", () => {
     });
   });
 
-  it("tsundere: 想念 is 「才沒有在等你」, 喜 shows as smug, strong 哀 leaks", () => {
+  it("tsundere: 想念 shows as acting indifferent, 喜 shows as smug, strong 哀 leaks", () => {
     const missing = shownEmotion([reading("missing", 0.5)], "tsundere", 0.2);
-    expect(missing?.style).toContain("才沒有在等你");
+    expect(missing?.style).toContain("裝作不在意");
     expect(missing).toMatchObject({ tag: "annoyed", masked: true });
     expect(shownEmotion([reading("joy", 0.5)], "tsundere", 0.2)?.tag).toBe("smug");
     expect(shownEmotion([reading("joy", 0.9)], "tsundere", 0.2)?.tag).toBe("happy");
@@ -126,6 +126,18 @@ describe("display rules", () => {
     expect(shownEmotion([reading("sorrow", 0.8)], "tsundere", 0.2)?.tag).toBe("sad");
     // Anger is not hidden.
     expect(shownEmotion([reading("anger", 0.5)], "tsundere", 0.2)?.masked).toBe(false);
+  });
+
+  it("tsundere styles describe behaviour: no line to copy, and within the prompt's 80 chars", () => {
+    for (const name of EMOTION_NAMES) {
+      // Below the weak mark, the plain rule, and past every leak mark.
+      for (const v of [0.3, 0.5, 1]) {
+        const style = shownEmotion([reading(name, v)], "tsundere", 0.2)?.style ?? "";
+        expect(style).not.toBe("");
+        expect(style).not.toMatch(/[「」『』]/);
+        expect(style.length).toBeLessThanOrEqual(80);
+      }
+    }
   });
 
   it("open shows what she feels; nothing noticeable shows nothing", () => {

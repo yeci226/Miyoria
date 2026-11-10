@@ -205,6 +205,9 @@ export class SceneDirector implements StreamCurtain, SceneRule {
       this.#manualUntil = this.#now() + this.#config.manual_hold_ms;
       log.debug({ scene }, "scene switched by someone else; holding");
     }
+    // A node that connects late (a song started before it was there, 2026-11-08) gets the scene
+    // that cannot wait now, not at the next change.
+    if (first && this.desired()?.urgent === true) this.#schedule(true);
   }
 
   /** A game session started or stopped (`game`: its id, for a scene of its own). */
@@ -256,7 +259,11 @@ export class SceneDirector implements StreamCurtain, SceneRule {
     const prev = this.#facts;
     this.#facts = next;
     if (prev.live !== next.live) this.#liveChanged(next.live);
-    if (prev.playing !== next.playing || prev.game !== next.game) {
+    if (
+      prev.playing !== next.playing ||
+      prev.game !== next.game ||
+      prev.browsing !== next.browsing
+    ) {
       this.#situation += 1;
       this.#memory.returnTo = null;
       this.#memory.ended = false;

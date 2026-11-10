@@ -45,6 +45,6 @@ if (traceAt >= 0) {
   }
   process.exit(red ? 1 : 0);
 }
-const card = runSuite(fixtures, { k, live });
+const card = await runSuite(fixtures, { k, live });
 process.stdout.write(`${json ? JSON.stringify(card, null, 2) : formatScorecard(card)}\n`);
 process.exit(card.ok ? 0 : 1);

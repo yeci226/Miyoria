@@ -22,6 +22,7 @@ import {
   splitAt,
   STALE_PARTIAL_MS,
 } from "./typewriter.js";
+import { MAX_TOUCHES, type Touch, TouchSet } from "./touch.js";
 import { Wave } from "./wave.js";
 
 const QUEUE_SHOWN = 5;
@@ -93,6 +94,9 @@ export class Overlay {
   private readonly giftText: Swap;
   private readonly screen: HTMLElement;
   private readonly screenBody: Swap;
+  private readonly touchLayer: HTMLElement;
+  private readonly touches = new TouchSet();
+  private readonly touchEls = new Map<number, HTMLElement>();
   /** The card whose time is running, and its timer. */
   private screenShown: number | null = null;
   private screenTimer: ReturnType<typeof setTimeout> | undefined;
@@ -169,6 +173,12 @@ export class Overlay {
     this.screen.setAttribute("role", "status");
     this.screenBody = new Swap(el("div", "shout__body", this.screen));
 
+    // Where viewers touched the stream on the website: a ripple and a small heart, at the same
+    // place of this 1920x1080 canvas as on their picture.
+    this.touchLayer = el("div", "touches", main);
+    this.touchLayer.hidden = !cfg.show.has("touches");
+    this.touchLayer.setAttribute("aria-hidden", "true");
+
     this.offline = el("div", "offline is-out", main, "feed offline");
     this.offline.hidden = true;
 
@@ -179,6 +189,10 @@ export class Overlay {
     if (action.type === "levels") {
       // Same clock as the rAF timestamps, but not tied to a frame having run.
       this.wave.level(action.rms, action.bands, performance.now());
+      return;
+    }
+    if (action.type === "touch") {
+      this.showTouch(action);
       return;
     }
     const prev = this.state;
@@ -204,7 +218,32 @@ export class Overlay {
       this.maybeHide(now, total);
     }
     this.wave.frame(dt, now);
+    for (const id of this.touches.expire(performance.now())) this.dropTouch(id);
     present(this.offline, this.cfg.debug && !this.state.connected);
+  }
+
+  // ── touches ──────────────────────────────────────────────────────────────
+
+  private showTouch({ x, y, part }: Touch): void {
+    if (!this.cfg.show.has("touches")) return;
+    const { touch, dropped } = this.touches.add({ x, y, part }, performance.now());
+    for (const id of dropped) this.dropTouch(id);
+    const e = el("div", `touch touch--${part}`, this.touchLayer);
+    e.style.left = `${(x * 100).toFixed(2)}%`;
+    e.style.top = `${(y * 100).toFixed(2)}%`;
+    el("i", "touch__ripple", e);
+    e.insertAdjacentHTML(
+      "beforeend",
+      '<svg class="touch__heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.6-9.2C.9 8.4 2.6 4.5 6.3 4.5c2.1 0 3.9 1.2 5.7 3.2 1.8-2 3.6-3.2 5.7-3.2 3.7 0 5.4 3.9 3.9 7.3C19.5 16.4 12 21 12 21z"/></svg>',
+    );
+    this.touchEls.set(touch.id, e);
+    // The set holds the cap; this only guards the DOM against a bug in it.
+    while (this.touchEls.size > MAX_TOUCHES) this.dropTouch(this.touchEls.keys().next().value as number);
+  }
+
+  private dropTouch(id: number): void {
+    this.touchEls.get(id)?.remove();
+    this.touchEls.delete(id);
   }
 
   // ── subtitle ─────────────────────────────────────────────────────────────

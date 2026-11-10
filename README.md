@@ -119,6 +119,11 @@ start = "decide"              # she picks the moment; a requested song starts on
 | Games | Plays Minecraft 1.21.1 legitimately through a Fabric bridge and Baritone (no x-ray, real progression, crafting), with live commentary |
 | Watching | Watches a friend's Discord Go Live when she decides to (off by default): a screenshot every 30 seconds goes to a vision model, and she speaks up at most about once a minute. Anyone can opt out with `/me privacy watch:off` |
 | Overlay | An OBS browser source with typewriter subtitles, an emotion dot, live status, the request queue and voice bars along the left edge |
+| Web | Searches and reads web pages (up to 12,000 characters each, treated as data, never as instructions) and browses on stream |
+| Workspace | A named sandbox workspace where she writes files and runs code, with a network that only reaches an allow-list |
+| Notebook | Recent talk, a profile per person and her own notebook pages, with local embeddings; plus skills she writes and reuses and reminders anyone can ask for |
+| Together | A live page and a party mode where viewers order, vote and earn rewards, with an economy of cards, songs and goals |
+| Evaluation | A blind persona test, ten multi-step tool tasks and a replay of the Minecraft method guard |
 | Extensions | TypeScript extensions, MCP servers, and sandboxed tools she can write and propose herself |
 
 ## Nodes at a glance

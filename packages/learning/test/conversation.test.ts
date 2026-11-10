@@ -137,6 +137,20 @@ describe("conversation compaction", () => {
     expect([...(await store.list("p", STATE_PREFIX)).keys()]).toEqual([stateKey(TEXT)]);
   });
 
+  it("says how old the recap is once it fell behind (v4 §5.7)", async () => {
+    const provider = new MockProvider("p").reply(FIRST);
+    const r = await rig({ provider });
+    await lines(r, 16);
+    await wait(6_000);
+    expect(provider.requests()).toHaveLength(1);
+    const fresh = await r.contribute("conversation", request(TEXT));
+    expect(fresh).toContain("前情提要:");
+    expect(fresh).not.toContain("寫到");
+    await wait(31 * 60_000);
+    // The last folded line was said at 12:00 UTC: 20:00 at the default UTC+8.
+    expect(await r.contribute("conversation", request(TEXT))).toContain("(寫到 20:00 為止)");
+  });
+
   it("hides threads of her notes nobody touched for stale_thread_mins from turns", async () => {
     // The second fold keeps the open question and the plan as they were: nobody touched them.
     const kept = JSON.stringify({
@@ -200,6 +214,50 @@ describe("conversation compaction", () => {
     expect(provider.requests()[1]?.messages.at(-1)?.content).toContain("不能用");
     expect(r.sup.services.require(ConversationStatesKey).get(TEXT)).toBeNull();
     expect(r.events(CONVERSATION_FOLDED_TOPIC)).toHaveLength(0);
+  });
+
+  it("notes still over their limit after one repair are cut, not thrown away", async () => {
+    const long = (n: number) =>
+      JSON.stringify({
+        recap: "大家聊了很多事。".repeat(200),
+        notes: {
+          現在: "在聊晚餐",
+          提過的事: Array.from({ length: n }, (_, i) => `第 ${i} 件事:${"細節".repeat(40)}`),
+        },
+      });
+    const provider = new MockProvider("p").reply(long(40)).reply(long(38));
+    const r = await rig({ provider });
+    await lines(r, 16);
+    await wait(6_000);
+    // She was asked once to make them shorter herself.
+    expect(provider.requests()).toHaveLength(2);
+    expect(provider.requests()[1]?.messages.at(-1)?.content).toContain("請精簡");
+    expect(provider.requests()[0]?.messages[0]?.content).toContain("不超過 2500 個字");
+    const state = r.sup.services.require(ConversationStatesKey).get(TEXT);
+    expect(state?.folds).toBe(1);
+    expect(JSON.stringify(state?.notes).length).toBeLessThanOrEqual(2500);
+    expect([...(state?.recap ?? "")].length).toBeLessThanOrEqual(501);
+    // The newest of the long list stayed, the oldest went.
+    const kept = (state?.notes.提過的事 ?? []) as string[];
+    expect(kept.at(-1)).toContain("第 37 件事");
+    expect(kept[0]).not.toContain("第 0 件事");
+    expect(state?.notes.現在).toBe("在聊晚餐");
+    expect(r.events(CONVERSATION_FOLDED_TOPIC)).toHaveLength(1);
+  });
+
+  it("a fold that keeps failing waits twice as long each time", async () => {
+    const provider = new MockProvider("p").reply("我不想整理");
+    const r = await rig({ provider });
+    await lines(r, 16);
+    await wait(6_000);
+    expect(provider.requests()).toHaveLength(2);
+    // Two minutes later the next try (and its repair), then four minutes after that.
+    await wait(125_000);
+    expect(provider.requests()).toHaveLength(4);
+    await wait(125_000);
+    expect(provider.requests()).toHaveLength(4);
+    await wait(125_000);
+    expect(provider.requests()).toHaveLength(6);
   });
 
   it("is capped: no more than max_calls_per_hour folds", async () => {
