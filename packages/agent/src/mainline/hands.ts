@@ -9,6 +9,7 @@
 import {
   ACTIVITY_DONE_TOPIC,
   ACTIVITY_FAILED_TOPIC,
+  type AccountRef,
   type ActionState,
   type ActivityManager,
   type ActivityTaskEvent,
@@ -23,6 +24,7 @@ import {
   newId,
   parseTaskEvent,
   parseTaskTopic,
+  sameAccount,
   type TaskEvent,
   type TaskId,
   type TurnId,
@@ -87,6 +89,31 @@ export interface Job {
 }
 
 export type Report = "turn" | "prompt" | "none";
+
+/** The account of whoever asked for `job`, when a message of theirs is behind it. */
+function askerOf(job: Job): AccountRef | null {
+  const r = job.requester;
+  if (typeof r !== "object" || r === null) return null;
+  const account = (r as { author?: { account?: unknown } }).author?.account;
+  if (typeof account !== "object" || account === null) return null;
+  const a = account as Partial<AccountRef>;
+  return typeof a.platform === "string" && typeof a.id === "string" ? (a as AccountRef) : null;
+}
+
+/**
+ * Of `jobs`, the results a turn answering `people` may tell (and so count as told): her own and
+ * theirs, not what someone else asked for. That one is told to whoever asked, in its own turn
+ * (2026-11-13 10:35: Sakana's turn was shown b.netanyahu's rice, said nothing of it, and the
+ * result counted as told, so b.netanyahu never got the second round of lines she owed them).
+ * `null`: a turn that answers nobody in particular, which may tell any.
+ */
+export function resultsFor(jobs: readonly Job[], people: readonly AccountRef[] | null): Job[] {
+  if (people === null || people.length === 0) return [...jobs];
+  return jobs.filter((job) => {
+    const asker = askerOf(job);
+    return asker === null || people.some((p) => sameAccount(p, asker));
+  });
+}
 
 export interface Run {
   ok: boolean;

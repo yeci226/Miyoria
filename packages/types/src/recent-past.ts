@@ -10,8 +10,9 @@
 // * Another guild's places are never shown.
 // * A DM is about disclosure, not about her knowing. What she and X said in their DM may inform
 //   her only while X is one of the people she is talking with, and it is marked as private: she
-//   must not quote or reveal it there. Anyone else's DM, or her DM with X when X is not the one she
-//   is talking with, never surfaces.
+//   must not quote or reveal it there. Outside a private place only that it happened comes back
+//   (when, that she asked, that X answered), never the words or the topic. Anyone else's DM, or
+//   her DM with X when X is not the one she is talking with, never surfaces.
 // * Her own state (singing, playing, being in voice) belongs to no one: it is shown everywhere.
 
 import type { Handle } from "./handle.js";
@@ -111,7 +112,7 @@ export const ElsewhereKey = serviceKey<Elsewhere>("Elsewhere");
 export interface Asking {
   at: Timestamp;
   place: PlaceRef;
-  /** Her words (cut). */
+  /** Her words (cut); `""` for a DM asking seen from outside a private place. */
   said: string;
   private: boolean;
 }
@@ -122,7 +123,7 @@ export interface AskedQuestion {
   key: string;
   handle: Handle;
   person: PersonId | null;
-  /** The first time she asked, in her words (cut). */
+  /** The first time she asked, in her words (cut); `""` when every asking seen was in a DM. */
   question: string;
   /** Every time she asked, oldest first. */
   asked: Asking[];

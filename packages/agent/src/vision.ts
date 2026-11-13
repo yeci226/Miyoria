@@ -20,6 +20,14 @@ export interface ImageCandidate {
   attachment: Attachment;
   /** Display name of who sent it. */
   author: string;
+  /**
+   * Where it was: on a message she answers, on the message one of them replies to, or sent by
+   * the same person a little `earlier` (`ago_s` seconds before). Her prompt says which, so an
+   * older screenshot is not read as part of the question.
+   */
+  source: "message" | "parent" | "earlier";
+  /** `earlier` only: seconds between it and the message she answers. */
+  ago_s?: number;
   /** Cache key: the attachment id, else the URL without its query. */
   key: string;
   type: string;
@@ -58,7 +66,9 @@ export function allowedUrl(url: string, hosts: readonly string[]): boolean {
 /**
  * The images of a turn, in order of relevance: the messages she answers (newest first), the
  * messages they reply to (`parents`: entries in the history or fetched), then the same
- * people's images in the history up to `same_author_window_ms` before. Unsupported types,
+ * people's images in the history up to `same_author_window_ms` before (not for a reply: it
+ * points at what it is about, and an older image of theirs was taken for its answer on
+ * 2026-11-08 14:22). Unsupported types,
  * images known to be too large and URLs outside `allowed_hosts` are skipped; at most
  * `max_images`.
  */
@@ -70,7 +80,12 @@ export function selectImages(
 ): ImageCandidate[] {
   const out: ImageCandidate[] = [];
   const keys = new Set<string>();
-  const consider = (a: Attachment, author: string): void => {
+  const consider = (
+    a: Attachment,
+    author: string,
+    source: ImageCandidate["source"],
+    agoMs = 0,
+  ): void => {
     if (out.length >= cfg.max_images) return;
     const type = imageType(a);
     if (type === null) return;
@@ -79,17 +94,25 @@ export function selectImages(
     const key = cacheKey(a);
     if (keys.has(key)) return;
     keys.add(key);
-    out.push({ attachment: a, author, key, type });
+    out.push({
+      attachment: a,
+      author,
+      key,
+      type,
+      source,
+      ...(source === "earlier" ? { ago_s: Math.max(0, Math.round(agoMs / 1000)) } : {}),
+    });
   };
   const newest = [...inputs].reverse();
   for (const m of newest) {
     for (const a of [...m.attachments, ...(m.forwarded ?? []).flatMap((f) => f.attachments)]) {
-      consider(a, m.author.display_name);
+      consider(a, m.author.display_name, "message");
     }
   }
-  for (const p of parents) for (const a of p.attachments) consider(a, p.author);
+  for (const p of parents) for (const a of p.attachments) consider(a, p.author, "parent");
   const ids = new Set(inputs.map((m) => m.id.id));
   for (const m of newest) {
+    if (m.reply_to != null) continue;
     const until = Date.parse(m.ts);
     const since = until - cfg.same_author_window_ms;
     for (const e of [...session.history()].reverse()) {
@@ -97,7 +120,7 @@ export function selectImages(
       if (e.ts > until || e.ts < since) continue;
       if (e.account.platform !== m.author.account.platform) continue;
       if (e.account.id !== m.author.account.id) continue;
-      for (const a of e.attachments) consider(a, e.author);
+      for (const a of e.attachments) consider(a, e.author, "earlier", until - e.ts);
     }
   }
   return out;
@@ -193,7 +216,18 @@ async function download(
   return { dataUrl: `data:${type};base64,${body.toString("base64")}`, bytes: body.length };
 }
 
-/** The content parts for loaded images: a label (who sent which file), then the image. */
+/** The line before an image: who sent it and where it was. */
+function imageLabel(c: ImageCandidate, who: string, name: string): string {
+  if (c.source === "parent") return `(被回覆的那則訊息裡 ${who} 傳的圖片 ${name})`;
+  if (c.source === "earlier") {
+    const ago = c.ago_s ?? 0;
+    const when = ago < 60 ? `${ago} 秒前` : `${Math.floor(ago / 60)} 分鐘前`;
+    return `(${who} ${when}另外傳的圖片 ${name},不是這則訊息附的)`;
+  }
+  return `(${who} 這則訊息附的圖片 ${name})`;
+}
+
+/** The content parts for loaded images: a label (who sent which file, and where), then the image. */
 export function imageParts(
   images: readonly LoadedImage[],
   detail: VisionConfig["detail"],
@@ -202,7 +236,7 @@ export function imageParts(
   for (const { candidate, dataUrl } of images) {
     const name = safeName(candidate.attachment.filename, 60);
     const who = safeName(candidate.author);
-    parts.push({ type: "text", text: `(${who} 傳的圖片 ${name})` });
+    parts.push({ type: "text", text: imageLabel(candidate, who, name) });
     parts.push({
       type: "image_url",
       image_url: { url: dataUrl, detail },

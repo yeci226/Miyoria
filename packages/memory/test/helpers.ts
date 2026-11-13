@@ -14,6 +14,7 @@ import {
 import {
   type AccountRef,
   type ContextKey,
+  type HandleDirectory,
   type JsonValue,
   newId,
   type PersonId,
@@ -196,9 +197,11 @@ export async function envWith(
   config: MemoryConfig,
   llm: MockProvider | null,
   embedder: Embedder | null,
+  handles: HandleDirectory | null = null,
 ): Promise<Env> {
   const store = await openAreas(backend);
   const engine = new MemoryEngine(profile(), config, store.memories, {
+    ...(handles ? { handles } : {}),
     people: store.people,
     messages: store.messages,
     settings: store.settings,

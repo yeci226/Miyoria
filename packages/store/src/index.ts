@@ -3,6 +3,7 @@
 // `openStore(url)` picks one from a store URL.
 
 export {
+  embeddingValues,
   fromMicros,
   MAX_DECISIONS,
   normalizeTimestamp,
@@ -62,6 +63,7 @@ export {
   type EconomyDoc,
   type FortuneRecord,
   type Goal,
+  type GoalFulfiller,
   type GoalPatch,
   type GoalPledge,
   type GoalStatus,

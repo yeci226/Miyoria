@@ -25,7 +25,7 @@ import torchaudio
 import yaml
 from engine import Cancelled, ConvertWork
 from pitch import clean_f0
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download as _hf_hub_download
 
 log = logging.getLogger("miyoria.sing.seedvc")
 
@@ -242,3 +242,28 @@ def _crossfade(a: np.ndarray, b: np.ndarray, overlap: int) -> np.ndarray:
     n = min(len(b), overlap)
     b[:n] = b[:n] * fade_in[:n] + (a[-overlap:] * fade_out)[:n]
     return b
+
+
+def hf_hub_download(repo: str, filename: str, **kwargs: object) -> str:
+    """The cached file when there is one, the download otherwise: a cached model needs no network,
+    so a dropped connection (11-11 night: SSLError to huggingface.co) no longer fails a song."""
+    try:
+        return _hf_hub_download(repo, filename, local_files_only=True, **kwargs)
+    except Exception:  # noqa: BLE001 - not cached (or unreadable): ask the hub
+        return _hf_hub_download(repo, filename, **kwargs)
+
+
+class PitchExtractor:
+    """Only the pitch tracker (RMVPE) of ``SeedVcSinger``, for the RVC voice, which needs F0 for
+    her reference and the auto key but none of Seed-VC's other models."""
+
+    def __init__(self, root: Path, device: str, cache: Path | None = None) -> None:
+        from modules.rmvpe import RMVPE
+
+        self.device = torch.device(device)
+        cache = str(cache or root / "checkpoints")
+        self.rmvpe = RMVPE(hf_hub_download("lj1995/VoiceConversionWebUI", "rmvpe.pt", cache_dir=cache),
+                           is_half=False, device=self.device)
+
+    f0 = SeedVcSinger.f0
+    median_f0 = SeedVcSinger.median_f0

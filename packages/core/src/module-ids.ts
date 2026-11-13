@@ -38,6 +38,7 @@ export const MODULE_IDS: readonly string[] = [
   "stage.link",
   "web",
   "sandbox",
+  "imagegen",
   "skills",
   "live",
   "party",
@@ -57,10 +58,11 @@ export const NEEDS_TOKEN: readonly string[] = [
 ];
 
 /**
- * High-risk modules that are off unless their section says `enabled = true` (a missing section
- * or a missing `enabled` key means disabled).
+ * Modules that are off unless their section says `enabled = true` (a missing section or a
+ * missing `enabled` key means disabled): high-risk ones, and ones that need a server of their own
+ * (`imagegen` needs ComfyUI).
  */
-export const OPT_IN_MODULES: readonly string[] = ["sandbox", "share", "watch"];
+export const OPT_IN_MODULES: readonly string[] = ["sandbox", "share", "watch", "imagegen"];
 
 /** Whether the config file enables module `id` (`OPT_IN_MODULES` need `enabled = true`). */
 export function moduleEnabled(config: Config, id: string): boolean {

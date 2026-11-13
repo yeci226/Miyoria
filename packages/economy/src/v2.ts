@@ -18,6 +18,7 @@ import { RoomDesk } from "./room.js";
 import { ShopDesk } from "./shop.js";
 import type {
   AchievementsView,
+  AchievementUnlocked,
   AlbumView,
   BetResult,
   CommissionKind,
@@ -109,12 +110,16 @@ export class V2 implements Economy2 {
     return this.e.config.currency;
   }
 
-  /** What may have become true after coins were earned: milestones. Never throws. */
-  async afterEarn(who: Member): Promise<void> {
+  /**
+   * What may have become true after coins were earned: milestones. Returns the achievements
+   * unlocked just now, for whoever reports the earning to show. Never throws.
+   */
+  async afterEarn(who: Member): Promise<AchievementUnlocked[]> {
     try {
-      await this.achievement.evaluate(who);
+      return await this.achievement.evaluate(who);
     } catch (error) {
       this.e.log.warn({ err: errorMessage(error) }, "cannot check achievements");
+      return [];
     }
   }
 
@@ -124,12 +129,16 @@ export class V2 implements Economy2 {
     await this.commissionDesk.sweep();
   }
 
-  /** A quest done for someone already known; a failure is logged, never thrown at the caller. */
-  async questDone(who: Member, quest: QuestId): Promise<void> {
+  /**
+   * A quest done for someone already known; `null` when it failed (logged, never thrown at the
+   * caller).
+   */
+  async questDone(who: Member, quest: QuestId): Promise<QuestResult | null> {
     try {
-      await this.quest.complete(who, quest);
+      return await this.quest.complete(who, quest);
     } catch (error) {
       this.e.log.warn({ err: errorMessage(error), quest }, "cannot tick a quest");
+      return null;
     }
   }
 

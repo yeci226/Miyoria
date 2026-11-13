@@ -45,13 +45,20 @@ import {
 } from "./interaction.js";
 import {
   account,
+  componentsText,
   contextKey,
+  displayName,
   hasContent,
   incomingMessage,
   kindOf,
+  type MentionsLike,
   type MessageLike,
+  mentionNames,
   PLATFORM,
   quotedMessage,
+  type UserLike,
+  type UserNames,
+  unnamedUsers,
 } from "./mapping.js";
 import {
   type GuildMemberLike,
@@ -409,12 +416,14 @@ export class GatewayBridge {
     if (!hasContent(msg as unknown as MessageLike)) return;
     const kind = await this.channelKind(client, msg.guildId, msg.channelId, msg.channel?.type);
     const parent = await repliedMessage(msg);
+    const names = await userNamesOf(client, msg, this.shared.selfIds.has(msg.author.id));
     const data = incomingMessage(
       msg as unknown as MessageLike,
       kind,
       this.shared.selfIds,
       parent?.author?.id ?? null,
       quoted(parent),
+      names,
     );
     const ids = {
       channel: msg.channelId,
@@ -465,6 +474,37 @@ async function repliedMessage(msg: Message): Promise<ParentLike | null> {
     log.debug({ message: msg.id, error: errorMessage(error) }, "cannot fetch replied message");
     return null;
   }
+}
+
+/** At most this many people's names are looked up for one message. */
+const MAX_NAME_LOOKUPS = 5;
+
+/**
+ * Names of the people `msg` mentions that its mention data lacks. Her cards are sent without
+ * pings (`allowed_mentions: { parse: [] }`), so Discord lists nobody: a receipt read 「@某人」
+ * (2026-11-11). The member and user caches first; for her own messages one member fetch each,
+ * as a receipt names one or two people. `null`: nothing is missing.
+ */
+async function userNamesOf(client: Client, msg: Message, self: boolean): Promise<UserNames | null> {
+  const text = msg.content.trim() === "" ? componentsText(msg.components) : msg.content;
+  const missing = unnamedUsers(text, mentionNames(msg.mentions as unknown as MentionsLike));
+  if (missing.length === 0) return null;
+  const names = new Map<string, string>();
+  for (const id of missing.slice(0, MAX_NAME_LOOKUPS)) {
+    let member = msg.guild?.members.cache.get(id) ?? null;
+    if (member === null && self && msg.guild) {
+      try {
+        member = await msg.guild.members.fetch(id);
+      } catch (error) {
+        log.debug({ user: id, error: errorMessage(error) }, "cannot fetch a mentioned member");
+      }
+    }
+    const user = member?.user ?? client.users.cache.get(id) ?? null;
+    if (user !== null) {
+      names.set(id, displayName(user as unknown as UserLike, member?.nickname ?? null));
+    }
+  }
+  return (id) => names.get(id) ?? null;
 }
 
 /** The replied-to message as a quote, if it came with enough to read. */

@@ -37,6 +37,8 @@ export interface QuestResult {
   /** What finishing all three added with this one. */
   bonus: number;
   all_done: boolean;
+  /** Achievements this quest unlocked (paid); absent when none. */
+  unlocked?: AchievementUnlocked[];
 }
 
 // ---- collection ------------------------------------------------------------------------------
@@ -93,6 +95,8 @@ export interface DrawResult {
   new: boolean;
   /** The pity made this one an SR or better. */
   by_pity: boolean;
+  /** Achievements this draw unlocked (paid); absent when none. */
+  unlocked?: AchievementUnlocked[];
 }
 
 export interface GiveItemResult {

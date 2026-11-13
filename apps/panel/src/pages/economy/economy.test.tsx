@@ -1,7 +1,8 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { EarnReason } from "@/api/types";
-import type { EconomyHealth, PredictionView, RoomItem } from "@/api/v4-types";
+import type { EconomyHealth, PredictionView, ReachedGoal, RoomItem } from "@/api/v4-types";
 import { mockFetch, renderRoute } from "@/test/render";
 import { EARN_REASON_LABEL, ISSUED_REASONS, reasonLabel, RECOVERED_REASONS } from "./labels";
 
@@ -166,5 +167,58 @@ describe("ledger reason labels", () => {
 
   it("name every reason the health table counts", () => {
     for (const r of [...ISSUED_REASONS, ...RECOVERED_REASONS]) expect(reasonLabel(r), r).not.toBe(r);
+  });
+});
+
+const reached = (over: Partial<ReachedGoal> = {}): ReachedGoal => ({
+  id: "g1",
+  title: "新麥克風",
+  promise: "學三種貓叫",
+  target: 50,
+  reached_at: "2026-11-10T00:00:00.000Z",
+  fulfilled_at: null,
+  fulfilled_by: null,
+  ...over,
+});
+
+describe("經濟 / 目標", () => {
+  it("lists the filled goals and marks one kept after a confirmation", async () => {
+    const user = userEvent.setup();
+    let goals = [reached(), reached({ id: "g0", title: "唱歌", fulfilled_at: "2026-11-09T00:00:00.000Z", fulfilled_by: "self" })];
+    const fetch = mockFetch((m, u) => {
+      if (u.pathname === "/api/economy/goals" && m === "GET") return { body: { goals } };
+      if (u.pathname === "/api/economy/goals/g1/fulfill" && m === "POST") {
+        goals = goals.map((g) => (g.id === "g1" ? { ...g, fulfilled_at: "2026-11-12T00:00:00.000Z", fulfilled_by: "owner" } : g));
+        return { body: { goal: goals[0] } };
+      }
+      return undefined;
+    });
+    renderRoute("/economy?tab=goals");
+    const table = await screen.findByRole("table", { name: "湊滿的目標" });
+    expect(screen.getByText("1 個還沒做到")).toBeInTheDocument();
+    const kept = within(table).getByText("唱歌").closest("tr") as HTMLElement;
+    expect(within(kept).getByText("做到了")).toBeInTheDocument();
+    expect(within(kept).getByText(/她自己說做到了/)).toBeInTheDocument();
+    const owed = within(table).getByText("新麥克風").closest("tr") as HTMLElement;
+    await user.click(within(owed).getByRole("button", { name: "記成做到了" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("學三種貓叫");
+    await user.click(within(dialog).getByRole("button", { name: "記成做到了" }));
+    await waitFor(() =>
+      expect(fetch.mock.calls.some(([u, init]) => String(u).endsWith("/api/economy/goals/g1/fulfill") && init?.method === "POST")).toBe(true),
+    );
+    await waitFor(() => expect(within(screen.getByRole("table", { name: "湊滿的目標" })).getByText(/主人記的/)).toBeInTheDocument());
+  });
+
+  it("keeps the button disabled for a read-only account, and has an empty state", async () => {
+    mockFetch((_m, u) => (u.pathname === "/api/economy/goals" ? { body: { goals: [reached()] } } : undefined));
+    renderRoute("/economy?tab=goals", { session: { session: { method: "token", user: null, permissions: { write: false } }, logout: () => {} } });
+    expect(await screen.findByRole("button", { name: "記成做到了" })).toBeDisabled();
+  });
+
+  it("says when no goal was filled yet", async () => {
+    mockFetch((_m, u) => (u.pathname === "/api/economy/goals" ? { body: { goals: [] } } : undefined));
+    renderRoute("/economy?tab=goals");
+    expect(await screen.findByText("還沒有湊滿的目標")).toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { ChevronDown, CircleAlert, Eye, EyeOff, LogIn } from "lucide-react";
-import { type FormEvent, useId, useState } from "react";
+import { type CSSProperties, type FormEvent, useId, useState } from "react";
 import { createApi } from "@/api/endpoints";
 import { ApiClient, type ApiConfig, describeError, isApiError } from "@/api/http";
 import { useConnection } from "@/app/connection";
@@ -28,6 +28,11 @@ export async function verifyConnection(
     return { ok: false, field: "url", message: describeError(e) };
   }
   return { ok: true, version };
+}
+
+/** The owner's login picture behind the window, when it was there at build time (`--login-art`). */
+export function loginArt(hasPicture: boolean): CSSProperties | undefined {
+  return hasPicture ? ({ "--login-art": 'url("/login.local.jpg")' } as CSSProperties) : undefined;
 }
 
 export function TokenForm({
@@ -205,7 +210,7 @@ export function TokenGate({
             )}
           </div>
         </div>
-        <div aria-hidden className="login-window hidden md:block" />
+        <div aria-hidden className="login-window hidden md:block" style={loginArt(__PANEL_ART__.login)} />
       </div>
     </div>
   );

@@ -224,6 +224,19 @@ export interface PartyResultView {
   players: PartyPlayerView[];
 }
 
+/** One of `GET /api/economy/goals`: a goal people filled, and whether she kept its promise. */
+export interface ReachedGoal {
+  id: string;
+  title: string;
+  promise: string;
+  target: number;
+  reached_at: string | null;
+  /** When the promise was marked kept; `null` while it is owed. */
+  fulfilled_at: string | null;
+  /** `owner` from the panel, `self` when she said she did it. */
+  fulfilled_by: "owner" | "self" | null;
+}
+
 /** `GET /api/party` (503 when the party module is off). */
 export interface PartySnapshot {
   sessions: PartySessionView[];

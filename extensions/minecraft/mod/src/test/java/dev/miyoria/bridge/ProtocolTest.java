@@ -64,6 +64,15 @@ class ProtocolTest {
     }
 
     @Test
+    void dropRequestParsing() throws Exception {
+        Request r = Request.parse("{\"type\":\"drop\",\"item\":\"dirt\",\"slot\":2,\"all\":true}");
+        assertEquals(Protocol.T_DROP, r.type());
+        assertEquals("dirt", r.str("item"));
+        assertEquals(2, r.num("slot"));
+        assertTrue(r.optBool("all", false));
+    }
+
+    @Test
     void resultShapeEchoesId() {
         JsonObject data = new JsonObject();
         data.addProperty("health", 20);

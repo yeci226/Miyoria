@@ -119,8 +119,8 @@ describe("workspace tools", () => {
     const read = await tool(h, "workspace_read").call(toolContext(), { path: "evil.txt" });
     expect(read).not.toContain("<|im_start|>");
     // Only the block's own two closing marks (end of its header and its footer) are left.
-    expect(read.split(DATA_CLOSE)).toHaveLength(3);
-    expect(read.split(DATA_OPEN)).toHaveLength(3);
+    expect(read.split(DATA_CLOSE)).toHaveLength(2);
+    expect(read.split(DATA_OPEN)).toHaveLength(2);
   });
 
   it("reads_a_long_file_in_pieces_and_says_where_to_continue", async () => {

@@ -330,7 +330,11 @@ export class Supervisor {
       this.#log.info({ module: id }, "module running");
       this.#emit(id, "running", null);
     } catch (error) {
-      this.#report(id, generation, `start failed: ${errorMessage(error)}`);
+      // Already inside the queue: handled now, so whoever asked for the start (`enable`,
+      // `restart`) sees the module failed and why, not a `starting` module with no reason.
+      await this.#handleFailure(id, generation, `start failed: ${errorMessage(error)}`).catch(
+        (err: unknown) => this.#log.error({ err, module: id }, "failure handling failed"),
+      );
     }
   }
 

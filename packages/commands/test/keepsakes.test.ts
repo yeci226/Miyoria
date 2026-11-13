@@ -3,6 +3,7 @@
 import { ServiceRegistry } from "@miyoria/kernel";
 import {
   type KeepsakeCard,
+  type KeepsakeCardOrder,
   type KeepsakeCards,
   type KeepsakeFortune,
   type KeepsakeResult,
@@ -59,16 +60,38 @@ class Fake implements Keepsakes {
     return { ok: true, value: SLIP, charged: first ? 10 : 0, balance: 20 };
   }
 
+  rerolled = 0;
+
   async cardsToday(): Promise<KeepsakeCards> {
-    return { latest: this.issued.at(-1) ?? null, today: this.issued.length, per_day: 5 };
+    return {
+      latest: this.issued.at(-1) ?? null,
+      today: this.issued.length,
+      per_day: 5,
+      prices: { foil: 30, reroll: 15 },
+      rerolls_left: 2 - this.rerolled,
+    };
   }
 
-  async issueCard(_who: unknown, key: string): Promise<KeepsakeResult<KeepsakeCard>> {
+  async issueCard(
+    _who: unknown,
+    key: string,
+    order: KeepsakeCardOrder = {},
+  ): Promise<KeepsakeResult<KeepsakeCard>> {
     this.keys.push(key);
     if (this.refuse) return { ok: false, ...this.refuse };
-    const made = card(this.issued.length + 1);
+    const made = { ...card(this.issued.length + 1), foil: order.foil === true };
     this.issued.push(made);
-    return { ok: true, value: made, charged: 0, balance: null };
+    return { ok: true, value: made, charged: made.foil ? 30 : 0, balance: made.foil ? 70 : null };
+  }
+
+  async rerollCard(_who: unknown, key: string): Promise<KeepsakeResult<KeepsakeCard>> {
+    this.keys.push(key);
+    const last = this.issued.at(-1);
+    if (!last) return { ok: false, status: 409, message: "今天沒有可以重抽的卡" };
+    this.rerolled += 1;
+    const made = { ...last, serial: `${last.serial}-R`, line: "重寫的一句" };
+    this.issued[this.issued.length - 1] = made;
+    return { ok: true, value: made, charged: 15, balance: 55 };
   }
 }
 
@@ -80,11 +103,11 @@ function setup(withService = true) {
     services,
   );
   registerKeepsakes(registry, services);
-  const run = (path: string) =>
+  const run = (path: string, args: Record<string, string | boolean> = {}) =>
     registry.dispatch(
       new Invocation({
         path: splitPath(path),
-        args: {},
+        args,
         invoker: { platform: "discord", id: "1" },
         invoker_display_name: "Owen",
         context: guildContext,
@@ -108,6 +131,37 @@ describe("me card", () => {
     expect(again.text).toContain("今天發了 1 / 5 張");
     expect(fake.issued).toHaveLength(1);
     expect(fake.keys[0]).toMatch(/^discord:/);
+  });
+
+  it("issues another one today, as a foil card when asked, and says what it cost", async () => {
+    const { run, fake } = setup();
+    await run("me card");
+    const shown = await run("me card");
+    expect(shown.text).toContain("要再一張用 action:再發一張，加 foil 做成閃卡（30）");
+    expect(shown.text).toContain("action:重抽（15，今天還能 2 次）");
+    const plain = await run("me card", { action: "再發一張" });
+    expect(plain.text).toContain("第 2 張");
+    expect(plain.text).not.toContain("花了");
+    // foil alone means a new card too.
+    const foil = await run("me card", { foil: true });
+    expect(foil.text).toContain("第 3 張　好朋友　閃卡");
+    expect(foil.text).toContain("花了 30，剩 70");
+    expect(fake.issued.map((c) => c.foil)).toEqual([false, false, true]);
+  });
+
+  it("rerolls today's newest card, and says plainly when there is none", async () => {
+    const { run, fake } = setup();
+    const none = await run("me card", { action: "重抽" });
+    expect(none.text).toBe("今天沒有可以重抽的卡");
+    expect(none.tone).toBe("info");
+    await run("me card");
+    const redone = await run("me card", { action: "重抽" });
+    expect(redone.text).toContain("重寫的一句");
+    expect(redone.text).toContain("花了 15，剩 55");
+    expect(fake.issued).toHaveLength(1);
+    // A reroll does not take a foil finish: that is a new card.
+    expect((await run("me card", { action: "重抽", foil: true })).text).toContain("再發一張");
+    expect(fake.rerolled).toBe(1);
   });
 
   it("answers a refusal as plain information, and a failure as a warning", async () => {

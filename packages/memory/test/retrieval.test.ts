@@ -1,6 +1,6 @@
 // Hybrid recall, the prompt section and the model tools (Rust `tests/retrieval.rs`).
 
-import type { MemoryScope } from "@miyoria/store";
+import type { MemoryRecord, MemoryScope } from "@miyoria/store";
 import type { ToolContext } from "@miyoria/tools";
 import { type AccountRef, type ContextKey, newId, systemClock } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
@@ -197,6 +197,38 @@ describe.each(BACKENDS)("retrieval (%s store)", (backend) => {
     expect(inDm).toContain("「Owen」說過:Owen 下週三要看牙醫");
     const otherGuild = toolCtx(guildCtx("g2", "c1"), acct("9"));
     expect(await recall.call(otherGuild, { query: "Minecraft 牙醫" })).toBe("想不起來有關的事。");
+  });
+});
+
+describe("ranking against stored vectors (sqlite store)", () => {
+  it("scores_present_peoples_memories_without_decoding_embeddings", async () => {
+    const embedder = new TableEmbedder()
+      .with("拉麵店開了", [1, 0, 0])
+      .with("Owen 喜歡壽司", [0.8, 0.6, 0])
+      .with("他愛吃什麼", [1, 0, 0]);
+    // One candidate from the search, so Owen's memory comes in through the present-people list
+    // and is scored in the engine from its stored vector.
+    const config = memoryConfig({ candidate_limit: 1 });
+    const e = await envWith("sqlite", config, null, embedder);
+    const owen = await e.person(acct("2"), "Owen");
+    const global: MemoryScope = { type: "global" };
+    await e.add("episode", global, [], "拉麵店開了", 0.5, t0());
+    const sushi = await e.add("fact", global, [owen], "Owen 喜歡壽司", 0.5, t0());
+
+    const memories = e.store.memories;
+    const listed: MemoryRecord[] = [];
+    const list = memories.list.bind(memories);
+    memories.list = async (...args) => {
+      const records = await list(...args);
+      listed.push(...records);
+      return records;
+    };
+    await e.engine.recall([global], [owen], "他愛吃什麼", PROMPT_KINDS, 1, t0());
+    const owens = listed.filter((r) => r.id === sushi);
+    expect(owens.length, "Owen's memory was listed").toBeGreaterThan(0);
+    for (const record of owens) {
+      expect(Object.getOwnPropertyDescriptor(record, "embedding")?.get, "undecoded").toBeDefined();
+    }
   });
 });
 

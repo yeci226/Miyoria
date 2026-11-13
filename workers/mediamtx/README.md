@@ -15,12 +15,11 @@ OBS ──RTMP──▶ 127.0.0.1:1935/live/miyoria ─┬─▶ voice node(goli
 
 ## 啟動
 
-PowerShell,在這個資料夾:
-
 ```powershell
-$env:MTX_HLSCDNSECRET = (Select-String -Path ..\..\.env -Pattern '^MIYORIA_HLS_SECRET=(.*)$').Matches[0].Groups[1].Value
-.\mediamtx.exe mediamtx.yml
+& workers\mediamtx\start.ps1
 ```
+
+它從 repo 的 `.env` 讀 `MIYORIA_HLS_SECRET`,當成 `MTX_HLSCDNSECRET` 交給 MediaMTX。
 
 `MTX_HLSCDNSECRET` 要跟 Core 的 `MIYORIA_HLS_SECRET` 一樣。沒設的話 MediaMTX 的 HLS 會要 cookie,Core 代理拿不到播放清單。
 

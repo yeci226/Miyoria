@@ -56,13 +56,16 @@ import {
   ConversationStatesKey,
   type CountedOutcome,
   contextKeyString as contextKeyDisplay,
+  DATA_OPEN,
   DirectivesKey,
   dataBlock,
+  escapeXml,
   FileReaderKey,
   type FloorClaimKind,
   GoalAgendaKey,
   type IncomingMessage,
   inspectInput,
+  isJsonObject,
   type JsonValue,
   type LaneKey,
   LessonsKey,
@@ -111,6 +114,7 @@ import {
   voiceLane,
   WorkingContextKey,
   WorldStateKey,
+  xmlAttrs,
 } from "@miyoria/types";
 import {
   assess,
@@ -144,13 +148,28 @@ import {
 import type { TurnFlags } from "./coordinator.js";
 import { Expression, ExpressionParser, type Segment } from "./expression.js";
 import { fileParts, selectFiles } from "./files.js";
-import { type FocusSelection, focusVerb, type TurnFocusInit } from "./focus.js";
+import {
+  type CallFor,
+  callFor,
+  FOR_ARG,
+  FOR_PROPERTY,
+  type FocusSelection,
+  focusVerb,
+  type TurnFocusInit,
+} from "./focus.js";
 import { voiceScope } from "./handle.js";
 import { awaitBackfill, fetchAround, quotedParent, replyParents } from "./history.js";
 import { isSelfTalk, looksLikeReasoning, ReplyScreen } from "./leak.js";
 import { ceilingFor, levelHint, paceMs } from "./levels.js";
+import {
+  pickKaomoji,
+  RECENT_OWN_LINES,
+  SCAN_LINES,
+  styleNote,
+  triggeredEntries,
+} from "./lorebook.js";
 import type { HeldLine } from "./mainline/gate.js";
-import type { Run } from "./mainline/hands.js";
+import { type Run, resultsFor } from "./mainline/hands.js";
 import {
   asksSeriously,
   CUT_OFF,
@@ -187,6 +206,7 @@ import {
   contextData,
   contextState,
   exampleDialogues,
+  examplesBlock,
   fitHistory,
   historyWindow,
   mainMessages,
@@ -236,7 +256,13 @@ import {
   whenAndWhere,
 } from "./prompt.js";
 import type { Agent, Initiative, IntentTurn } from "./runtime.js";
-import { feelingCauseBody, type PresentPerson, peopleBody, selfBlocks } from "./self-block.js";
+import {
+  feelingCauseBody,
+  type PresentPerson,
+  peopleBody,
+  personTag,
+  selfBlocks,
+} from "./self-block.js";
 import { type HistoryEntry, messageText, type Session } from "./session.js";
 import { type BudgetState, EXHAUSTED_LINE } from "./signals.js";
 import {
@@ -248,7 +274,7 @@ import {
 } from "./speech.js";
 import { offeredIn, scopeOfHer, scopeOfSnapshot, type ToolScope } from "./tool-scope.js";
 import { KeepNoteTool, ReactTool } from "./tools.js";
-import { charCount, contextId, fixed, guard, TimeoutError, timeout } from "./util.js";
+import { charCount, contextId, fixed, guard, TimeoutError, timeout, toolBatches } from "./util.js";
 import { imageParts, selectImages } from "./vision.js";
 
 const TYPING_TTL_MS = 10_000;
@@ -274,6 +300,8 @@ const SLOW_ORDER: readonly string[] = ["server_emoji", "notebook"];
 const SLOW_SECTIONS: ReadonlySet<string> = new Set(SLOW_ORDER);
 /** Title of 「今天的她」 (v4 §6.2). */
 const LIFE_TITLE = "今天的你";
+/** An emotion she feels at least this much counts as her mood for the lorebook. */
+const MOOD_MIN = 0.3;
 const DAY_MS = 86_400_000;
 /**
  * The party tools that act in a running game, with the game they are for (`null`: any). Offered
@@ -1158,6 +1186,20 @@ class Turn {
     });
   }
 
+  /**
+   * Whom her lines of this turn answer (`HistoryEntry.answering`): the people of its focus; nobody
+   * in a turn she started herself. Who goes on talking with her next is read off it (attention's
+   * `conversing`).
+   */
+  #answering(): AccountRef[] {
+    if (this.inputs.length === 0) return [];
+    const out: AccountRef[] = [];
+    for (const m of this.#focused) {
+      if (!out.some((a) => sameAccount(a, m.author.account))) out.push(m.author.account);
+    }
+    return out;
+  }
+
   /** The messages the reply answers (all inputs when nothing was selected). */
   get #focused(): readonly IncomingMessage[] {
     const focus = this.plan.selection?.focus ?? [];
@@ -1910,7 +1952,9 @@ class Turn {
     const m = this.agent.config.mainline;
     if (skills !== null && skills.trim() !== "") {
       // The skill index comes as a data block; anything else is made one.
-      extras.slow.push(skills.includes("⟦資料") ? skills : dataBlock("skills", "你的技能", skills));
+      extras.slow.push(
+        skills.includes(DATA_OPEN) ? skills : dataBlock("skills", "你的技能", skills),
+      );
     }
     const sections: PromptSection[] = [...contributed]
       .sort((a, b) => SLOW_ORDER.indexOf(a.key) - SLOW_ORDER.indexOf(b.key))
@@ -1920,12 +1964,8 @@ class Turn {
       sections.push({ key: "life", title: LIFE_TITLE, body: life, order: sections.length });
     }
     if (people !== null) {
-      sections.push({
-        key: "people",
-        title: this.#peopleTitle(),
-        body: people,
-        order: sections.length,
-      });
+      // Over its budget the block keeps whole lines: a cut `<person/>` would read as nothing.
+      sections.push(ownBlock("people", this.#peopleTitle(), people, sections.length));
     }
     const { data } = contributedData(sections);
     const slow = budgetBlocks(data, {
@@ -2096,8 +2136,7 @@ class Turn {
         profiles.render(where, m.people_chars, { exclude }, s),
       );
       const handle = present.find((p) => crush !== null && p.person === crush)?.handle;
-      const lines = [body.trim(), handle === undefined ? "" : `- ${safeName(handle)}:你偷偷喜歡他`];
-      const text = lines.filter((l) => l !== "").join("\n");
+      const text = handle === undefined ? body.trim() : markSecret(body.trim(), handle);
       const out = text === "" ? null : text;
       kept.slow.set("people", key, now, out);
       return out;
@@ -2151,7 +2190,48 @@ class Turn {
     );
     const seed = stableHash(`${contextId(this.key)}:${this.session.startedAt}`);
     const picked = rotatedExamples(dialogues, seed, chars);
-    return picked.length === 0 ? null : dataBlock("examples", EXAMPLES_TITLE, picked.join("\n\n"));
+    return examplesBlock(picked, this.agent.persona.names());
+  }
+
+  /**
+   * The turn's `<style_note>` (`lorebook.ts`): the lorebook entries that what was just said or her
+   * mood bring up and, in text, a few kaomoji for her mood that she has not used lately.
+   */
+  #styleNote(history: readonly HistoryEntry[]): string {
+    const book = this.agent.persona.lorebook();
+    const moods = this.#moods();
+    const answered = focusEntries(history);
+    const others = history.filter((e) => !e.isSelf && e.current !== true).slice(-SCAN_LINES);
+    const scan = [...others, ...answered].map((e) => e.text).join("\n");
+    const entries = triggeredEntries(book, scan, moods, this.voice);
+    if (this.voice) return styleNote(true, [], entries);
+    const own = history
+      .filter((e) => e.isSelf)
+      .slice(-RECENT_OWN_LINES)
+      .map((e) => e.text);
+    const seed = stableHash(`${contextId(this.key)}:${this.#now}:${history.at(-1)?.ts ?? 0}`);
+    return styleNote(false, pickKaomoji(book, moods, own, seed), entries);
+  }
+
+  /** Her emotions now, by name: the tag she shows and the strongest ones she feels. */
+  #moods(): Set<string> {
+    const services = this.agent.ctx.services;
+    const moods = new Set<string>();
+    try {
+      const snap = services.get(AffectStateKey)?.snapshot() ?? null;
+      const self = services.get(SelfStateKey) ?? null;
+      const shown = snap !== null ? snap.shown : (self?.shown() ?? null);
+      if (shown !== null) moods.add(shown.tag);
+      const felt = snap !== null ? snap.top : (self?.emotions() ?? []);
+      for (const e of felt.slice(0, 2)) if (e.intensity >= MOOD_MIN) moods.add(e.name);
+    } catch (error) {
+      this.agent.log.warn(
+        { turn: this.turn, error: errorMessage(error) },
+        "no mood for the lorebook",
+      );
+    }
+    if (moods.size === 0) moods.add("neutral");
+    return moods;
   }
 
   /** What prompt contributors get to see of this turn. */
@@ -2541,7 +2621,12 @@ class Turn {
     const own = this.intent?.intent.id ?? main.claim.proposal?.id ?? null;
     const examples = this.#mainExamples();
     const wishes = services.get(DirectivesKey)?.wishes(this.key) ?? [];
-    const telling = [...line.hands.peekResults(ACTING_ALONE), ...line.hands.peekResults(this.key)];
+    // A turn answering someone tells what they (or nobody) asked for, not another person's.
+    const answering = main.claim.kind === "addressed" || main.claim.kind === "reply";
+    const telling = resultsFor(
+      [...line.hands.peekResults(ACTING_ALONE), ...line.hands.peekResults(this.key)],
+      answering ? this.#authors() : null,
+    );
     main.telling(telling);
     const data = [
       ...extras.own,
@@ -2556,19 +2641,6 @@ class Turn {
       resultData(telling),
       wishes.length === 0 ? null : dataBlock("viewers", "觀眾的要求", wishes.join("\n")),
     ].filter((d): d is string => d !== null);
-    const tail = tailSection({
-      head: whenAndWhere(this.key, new Date(now), offset),
-      kind: main.claim.kind,
-      muted: main.claim.muted,
-      notes: extras.self,
-      state: contextState(buckets),
-      tasks: line.tasks().map((t) => `${t.task}(${t.owner}):${t.text}`),
-      recent: main.main.recent(this.key, m.recent_lines),
-      actions: [...line.hands.recent(ACTING_ALONE, 2), ...line.hands.recent(this.key, 3)],
-      speaksIn: this.voice ? speaksIn : null,
-      now,
-      party: services.get(PartyStatusKey)?.running(this.key) ?? null,
-    });
     const selection = this.plan.selection;
     const verbs = selection === null ? new Map<string, string>() : focusVerbs(selection);
     const folded = services.get(ConversationStatesKey)?.get(this.key) ?? null;
@@ -2599,6 +2671,18 @@ class Turn {
       (id) => this.#shownAround(id),
     );
     this.#replyTargets = focusEntries(history);
+    const tail = tailSection({
+      head: whenAndWhere(this.key, new Date(now), offset),
+      notes: extras.self,
+      state: contextState(buckets),
+      tasks: line.tasks().map((t) => `${t.task}(${t.owner}):${t.text}`),
+      recent: main.main.recent(this.key, m.recent_lines),
+      actions: [...line.hands.recent(ACTING_ALONE, 2), ...line.hands.recent(this.key, 3)],
+      speaksIn: this.voice ? speaksIn : null,
+      now,
+      party: services.get(PartyStatusKey)?.running(this.key) ?? null,
+      style: this.#styleNote(history),
+    });
     // What her tools brought back in earlier turns, beside her lines (v4 §4.2).
     const traces = [...keptOf(this.session).traces.list()];
     const build = (kept: readonly HistoryEntry[]) =>
@@ -2614,6 +2698,7 @@ class Turn {
         data,
         history: kept,
         tail,
+        turn: { kind: main.claim.kind, muted: main.claim.muted },
         transcript: {
           // The window is within `history_chars` already; this only stops what it misjudged.
           maxChars: m.history_chars * 2,
@@ -3081,7 +3166,7 @@ class Turn {
       call.name,
       call.arguments,
       () => this.#hand(call, priority, this.signal, limit),
-      this.#requester(),
+      this.#requesterOf(call),
     );
     if (run.ok) this.#succeeded.add(call.name);
     this.#trace(call, run.ok, run.text);
@@ -3297,7 +3382,7 @@ class Turn {
         { ttl: cfg.reply_ttl_ms, turn: this.turn, blocked },
       );
       const id = action.id;
-      this.session.recordOwn(displayName, me, chunk, id, this.#now);
+      this.session.recordOwn(displayName, me, chunk, id, this.#now, this.#answering());
       this.agent.trackAction(id, this.session);
       try {
         await guard(sink.submit(action), this.signal);
@@ -3477,9 +3562,14 @@ class Turn {
         else earlier = expression;
       }
       messages.push(assistantMessage(raw, calls));
-      for (const call of calls) {
-        const result = await this.#runTool(call, priority);
-        messages.push(toolResultMessage(call.id, result));
+      // Calls that only look (a search, a balance) run side by side; anything else alone, in order.
+      const readOnly = (call: ToolCall) => this.#tool(call.name)?.readOnly === true;
+      for (const batch of toolBatches(calls, readOnly)) {
+        const tried = await Promise.all(batch.map((call) => this.#tryTool(call, priority)));
+        batch.forEach((call, i) => {
+          const result = this.#toolResult(call, tried[i] as [boolean, string]);
+          messages.push(toolResultMessage(call.id, result));
+        });
       }
     }
     return earlier ?? new Expression();
@@ -3500,7 +3590,7 @@ class Turn {
     const offeredTools = (request.tools?.length ?? 0) > 0;
     this.#mark("request");
     const stream = await guard(
-      withLlmTag({ module: "agent", turn: this.turn, label: "reply" }, () =>
+      withLlmTag({ module: "agent", turn: this.turn, label: this.voice ? "voice" : "reply" }, () =>
         router.stream("chat", request, signal),
       ),
       signal,
@@ -3609,8 +3699,8 @@ class Turn {
   }
 
   /** Runs one tool call; the result (or error) is a short text for the model. */
-  async #runTool(call: ToolCall, priority: Priority): Promise<string> {
-    const [ok, full] = await this.#tryTool(call, priority);
+  /** What a call brought back, as the model reads it; publishes `agent.tool`. */
+  #toolResult(call: ToolCall, [ok, full]: [boolean, string]): string {
     if (ok) this.#succeeded.add(call.name);
     let result = truncate(full, this.agent.config.max_tool_result_chars);
     // A long result (a search, lyrics, a page) is gone next turn unless she keeps what matters.
@@ -3682,10 +3772,45 @@ class Turn {
   #toolSpecs(): ToolSpec[] {
     const scope = this.#toolScope();
     const tools = this.agent.tools;
+    const several = severalPeople(this.#focused.map((m) => m.author));
     return tools.names().flatMap((name) => {
       const tool = tools.get(name);
-      return tool && this.#offers(tool, scope) ? [tool.spec] : [];
+      if (!tool || !this.#offers(tool, scope)) return [];
+      return [several && tool.actsFor === true ? withFor(tool.spec) : tool.spec];
     });
+  }
+
+  /**
+   * The message a call acts for (`callFor`): its `for_whom` (taken off `args`) among the people of
+   * the focus when several called her at once, else `#requester`.
+   */
+  #callFor(tool: Tool | undefined, args: JsonValue): CallFor {
+    let pick: unknown;
+    if (isJsonObject(args) && FOR_ARG in args) {
+      pick = args[FOR_ARG];
+      delete args[FOR_ARG];
+    }
+    const names = this.agent.persona.names();
+    return callFor(
+      this.#focused,
+      this.#replyTargets,
+      pick,
+      tool?.actsFor === true,
+      (m) => m.mentions_self || (m.reply_to_self && directReason(m, names) === "reply"),
+      () => this.#requester(),
+    );
+  }
+
+  /** The message a call acts for, for the hands' record (`#requester` when it cannot tell). */
+  #requesterOf(call: ToolCall): IncomingMessage | undefined {
+    let args: JsonValue = {};
+    try {
+      args = JSON.parse(call.arguments.trim() === "" ? "{}" : call.arguments) as JsonValue;
+    } catch {
+      return this.#requester();
+    }
+    const found = this.#callFor(this.#tool(call.name), args);
+    return found.ok ? found.message : this.#requester();
   }
 
   #tool(name: string): Tool | undefined {
@@ -3749,12 +3874,15 @@ class Turn {
         return [false, `error: arguments are not valid JSON: ${errorMessage(error)}`];
       }
     }
+    // Whom it is for, before anything runs: never silently the latest speaker (`callFor`).
+    const target = this.#callFor(tool, args);
+    if (!target.ok) return [false, `error: ${target.error}`];
     if (this.#main !== null) {
       const grounded = groundArgs(call.name, args, this.key);
       if (JSON.stringify(grounded) !== JSON.stringify(args)) this.#tally.count("ground_args");
       args = grounded;
     }
-    const last = this.#requester();
+    const last = target.message;
     if (!last && this.intent === null && this.#main === null) {
       return [false, "error: no triggering message"];
     }
@@ -3868,6 +3996,23 @@ class Turn {
 }
 
 /** One of the agent's own data blocks. */
+/** What the people block says of her crush. */
+const SECRET = "你偷偷喜歡他";
+
+/**
+ * The profiles of the people here with her crush marked on `handle`'s `<person>` tag (a tag of its
+ * own when the profiles have none for them).
+ */
+export function markSecret(body: string, handle: string): string {
+  const name = ` name="${escapeXml(safeName(handle))}"`;
+  const lines = body === "" ? [] : body.split("\n");
+  const at = lines.findIndex((l) => l.startsWith(`<person${name}`) && l.endsWith("/>"));
+  if (at < 0) return [...lines, personTag({ name: handle, secret: SECRET })].join("\n");
+  const line = lines[at] as string;
+  lines[at] = `${line.slice(0, -2)}${xmlAttrs({ secret: SECRET })}/>`;
+  return lines.join("\n");
+}
+
 function ownBlock(key: string, title: string, body: string, order: number): PromptBlock {
   return {
     key,
@@ -3884,4 +4029,24 @@ function ownBlock(key: string, title: string, body: string, order: number): Prom
 /** The context as a JSON object (event payloads). */
 function contextJson(key: ContextKey): JsonValue {
   return { platform: key.platform, scope: key.scope, channel: key.channel, kind: key.kind };
+}
+
+/**
+ * `spec` with a required `for_whom` (`callFor`): several people called her at once, so a tool that
+ * acts for someone says whom.
+ */
+function withFor(spec: ToolSpec): ToolSpec {
+  const params = isJsonObject(spec.parameters) ? spec.parameters : { type: "object" };
+  const properties = isJsonObject(params.properties) ? params.properties : {};
+  const required = Array.isArray(params.required)
+    ? params.required.filter((r) => r !== FOR_ARG)
+    : [];
+  return {
+    ...spec,
+    parameters: {
+      ...params,
+      properties: { ...properties, [FOR_ARG]: { ...FOR_PROPERTY } },
+      required: [...required, FOR_ARG],
+    },
+  };
 }

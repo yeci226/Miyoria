@@ -11,5 +11,6 @@ cards:
 The framework must match the Core: 5-r.5 calls `csmGetMocVersion(mocBytes)`, which Core 5.1 does
 not have. Her model (Cubism 5, moc3 v5) loads with Core 5.1 and framework 5-r.4.
 
-Then `pnpm --filter @miyoria/card-studio build`, and `pnpm --filter @miyoria/card-studio sample
+Then `pnpm --filter @miyoria/card-studio build` (without these files it prints why and builds nothing, so CI and
+other machines pass), and `pnpm --filter @miyoria/card-studio sample
 <out>` renders samples (`SAMPLES_FILE` names a JSON of pose specs).

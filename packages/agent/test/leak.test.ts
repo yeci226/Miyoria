@@ -49,6 +49,35 @@ describe("reasoning that is not a reply", () => {
     }
   });
 
+  it("the prompt's own tags and lines echoed back are a leak", () => {
+    for (const line of [
+      "<reply_to>",
+      "</now>",
+      "< style_note >短短的",
+      '<data source="memory" title="你記得的事">',
+      "</data>",
+      '<person name="阿明" relation="朋友"/>',
+      '<example situation="被餵白飯">',
+      "<chat>星野: 請你吃白飯</chat>",
+      "<reply><emo:happy>好耶</reply>",
+      "這回合想用顏文字的話從這幾個挑:(≧▽≦)",
+      "⟦資料 來源=memory 標題=你記得的事⟧",
+      "要回的訊息:阿明 問你",
+    ]) {
+      expect(reasoningScore(line), line).toBe(2);
+    }
+    // Her tags, a kaomoji, a word that starts like a tag are her words.
+    for (const line of [
+      "<emo:happy>好耶 (≧▽≦)",
+      "<voice>えっ</voice>欸,真的嗎?",
+      "<silence/>",
+      "replying 中……才怪",
+      "1 < 2 啦",
+    ]) {
+      expect(reasoningScore(line), line).toBe(0);
+    }
+  });
+
   it("two lines that think aloud are a leak, one is not", () => {
     const guard = new ReasoningGuard();
     expect(guard.drops("等一下，這張圖……他把斜率算成 1/2？")).toBe(false);

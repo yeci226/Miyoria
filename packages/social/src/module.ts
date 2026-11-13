@@ -1,3 +1,4 @@
+import { actuatorsFor } from "@miyoria/actions";
 import { CommandMount } from "@miyoria/commands";
 import {
   defineManifest,
@@ -33,6 +34,7 @@ import {
   SocialSignalsKey,
   safeName,
 } from "@miyoria/types";
+import { callNameCapability } from "./call-name-tool.js";
 import { registerCommands, unregisterCommands } from "./commands.js";
 import { DEPRECATED_SOCIAL_KEYS, SocialConfigSchema } from "./config.js";
 import { type Observed, Social, SocialKey, type SocialStores } from "./engine.js";
@@ -45,6 +47,7 @@ export class SocialError extends Error {
 interface Running {
   social: Social;
   commands: CommandMount;
+  off: () => void;
 }
 
 /** Liked this much counts as someone she cares about, for the appraisal. */
@@ -164,7 +167,9 @@ export class SocialModule implements Module {
       unregisterCommands,
     );
     commands.attach(ctx);
-    this.#running = { social, commands };
+    // Her tool `set_call_name`: the speaker's own 稱呼, said in chat.
+    const off = actuatorsFor(ctx).register(callNameCapability(social));
+    this.#running = { social, commands, off };
 
     // Subscribe before returning so no event published after start is missed.
     const sub = ctx.subscribe([
@@ -262,6 +267,7 @@ export class SocialModule implements Module {
     this.#running = null;
     if (!running) return;
     running.commands.detach();
+    running.off();
     await running.social.flush();
   }
 }

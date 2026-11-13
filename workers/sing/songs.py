@@ -9,6 +9,8 @@
         source.wav  vocals.wav  instrumental.wav  lead.wav?  backing.wav?  info.json  video.mp4?  video.json?
                                            lead + backing = vocals (leadsplit.py); older stems get them on demand
     <root>/queries.json          normalised query → source key (so repeated requests skip the search)
+    <root>/_usage.json           when each song and download was last used (cache.py, which removes
+                                 the least recently used ones; ``_trash-*`` dirs are ones on their way out)
     <root>/library/              the owner's own files: full songs, or a folder with
                                  vocals.* + instrumental.* (+ lyrics.lrc, info.json {title, artist});
                                  a video next to the audio (``video.*`` in a folder, the same name
@@ -163,6 +165,18 @@ class Store:
             q[normalize_query(query)] = source_key
             tmp = self.root / "queries.json.tmp"
             tmp.write_text(json.dumps(q, ensure_ascii=False, indent=1), "utf-8")
+            os.replace(tmp, self.root / "queries.json")
+
+    def forget_sources(self, keys: set[str]) -> None:
+        """Drops the queries that led to these downloads (cache.py removed them): asking again
+        searches again instead of finding a download that is gone."""
+        with self._lock:
+            q = self._queries()
+            kept = {k: v for k, v in q.items() if safe_id(v, 96) not in keys}
+            if len(kept) == len(q):
+                return
+            tmp = self.root / "queries.json.tmp"
+            tmp.write_text(json.dumps(kept, ensure_ascii=False, indent=1), "utf-8")
             os.replace(tmp, self.root / "queries.json")
 
     def source_info(self, key: str) -> dict[str, Any] | None:

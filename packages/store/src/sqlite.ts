@@ -48,9 +48,9 @@ import {
   contextLookupKey,
   cosine,
   decodeEmbedding,
-  embeddingFromF32,
   encodeEmbedding,
   fromMicros,
+  lazyEmbedding,
   MAX_DECISIONS,
   memoryKind,
   memoryOrigin,
@@ -101,6 +101,7 @@ import type {
   EconomyDoc,
   FortuneRecord,
   Goal,
+  GoalFulfiller,
   GoalPatch,
   GoalPledge,
   GoalStatus,
@@ -1052,6 +1053,17 @@ function goalFromRow(row: Row): Goal {
     created_at: ts(row, "created_at"),
     deadline: ts(row, "deadline"),
     closed_at: optTs(row, "closed_at"),
+    ...fulfilledOf(row),
+  };
+}
+
+/** The kept-promise columns of a goal row; nothing while it is owed. */
+function fulfilledOf(row: Row): Pick<Goal, "fulfilled_at" | "fulfilled_by"> {
+  const at = optTs(row, "fulfilled_at");
+  if (at === null) return {};
+  return {
+    fulfilled_at: at,
+    fulfilled_by: optStr(row, "fulfilled_by") === "self" ? "self" : "owner",
   };
 }
 
@@ -1126,6 +1138,16 @@ class SqliteGoals implements GoalStore {
       params,
     );
     return rows.map(goalFromRow);
+  }
+
+  async fulfill(id: string, by: GoalFulfiller, at: Timestamp): Promise<boolean> {
+    return (
+      this.db.run(
+        "UPDATE goals SET fulfilled_at = $at, fulfilled_by = $by WHERE id = $id AND " +
+          "status = 'reached' AND fulfilled_at IS NULL",
+        { id, by, at: toMicros(at) },
+      ) > 0
+    );
   }
 
   async addPledge(pledge: GoalPledge): Promise<void> {
@@ -1828,7 +1850,7 @@ function memoryFromRow(row: Row): MemoryRecord {
   const embedding = row.embedding;
   const sourceContext = optStr(row, "source_context");
   const source = optStr(row, "source");
-  return {
+  const record: MemoryRecord = {
     id: str(row, "id"),
     profile: str(row, "profile_id"),
     kind: memoryKind(str(row, "kind")),
@@ -1836,8 +1858,7 @@ function memoryFromRow(row: Row): MemoryRecord {
     subjects: json<PersonId[]>(row, "subjects", "memory subjects"),
     content: str(row, "content"),
     tokens: str(row, "tokens"),
-    embedding:
-      embedding instanceof Uint8Array ? embeddingFromF32(decodeEmbedding(embedding)) : null,
+    embedding: null,
     importance: num(row, "importance"),
     confidence: num(row, "confidence"),
     created_at: ts(row, "created_at"),
@@ -1853,6 +1874,9 @@ function memoryFromRow(row: Row): MemoryRecord {
     done: bool(row, "done"),
     superseded_by: optStr(row, "superseded_by"),
   };
+  return embedding instanceof Uint8Array
+    ? lazyEmbedding(record, () => decodeEmbedding(embedding))
+    : record;
 }
 
 /** Newest first, ties broken by id (descending). */
@@ -1874,6 +1898,25 @@ const SEARCH_FILTER =
   "m.profile_id = $profile AND m.scope_key IN (SELECT value FROM json_each($scopes)) " +
   "AND ($kinds IS NULL OR m.kind IN (SELECT value FROM json_each($kinds))) " +
   "AND m.superseded_by IS NULL";
+
+/** What `list` and `count` select (`listParams`). */
+const LIST_FILTER =
+  "profile_id = $profile " +
+  "AND ($subject IS NULL OR EXISTS (SELECT 1 FROM json_each(subjects) WHERE value = " +
+  "$subject)) AND ($scope IS NULL OR scope_key = $scope) " +
+  "AND ($kind IS NULL OR kind = $kind) AND ($before IS NULL OR created_at < $before) " +
+  "AND ($all = 1 OR superseded_by IS NULL)";
+
+function listParams(profile: ProfileId, filter: MemoryFilter): Params {
+  return {
+    profile,
+    subject: filter.subject,
+    scope: filter.scope === null ? null : memoryScopeKey(filter.scope),
+    kind: filter.kind,
+    before: optionalMicros(filter.before),
+    all: filter.include_superseded ? 1 : 0,
+  };
+}
 
 class SqliteMemories implements MemoryRecordStore {
   constructor(private readonly db: Db) {}
@@ -1978,26 +2021,40 @@ class SqliteMemories implements MemoryRecordStore {
       }
     }
 
-    // Nearest neighbours: exact cosine over the rows with the query's dimension.
+    // Nearest neighbours: exact cosine over the rows with the query's dimension. Only what the
+    // ranking needs is read for every candidate; the whole row only for the ones kept.
     if (embedding !== null) {
       const query32 = Float32Array.from(embedding);
-      const rows = this.db.all(
-        `SELECT * FROM memory_records m WHERE ${SEARCH_FILTER} ` +
+      const candidates = this.db.all(
+        `SELECT m.seq, m.id, m.created_at, m.embedding FROM memory_records m WHERE ${SEARCH_FILTER} ` +
           "AND m.embedding IS NOT NULL AND length(m.embedding) = $bytes",
         { ...filter, bytes: embedding.length * 4 },
       );
-      const scored = rows
+      const scored = candidates
         .map((row) => ({
           row,
           score: cosine(decodeEmbedding(row.embedding as Uint8Array), query32),
         }))
         .sort((a, b) => b.score - a.score || newestFirst(a.row, b.row))
         .slice(0, limit ?? undefined);
+      const byId = new Map(hits.map((h) => [h.record.id, h]));
+      const missing = scored.filter(({ row }) => !byId.has(str(row, "id")));
+      const full = new Map<number, Row>();
+      if (missing.length > 0) {
+        const rows = this.db.all(
+          "SELECT * FROM memory_records WHERE seq IN (SELECT value FROM json_each($seqs))",
+          { seqs: JSON.stringify(missing.map(({ row }) => num(row, "seq"))) },
+        );
+        for (const row of rows) full.set(num(row, "seq"), row);
+      }
       for (const { row, score } of scored) {
-        const id = str(row, "id");
-        const hit = hits.find((h) => h.record.id === id);
-        if (hit) hit.vector_score = score;
-        else hits.push({ record: memoryFromRow(row), text_score: 0, vector_score: score });
+        const hit = byId.get(str(row, "id"));
+        if (hit) {
+          hit.vector_score = score;
+          continue;
+        }
+        const whole = full.get(num(row, "seq"));
+        if (whole) hits.push({ record: memoryFromRow(whole), text_score: 0, vector_score: score });
       }
     }
     return hits;
@@ -2005,23 +2062,19 @@ class SqliteMemories implements MemoryRecordStore {
 
   async list(profile: ProfileId, filter: MemoryFilter): Promise<MemoryRecord[]> {
     const rows = this.db.all(
-      "SELECT * FROM memory_records WHERE profile_id = $profile " +
-        "AND ($subject IS NULL OR EXISTS (SELECT 1 FROM json_each(subjects) WHERE value = " +
-        "$subject)) AND ($scope IS NULL OR scope_key = $scope) " +
-        "AND ($kind IS NULL OR kind = $kind) AND ($before IS NULL OR created_at < $before) " +
-        "AND ($all = 1 OR superseded_by IS NULL) " +
+      `SELECT * FROM memory_records WHERE ${LIST_FILTER} ` +
         "ORDER BY created_at DESC, id DESC LIMIT $limit",
-      {
-        profile,
-        subject: filter.subject,
-        scope: filter.scope === null ? null : memoryScopeKey(filter.scope),
-        kind: filter.kind,
-        before: optionalMicros(filter.before),
-        all: filter.include_superseded ? 1 : 0,
-        limit: limitParam(filter.limit),
-      },
+      { ...listParams(profile, filter), limit: limitParam(filter.limit) },
     );
     return rows.map(memoryFromRow);
+  }
+
+  async count(profile: ProfileId, filter: MemoryFilter): Promise<number> {
+    const row = this.db.get(
+      `SELECT count(*) AS n FROM memory_records WHERE ${LIST_FILTER}`,
+      listParams(profile, filter),
+    );
+    return row ? num(row, "n") : 0;
   }
 
   async touch(ids: readonly string[], at: Timestamp): Promise<void> {

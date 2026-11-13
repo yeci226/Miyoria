@@ -26,7 +26,7 @@ import {
   type Whereabouts,
 } from "@miyoria/types";
 import type { RecentConfig } from "./config.js";
-import { disclose, placeRef, type Viewer } from "./places.js";
+import { disclose, placeRef, quotable, type Viewer, WITHHELD } from "./places.js";
 import type { Her, RecentLog, Said, Window } from "./recent-log.js";
 import { textSimilarity, tokenize } from "./tokenize.js";
 
@@ -140,7 +140,8 @@ export function visibleQuestion(
     asked.push({
       at: toTimestamp(line.at),
       place: placeRef(line.context, viewer),
-      said: cut(said, quoteChars),
+      // Asked in a DM, seen from a channel: that she asked, not what (`""`).
+      said: quotable(d, viewer) ? cut(said, quoteChars) : "",
       private: d === "private",
     });
   }
@@ -162,11 +163,15 @@ export function visibleQuestion(
     key: q.key,
     handle: q.handle,
     person,
-    question: asked[0]?.said ?? cut(q.question, quoteChars),
+    question: asked.find((a) => a.said !== "")?.said ?? "",
     asked,
     answered_at: answer !== null && shown !== "hide" ? toTimestamp(answer.at) : null,
     answered_in: answer !== null && shown !== "hide" ? placeRef(answer.context, viewer) : null,
-    answer: answer !== null && shown !== "hide" ? cut(answer.text, quoteChars) : null,
+    // Answered in a DM, seen from a channel: that they answered, not what.
+    answer:
+      answer !== null && shown !== "hide" && quotable(shown, viewer)
+        ? cut(answer.text, quoteChars)
+        : null,
     private: priv,
   };
 }
@@ -262,5 +267,6 @@ export function questionLine(q: AskedQuestion, clock: (at: Timestamp) => string)
     q.answered_at === null
       ? ";還沒回你"
       : `;${safeName(q.handle)} ${clock(q.answered_at)}${q.answered_in !== null && q.answered_in.label !== "" ? ` 在${q.answered_in.label}` : ""}回了${q.answer === null ? "" : `:「${q.answer}」`}`;
-  return `你問過 ${safeName(q.handle)}「${q.question}」(${times})${answered}`;
+  const what = q.question === "" ? ` 一件事${WITHHELD}` : `「${q.question}」`;
+  return `你問過 ${safeName(q.handle)}${what}(${times})${answered}`;
 }

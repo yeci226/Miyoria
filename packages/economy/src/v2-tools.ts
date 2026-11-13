@@ -10,6 +10,7 @@ import { typedCommand } from "@miyoria/commands";
 import type { JsonObject } from "@miyoria/types";
 import { z } from "zod";
 import type { EconomyService } from "./economy.js";
+import { bonusLine, mutedText, unlockLines } from "./notices.js";
 import { QUESTS } from "./quests.js";
 import { receipt, someone } from "./receipt.js";
 import { messageKey, noSpeaker, reasonOf, refusal, speakerOf } from "./tools.js";
@@ -48,6 +49,7 @@ export function questsCapability(economy: EconomyService): Capability {
     permission: null,
     tool: {
       name: "check_quests",
+      readOnly: true,
       description:
         `有人問今天的任務、還能賺什麼${cur}的時候用:每天三個小任務(跟你聊一件新的事、參加一場遊戲、` +
         `聽完一首歌),做完有${cur}。只看正在跟你說話的人自己的進度。${NOT_ON_OWN}`,
@@ -113,7 +115,7 @@ export function completeQuestCapability(economy: EconomyService): Capability {
               receipt: receipt(
                 "📝 每日任務",
                 `${someone(who.account)} 聊了一件新的事,拿到 ${r.paid} ${cur}`,
-                r.bonus > 0 ? `三個任務都完成,再加 ${r.bonus}` : null,
+                mutedText([r.bonus > 0 ? bonusLine(r.bonus) : null, ...unlockLines(r.unlocked)]),
               ),
             };
           case "done":
@@ -237,7 +239,7 @@ export function drawCapability(economy: EconomyService): Capability {
           receipt: receipt(
             "🎴 抽收藏",
             `${someone(who.account)} 抽到了 ${line}`,
-            `−${r.charged} ${cur} · 現在有 ${r.balance}`,
+            mutedText([`−${r.charged} ${cur} · 現在有 ${r.balance}`, ...unlockLines(r.unlocked)]),
           ),
         };
       });
@@ -281,6 +283,7 @@ export function predictionsCapability(economy: EconomyService): Capability {
     permission: null,
     tool: {
       name: "check_predictions",
+      readOnly: true,
       description:
         `有人問現在有什麼預測、能押什麼的時候用。預測是押${cur}猜一件事的結果,猜中的人平分大家押的,` +
         `不是你給的獎勵。只會顯示正在跟你說話的人自己押了什麼。${NOT_ON_OWN}`,
@@ -578,6 +581,7 @@ export function listCommissionsCapability(economy: EconomyService): Capability {
     limits: { per_day: 200, per_person_per_day: 200, cooldown_ms: 0 },
     tool: {
       name: "list_commissions",
+      readOnly: true,
       description: `看有哪些人付了錢、在等你做的委託。${OWN}`,
       properties: {},
       required: [],
@@ -684,6 +688,7 @@ export function roomCapability(economy: EconomyService): Capability {
     limits: { per_day: 500, per_person_per_day: 30, cooldown_ms: 0 },
     tool: {
       name: "check_room",
+      readOnly: true,
       description:
         `對方問你的房間、家具、衣服、背景,或想湊錢幫你佈置時用:列出每樣東西湊了多少${cur}。` +
         `這是大家一起出錢佈置你的房間,不是買你的好感,不要因為誰出得多就特別對待他。${NOT_ON_OWN}`,
@@ -797,6 +802,7 @@ export function shopCapability(economy: EconomyService): Capability {
     limits: { per_day: 500, per_person_per_day: 30, cooldown_ms: 0 },
     tool: {
       name: "check_shop",
+      readOnly: true,
       description:
         `對方問你的小店、有什麼能買的時用:這個禮拜上架的稱號和收藏,各幾${cur}。` +
         `買東西不會改變你對他的感覺,不要勸買。${NOT_ON_OWN}`,

@@ -47,6 +47,47 @@ describe("image selection", () => {
     expect(picked.map((c) => c.attachment.id)).toEqual(["now", "amy", "recent"]);
     expect(picked[0]?.key).toBe("id:now");
     expect(picked[0]?.author).toBe("owen");
+    expect(picked.map((c) => c.source)).toEqual(["message", "parent", "earlier"]);
+    expect(picked[2]?.ago_s).toBe(60);
+  });
+
+  it("a_reply_leaves_out_the_same_persons_earlier_images", () => {
+    // 2026-11-08 14:22: a screenshot posted before was read as the answer to a reply.
+    const t = 1_000_000;
+    const s = new Session(tctx(), 50);
+    const shot = message("m1", "owen", t - 60_000, [image("shot")]);
+    const asked = message("m2", "amy", t - 30_000, [image("asked")]);
+    const reply = {
+      ...message("m3", "owen", t, []),
+      reply_to: { context: tctx(), id: "m2" },
+    };
+    for (const m of [shot, asked, reply]) s.recordMessage(m, false);
+    const parent = { ...(s.entry("m2") as NonNullable<ReturnType<Session["entry"]>>) };
+    expect(selectImages([reply], s, [parent], vision()).map((c) => c.attachment.id)).toEqual([
+      "asked",
+    ]);
+    // Without its parent (the fetch failed) a reply still gets no older image of theirs.
+    expect(selectImages([reply], s, [], vision())).toEqual([]);
+  });
+
+  it("each_image_says_where_it_was", () => {
+    const t = 1_000_000;
+    const s = new Session(tctx(), 50);
+    const recent = message("m1", "owen", t - 90_000, [image("recent")]);
+    const trigger = message("m2", "owen", t, [image("now")]);
+    for (const m of [recent, trigger]) s.recordMessage(m, false);
+    const loaded = selectImages([trigger], s, [], vision()).map((candidate) => ({
+      candidate,
+      dataUrl: "data:image/png;base64,AA",
+      bytes: 1,
+    }));
+    const labels = imageParts(loaded, "low")
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { text: string }).text);
+    expect(labels).toEqual([
+      "(owen 這則訊息附的圖片 now.png)",
+      "(owen 1 分鐘前另外傳的圖片 recent.png,不是這則訊息附的)",
+    ]);
   });
 
   it("skips_unsupported_large_and_foreign_images_and_caps_the_count", () => {
@@ -119,7 +160,7 @@ describe("image loader", () => {
     expect(loader.cached).toBe(1);
     const parts = imageParts([first as NonNullable<typeof first>], "low");
     expect(parts).toEqual([
-      { type: "text", text: "(owen 傳的圖片 a.png)" },
+      { type: "text", text: "(owen 這則訊息附的圖片 a.png)" },
       {
         type: "image_url",
         image_url: { url: "data:image/png;base64,BwcH", detail: "low" },

@@ -24,9 +24,11 @@ import {
 } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  account,
   channel,
   Harness,
   incoming,
+  mention,
   noCheck,
   SlowProvider,
   stopHarnesses,
@@ -193,5 +195,67 @@ describe("the agent with the Arbiter", () => {
     expect(r.decisions().map((d) => d.verdict)).toContain("accepted");
     // No "skipped" trace for it: the Arbiter waited instead.
     expect(r.h.traces().some((t) => t.reasons.some((x) => x.startsWith("skipped")))).toBe(false);
+  });
+
+  // 2026-11-10: right after her reply in a DM, a followup turn and the turn telling its result
+  // answered 「失敗了誒」 a second time.
+  it("a followup about someone waits a minute after she answered them; one about another does not", async () => {
+    const chat = new MockProvider("chat")
+      .reply("在啊")
+      .reply("Amy 你的貓還好嗎")
+      .reply("考試考得怎樣?");
+    const r = await rig("always", noCheck(), chat, { retry_ms: 5_000 });
+    const c = channel("c");
+    r.h.say(mention(c, "Owen", "在嗎"));
+    await wait(3000);
+    expect(r.h.sink.texts()).toEqual(["在啊"]);
+    const followup = (who: string, hint: string) =>
+      r.h.sup.bus.publish(
+        "memory",
+        v2Event(
+          ARBITER_IMPULSE_TOPIC,
+          newImpulse(
+            {
+              source: "followup",
+              context: c,
+              account: account(who),
+              about: [account(who)],
+              ttlMs: 5 * 60_000,
+              why: "之前說好要問的",
+              hint,
+              reason: "followup",
+            },
+            Date.now(),
+          ),
+        ),
+      );
+    followup("Amy", "問 Amy 的貓");
+    await wait(100);
+    expect(r.h.sink.texts()).toEqual(["在啊", "Amy 你的貓還好嗎"]);
+    followup("Owen", "問 Owen 考試");
+    await wait(100);
+    expect(r.decisions().map((d) => [d.verdict, d.reason, d.detail])).toContainEqual([
+      "deferred",
+      "busy",
+      "she just answered them",
+    ]);
+    await wait(40_000);
+    expect(r.h.sink.texts(), "still waiting").toHaveLength(2);
+    await wait(30_000);
+    expect(r.h.sink.texts()).toEqual(["在啊", "Amy 你的貓還好嗎", "考試考得怎樣?"]);
+  });
+
+  it("a result someone waits for does not wait for that", async () => {
+    const chat = new MockProvider("chat").reply("在啊").reply("跑完了,結果是 42");
+    const r = await rig("always", noCheck(), chat);
+    const c = channel("c");
+    r.h.say(mention(c, "Owen", "幫我跑一下"));
+    await wait(3000);
+    r.h.publish({
+      type: "agent_initiative",
+      data: { context: c, reason: "action_result", hint: "結果:42", about: [account("Owen")] },
+    });
+    await wait(100);
+    expect(r.h.sink.texts()).toEqual(["在啊", "跑完了,結果是 42"]);
   });
 });

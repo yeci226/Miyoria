@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
-import { DvsEngine, ffmpegErrorMessage, LOW_LATENCY_INPUT, PASSTHROUGH_FLAGS } from "../src/golive/dvs-engine.js";
+import {
+  DvsEngine,
+  ffmpegErrorMessage,
+  LOW_LATENCY_INPUT,
+  PASSTHROUGH_FLAGS,
+  PULL_PROBE_INPUT,
+} from "../src/golive/dvs-engine.js";
 import { cachedProbe, resolveEncoder } from "../src/golive/encoder.js";
 import {
   type Attach,
@@ -71,9 +77,11 @@ describe("golive protocol parsing", () => {
 describe("normalizeSource", () => {
   it("makes ffmpeg the RTMP server by default, a client with listen:false", () => {
     expect(normalizeSource("rtmp://127.0.0.1:1935/live/miyoria")).toEqual({
-      ok: true, source: "rtmp://127.0.0.1:1935/live/miyoria", inputOptions: ["-listen", "1"], live: true,
+      ok: true, source: "rtmp://127.0.0.1:1935/live/miyoria", inputOptions: ["-listen", "1"], live: true, pull: false,
     });
-    expect(normalizeSource("rtmp://127.0.0.1/live/x", false)).toMatchObject({ inputOptions: [], live: true });
+    expect(normalizeSource("rtmp://127.0.0.1/live/x", false)).toMatchObject({ inputOptions: [], live: true, pull: true });
+    expect(normalizeSource("srt://10.0.0.5:9999", false)).toMatchObject({ pull: true });
+    expect(normalizeSource("udp://127.0.0.1:5000", false)).toMatchObject({ pull: false });
   });
 
   it("adds mode=listener to SRT urls (mode=caller with listen:false) unless mode is explicit", () => {
@@ -450,8 +458,8 @@ describe("DvsEngine", () => {
       },
     };
     const engine = new DvsEngine(client, noLog, async () => fake as never);
-    const run = (source: string, noTranscode = false) => {
-      const p = planGoLive(req({ source }), cfg);
+    const run = (source: string, noTranscode = false, listen?: boolean) => {
+      const p = planGoLive(req({ source, ...(listen === undefined ? {} : { listen }) }), cfg);
       if (!p.ok) throw new Error(p.error);
       return engine.run(
         { ...p.plan, encoder: "software", noTranscode },
@@ -476,6 +484,14 @@ describe("DvsEngine", () => {
     // Passing the source through: its AVCC framing is converted for the demuxer.
     await run("rtmp://127.0.0.1:1935/live/x", true);
     expect(calls.at(-1)?.output).toEqual(PASSTHROUGH_FLAGS);
+    expect(calls.at(-1)?.input).not.toEqual(expect.arrayContaining(PULL_PROBE_INPUT));
+
+    // Pulled from a hub: the probe waits long enough for the next keyframe, and the longer
+    // values come last, so they are the ones ffmpeg keeps.
+    await run("rtmp://127.0.0.1:1935/live/x", true, false);
+    const pulled = calls.at(-1)?.input ?? [];
+    expect(pulled.slice(-PULL_PROBE_INPUT.length)).toEqual(PULL_PROBE_INPUT);
+    expect(pulled).not.toContain("-listen");
   });
 
   it("uses the spelling of the low-delay flag that current ffmpeg accepts", () => {

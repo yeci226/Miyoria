@@ -217,7 +217,8 @@ overlay 的新東西走 `economy.screen`(`ScreenEvent`:留言或獻詞)。
 
 - **錢包**:帳本上的一個合成帳號 `{ platform: "self", id: <profile> }`。每筆付費禮物(餵食、信、表情、留言上大螢幕、歌曲獻詞)的 `her_share`(0.2,無條件捨去)進她的錢包(`her_share`,`ref` 是那筆扣款);退款時按她還剩的拿回(`her_share_back`)。她的工作脈絡有 `purse`(餘額、在存的目標、貼著的懸賞、答應過大家的事)和 `purse_news`(剛發生的事)兩個桶。
 - **她的工具**(中風險,要 `economy.agency`,沒有人有,所以她用 `on_own` 呼叫):`treat_from_purse`(請正在跟她說話的人,每人每天 `treat_per_person`、所有人 `treat_total`,不算進 `give_coins` 的上限)、`buy_for_self`(花 `expression` 買自己的表情,每天 `self_expressions_per_day`,沒做出來就退回錢包)、`propose_goal` / `cancel_goal`、`post_bounty` / `award_bounty` / `cancel_bounty`。
-- **目標**:一次一個,名稱 30 字、承諾 60 字,目標最多 `goal_max_target`(2000),最多 `goal_max_days`(7)天;承諾和懸賞任務過約定的同一道閘門(`guardTask`)。投的錢是 `goal_pledge`(託管,每人每個目標最多 `goal_pledge_max`);湊滿就變成她的(`goal_funds` 進錢包),她被告知「大家湊到了…你答應過要…」,承諾留在 `purse` 桶 `goal_keep_days` 天(目前沒有 service key 可以寫進她的承諾簿,所以只靠這兩行)。時間到沒湊滿或她取消,每筆退一次。
+- **目標**:一次一個,名稱 30 字、承諾 60 字,目標最多 `goal_max_target`(2000),最多 `goal_max_days`(7)天;承諾和懸賞任務過約定的同一道閘門(`guardTask`)。投的錢是 `goal_pledge`(託管,每人每個目標最多 `goal_pledge_max`);湊滿就變成她的(`goal_funds` 進錢包),她被告知「大家湊到了…你答應過要…」,承諾留在 `purse` 桶 `goal_keep_days` 天,直到記成做到了。
+- **做到了**(2026-11-12):湊滿的目標在記成做到了之前都算欠著(`goals.fulfilled_at` / `fulfilled_by`,migration 0017)。主人在面板「經濟 → 目標」按「記成做到了」(`POST /api/economy/goals/:id/fulfill`,`admin.economy.goals`;`GET /api/economy/goals` 列出湊滿的目標),或她自己用 `goal_done`(最新一個還欠著的)。第一次記的算數,之後再記是 409。記下之後 `purse` 桶不再提醒,`purse_news` 告訴她一聲,`/me goals` 和會員頁顯示「她做到了」。沒有用她的承諾簿(`CommitmentBook`):那是給幾分鐘內就做的事,預設 120 秒到期、逾期 30 分鐘記成沒做到,只在說出口的頻道顯示。時間到沒湊滿或她取消,每筆退一次。
 - **懸賞**:`bounty_max`(50)以內,同時最多 `bounties_open`(3)個,獎金先從錢包扣下(`bounty_hold`),付給說話的人(`bounty`,一個懸賞只付一次,不付給自己),取消或 `bounty_days`(3)天沒人領就回到錢包。
 - **API**:`GET /api/member/goals`、`POST /api/member/goals/:id/pledge {amount}`(`Idempotency-Key`)、`GET /api/member/bounties`(`packages/api/src/agency.ts`)。陌生人看得到目標,不能投(403)。表:`goals`、`goal_pledges`、`bounties`(migration 0013)。
 

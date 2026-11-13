@@ -323,10 +323,13 @@ export class Purse {
         );
       } else if (
         g.status === "reached" &&
+        g.fulfilled_at === undefined &&
         g.closed_at !== null &&
         now - Date.parse(g.closed_at) < c.goal_keep_days * DAY_MS
       ) {
-        parts.push(`你答應過大家的(目標「${g.title}」湊到了):${g.promise}`);
+        parts.push(
+          `你答應過大家、還沒做到的(目標「${g.title}」湊到了):${g.promise}(做到了用 goal_done 記下來)`,
+        );
       }
     }
     const bounties = await s.get(BountyStoreKey)?.list(this.e.profile, {

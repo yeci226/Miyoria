@@ -776,9 +776,12 @@ class RealBackend:
             code = self.ying_dir if ying else self.seedvc_dir
             if str(code) not in sys.path:
                 sys.path.insert(0, str(code))
-            from seedvc_runtime import SeedVcSinger
+            from seedvc_runtime import PitchExtractor, SeedVcSinger
 
-            if ying:
+            if self.voice == "rvc":
+                # RVC converts by itself: only the pitch tracker is needed here.
+                self._vc = PitchExtractor(self.seedvc_dir, self.device)
+            elif ying:
                 self._vc = SeedVcSinger(self.ying_dir, self.device, ckpt=self.ying_dir / YING_CKPT,
                                         config=self.ying_dir / YING_CONFIG, cache=self.seedvc_dir / "checkpoints")
             else:

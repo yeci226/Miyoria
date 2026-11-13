@@ -5,7 +5,7 @@
 // which is there before anything can say a word): llm, speech, voice.link, voice, scheduler, agent, commands,
 // auth, actions, directive, activity, social, mood, world, self, memory, arbiter, mind, knowledge, conversation,
 // reflect, queue, game, game.chat, sing, share (opt-in), watch (opt-in), mcp,
-// stage.link, economy, web, sandbox (opt-in), party, recorder, Discord bot, Admin API, terminal chat, then the
+// stage.link, economy, web, sandbox (opt-in), imagegen (opt-in), party, recorder, Discord bot, Admin API, terminal chat, then the
 // extension host and one `ext.<id>` per extension.
 
 import { mkdir } from "node:fs/promises";
@@ -23,6 +23,7 @@ import { EconomyModule } from "@miyoria/economy";
 import * as extHost from "@miyoria/ext-host";
 import { FactsModule } from "@miyoria/facts";
 import { GameChatModule, GameHandleKey, GameModule } from "@miyoria/game";
+import { ImageGenModule } from "@miyoria/imagegen";
 import type { Config, Module } from "@miyoria/kernel";
 import {
   ConversationModule,
@@ -192,6 +193,7 @@ async function coreModules({
     new EconomyModule(profileId),
     new WebModule(),
     new SandboxModule(profileId, { baseDir }),
+    new ImageGenModule({ baseDir }),
     new SkillsModule(),
     new LiveModule({ names: profile.names() }),
     new PartyModule(),

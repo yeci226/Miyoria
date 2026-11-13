@@ -352,7 +352,20 @@ public final class Reflexes {
         if (p == null || w == null) return;
         switch (k) {
             case LAVA -> {
-                if (spot == null || ticks % 20 == 0) spot = safeSpot(p, w, 5, 0, null);
+                // A water bucket, once: using it again on the next ticks would scoop the water back up.
+                if (ticks == 1 && mc.interactionManager != null) {
+                    PlayerInventory inv = p.getInventory();
+                    for (int i = 0; i < inv.main.size(); i++) {
+                        if (inv.main.get(i).isOf(Items.WATER_BUCKET)) {
+                            hold(mc, p, i);
+                            p.setPitch(90f);
+                            mc.interactionManager.interactItem(p, Hand.MAIN_HAND);
+                            break;
+                        }
+                    }
+                }
+                // Keys, not Baritone: a path takes ticks to compute and she is burning.
+                if (spot == null || ticks % 20 == 0) spot = safeSpot(p, w, 6, 0, null);
                 moveToward(mc, p, spot, true);
             }
             case FALLING_BLOCK -> {
@@ -368,6 +381,24 @@ public final class Reflexes {
                 BlockPos at = w.getBlockState(head).getCollisionShape(w, head).isEmpty() ? p.getBlockPos() : head;
                 if (mc.interactionManager != null) mc.interactionManager.updateBlockBreakingProgress(at, Direction.UP);
                 p.swingHand(Hand.MAIN_HAND);
+
+                // If suffocation continues beyond 5 ticks, backstep/move laterally toward an adjacent open block
+                if (ticks > 5) {
+                    BlockPos feet = p.getBlockPos();
+                    BlockPos escape = null;
+                    for (Direction d : Direction.values()) {
+                        if (!d.getAxis().isHorizontal()) continue;
+                        BlockPos adj = feet.offset(d);
+                        if (free(w, adj) && free(w, adj.up())) {
+                            escape = adj;
+                            break;
+                        }
+                    }
+                    if (escape != null) {
+                        Vec3d targetVec = new Vec3d(escape.getX() + 0.5, escape.getY(), escape.getZ() + 0.5);
+                        moveToward(mc, p, targetVec, false);
+                    }
+                }
             }
             case DROWNING -> press(mc.options.jumpKey);
             case FLEE -> {

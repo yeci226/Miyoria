@@ -54,6 +54,7 @@ import {
   MAX_FEED_COUNT,
   STRANGER,
 } from "./economy.js";
+import { mutedText, unlockLines } from "./notices.js";
 import { receipt, someone } from "./receipt.js";
 import { EconomyError, FEED_ITEMS, type FeedItem, type ShopItem } from "./types.js";
 
@@ -366,7 +367,10 @@ export function acceptFoodCapability(economy: EconomyService, offers: VoiceOffer
             receipt: receipt(
               "🍚 收下了",
               `${someone(who.account)} 餵了${label}`,
-              `−${r.charged} ${cur} · 剩 ${r.balance}${less ? " · 吃不下的沒扣" : ""}`,
+              mutedText([
+                `−${r.charged} ${cur} · 剩 ${r.balance}${less ? " · 吃不下的沒扣" : ""}`,
+                ...unlockLines(r.unlocked),
+              ]),
             ),
           }),
     };
@@ -496,7 +500,7 @@ export function checkinCapability(economy: EconomyService): Capability {
           receipt: receipt(
             "📅 簽到",
             `${someone(who.account)} 拿到 ${r.gained} ${cur}`,
-            `連續第 ${r.streak} 天 · 現在有 ${r.balance}`,
+            mutedText([`連續第 ${r.streak} 天 · 現在有 ${r.balance}`, ...unlockLines(r.unlocked)]),
           ),
         };
       } catch (error) {
@@ -553,6 +557,7 @@ export function lookCapability(economy: EconomyService): Capability {
     permission: null,
     tool: {
       name: "check_coins",
+      readOnly: true,
       description:
         `有人問他有多少${cur}、今天還能賺多少,或${cur}能買什麼、商店有什麼的時候用這個,` +
         "不要自己猜餘額或商品。只會給正在跟你說話的人看他自己的錢包,看不到別人的;" +
@@ -570,7 +575,7 @@ export function lookCapability(economy: EconomyService): Capability {
       const { principal } = ctx;
       const account = principal.kind === "user" ? principal.requester : null;
       const w = account === null ? null : await economy.wallet(account);
-      const known = w !== null && w.can_earn;
+      const known = w?.can_earn === true;
       const out: string[] = [];
       const data: JsonObject = { currency: cur, has_wallet: known };
       if (about !== "shop") {

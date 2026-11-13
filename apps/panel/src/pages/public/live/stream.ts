@@ -10,7 +10,7 @@ const MEDIA_WINDOW_MS = 10_000;
 
 /**
  * Starts playing `src` in `video`; returns the teardown. `onFatal` is called once when the stream
- * cannot be brought back (the caller shows her drawn figure instead).
+ * cannot be brought back (the caller drops the picture for a while).
  */
 export function attachStream(video: HTMLVideoElement, src: string, onFatal: () => void): () => void {
   let dead = false;

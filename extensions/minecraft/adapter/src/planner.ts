@@ -20,6 +20,24 @@ export type Inventory = Record<string, number>;
 
 const WOODS = ["oak", "birch", "spruce", "jungle", "acacia", "dark_oak", "mangrove", "cherry"];
 const STEMS = ["crimson", "warped"];
+const COLORS = [
+  "white",
+  "orange",
+  "magenta",
+  "light_blue",
+  "yellow",
+  "lime",
+  "pink",
+  "gray",
+  "light_gray",
+  "cyan",
+  "purple",
+  "blue",
+  "brown",
+  "green",
+  "red",
+  "black",
+];
 
 const GROUPS: Record<string, string[]> = {
   "#logs": [
@@ -29,6 +47,8 @@ const GROUPS: Record<string, string[]> = {
   "#planks": [...WOODS, ...STEMS, "bamboo"].map((w) => `${w}_planks`),
   "#stone": ["cobblestone", "cobbled_deepslate", "blackstone"],
   "#coal": ["coal", "charcoal"],
+  "#wool": COLORS.map((c) => `${c}_wool`),
+  "#beds": COLORS.map((c) => `${c}_bed`),
   /** Raw meat, what hunting any animal gives. */
   "#meat": ["beef", "porkchop", "mutton", "chicken", "rabbit"],
   /** Anything worth eating (no rotten flesh, no spider eyes). */
@@ -108,7 +128,15 @@ const RECIPES: Record<string, Recipe> = {
   bowl: recipe(4, [["#planks", 3]]),
   ladder: recipe(3, [["stick", 7]]),
   bread: recipe(1, [["wheat", 3]]),
+  flint_and_steel: recipe(1, [["iron_ingot", 1], ["flint", 1]], false),
+  blaze_powder: recipe(2, [["blaze_rod", 1]], false),
+  ender_eye: recipe(1, [["blaze_powder", 1], ["ender_pearl", 1]], false),
+  bow: recipe(1, [["stick", 3], ["string", 3]]),
+  arrow: recipe(4, [["flint", 1], ["stick", 1], ["feather", 1]]),
 };
+
+// A bed takes three wool of its own colour (any planks).
+for (const c of COLORS) RECIPES[`${c}_bed`] = recipe(1, [[`${c}_wool`, 3], ["#planks", 3]]);
 
 // Tools and armour of every material.
 const TOOL_MATERIALS: Record<string, string> = {
@@ -205,6 +233,8 @@ const MINED: Record<string, string[]> = {
   sand: ["sand"],
   red_sand: ["red_sand"],
   gravel: ["gravel"],
+  // Gravel drops flint now and then; the runner mines again until there is enough.
+  flint: ["gravel"],
   clay_ball: ["clay"],
   obsidian: ["obsidian"],
   melon_slice: ["melon"],
@@ -287,8 +317,17 @@ function foodChoice(inv: Inventory, world: World): string {
   return "#meat";
 }
 
+/** Drops of monsters she has to fight or trade for; the planner cannot plan them. */
+const MOB_DROPS: Record<string, string> = {
+  blaze_rod: "要到下界要塞打烈焰人",
+  ender_pearl: "要打終界使者,或在下界用金錠跟豬布林交易",
+  string: "要打蜘蛛,或破壞蜘蛛網",
+};
+
 /** Why `item` cannot be planned, and what she can do instead. */
 export function unknownText(item: string): string {
+  const mob = MOB_DROPS[item];
+  if (mob) return `${itemName(item)}沒辦法自己做出來,${mob}`;
   return `不知道怎麼取得${itemName(item)}(只會砍樹、挖礦、合成、用熔爐燒、打獵和收成)。要吃的用 obtain {item:"food"},或 cooked_beef、cooked_porkchop、bread 這類`;
 }
 

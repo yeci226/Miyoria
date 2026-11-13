@@ -266,7 +266,13 @@ export interface Goal {
   created_at: Timestamp;
   deadline: Timestamp;
   closed_at: Timestamp | null;
+  /** A reached goal whose promise she kept: when it was marked done. Absent while it is owed. */
+  fulfilled_at?: Timestamp;
+  /** Who marked it: `owner` (the panel) or `self` (she said she did it). */
+  fulfilled_by?: GoalFulfiller;
 }
+
+export type GoalFulfiller = "owner" | "self";
 
 /** What `GoalStore.transition` changes besides the status. */
 export interface GoalPatch {

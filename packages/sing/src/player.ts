@@ -3,7 +3,9 @@
 // lines as cues while it plays. The start cue carries the path of the song's original video for
 // the Stage node to show (muted) in OBS.
 
+import { access } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
+import { getLogger } from "@miyoria/kernel";
 import {
   type Clock,
   type PlaybackState,
@@ -14,6 +16,8 @@ import {
   type VoicePlayer,
 } from "@miyoria/types";
 import type { SingWorker, SongMeta } from "./client.js";
+
+const log = getLogger("sing");
 
 export interface PlayerDeps {
   worker: SingWorker;
@@ -104,6 +108,34 @@ export async function* paced(
  * Sings `song` in `guild`'s voice channel and resolves with how it ended. Aborting `signal`
  * fades it out (a skip or stop). Throws when the audio cannot be fetched or played.
  */
+/**
+ * Makes sure the song's video is in `d.videoDir` (the song worker may run on another machine, so
+ * Core fetches it from the worker once). The path to show, or `null` when there is none.
+ */
+export async function ensureVideo(
+  d: PlayerDeps,
+  song: SongMeta,
+  signal: AbortSignal,
+): Promise<string | null> {
+  if (d.videoDir === null) return null;
+  const path = songVideoPath(d.videoDir, song);
+  const file = song.video?.file;
+  if (path === null || file === undefined) return null;
+  try {
+    await access(path);
+    return path;
+  } catch {
+    // not here yet: ask the worker
+  }
+  try {
+    await d.worker.download(song.id, file, path, signal);
+    return path;
+  } catch (error) {
+    if (!signal.aborted) log.warn({ song: song.id, err: String(error) }, "song video not fetched");
+    return null;
+  }
+}
+
 export async function singSong(
   d: PlayerDeps,
   song: SongMeta,
@@ -111,10 +143,12 @@ export async function singSong(
   signal: AbortSignal,
 ): Promise<PlaybackState> {
   const rate = song.play.sample_rate;
+  const videoFetch = ensureVideo(d, song, signal);
   const [mix, vocals] = await Promise.all([
     d.worker.audio(song.id, "play_mix.pcm", signal),
     d.lipSyncVocals ? d.worker.audio(song.id, "play_vocals.pcm", signal) : Promise.resolve(null),
   ]);
+  const video = await videoFetch;
   if (signal.aborted) return "interrupted";
   const streaming = new AbortController();
   const handle = await d.voice.play(
@@ -131,6 +165,7 @@ export async function singSong(
     d,
     song,
     durationMs,
+    video,
     handle,
     AbortSignal.any([signal, lyricsDone.signal]),
   );
@@ -152,6 +187,7 @@ async function cueLyrics(
   d: PlayerDeps,
   song: SongMeta,
   durationMs: number,
+  video: string | null,
   handle: { state(): PlaybackState | null },
   signal: AbortSignal,
 ): Promise<void> {
@@ -161,7 +197,6 @@ async function cueLyrics(
   }
   if (signal.aborted || handle.state() !== "started") return;
   const startedAt = d.clock.now();
-  const video = d.videoDir === null ? null : songVideoPath(d.videoDir, song);
   const beats = songBeats(song);
   d.cue({
     state: "started",

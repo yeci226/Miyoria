@@ -23,7 +23,9 @@ import { HttpSingWorker, type SingWorker } from "./client.js";
 import { SingClips } from "./clips.js";
 import { registerCommands } from "./commands.js";
 import { SingConfigSchema } from "./config.js";
+import { FailoverSingWorker } from "./failover.js";
 import { PROMPT_KEY, SingPrompt } from "./prompt.js";
+import { ROOM_PROMPT_KEY, VoiceRoom, VoiceRoomPrompt } from "./room.js";
 import { Singer } from "./singer.js";
 
 /** The singing flow (set list, requests, playback), for the Admin API and tests. */
@@ -82,7 +84,16 @@ export class SingModule implements Module {
   async start(ctx: ModuleContext): Promise<void> {
     const cfg = ctx.config(SingConfigSchema);
     const timeoutMs = cfg.timeout_secs * 1000;
-    const worker = this.#worker?.(cfg.url, timeoutMs) ?? new HttpSingWorker(cfg.url, timeoutMs);
+    const make = (url: string) =>
+      this.#worker?.(url, timeoutMs) ?? new HttpSingWorker(url, timeoutMs);
+    const urls = workerUrls(cfg.url, cfg.fallback_urls);
+    const worker: SingWorker =
+      urls.length === 1
+        ? make(cfg.url)
+        : new FailoverSingWorker(
+            urls.map((url) => ({ name: url, worker: make(url) })),
+            { retryMs: cfg.fallback_retry_secs * 1000, now: () => ctx.clock.now() },
+          );
     const videoDir = cfg.video ? resolve(this.#baseDir, cfg.video_dir) : null;
     const singer = new Singer(cfg, ctx, worker, videoDir);
     const actuators = actuatorsFor(ctx);
@@ -103,6 +114,9 @@ export class SingModule implements Module {
     commands.attach(ctx);
     const prompts = ctx.services.get(PromptContributorsKey) ?? null;
     prompts?.register(new SingPrompt(singer, cfg.only_on_request));
+    const room = new VoiceRoom(() => ctx.clock.now());
+    prompts?.register(new VoiceRoomPrompt(room, singer.list));
+    singer.setPresence((guild, who) => room.present(guild, who));
     ctx.provide(SingerKey, singer);
     ctx.provide(VoiceFloorKey, singer);
     ctx.provide(SpeechPauseKey, singer);
@@ -125,13 +139,17 @@ export class SingModule implements Module {
     const events = ctx.subscribe([
       "voice.joined",
       "voice.left",
+      "voice.participants",
       "voice.playback",
       "agent.turn.completed",
       "action.completed",
       "queue.item_activated",
     ]);
     ctx.spawn("events", async () => {
-      for await (const env of events) singer.onEvent(env.event);
+      for await (const env of events) {
+        room.onEvent(env.event);
+        singer.onEvent(env.event);
+      }
     });
     await singer.restore();
     ctx.spawn("worker", (signal) => singer.run(signal));
@@ -168,7 +186,21 @@ export class SingModule implements Module {
     running.singer.close();
     running.commands.detach();
     running.prompts?.unregister(PROMPT_KEY);
+    running.prompts?.unregister(ROOM_PROMPT_KEY);
     running.unroute?.();
     for (const unregister of running.capabilities) unregister();
   }
+}
+
+/** `url`, then `fallback_urls`, each address once (a trailing slash does not make it another). */
+export function workerUrls(url: string, fallbacks: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of [url, ...fallbacks]) {
+    const key = u.replace(/\/+$/, "").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(u);
+  }
+  return out;
 }

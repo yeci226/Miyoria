@@ -9,6 +9,8 @@ export const CORE_CHARS = 420;
 
 /** Bullets that describe who she is, preferred after the opening paragraph. */
 const CHARACTER_BULLET = /^(個性|性格|personality)/i;
+/** One line of a leading tag block: `【PERSONA_LOAD】` or an `UPPER_SNAKE` tag. */
+const TAG_LINE = /^(?:【[^】]*】|[A-Z][A-Z0-9_]*)$/;
 
 function sentences(text: string): string[] {
   return text
@@ -48,6 +50,9 @@ export function characterCore(
       if (paragraph) opening = false;
       continue;
     }
+    // A tag block before the first heading (【PERSONA_LOAD】, then one UPPER_SNAKE tag a line) is
+    // for the chat model; the core is the character's words, so it starts at the heading.
+    if (headings === 0 && picked.length === 0 && TAG_LINE.test(line)) continue;
     if (line.startsWith("#")) {
       headings += 1;
       if (headings > 1) break;

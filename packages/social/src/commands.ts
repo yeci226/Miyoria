@@ -267,7 +267,7 @@ async function link(social: Social, inv: Invocation): Promise<CommandReply> {
 }
 
 const NOT_RESPONDING = () => notice("warn", "她目前不會回應你。");
-const CLEAR_WORDS = new Set(["清除", "取消", "reset", "clear", "-"]);
+export const CLEAR_WORDS: ReadonlySet<string> = new Set(["清除", "取消", "reset", "clear", "-"]);
 
 async function profile(
   social: Social,
@@ -348,7 +348,7 @@ const RUDE_KINDS: ReadonlySet<EventKind> = new Set([
 ]);
 
 /** Rejects names she would not use: too long, links / mentions, rude words. */
-function checkCallName(call: string): string | null {
+export function checkCallName(call: string): string | null {
   const len = [...call].length;
   if (len === 0) return "稱呼不能是空的。";
   if (len > MAX_CALL_NAME_CHARS) return `稱呼最多 ${MAX_CALL_NAME_CHARS} 個字。`;

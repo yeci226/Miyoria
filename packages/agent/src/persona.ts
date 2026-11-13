@@ -1,4 +1,4 @@
-import { type PersonaSection, Profile } from "@miyoria/profile";
+import { type Lorebook, type PersonaSection, Profile } from "@miyoria/profile";
 import { serviceKey } from "@miyoria/types";
 import { charCount } from "./util.js";
 
@@ -28,7 +28,13 @@ export class PersonaHandle {
       examples: [...p.examples],
       voice: p.voice === null ? null : structuredClone(p.voice),
       avatar: p.avatar === null ? null : structuredClone(p.avatar),
+      lorebook: p.lorebook === null ? null : structuredClone(p.lorebook),
     });
+  }
+
+  /** The profile's `lorebook.toml` (`null`: none). */
+  lorebook(): Lorebook | null {
+    return this.#profile.lorebook;
   }
 
   sections(): PersonaSection[] {

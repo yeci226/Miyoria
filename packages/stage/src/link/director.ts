@@ -45,6 +45,9 @@ import {
 } from "./scene-rule.js";
 import type { SceneRoles, ScenesConfig } from "./scenes.js";
 
+/** How long the ending scene outlasts the curtain's hold, waiting for the stream to stop. */
+export const CURTAIN_GRACE_MS = 15_000;
+
 const log = getLogger("stage.director");
 
 /** `voice.golive` states. */
@@ -336,7 +339,10 @@ export class SceneDirector implements StreamCurtain, SceneRule {
   async close(signal?: AbortSignal): Promise<void> {
     if (this.#closed || !this.live() || this.#memory.ended) return;
     this.#memory.ended = true;
-    this.#memory.endingUntil = this.#now() + this.#config.ending_ms;
+    // The stream is stopped right after the hold. The ending scene stays wanted a while longer,
+    // so the director does not switch back in the moment between the hold and the stop (CI,
+    // 2026-11-10: a "Talk" switch went out before the stop). If the stop never comes, it lets go.
+    this.#memory.endingUntil = this.#now() + this.#config.ending_ms + CURTAIN_GRACE_MS;
     const scene = this.#roles.resolve("ending");
     if (scene === null || this.#config.ending_ms <= 0) return;
     const switched = await this.#mutex.run(async () => {
@@ -349,6 +355,8 @@ export class SceneDirector implements StreamCurtain, SceneRule {
     } catch {
       // Aborted: stop now.
     }
+    // Wakes at the end of the grace, in case the stream is still live then.
+    this.#planNext();
   }
 
   // ----- evaluation -----

@@ -34,9 +34,13 @@ const RequestArgs = z.object({
   /** Commands only: a paid dedication (up to 40 characters). */
   dedication: z.string().trim().max(200).nullish(),
 });
+// Song numbers start at 1; a model that fills the optional field with 0 means "the first ready".
 const PlayArgs = z.object({
   /** A number on the set list (also written as text, `#3`) or a song's name. */
-  song: z.union([z.number().int().positive(), z.string().trim().min(1).max(300)]).nullish(),
+  song: z.preprocess(
+    (v) => (v === 0 ? null : v),
+    z.union([z.number().int().positive(), z.string().trim().min(1).max(300)]).nullish(),
+  ),
 });
 const StopArgs = z.object({ all: z.boolean().nullish(), current: z.boolean().nullish() });
 const SteerArgs = z.object({

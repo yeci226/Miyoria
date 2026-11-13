@@ -18,6 +18,18 @@ const LABEL_TONE: Record<string, Tone> = {
   摯友: "brand",
 };
 
+/**
+ * Her stance toward them, with the level it was written at when that is not the level now (she
+ * rewrites it every 5 levels, at her daily reflection): `嘴硬但會照顧他(Lv.30 時寫的)`.
+ */
+export function stanceText(card: PersonCard): string | null {
+  const stance = card.stance?.trim();
+  if (!stance) return null;
+  const at = card.stance_level;
+  const stale = typeof at === "number" && typeof card.level === "number" && at !== card.level;
+  return stale ? `${stance}(Lv.${at} 時寫的)` : stance;
+}
+
 /** The active emotions toward one person, strongest first: `想念 0.60 · 感激 0.20`. */
 export function emotionsText(card: PersonCard): string {
   return Object.entries(card.emotions)
@@ -37,8 +49,9 @@ function Gauge({ children, label, value }: { children: string; label: string; va
 }
 
 /**
- * One card per person: how she feels about them (the numbers, the label, the emotions toward them
- * and her words). Nothing is shown on a Core without the affect module.
+ * One card per person: how she feels about them (the numbers, the label and level, the emotions
+ * toward them, her words and how she acts with them). Nothing is shown on a Core without the
+ * affect module.
  */
 export function PersonCards() {
   const cards = useAffectPeople();
@@ -68,6 +81,7 @@ export function PersonCards() {
           <TableBody>
             {list.map((c) => {
               const emotions = emotionsText(c);
+              const stance = stanceText(c);
               return (
                 <TableRow key={c.person}>
                   <TableCell className="align-top">
@@ -81,6 +95,11 @@ export function PersonCards() {
                       </Link>
                       <span className="flex flex-wrap items-center gap-1">
                         <StatusBadge tone={LABEL_TONE[c.label] ?? "neutral"}>{c.label}</StatusBadge>
+                        {typeof c.level === "number" && (
+                          <Badge variant="outline" className="font-mono tabular-nums" title="好感等級(每 1 點一級)">
+                            Lv.{c.level}
+                          </Badge>
+                        )}
                         {c.owner && <Badge variant="brand">主人</Badge>}
                         {c.blocked && <Badge variant="destructive">封鎖</Badge>}
                       </span>
@@ -109,6 +128,12 @@ export function PersonCards() {
                   </TableCell>
                   <TableCell className="max-w-[48ch] align-top whitespace-pre-wrap leading-relaxed">
                     {c.feeling || <span className="text-muted-foreground">—</span>}
+                    {stance && (
+                      <span className="mt-1 block text-[13px]">
+                        <span className="text-muted-foreground">相處方式:</span>
+                        {stance}
+                      </span>
+                    )}
                     {emotions && <span className="mt-1 block text-[13px] text-muted-foreground">{emotions}</span>}
                   </TableCell>
                   <TableCell className="align-top text-muted-foreground">

@@ -463,12 +463,41 @@ describe("crowdfunding goals", () => {
     expect((await r.store.goals.get(goal.id))?.status).toBe("reached");
     const told = news(r).find((t) => t.includes("大家湊到了「新麥克風」"));
     expect(told).toContain("你答應過要:學三種貓叫");
-    expect(lastNote(r)).toContain("你答應過大家的");
+    expect(lastNote(r)).toContain("你答應過大家、還沒做到的(目標「新麥克風」湊到了):學三種貓叫");
     // It is over: nobody can add to it, and the money is hers once.
     await expect(r.economy.pledge(ALICE, goal.id, 5, "a2")).rejects.toMatchObject({ status: 409 });
     await r.economy.goalDesk.sweep();
     await r.economy.goalDesk.sweep();
     expect(await purse(r)).toBe(50);
+  });
+
+  it("a reached goal is owed until it is marked kept, once, by the owner or by her", async () => {
+    const r = await rig();
+    await fund(r, ALICE, 100);
+    const { goal } = await propose(r);
+    if (!goal) throw new Error("no goal");
+    // Nothing reached yet: nothing to mark.
+    await expect(r.economy.fulfillGoal(null, "self")).rejects.toMatchObject({ status: 409 });
+    await expect(r.economy.fulfillGoal(goal.id, "owner")).rejects.toMatchObject({ status: 409 });
+    await r.economy.pledge(ALICE, goal.id, 50, "a");
+    expect(await r.economy.reachedGoals()).toMatchObject([{ id: goal.id }]);
+    expect(lastNote(r)).toContain("還沒做到");
+    // Her own report (`goal_done`) marks the newest one owed.
+    expect((await say(r, "goal_done", ALICE, "k")).data).toMatchObject({
+      done: true,
+      goal: goal.id,
+    });
+    expect(await r.store.goals.get(goal.id)).toMatchObject({ fulfilled_by: "self" });
+    expect((await say(r, "goal_done", ALICE, "k2")).data).toMatchObject({ done: false });
+    expect(news(r).at(-1)).toContain("你把目標「新麥克風」記成做到了");
+    expect(lastNote(r)).not.toContain("學三種貓叫");
+    expect((await r.economy.goals(ALICE))[0]).toMatchObject({ status: "reached", fulfilled: true });
+    // The first mark stands.
+    await expect(r.economy.fulfillGoal(goal.id, "owner")).rejects.toMatchObject({
+      status: 409,
+      message: "這個目標已經記成做到了",
+    });
+    await expect(r.economy.fulfillGoal(null, "self")).rejects.toMatchObject({ status: 409 });
   });
 
   it("shows the goal to anyone and the pledge to its owner, and not to strangers' pledging", async () => {
@@ -488,6 +517,7 @@ describe("crowdfunding goals", () => {
         my_pledge: 10,
         deadline: toTimestamp(T0 + 3 * DAY),
         status: "open",
+        fulfilled: false,
       },
     ]);
     expect((await r.economy.goals(BOB))[0]).toMatchObject({ raised: 10, my_pledge: 0 });

@@ -139,6 +139,22 @@ describe("DiscordHistory", () => {
     expect(await history.recent(ctx, { before: null, limit: 5 })).toEqual([]);
   });
 
+  test("her_cards_read_back_are_cards_with_the_people_named", async () => {
+    const card = fetched("9", 9000, {
+      author: { id: "7", username: "miyoria", bot: true },
+      content: "",
+      components: [{ type: 10, content: "**🍚 收下了**\n<@99> 餵了白飯" }],
+    });
+    const users = new Map([["99", { id: "99", username: "eel", globalName: "阿鰻" }]]);
+    const history = new DiscordHistory(
+      { ...client([card]), users: { cache: { get: (id: string) => users.get(id) } } },
+      new Set(["7"]),
+    );
+    const [m] = await history.recent(ctx, { before: null, limit: 5 });
+    expect(m?.card).toBe(true);
+    expect(m?.text).toBe("**🍚 收下了**\n@阿鰻 餵了白飯");
+  });
+
   test("an_aborted_signal_stops_the_read", async () => {
     const history = new DiscordHistory(client([fetched("5", 5000)]), new Set());
     const controller = new AbortController();

@@ -320,6 +320,7 @@ export const LOOP_TOOLS: readonly string[] = [
   "recall",
   "remember",
   "check_coins",
+  "set_call_name",
   "keep_note",
   "drop_note",
   "code_run",
@@ -328,6 +329,24 @@ export const LOOP_TOOLS: readonly string[] = [
   // the hands, which follow the task and tell her when it ends.
   "work_list",
   "work_steer",
+  // Coins, collectibles and reminders answer at once too. With the hands they cost a 「稍等喔。」
+  // and a result turn of their own, which said the same thing again (2026-11-13 02:49) or got
+  // superseded by the next person (02:35); in the loop she reacts to the result in one reply.
+  "accept_food",
+  "give_coins",
+  "treat_from_purse",
+  "make_deal",
+  "deal_done",
+  "cancel_deal",
+  "checkin_for_speaker",
+  "post_bounty",
+  "award_bounty",
+  "check_shop",
+  "check_collection",
+  "check_quests",
+  "draw_collectible",
+  "remind_me",
+  "remember_date",
 ];
 
 /**
@@ -362,7 +381,8 @@ export const MainLineConfigSchema = z.object({
    * Example dialogues, before the history (0: none). Which of them she sees turns over from one
    * session to the next and stays the same within one, so the prefix does too.
    */
-  examples_chars: z.number().int().nonnegative().default(2000),
+  // 4000 (2026-11-11): her examples grew to about 2,100 characters; at 2000 some were never shown.
+  examples_chars: z.number().int().nonnegative().default(4000),
   /** Tools that run inside the turn (`LOOP_TOOLS`); the rest go to the hands. */
   loop_tools: z.array(z.string()).default([...LOOP_TOOLS]),
   /** Calls of the loop run per round; more in one response are refused (she hears so). */
@@ -387,7 +407,8 @@ export const MainLineConfigSchema = z.object({
    * are written again only when who is here or who talks with her changes, or after
    * `people_refresh_mins`: in between the block reads the same and the prefix stays cached.
    */
-  people_chars: z.number().int().nonnegative().default(2400),
+  // 3600 since the people are `<person/>` tags: the attribute names take room the old lines did not.
+  people_chars: z.number().int().nonnegative().default(3600),
   people_refresh_mins: z.number().nonnegative().default(30),
   /**
    * 「今天的她」 (`LifeLog.summary`, v4 §6.2), before the history: it changes when she has done
@@ -603,6 +624,11 @@ export const AgentConfigSchema = z.object({
    * answers (the turn's focus).
    */
   reply_reference: z.boolean().default(true),
+  /**
+   * Text: several people calling her at once get a turn each, in the order they called, instead
+   * of one turn answering them all (where the answers mixed and read as said to the first).
+   */
+  one_caller_per_turn: z.boolean().default(true),
   /** The typing indicator is resubmitted this often while generating. */
   typing_refresh_ms: z.number().int().nonnegative().default(8000),
   /** The main line of `pipeline = "v3"`. */

@@ -16,9 +16,15 @@ import { REASONING_LEVELS, type ReasoningLevel } from "@miyoria/types";
 import { charCount } from "../util.js";
 import { COMMIT_TOOL } from "./output.js";
 
-/** Sentences of `text`, punctuation kept. */
+/** A sentence: up to its stop, and the closing quotes or brackets after it, which are its own. */
+const SENTENCE = /[^。!?!?\n]+[。!?!?\n」』）)】〉》”’"']*/g;
+
+/**
+ * Sentences of `text`, punctuation kept. A closing quote after the full stop stays with its
+ * sentence: 「……吾輩看見了喔。」 went out as two messages, the second a lone 」 (2026-11-13 02:43).
+ */
 export function sentences(text: string): string[] {
-  return (text.match(/[^。!?!?\n]+[。!?!?\n]*/g) ?? []).filter((s) => s.trim() !== "");
+  return (text.match(SENTENCE) ?? []).filter((s) => s.trim() !== "");
 }
 
 /** `[llm.reasoning]` purpose of a call that reads what her tools brought back (v4 §4.4). */

@@ -47,6 +47,18 @@ export interface HistoryEntry {
   turn: TurnId | null;
   /** The input defence flagged it, with this note: it is shown as data, beside the note. */
   flagged?: string | null;
+  /**
+   * A card (`IncomingMessage.card`). Hers are notices, receipts and panels posted in her name:
+   * not lines she said, so nobody answering one is going on talking with her (attention.ts).
+   */
+  card?: boolean;
+  /** Accounts other than hers the text @-mentions (`IncomingMessage.mentions_others`). */
+  mentions?: AccountRef[];
+  /**
+   * Her line: whom it answered, the people of the turn's focus; `[]`: nobody, she started it
+   * herself. Missing: not known (a line seen only as the platform echoed it).
+   */
+  answering?: AccountRef[];
   /** One of the messages the current turn answers (set on a copy while building the prompt). */
   current?: boolean;
   /** With `current`: how the focus block introduces it (`問你`, `回你`, `接著說`, `說`). */
@@ -119,7 +131,8 @@ export class Session {
 
   #record(msg: IncomingMessage, isSelf: boolean, spoken: boolean): void {
     const entry = historyEntry(msg, isSelf, spoken);
-    if (isSelf) {
+    // Her cards (notices, receipts) are posted in her name; she did not say them.
+    if (isSelf && entry.card !== true) {
       const ts = entry.ts;
       this.#lastSelfAt = this.#lastSelfAt === null ? ts : Math.max(this.#lastSelfAt, ts);
       const echo = this.#history.find(
@@ -129,9 +142,11 @@ export class Session {
         echo.pending = null;
         echo.account = msg.author.account;
         echo.id = entry.id;
+        echo.replyTo ??= entry.replyTo;
+        if (entry.mentions !== undefined) echo.mentions = entry.mentions;
         return;
       }
-    } else {
+    } else if (!isSelf) {
       this.#seen(msg.author.account, msg.author.display_name, entry.ts, true);
     }
     this.#push(entry);
@@ -158,8 +173,10 @@ export class Session {
       known.add(msg.id.id);
       const entry = historyEntry(msg, isSelf, false);
       if (isSelf) {
-        this.#lastSelfAt =
-          this.#lastSelfAt === null ? entry.ts : Math.max(this.#lastSelfAt, entry.ts);
+        if (entry.card !== true) {
+          this.#lastSelfAt =
+            this.#lastSelfAt === null ? entry.ts : Math.max(this.#lastSelfAt, entry.ts);
+        }
       } else {
         this.#seen(msg.author.account, msg.author.display_name, entry.ts, false);
       }
@@ -191,9 +208,20 @@ export class Session {
   }
 
   /** Records a reply she just submitted (`ts` epoch ms). */
-  recordOwn(author: string, account: AccountRef, text: string, action: ActionId, ts: number): void {
+  recordOwn(
+    author: string,
+    account: AccountRef,
+    text: string,
+    action: ActionId,
+    ts: number,
+    answering?: readonly AccountRef[],
+  ): void {
     this.#lastSelfAt = ts;
-    this.#push({ ...ownEntry(author, account, text, ts), pending: action });
+    this.#push({
+      ...ownEntry(author, account, text, ts),
+      pending: action,
+      ...(answering === undefined ? {} : { answering: answering.map((a) => ({ ...a })) }),
+    });
   }
 
   /**
@@ -283,7 +311,7 @@ export class Session {
     for (let i = this.#history.length - 1; i >= 0; i--) {
       if (this.#history[i]?.pending === action) this.#history.splice(i, 1);
     }
-    this.#lastSelfAt = this.#history.findLast((e) => e.isSelf)?.ts ?? null;
+    this.#lastSelfAt = this.#history.findLast((e) => e.isSelf && e.card !== true)?.ts ?? null;
   }
 
   #push(entry: HistoryEntry): void {
@@ -314,7 +342,7 @@ export class Session {
     };
   }
 
-  /** Epoch ms of her last words, if any. */
+  /** Epoch ms of her last words, if any (her cards are not her words). */
   lastSelfAt(): number | null {
     return this.#lastSelfAt;
   }
@@ -325,7 +353,7 @@ export class Session {
    */
   selfShare(window: number): number {
     const w = Math.max(window, 1);
-    const own = this.recent(w).filter((e) => e.isSelf).length;
+    const own = this.recent(w).filter((e) => e.isSelf && e.card !== true).length;
     return own / w;
   }
 
@@ -395,6 +423,10 @@ export function historyEntry(msg: IncomingMessage, isSelf: boolean, spoken: bool
     spoken,
     interrupted: false,
     turn: null,
+    ...(msg.card === true ? { card: true } : {}),
+    ...((msg.mentions_others?.length ?? 0) > 0
+      ? { mentions: (msg.mentions_others ?? []).map((m) => ({ ...m.account })) }
+      : {}),
   };
 }
 

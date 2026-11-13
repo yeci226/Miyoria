@@ -6,6 +6,7 @@ import {
   EmojiUsage,
   emojiContributor,
   emojiLines,
+  loosenEmoji,
   reactionEmoji,
   renderEmoji,
   type ServerEmoji,
@@ -64,9 +65,10 @@ describe("renderEmoji", () => {
     expect(renderEmoji("轉圈 :dance:", lookup, [], limits).text).toBe("轉圈 <a:dance:222>");
   });
 
-  test("leaves_existing_markup_and_times_alone", () => {
+  test("keeps_existing_markup_and_leaves_times_alone", () => {
+    // Markup she already wrote is read back as the emoji it names, so it counts toward the limits.
     const text = "已經有 <:fanfan:111> 了,現在 12:30:45";
-    expect(renderEmoji(text, lookup, [], limits)).toEqual({ text, used: [] });
+    expect(renderEmoji(text, lookup, [], limits)).toEqual({ text, used: ["fanfan"] });
   });
 
   test("one_per_message", () => {
@@ -88,6 +90,22 @@ describe("renderEmoji", () => {
   test("a_message_of_only_emoji_keeps_one", () => {
     expect(renderEmoji(":fanfan:", lookup, [[], ["dance"]], limits).text).toBe("<:fanfan:111>");
   });
+
+  test("copied_markup_and_emoji_in_inline_code_come_out_as_emoji", () => {
+    // Seen live: she wrote someone's emoji as raw markup inside backticks, so it showed as text.
+    expect(loosenEmoji("你的 `<:UiCryHarder:1169601539753648178>` 貼滿了")).toBe(
+      "你的 :UiCryHarder: 貼滿了",
+    );
+    expect(loosenEmoji("`:fanfan:` 和 <a:dance:222>")).toBe(":fanfan: 和 :dance:");
+    // Code that is more than an emoji stays code.
+    expect(loosenEmoji("打 `:fanfan: hi` 試試")).toBe("打 `:fanfan: hi` 試試");
+    expect(renderEmoji("餓 `<:fanfan:999>`", lookup, [], limits).text).toBe("餓 <:fanfan:111>");
+    // Not a server emoji here: readable as a name, not raw markup.
+    expect(renderEmoji("你的 `<:UiCryHarder:1169601539753648178>`", lookup, [], limits)).toEqual({
+      text: "你的 :UiCryHarder:",
+      used: [],
+    });
+  });
 });
 
 describe("reactions", () => {
@@ -96,6 +114,8 @@ describe("reactions", () => {
     expect(reactionEmoji("fanfan", lookup)).toBe("fanfan:111");
     expect(reactionEmoji("👍", lookup)).toBe("👍");
     expect(reactionEmoji("unknown", lookup)).toBe("unknown");
+    expect(reactionEmoji("<:fanfan:999>", lookup)).toBe("fanfan:111");
+    expect(reactionEmoji("<a:other:555>", lookup)).toBe("other:555");
   });
 });
 
@@ -239,9 +259,12 @@ describe("DiscordSink with server emoji", () => {
     on = true;
     const dm = { platform: "discord", scope: null, channel: "300", kind: "dm" } as const;
     await sink.send(dm, { text: ":fanfan:", reply_to: null });
+    // Markup in inline code still comes out of it, so Discord draws the emoji.
+    await sink.send(dm, { text: "你的 `<:cry:42>`", reply_to: null });
     expect(rest.bodies.map((b) => (b as { content: string }).content)).toEqual([
       ":fanfan:",
       ":fanfan:",
+      "你的 <:cry:42>",
     ]);
   });
 });

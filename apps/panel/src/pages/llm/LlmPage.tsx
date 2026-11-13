@@ -10,6 +10,7 @@ import { CallSheet } from "./CallSheet";
 import { CallsTab } from "./CallsTab";
 import { OverviewTab } from "./OverviewTab";
 import { PricesTab } from "./PricesTab";
+import { ThinkingTab } from "./ThinkingTab";
 
 const route = getRouteApi("/llm");
 
@@ -51,6 +52,9 @@ export function LlmPage() {
         </TabsContent>
         <TabsContent value="calls">
           <CallsTab search={search} />
+        </TabsContent>
+        <TabsContent value="thinking">
+          <ThinkingTab search={search} />
         </TabsContent>
         <TabsContent value="prices">
           <PricesTab />

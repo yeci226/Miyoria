@@ -301,7 +301,7 @@ describe("vision", () => {
     expect(hasImages(msgs)).toBe(true);
     expect(msgs[1]?.content).toEqual([
       { type: "text", text: "Owen: 看我的貓 [圖片: cat.png(一隻貓)]" },
-      { type: "text", text: "(Owen 傳的圖片 cat.png)" },
+      { type: "text", text: "(Owen 這則訊息附的圖片 cat.png)" },
       {
         type: "image_url",
         image_url: { url: "data:image/png;base64,AQIDBA==", detail: "auto" },

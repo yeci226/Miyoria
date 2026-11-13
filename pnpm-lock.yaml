@@ -411,6 +411,9 @@ importers:
       '@miyoria/types':
         specifier: workspace:*
         version: link:../types
+      opencc-js:
+        specifier: ^1.4.2
+        version: 1.4.2
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -784,6 +787,9 @@ importers:
       '@miyoria/game':
         specifier: workspace:*
         version: link:../game
+      '@miyoria/imagegen':
+        specifier: workspace:*
+        version: link:../imagegen
       '@miyoria/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -1112,6 +1118,28 @@ importers:
       '@miyoria/tools':
         specifier: workspace:*
         version: link:../tools
+      '@miyoria/types':
+        specifier: workspace:*
+        version: link:../types
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@24.19.2)(jsdom@26.1.0)(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.15))
+
+  packages/imagegen:
+    dependencies:
+      '@miyoria/kernel':
+        specifier: workspace:*
+        version: link:../kernel
       '@miyoria/types':
         specifier: workspace:*
         version: link:../types
@@ -1725,6 +1753,9 @@ importers:
 
   packages/social:
     dependencies:
+      '@miyoria/actions':
+        specifier: workspace:*
+        version: link:../actions
       '@miyoria/commands':
         specifier: workspace:*
         version: link:../commands
@@ -4279,6 +4310,7 @@ packages:
   discord.js@14.28.0:
     resolution: {integrity: sha512-l/mIllvqvWQDWqa8NPw7b2AU2tM9oPWiWR6Jk54DTNlUdyArXbi+Y0m0sLIUtQ9O0x+tyVpDMCG6K6Kf0yeAWQ==}
     engines: {node: '>=18'}
+    deprecated: Please upgrade to 14.28.1 or newer as those versions solve a potential security issue related to the new permission fields on channels
 
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
@@ -5393,6 +5425,7 @@ packages:
 
   tldts-core@7.4.20:
     resolution: {integrity: sha512-C630TWXZCZmLq0F2bW4QqwnaaxCQ/svpAqvJwnC4JvgEM5ohhBnGsEzTLSOXcN+xjz+kEaHS5uoWIw2klnqd0A==}
+    deprecated: Partial release, see https://github.com/remusao/tldts/issues/2735. Use >=7.4.22.
 
   tldts@6.1.86:
     resolution: {integrity: sha512-WMi/OQ2axVTf/ykqCQgXiIct+mSQDFdH2fkwhPwgEwvJ1kSzZRiinb0zF2Xb8u4+OqPChmyI6MEu4EezNJz+FQ==}

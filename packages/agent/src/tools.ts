@@ -13,14 +13,18 @@ export class ToolArgumentError extends Error {
   override readonly name = "ToolArgumentError";
 }
 
-/** Built-in `react`: adds an emoji reaction to the triggering message. */
+/** Reactions one `react` call may add (Discord itself allows many per message). */
+export const MAX_REACTIONS = 5;
+
+/** Built-in `react`: adds emoji reactions to the triggering message. */
 export class ReactTool implements Tool {
   static readonly NAME = "react";
 
   readonly spec: ToolSpec = {
     name: ReactTool.NAME,
     description:
-      "對觸發這次對話的那則訊息加上一個 emoji 反應。只想表達情緒、不需要多說話時可以只按反應然後輸出 <silence/>。",
+      "對觸發這次對話的那則訊息加上 emoji 反應。只想表達情緒、不需要多說話時可以只按反應然後輸出 <silence/>。" +
+      `Discord 一則訊息可以按很多個不同的反應:想按好幾個就用 emojis 列出來(最多 ${MAX_REACTIONS} 個)。`,
     parameters: {
       type: "object",
       properties: {
@@ -28,8 +32,12 @@ export class ReactTool implements Tool {
           type: "string",
           description: "一個 emoji,例如 👍、😤、🐋;伺服器表情寫 :名字:",
         },
+        emojis: {
+          type: "array",
+          items: { type: "string" },
+          description: `要一起按的幾個 emoji(最多 ${MAX_REACTIONS} 個),按順序加上去`,
+        },
       },
-      required: ["emoji"],
     },
   };
 
@@ -40,20 +48,33 @@ export class ReactTool implements Tool {
   }
 
   async call(ctx: ToolContext, args: JsonValue): Promise<string> {
-    const raw = isJsonObject(args) ? args.emoji : undefined;
-    const emoji = typeof raw === "string" ? raw.trim() : "";
-    if (emoji === "" || charCount(emoji) > MAX_EMOJI_LEN) {
-      throw new ToolArgumentError("`emoji` must be a single emoji");
+    const single = isJsonObject(args) ? args.emoji : undefined;
+    const many = isJsonObject(args) ? args.emojis : undefined;
+    const raw: (JsonValue | undefined)[] = [single, ...(Array.isArray(many) ? many : [])];
+    const emoji: string[] = [];
+    for (const item of raw) {
+      if (item === undefined || item === null) continue;
+      const one = typeof item === "string" ? item.trim() : "";
+      if (one === "" || charCount(one) > MAX_EMOJI_LEN) {
+        throw new ToolArgumentError("each `emoji` must be a single emoji");
+      }
+      if (!emoji.includes(one)) emoji.push(one);
+    }
+    if (emoji.length === 0) throw new ToolArgumentError("give an `emoji` (or `emojis`)");
+    if (emoji.length > MAX_REACTIONS) {
+      throw new ToolArgumentError(`at most ${MAX_REACTIONS} emoji in one call`);
     }
     const sink = this.#ctx.services.require(ActionSinkKey);
-    const action = newAction(
-      textLane(ctx.context),
-      ctx.priority,
-      { type: "react", message: ctx.message, emoji },
-      { turn: ctx.turn },
-    );
-    await sink.submit(action);
-    return `reacted with ${emoji}`;
+    for (const one of emoji) {
+      const action = newAction(
+        textLane(ctx.context),
+        ctx.priority,
+        { type: "react", message: ctx.message, emoji: one },
+        { turn: ctx.turn },
+      );
+      await sink.submit(action);
+    }
+    return `reacted with ${emoji.join(" ")}`;
   }
 }
 

@@ -31,6 +31,7 @@ import {
   toTimestamp,
 } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { KAOMOJI_LINE } from "../src/lorebook.js";
 import { done, Harness, mention, nextTs, stopHarnesses, textDelta, wait } from "./harness.js";
 
 const PROFILE = join(fileURLToPath(new URL("../../..", import.meta.url)), "profiles/deepseek-chan");
@@ -132,7 +133,7 @@ function provide(services: Services, voice: boolean) {
   const profiles: PersonProfiles = {
     profiles: async () => [],
     render: async () =>
-      "- 阿明:朋友(好感 Lv.24);你叫他「阿明」;你覺得:很拚但常熬夜;上次見面:昨天晚上\n- 小林:認識(好感 Lv.6)",
+      '<person name="阿明" relation="朋友" level="24" call_as="阿明" impression="很拚但常熬夜" last_seen="昨天晚上"/>\n<person name="小林" relation="認識" level="6"/>',
   };
   services.provide("app", PersonProfilesKey, profiles);
   const life: LifeLog = {
@@ -212,15 +213,44 @@ describe("the whole prompt of the shipped persona", () => {
     const system = systemText(request);
     // One place says how long a reply is, and it names no sentence count.
     expect(system).not.toMatch(/[一二三1-3]\s*到\s*[二三四2-4]\s*句/);
-    expect(system.split("長短跟著當下").length - 1).toBe(1);
+    expect(system.split("短、口語").length - 1).toBe(1);
     // Her names are a fact, not a role she plays.
     expect(system).not.toMatch(/演的樣子|角色設定/);
     // Her mood is a state: no way to act it and no tag picked for her in the tail.
     const tail = String(request?.messages.at(-1)?.content);
     expect(tail).not.toContain("外表的樣子");
-    expect(tail).not.toContain("<emo:");
+    // It may remind her to open with a tag, but never names one for her.
+    expect(tail).not.toMatch(/<emo:(?!名稱)/);
     // The example dialogues name nobody real.
     expect(JSON.stringify(request?.messages)).not.toContain("Owen");
+    // The examples are examples, not data; the data blocks are tags.
+    const slow = String(request?.messages[1]?.content);
+    expect(slow.startsWith("<examples note=")).toBe(true);
+    expect(slow).toContain('<example situation="被餵白飯">\n<chat>星野: ');
+    expect(slow).toContain('<data source="people" title="在場的人">\n<person name="阿明"');
+    expect(JSON.stringify(request?.messages)).not.toContain("⟦");
+    // The tail: her state, the turn's style note with four kaomoji, what she answers last.
+    expect(tail).toMatch(
+      /^<now>\n[\s\S]*\n<\/now>\n\n<style_note>\n[\s\S]*\n<\/style_note>\n\n<reply_to>\n/,
+    );
+    expect(tail.endsWith("阿明 問你:DS醬 明天面試好緊張,你覺得我該準備什麼\n</reply_to>")).toBe(
+      true,
+    );
+    const kaomoji = tail.split("\n").find((l) => l.startsWith(KAOMOJI_LINE)) ?? "";
+    expect(kaomoji.slice(KAOMOJI_LINE.length).split(" ")).toHaveLength(4);
+    // What she answers is said once in the history and once at the end, nowhere else.
+    expect(JSON.stringify(request?.messages).split("明天面試好緊張")).toHaveLength(3);
+
+    // The next turn: the fixed front reads the same; what it brings up is only in the tail.
+    h.say(mention(TEXT, "阿明", "主人說你最近變胖了"));
+    await wait(3000);
+    const next = llm.requests[1];
+    expect(next?.messages[0]).toEqual(request?.messages[0]);
+    expect(next?.messages[1]).toEqual(request?.messages[1]);
+    const nextTail = String(next?.messages.at(-1)?.content);
+    expect(nextTail).toContain("流線型");
+    expect(nextTail).toContain("最怕被扣白飯");
+    expect(String(request?.messages.at(-1)?.content)).not.toContain("炸毛");
   });
 
   it("a voice turn, heard in Japanese", async () => {
@@ -269,6 +299,11 @@ describe("the whole prompt of the shipped persona", () => {
     // The language in Chinese, and the format shown again in the tail.
     expect(systemText(request)).not.toContain("Japanese");
     expect(String(request?.messages.at(-1)?.content)).toContain("<voice>えっ、本当に?</voice>");
+    // No kaomoji offered in voice; what she answers comes last.
+    const tail = String(request?.messages.at(-1)?.content);
+    expect(tail).toContain("<style_note>");
+    expect(tail).not.toContain(KAOMOJI_LINE);
+    expect(tail.endsWith("阿明(語音) 問你:米優你今天在幹嘛\n</reply_to>")).toBe(true);
     // No example with code in it: it cannot be read aloud.
     expect(JSON.stringify(request?.messages)).not.toContain(".chars()");
   });

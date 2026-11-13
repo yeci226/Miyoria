@@ -124,7 +124,8 @@ export class QuestDesk {
       }
       return { status: "paid", paid: paid.paid, bonus, all_done: done.has("all") };
     });
-    if (result.status === "paid") await this.e.v2.afterEarn(who);
-    return result;
+    if (result.status !== "paid") return result;
+    const unlocked = await this.e.v2.afterEarn(who);
+    return unlocked.length > 0 ? { ...result, unlocked } : result;
   }
 }

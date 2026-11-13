@@ -61,6 +61,7 @@ const goalView = (g: GoalView): GoalView => ({
   my_pledge: g.my_pledge,
   deadline: g.deadline,
   status: g.status,
+  fulfilled: g.fulfilled,
 });
 
 const bountyView = (b: BountyView): BountyView => ({

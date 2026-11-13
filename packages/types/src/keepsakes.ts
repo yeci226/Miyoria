@@ -70,6 +70,16 @@ export interface KeepsakeCards {
   /** Cards issued today (the local day). */
   today: number;
   per_day: number;
+  /** What a foil finish and a reroll cost now; `null` when it is not on offer. */
+  prices: { foil: number | null; reroll: number | null };
+  /** Rerolls of today's newest card still allowed today. */
+  rerolls_left: number;
+}
+
+/** What a new card is issued with (a chosen picture stays on the member page). */
+export interface KeepsakeCardOrder {
+  /** A foil finish, paid (`card_foil`). */
+  foil?: boolean;
 }
 
 export interface Keepsakes {
@@ -81,8 +91,17 @@ export interface Keepsakes {
    */
   drawFortune(who: KeepsakeWho, key: string): Promise<KeepsakeResult<KeepsakeFortune>>;
   cardsToday(account: AccountRef): Promise<KeepsakeCards>;
-  /** A plain card (no chosen picture, no foil) of what she thinks of them now. */
-  issueCard(who: KeepsakeWho, key: string): Promise<KeepsakeResult<KeepsakeCard>>;
+  /** A card of what she thinks of them now (no chosen picture; foil when ordered and paid). */
+  issueCard(
+    who: KeepsakeWho,
+    key: string,
+    order?: KeepsakeCardOrder,
+  ): Promise<KeepsakeResult<KeepsakeCard>>;
+  /**
+   * Replaces today's newest card with one she writes afresh, paid (`card_reroll`): the old one is
+   * voided and the new one keeps its number. Refused when there is no card today to replace.
+   */
+  rerollCard(who: KeepsakeWho, key: string): Promise<KeepsakeResult<KeepsakeCard>>;
 }
 
 export const KeepsakesKey = serviceKey<Keepsakes>("Keepsakes");

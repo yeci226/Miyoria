@@ -406,3 +406,37 @@ describe("componentsText", () => {
     expect([...componentsText([{ type: 10, content: "長".repeat(700) }])].length).toBe(601);
   });
 });
+
+describe("her cards", () => {
+  /** A receipt as `DiscordSink.sendCard` posts it: components, no content, no pings. */
+  const receipt = (extra: Partial<MessageLike> = {}) =>
+    message({
+      author: user("7", "miyoria", null, true),
+      member: null,
+      content: "",
+      components: [
+        { type: 17, components: [{ type: 10, content: "**🍚 收下了**\n<@99> 餵了白飯" }] },
+      ],
+      ...extra,
+    });
+
+  test("a card is marked as one, a plain line is not", () => {
+    expect(incomingMessage(receipt(), "channel", selves()).card).toBe(true);
+    expect(incomingMessage(message(), "channel", selves()).card).toBeUndefined();
+    // Content beside components is something said.
+    expect(incomingMessage(receipt({ content: "好" }), "channel", selves()).card).toBeUndefined();
+  });
+
+  test("a mention Discord lists nobody for is named from the platform's caches", () => {
+    // 2026-11-11: receipts read 「@某人」 in her history, so nobody could tell whom it charged.
+    expect(incomingMessage(receipt(), "channel", selves()).text).toContain("@某人 餵了白飯");
+    const names = (id: string) => (id === "99" ? "阿鰻" : null);
+    const m = incomingMessage(receipt(), "channel", selves(), null, null, names);
+    expect(m.text).toBe("**🍚 收下了**\n@阿鰻 餵了白飯");
+    // What the message's own mention data says wins.
+    const listed = receipt({ mentions: { users: new Map([["99", user("99", "eel", "鰻魚")]]) } });
+    expect(incomingMessage(listed, "channel", selves(), null, null, names).text).toContain(
+      "@鰻魚 餵了白飯",
+    );
+  });
+});

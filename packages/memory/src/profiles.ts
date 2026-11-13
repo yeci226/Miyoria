@@ -27,11 +27,12 @@ import {
   timestampMs,
   toTimestamp,
   type Whereabouts,
+  xmlAttrs,
 } from "@miyoria/types";
 import type { ProfilesConfig } from "./config.js";
 import { readable } from "./contributor.js";
 import { type MemoryEngine, memoryFilter } from "./engine.js";
-import { disclose, PRIVATE_MARK, placeRef, type Viewer } from "./places.js";
+import { disclose, PRIVATE_MARK, placeRef, quotable, type Viewer, withheldTalk } from "./places.js";
 import { clockOf, type RecentDeps, viewerFor } from "./recent.js";
 import { parseWindow, type RecentLog, type Said } from "./recent-log.js";
 import { hasScope, visibleScopes } from "./scope.js";
@@ -133,7 +134,10 @@ export class Profiles implements PersonProfiles {
         !exclude.includes(r.id),
     );
     if (episode !== undefined) lastTopic = cut(episode.content, cfg.topic_chars);
-    else if (seen.said !== null) {
+    else if (seen.said !== null && seen.private && !quotable("private", viewer)) {
+      // Their DM, seen from a channel: that they talked, not about what.
+      lastTopic = withheldTalk(handle);
+    } else if (seen.said !== null) {
       lastTopic = `${safeName(handle)}說:「${cut(seen.said.text, cfg.topic_chars)}」`;
       topicPrivate = seen.private;
     }
@@ -272,12 +276,16 @@ export class Profiles implements PersonProfiles {
     const blocks: string[] = [];
     let left = maxChars;
     for (const p of await this.profiles(where, options)) {
-      const block = [cut(profileLine(p, clock), cfg.person_chars)];
-      for (const q of p.questions) {
-        const line = questionLine(q, clock);
-        if (line !== "") block.push(`  · ${line}${q.private ? `(${PRIVATE_MARK})` : ""}`);
-      }
-      const text = block.join("\n");
+      const asked = p.questions
+        .map((q) => {
+          const line = questionLine(q, clock);
+          return line === "" ? "" : `${line}${q.private ? `(${PRIVATE_MARK})` : ""}`;
+        })
+        .filter((l) => l !== "");
+      // The questions were lines of their own under the person, outside the person's budget.
+      const room = cfg.person_chars + asked.reduce((n, l) => n + [...l].length + 1, 0);
+      const text = profileLine(p, clock, room, asked);
+      // The block's budget (`maxChars`) counts the tag as it is: what she reads.
       const n = [...text].length + 1;
       if (n > left) continue;
       blocks.push(text);
@@ -308,26 +316,70 @@ function pointText(p: PersonProfile["points"][number], handle: Handle): string {
   return p.text;
 }
 
-/** `- Owen:好朋友(好感 Lv.12);你叫他「歐文」;上次見面 昨天 21:30(語音);...`. */
-export function profileLine(p: PersonProfile, clock: (at: Timestamp) => string): string {
-  const parts: string[] = [];
-  if (p.label !== null) parts.push(p.level === null ? p.label : `${p.label}(好感 Lv.${p.level})`);
-  if (p.call_name) parts.push(`你叫他「${safeName(p.call_name, 16)}」`);
-  if (p.last_seen !== null) {
-    const where =
-      p.last_place !== null && p.last_place.label !== "" ? `,${p.last_place.label}` : "";
-    parts.push(`上次見面:${clock(p.last_seen)}${where}`);
+/**
+ * `<person name="Owen" relation="好朋友" level="12" call_as="歐文" last_seen="昨天 21:30,語音" …/>`:
+ * one person's profile as one tag, every value escaped (`xmlAttrs`). Within `maxChars` (0: no
+ * limit) the least important values go first, from the end; the name always stays. `asked`: her
+ * questions to them, when she is talking with them.
+ */
+export function profileLine(
+  p: PersonProfile,
+  clock: (at: Timestamp) => string,
+  maxChars = 0,
+  asked: readonly string[] = [],
+): string {
+  const attrs: [string, string | number | null][] = [
+    ["relation", p.label],
+    ["level", p.label === null ? null : p.level],
+    ["call_as", p.call_name ? safeName(p.call_name, 16) : null],
+    ["impression", p.feeling],
+    ["stance", p.stance],
+    [
+      "last_seen",
+      p.last_seen === null
+        ? null
+        : `${clock(p.last_seen)}${p.last_place !== null && p.last_place.label !== "" ? `,${p.last_place.label}` : ""}`,
+    ],
+    [
+      "last_topic",
+      p.last_topic === null
+        ? null
+        : `${p.last_topic}${p.last_topic_private ? `(${PRIVATE_MARK})` : ""}`,
+    ],
+    ["notes", p.points.length === 0 ? null : p.points.map((x) => pointText(x, p.handle)).join(";")],
+    ["asked", asked.length === 0 ? null : asked.join(";")],
+  ];
+  if (attrs.every(([, v]) => v === null || String(v).trim() === "")) {
+    attrs.push(["note", "還不太認識"]);
   }
-  if (p.last_topic !== null) {
-    parts.push(`上次聊:${p.last_topic}${p.last_topic_private ? `(${PRIVATE_MARK})` : ""}`);
+  const name = safeName(p.handle);
+  // What the budget counts is what is said (the name and the values), as it was for the line
+  // this tag replaced, not the markup around it.
+  const size = (kept: readonly [string, string | number | null][]) =>
+    kept.reduce((n, [, v]) => n + (v === null ? 0 : [...String(v)].length), [...name].length);
+  let kept = attrs;
+  // Too long: the longest of the free-text values is cut, then values go from the end.
+  while (maxChars > 0 && size(kept) > maxChars && kept.length > 0) {
+    const free = kept
+      .map(([k, v], i) => ({ i, k, n: typeof v === "string" ? [...v].length : 0 }))
+      .filter((a) => FREE_TEXT.has(a.k) && a.n > MIN_VALUE)
+      .sort((a, b) => b.n - a.n)[0];
+    if (free !== undefined) {
+      const over = size(kept) - maxChars;
+      const [k, v] = kept[free.i] as [string, string];
+      const next = cut(v, Math.max(MIN_VALUE, free.n - over));
+      kept = kept.map((a, i) => (i === free.i ? [k, next] : a));
+    } else {
+      kept = kept.slice(0, -1);
+    }
   }
-  if (p.feeling !== null) parts.push(`你覺得:${p.feeling}`);
-  if (p.stance !== null) parts.push(`你的相處方式:${p.stance}`);
-  if (p.points.length > 0) {
-    parts.push(`重點:${p.points.map((x) => pointText(x, p.handle)).join(";")}`);
-  }
-  return `- ${safeName(p.handle)}:${parts.length === 0 ? "(還不太認識)" : parts.join(";")}`;
+  return `<person${xmlAttrs({ name, ...Object.fromEntries(kept) })}/>`;
 }
+
+/** Values of `profileLine` that are cut before any is left out. */
+const FREE_TEXT = new Set(["impression", "stance", "last_topic", "notes", "asked"]);
+/** A cut value keeps at least this many characters. */
+const MIN_VALUE = 12;
 
 /** For callers holding records: their ids and contents, as `ProfileOptions.exclude`. */
 export function excludeOf(records: readonly Pick<MemoryRecord, "id" | "content">[]): string[] {

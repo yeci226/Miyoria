@@ -40,6 +40,14 @@ export const LOW_LATENCY_INPUT = [
   "-probesize", "1000000",
 ];
 
+/**
+ * After LOW_LATENCY_INPUT when the feed is pulled from a server (MediaMTX): the pull joins mid-GOP,
+ * and 0.5 s of probing ends before the next keyframe brings the picture size ("Could not find codec
+ * parameters ... unspecified size", then nut cannot write its header). Waiting for a keyframe is
+ * time spent before the first packet, not a queue: nothing is buffered while it waits.
+ */
+export const PULL_PROBE_INPUT = ["-analyzeduration", "3000000", "-probesize", "5000000"];
+
 /** Output options when the source's H.264 is copied: AVCC framing → Annex B. */
 export const PASSTHROUGH_FLAGS = ["-bsf:v", "h264_mp4toannexb"];
 
@@ -122,7 +130,11 @@ export class DvsEngine implements StreamEngine {
           // Not the library's `minimizeLatency`: it passes `-flags lowdelay`, which current ffmpeg builds
           // reject ("Error setting option flags to value lowdelay"); the flag is spelled `low_delay`.
           minimizeLatency: false,
-          customInputOptions: [...plan.inputOptions, ...(plan.live ? LOW_LATENCY_INPUT : [])],
+          customInputOptions: [
+            ...plan.inputOptions,
+            ...(plan.live ? LOW_LATENCY_INPUT : []),
+            ...(plan.pull ? PULL_PROBE_INPUT : []),
+          ],
           // Copied H.264 from RTMP / MP4 is length-prefixed (AVCC); the library's demuxer parses
           // Annex B, so convert the stream framing (no re-encode).
           customFfmpegFlags: plan.noTranscode ? PASSTHROUGH_FLAGS : [],

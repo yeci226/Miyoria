@@ -262,6 +262,35 @@ describe("daily reflection", () => {
     expect(curator.insights).toEqual([]);
   });
 
+  it("a reply a little over its limits is cut and kept, not refused", async () => {
+    // Core log 2026-11-10: "her reflection failed" for insights / lessons over their limits.
+    const reply = JSON.stringify({
+      summary: "長".repeat(1500),
+      insights: Array.from({ length: 10 }, (_, i) => ({
+        from: ["n1", "n2"],
+        content: `${i} ${"拉".repeat(500)}`,
+        importance: 1.4,
+      })),
+      lessons: Array.from({ length: 9 }, (_, i) => ({
+        text: `第 ${i} 條:${"慢".repeat(300)}`,
+        talk: -3,
+        days: 400,
+      })),
+    });
+    const { reflector, lessons, curator, provider } = setup(reply);
+    const run = await reflector.reflect("daily", null);
+    expect(run?.error).toBeNull();
+    // One call: nothing was sent back to be redone.
+    expect(provider.requests()).toHaveLength(1);
+    expect(curator.insights).toHaveLength(8);
+    expect(curator.insights.every((i) => [...i.content].length <= 400)).toBe(true);
+    expect(curator.insights[0]?.importance).toBe(1);
+    const kept = lessons.all();
+    expect(kept).toHaveLength(6);
+    expect(kept.every((l) => [...l.text].length <= 200 && l.text.endsWith("…"))).toBe(true);
+    expect(kept.every((l) => l.talk === null || l.talk >= -1)).toBe(true);
+  });
+
   it("a daily reflection that failed is tried again later, three times a day at most", async () => {
     const start = Date.parse("2026-11-02T22:00:00.000Z"); // 06:00 local
     vi.setSystemTime(start);

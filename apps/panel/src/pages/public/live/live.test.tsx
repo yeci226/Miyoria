@@ -18,8 +18,7 @@ import {
 } from "./feed";
 import { isLivePath } from "./LivePage";
 import { contentBox, spotAt } from "./touch";
-import { LiveStage, PAT_MS, poseOf, RETRY_VIDEO_MS } from "./LiveStage";
-import { faceOf } from "./Mascot";
+import { LiveStage, RETRY_VIDEO_MS } from "./LiveStage";
 
 const NOW: LiveSnapshot = {
   presence: { place: "in_voice", game: null },
@@ -137,8 +136,7 @@ function stage(member: MemberSession | null = MEMBER, loginUrl: string | null = 
   );
   const source = FakeSource.all.at(-1) as FakeSource;
   const send = (event: LiveEvent) => act(() => source.send(event));
-  const figure = () => view.container.querySelector("svg.mio") as SVGSVGElement;
-  return { ...view, source, send, figure };
+  return { ...view, source, send };
 }
 
 describe("the feed on the page", () => {
@@ -197,38 +195,18 @@ describe("the feed on the page", () => {
   });
 });
 
-describe("her figure", () => {
-  it("draws every emotion she has with a face of its own, and unknown ones resting", () => {
-    expect(faceOf("happy")).toBe("happy");
-    expect(faceOf("Embarrassed")).toBe("shy");
-    expect(faceOf("smug")).toBe("smug");
-    expect(faceOf("whatever")).toBe("neutral");
-  });
-
-  it("sleeps while she is away, thinks while she thinks, sings while she sings", () => {
-    expect(poseOf(null)).toBe("asleep");
-    expect(poseOf({ ...NOW, presence: { place: "offline", game: null } })).toBe("asleep");
-    const thinking = { kind: "thinking" as const, label: "思考中…", detail: null, progress: null };
-    expect(poseOf({ ...NOW, activity: thinking })).toBe("thinking");
-    expect(poseOf({ ...NOW, presence: { place: "singing", game: null } })).toBe("singing");
-  });
-});
-
 describe("the live stage", () => {
-  it("connects, then shows where she is, her face and what she says as it arrives", () => {
+  it("connects, then shows where she is and what she says as it arrives", () => {
     const s = stage();
     expect(screen.getByTestId("live-state")).toHaveTextContent("連線中…");
     expect(s.source.url).toBe("/api/public/live");
     s.send({ type: "hello", snapshot: NOW });
     expect(screen.getByTestId("live-state")).toHaveTextContent("她在語音頻道");
     expect(screen.getByText("她現在沒在說話")).toBeInTheDocument();
-    s.send({ type: "emotion", emotion: { name: "embarrassed", intensity: 0.8 } });
-    expect(s.figure().dataset.face).toBe("shy");
     s.send({ type: "speaking", speaking: true });
     s.send({ type: "line", line: { id: 1, text: "欸,你回來啦", final: false, via: "voice" } });
     const quote = screen.getByText("欸,你回來啦");
     expect(quote).toHaveAttribute("data-final", "false");
-    expect(s.figure().dataset.speaking).toBe("true");
     expect(screen.getByText("她在語音裡說")).toBeInTheDocument();
     s.send({ type: "line", line: { id: 1, text: "欸,你回來啦", final: true, via: "voice" } });
     expect(screen.getByText("欸,你回來啦")).toHaveAttribute("data-final", "true");
@@ -253,7 +231,6 @@ describe("the live stage", () => {
       },
     });
     expect(screen.getByTestId("live-state")).toHaveTextContent("她在唱歌正在唱〈春日影〉");
-    expect(s.figure().dataset.pose).toBe("singing");
   });
 
   it("asks a visitor to log in to pat her, and offers no pat", () => {
@@ -281,14 +258,10 @@ describe("the live stage", () => {
     const s = stage();
     s.send({ type: "hello", snapshot: NOW });
     await userEvent.click(screen.getByRole("button", { name: /摸摸頭/ }));
-    expect(s.figure().dataset.patting).toBe("true");
-    expect(s.figure().dataset.face).toBe("happy");
-    expect(s.figure().querySelectorAll("[data-heart]")).toHaveLength(1);
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("她感覺到了"));
     expect(calls).toEqual([{ method: "POST", path: "/api/member/live/pat", body: {} }]);
     // Her own pat coming back through the feed does not count twice.
     s.send({ type: "pat", pats: { recent: 1, open: true } });
-    expect(s.figure().querySelectorAll("[data-heart]")).toHaveLength(1);
     expect(screen.getByText("這一分鐘 1 次摸頭")).toBeInTheDocument();
   });
 
@@ -300,22 +273,17 @@ describe("the live stage", () => {
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("摸太快了"));
   });
 
-  it("shows somebody else's pat too, and lets go of it after a moment", () => {
-    vi.useFakeTimers();
+  it("counts somebody else's pat without a picture to show it on", () => {
     const s = stage();
     s.send({ type: "hello", snapshot: NOW });
     s.send({ type: "pat", pats: { recent: 1, open: true } });
-    expect(s.figure().dataset.patting).toBe("true");
-    act(() => vi.advanceTimersByTime(PAT_MS + 500));
-    expect(s.figure().dataset.patting).toBe("false");
-    expect(s.figure().querySelectorAll("[data-heart]")).toHaveLength(0);
+    expect(screen.getByText("這一分鐘 1 次摸頭")).toBeInTheDocument();
   });
 
   it("keeps the last picture while it reconnects, and says it is lost before any", () => {
     const s = stage();
     act(() => s.source.fail(true));
     expect(screen.getByTestId("live-state")).toHaveTextContent("連不上現場");
-    expect(s.figure().dataset.pose).toBe("asleep");
     const t = stage();
     t.send({ type: "hello", snapshot: NOW });
     act(() => t.source.fail(false));
@@ -383,18 +351,16 @@ describe("the picture and the touches", () => {
       return video;
     }
 
-    it("draws her figure while OBS is not publishing", () => {
+    it("shows no picture while OBS is not publishing, only her state and lines", () => {
       const s = stage();
       s.send({ type: "hello", snapshot: NOW });
-      expect(s.figure()).not.toBeNull();
       expect(s.container.querySelector("video")).toBeNull();
     });
 
-    it("plays the picture with hls.js once OBS publishes, and goes back to the figure when it stops", async () => {
+    it("plays the picture with hls.js once OBS publishes, and drops it when it stops", async () => {
       const s = stage();
       s.send({ type: "hello", snapshot: { ...NOW, video: VIDEO_ON } });
       expect(s.container.querySelector("video")).not.toBeNull();
-      expect(s.figure()).toBeNull();
       await waitFor(() => expect(hlsAll()).toHaveLength(1));
       const hls = hlsAll()[0] as FakeHlsLike;
       expect(hls.source).toBe("/api/public/live/video/index.m3u8");
@@ -405,7 +371,6 @@ describe("the picture and the touches", () => {
       expect(screen.getByTestId("live-state")).toHaveTextContent("她在語音頻道");
       expect(screen.getByRole("button", { name: /摸摸頭/ })).toBeEnabled();
       s.send({ type: "video", video: { on: false, src: null } });
-      expect(s.figure()).not.toBeNull();
       expect(s.container.querySelector("video")).toBeNull();
       expect(hls.destroyed).toBe(true);
     });
@@ -428,7 +393,7 @@ describe("the picture and the touches", () => {
       canPlay.mockRestore();
     });
 
-    it("recovers a network error, and gives the picture up to her figure when it will not come back", async () => {
+    it("recovers a network error, and gives the picture up when it will not come back", async () => {
       const s = stage();
       s.send({ type: "hello", snapshot: { ...NOW, video: VIDEO_ON } });
       await waitFor(() => expect(hlsAll()).toHaveLength(1));
@@ -440,9 +405,9 @@ describe("the picture and the touches", () => {
       fail("networkError");
       act(() => vi.advanceTimersByTime(1_100));
       expect(hls.started).toBe(1);
-      expect(s.figure()).toBeNull();
+      expect(s.container.querySelector("video")).not.toBeNull();
       for (let i = 0; i < 5; i++) fail("networkError");
-      expect(s.figure()).not.toBeNull();
+      expect(s.container.querySelector("video")).toBeNull();
       expect(screen.getByTestId("live-state")).toHaveTextContent("直播畫面連不上");
       // After a while it is tried again.
       act(() => vi.advanceTimersByTime(RETRY_VIDEO_MS + 100));

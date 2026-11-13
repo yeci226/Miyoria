@@ -28,6 +28,8 @@ export function whereOf(ctx: ToolContext): NotebookWhere {
 const PATH_HINT = "頁面路徑,例如「人/Owen」「主題/Minecraft 建築」「自己/想做的事」";
 
 export class NotebookReadTool implements Tool {
+  /** Reading a page writes nothing. */
+  readonly readOnly = true;
   readonly spec: ToolSpec = {
     name: NOTEBOOK_READ,
     description:

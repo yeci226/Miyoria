@@ -106,15 +106,15 @@ describe("the gate", () => {
     const text = await r.call("web_search", ALICE, { query: "Claude Opus 5.5" });
     expect(text).toContain("Introducing Claude Opus 5.5 & friends");
     expect(text).toContain("https://www.anthropic.com/news/claude-opus-5-5");
-    expect(text).toContain(`${DATA_OPEN}資料 來源=web`);
-    expect(text.trimEnd().endsWith(`${DATA_OPEN}/資料${DATA_CLOSE}`)).toBe(true);
+    expect(text).toContain(`${DATA_OPEN} source="web`);
+    expect(text.trimEnd().endsWith(DATA_CLOSE)).toBe(true);
   });
 
   it("answers a member's page read", async () => {
     const r = rig();
     const text = await r.call("web_read", ALICE, { url: "https://example.com/post" });
     expect(text).toContain("Second paragraph.");
-    expect(text).toContain(`${DATA_OPEN}資料 來源=web`);
+    expect(text).toContain(`${DATA_OPEN} source="web`);
   });
 
   it("refuses someone without tools.web", async () => {

@@ -62,7 +62,7 @@ export interface LivePlayerProps {
   spots: readonly Spot[];
   /** A member touched the picture at `spot`. */
   onTouch: (spot: LiveSpot) => void;
-  /** The stream could not be brought back; the page draws her figure instead. */
+  /** The stream could not be brought back; the page shows no picture until it tries again. */
   onFail: () => void;
 }
 

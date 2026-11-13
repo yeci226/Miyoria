@@ -218,15 +218,23 @@ export function wishGrams(text: string, person: Handle | null = null): Set<strin
   return grams;
 }
 
-/** `a` and `b` are about the same thing (for the same person). */
-export function sameWish(a: string, b: string, person: Handle | null = null): boolean {
+/**
+ * `a` and `b` are about the same thing (for the same person): at least `min` of the smaller
+ * one's grams are shared. A DM to the person is held to `DM_SAME_WISH` (2026-11-11: her DM
+ * paraphrased a wish whose topic also carried its plan's steps, shared 0.30, and the wish
+ * fired again 13 minutes later; an unrelated DM shared 0.00).
+ */
+export function sameWish(a: string, b: string, person: Handle | null = null, min = 0.5): boolean {
   const x = wishGrams(a, person);
   const y = wishGrams(b, person);
   if (x.size === 0 || y.size === 0) return false;
   let shared = 0;
   for (const g of x) if (y.has(g)) shared++;
-  return shared / Math.min(x.size, y.size) >= 0.5;
+  return shared / Math.min(x.size, y.size) >= min;
 }
+
+/** `sameWish`'s share for a DM sent to the wish's person: the message is for them alone. */
+export const DM_SAME_WISH = 0.25;
 
 /**
  * The person says she asked already, or asks her to stop asking ("你已經在私訊問過我了",

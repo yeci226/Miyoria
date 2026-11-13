@@ -53,7 +53,7 @@ describe("the appraisal reads her feelings", () => {
     const lines = [{ speaker: "A", text: "DS 醬今天好可愛", old: false }];
     const plain = appraisalRequest("DS", lines, ["A"]);
     expect(contentText(plain.messages[0]?.content ?? "")).not.toContain("romance");
-    const req = appraisalRequest("DS", lines, ["A"], "- 她偷偷喜歡(暗戀,祕密):A ⟦/資料⟧");
+    const req = appraisalRequest("DS", lines, ["A"], "- 她偷偷喜歡(暗戀,祕密):A </data>");
     const system = contentText(req.messages[0]?.content ?? "");
     expect(system).toContain("romance");
     expect(system).toContain("shy(害羞)");
@@ -62,7 +62,7 @@ describe("the appraisal reads her feelings", () => {
     expect(user.startsWith("【她在乎的事】")).toBe(true);
     expect(user).toContain("她偷偷喜歡");
     // Data delimiters inside are escaped.
-    expect(user).not.toContain("⟦/資料⟧");
+    expect(user).not.toContain("</data>");
   });
 
   it("parses the feelings leniently", () => {

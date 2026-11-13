@@ -51,10 +51,11 @@ const STATE: Record<SongEntry["state"], string> = {
   cancelled: "已取消",
 };
 
-function line(e: SongEntry): string {
+function line(e: SongEntry, waiting = false): string {
   let s = `#${e.no} ${md(songLabel(e))}：${STATE[e.state]}`;
   if (e.state === "preparing") s += `（${Math.round(e.progress * 100)}%）`;
   s += ` · ${md(e.requester_name)}`;
+  if (waiting) s += "（不在語音裡，回來再唱）";
   if (e.state === "failed" && e.error) s += `（${md(e.error.slice(0, 80))}）`;
   return s;
 }
@@ -67,9 +68,14 @@ export function listCard(singer: Singer, note: string | null = null): CommandRep
   const blocks: CardBlock[] = [];
   blocks.push({
     type: "text",
-    text: open.length > 0 ? open.map(line).join("\n") : "歌單是空的。用 /queue song request 點歌。",
+    text:
+      open.length > 0
+        ? open.map((e) => line(e, e.state === "ready" && singer.waitsForRequester(e))).join("\n")
+        : "歌單是空的。用 /queue song request 點歌。",
   });
-  if (recent.length > 0) blocks.push({ type: "muted", text: recent.map(line).join("\n") });
+  if (recent.length > 0) {
+    blocks.push({ type: "muted", text: recent.map((e) => line(e)).join("\n") });
+  }
   if (note) blocks.push({ type: "muted", text: note });
   const buttons: CardButton[] = [
     { id: componentId(R.refresh), label: "重新整理", style: "secondary" },

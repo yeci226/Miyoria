@@ -122,7 +122,7 @@ export interface AdapterOptions extends EventOptions {
 const MEASURED = new Set([...ITEM_GOALS, ...PLACE_GOALS]);
 
 /** Goals that are done once the mod accepted them. */
-const INSTANT = new Set(["chat", "look", "attack", "use", "select", "respawn", "place", "stop"]);
+const INSTANT = new Set(["chat", "look", "attack", "use", "select", "respawn", "place", "drop", "stop"]);
 /** Baritone goals that never end by themselves; at the end of their budget they are done. */
 const OPEN_ENDED = new Set(["follow", "explore", "farm"]);
 /** Goals that end with their own events. */

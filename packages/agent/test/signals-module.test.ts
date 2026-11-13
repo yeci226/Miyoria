@@ -192,8 +192,8 @@ describe("prompt contributors", () => {
     const d = data(mock, before);
     expect(
       d.endsWith(
-        "⟦資料 來源=world 標題=周遭⟧\n大家都在線\n⟦/資料⟧\n\n" +
-          "⟦資料 來源=memory 標題=你記得的事⟧\nOwen 明天要考數學\n⟦/資料⟧",
+        '<data source="world" title="周遭">\n大家都在線\n</data>\n\n' +
+          '<data source="memory" title="你記得的事">\nOwen 明天要考數學\n</data>',
       ),
       d,
     ).toBe(true);
@@ -222,7 +222,7 @@ describe("prompt contributors", () => {
 
   it("contributed_context_is_capped", async () => {
     const mock = new MockProvider("chat").reply("嗯");
-    const config = { attention: { llm_check: false }, max_context_chars: 80 };
+    const config = { attention: { llm_check: false }, max_context_chars: 110 };
     const h = await Harness.create("always", config, mock);
     const registry = new PromptContributors();
     h.sup.services.provide(APP, PromptContributorsKey, registry);
@@ -235,10 +235,10 @@ describe("prompt contributors", () => {
     h.say(incoming(channel("c"), "Owen", "嗨"));
     await wait(3000);
     const d = data(mock, 0);
-    const tail = d.slice(d.indexOf("⟦資料 來源=a"));
-    expect([...tail].length, tail).toBeLessThanOrEqual(80);
+    const tail = d.slice(d.indexOf('<data source="a"'));
+    expect([...tail].length, tail).toBeLessThanOrEqual(110);
     expect(tail).toContain("第一段");
-    expect(tail.endsWith("…\n⟦/資料⟧"), tail).toBe(true);
+    expect(tail.endsWith("…\n</data>"), tail).toBe(true);
   });
 });
 
@@ -345,7 +345,9 @@ describe("social signals", () => {
     await wait(3000);
     expect(mock.requests().length).toBe(1);
     // One line per person, one relationship scale.
-    expect(data(mock, 0)).toContain("⟦資料 來源=people 標題=在場的人⟧\n- rude:很討厭\n⟦/資料⟧");
+    expect(data(mock, 0)).toContain(
+      '<data source="people" title="在場的人">\n<person name="rude" relation="很討厭"/>\n</data>',
+    );
     let trace = lastTrace(h);
     expect(trace.respond).toBe(true);
 
@@ -361,7 +363,7 @@ describe("social signals", () => {
     // Friends get a warm tone and their call name.
     h.say(mention(channel("c3"), "Owen", "早"));
     await wait(3000);
-    expect(data(mock, 2)).toContain("- Owen:摯友;你叫他「歐文」");
+    expect(data(mock, 2)).toContain('<person name="Owen" relation="摯友" call_as="歐文"/>');
   });
 
   it("affinity no longer scales the ambient probability (her talkativeness does)", async () => {
@@ -459,9 +461,9 @@ describe("initiative", () => {
     const s = situation(mock, 0);
     expect(s).toContain("是你自己想主動開啟話題");
     expect(s).toContain("你想到可以聊的事在參考資料「你想聊的事」裡。");
-    expect(data(mock, 0)).toContain("標題=你想聊的事⟧\n問 Owen 考試考得怎樣\n⟦/資料⟧");
+    expect(data(mock, 0)).toContain('title="你想聊的事">\n問 Owen 考試考得怎樣\n</data>');
     expect(s).not.toContain("問 Owen 考試考得怎樣");
-    expect(data(mock, 0)).toContain("- Owen:好朋友");
+    expect(data(mock, 0)).toContain('<person name="Owen" relation="好朋友"');
     expect(h.sink.sent()).toEqual([["欸,Owen,考試考得怎樣?", "initiative"]]);
     const trace = lastTrace(h);
     expect(trace.respond).toBe(true);

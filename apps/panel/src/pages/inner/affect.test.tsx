@@ -6,7 +6,7 @@ import type { AffectSnapshot, DayPlanView, Envelope, Goal, GoalsView, PersonCard
 import { applyCustomEvent } from "@/app/events-store";
 import { queryKeys } from "@/app/queries";
 import { mockFetch, renderRoute } from "@/test/render";
-import { emotionsText } from "./PersonCards";
+import { emotionsText, stanceText } from "./PersonCards";
 import { triggerText } from "./GoalsTab";
 
 const AT = "2026-11-02T12:00:00.000Z";
@@ -43,6 +43,9 @@ const CARD: PersonCard = {
   emotions: { missing: 0.6, gratitude: 0.2 },
   feeling: "最近常陪我聊天,有點在意他",
   label: "好朋友",
+  level: 60,
+  stance: "嘴硬但會照顧他",
+  stance_level: 55,
   owner: true,
   blocked: false,
   last_seen: AT,
@@ -159,6 +162,8 @@ describe("Inner: people cards", () => {
     expect(within(cards).getByRole("meter", { name: "owen 在意 0.50" })).toBeInTheDocument();
     expect(within(cards).getByText("最近常陪我聊天,有點在意他")).toBeInTheDocument();
     expect(within(cards).getByText("想念 0.60 · 感激 0.20")).toBeInTheDocument();
+    expect(within(cards).getByText("Lv.60")).toBeInTheDocument();
+    expect(within(cards).getByText("嘴硬但會照顧他(Lv.55 時寫的)")).toBeInTheDocument();
     expect(await screen.findByRole("table", { name: "感情" })).toBeInTheDocument();
   });
 
@@ -172,6 +177,15 @@ describe("Inner: people cards", () => {
   it("orders the emotions toward a person by strength", () => {
     expect(emotionsText({ ...CARD, emotions: { gratitude: 0.2, missing: 0.6, jealousy: 0 } })).toBe("想念 0.60 · 感激 0.20");
     expect(emotionsText({ ...CARD, emotions: {} })).toBe("");
+  });
+
+  it("says when her stance was written at another level, and nothing without one", () => {
+    expect(stanceText({ ...CARD, stance_level: 60 })).toBe("嘴硬但會照顧他");
+    expect(stanceText(CARD)).toBe("嘴硬但會照顧他(Lv.55 時寫的)");
+    expect(stanceText({ ...CARD, stance: null })).toBeNull();
+    // An older Core sends neither.
+    const { level: _l, stance: _s, stance_level: _sl, ...old } = CARD;
+    expect(stanceText(old)).toBeNull();
   });
 });
 

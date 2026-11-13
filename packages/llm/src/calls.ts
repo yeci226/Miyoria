@@ -2,7 +2,9 @@
 // records (time, purpose, model, tokens, latency, cost and the price used, finish reason,
 // fallbacks, retries, errors, who asked), and for the most recent calls the full request and
 // response with secrets redacted. Records and details live in memory only (they start over
-// when the process restarts); the cost tracker keeps the persisted totals.
+// when the process restarts); the cost tracker keeps the persisted totals. The reasoning and
+// the answer of each call are also kept apart from the details, for many more calls, so the
+// panel can read her chain of thought by kind of call.
 
 import type { ReasoningLevel } from "@miyoria/types";
 import type { Pricing } from "./cost.js";
@@ -18,8 +20,47 @@ export const MAX_DETAIL_CHARS = 12_000_000;
 /** Characters kept of one message, of the response text and of the reasoning. */
 export const MAX_MESSAGE_CHARS = 40_000;
 export const MAX_RESPONSE_CHARS = 40_000;
+/** Calls whose reasoning and answer are kept for the chain-of-thought view. */
+export const MAX_THINKING = 2000;
+/** Characters of all kept reasoning and answers together. */
+export const MAX_THINKING_CHARS = 10_000_000;
+/** Characters kept of an answer in the chain-of-thought view. */
+export const MAX_THINKING_ANSWER_CHARS = 4000;
 
 export type LlmCallStatus = "streaming" | "ok" | "error" | "aborted";
+
+/** What a call was for, broadly: her inner thoughts, a text or voice reply, and so on. */
+export const CALL_KINDS = [
+  "mind",
+  "chat",
+  "voice",
+  "attention",
+  "memory",
+  "learning",
+  "social",
+  "other",
+] as const;
+export type LlmCallKind = (typeof CALL_KINDS)[number];
+
+/** The kind of a call, from who asked (`module`) and for what (`label`, `purpose`). */
+export function callKind(c: {
+  module: string | null;
+  label: string | null;
+  purpose: string;
+}): LlmCallKind {
+  const m = c.module;
+  if (m === "mind" || (m === null && c.purpose === "mind")) return "mind";
+  if (m === "agent") {
+    if (c.label === "voice") return "voice";
+    if (c.label === "attention") return "attention";
+    return "chat";
+  }
+  if (m === "voice") return "voice";
+  if (m === "memory") return "memory";
+  if (m === "learning") return "learning";
+  if (m === "social") return "social";
+  return "other";
+}
 
 /** A model of the chain that failed before this call's model answered. */
 export interface LlmFallback {
@@ -43,6 +84,8 @@ export interface LlmCallRecord {
   purpose: string;
   /** The purpose whose chain answered (`chat` when `purpose` has none). */
   chain: string;
+  /** What it was for, broadly (`callKind`). */
+  kind: LlmCallKind;
   /** `provider:model` that answered (the last one tried when all failed). */
   model: string | null;
   provider: string | null;
@@ -96,6 +139,33 @@ export interface LlmCallDetail {
   messages: LlmMessageView[];
   tools: string[];
   response: { text: string; reasoning: string; tool_calls: ToolCall[]; cut: number };
+}
+
+/** A call with its chain of thought and answer, for the chain-of-thought view. */
+export interface LlmThinking {
+  call: LlmCallRecord;
+  /** `null` once dropped from the ring (or before the call ends). */
+  reasoning: string | null;
+  answer: string | null;
+  /** Names of the tools it called. */
+  tool_calls: string[];
+  /** Characters cut from the reasoning and the answer. */
+  cut: number;
+}
+
+export interface LlmThinkingPage {
+  items: LlmThinking[];
+  next_cursor: string | null;
+  matched: number;
+  /** Calls per kind under the same filter (without the kind), and how many of them reasoned. */
+  by_kind: { kind: LlmCallKind; calls: number; reasoned: number }[];
+}
+
+interface ThinkingEntry {
+  reasoning: string;
+  answer: string;
+  tool_calls: string[];
+  cut: number;
 }
 
 // ---- redaction ---------------------------------------------------------------------------------
@@ -280,6 +350,9 @@ function counts(values: readonly string[]): Map<string, number> {
 // ---- the log --------------------------------------------------------------------------------
 
 export interface LlmCallFilter {
+  kind?: LlmCallKind;
+  /** Only calls that answered with reasoning. */
+  reasoned?: boolean;
   purpose?: string;
   model?: string;
   module?: string;
@@ -299,11 +372,15 @@ export class LlmCallLog {
   readonly #calls: LlmCallRecord[] = [];
   readonly #details = new Map<string, LlmCallDetail>();
   #detailChars = 0;
+  readonly #thinking = new Map<string, ThinkingEntry>();
+  #thinkingChars = 0;
 
   constructor(
     private readonly maxCalls = MAX_CALLS,
     private readonly maxDetails = MAX_DETAILS,
     private readonly maxDetailChars = MAX_DETAIL_CHARS,
+    private readonly maxThinking = MAX_THINKING,
+    private readonly maxThinkingChars = MAX_THINKING_CHARS,
   ) {}
 
   /** Starts a record of a call (returned for the router to fill in). */
@@ -336,6 +413,7 @@ export class LlmCallLog {
       at,
       purpose,
       chain,
+      kind: callKind({ module: tag?.module ?? null, label: tag?.label ?? null, purpose }),
       model: null,
       provider: null,
       status: "streaming",
@@ -370,7 +448,10 @@ export class LlmCallLog {
     this.#calls.push(record);
     while (this.#calls.length > this.maxCalls) {
       const old = this.#calls.shift();
-      if (old) this.#dropDetail(old.id);
+      if (old) {
+        this.#dropDetail(old.id);
+        this.#dropThinking(old.id);
+      }
     }
     const detail: LlmCallDetail = {
       messages: request.messages.map(messageView),
@@ -391,6 +472,7 @@ export class LlmCallLog {
       record.reasoning_chars = reasoning.length;
       record.tool_calls = toolCalls.length;
     }
+    if (record) this.#keepThinking(id, text, reasoning, toolCalls);
     const d = this.#details.get(id);
     if (!d) return;
     this.#detailChars -= detailChars(d);
@@ -404,6 +486,35 @@ export class LlmCallLog {
     };
     this.#detailChars += detailChars(d);
     this.#trim();
+  }
+
+  #keepThinking(id: string, text: string, reasoning: string, toolCalls: ToolCall[]): void {
+    this.#dropThinking(id);
+    const r = clip(redactSecrets(reasoning), MAX_RESPONSE_CHARS);
+    const a = clip(redactSecrets(text), MAX_THINKING_ANSWER_CHARS);
+    const entry: ThinkingEntry = {
+      reasoning: r.text,
+      answer: a.text,
+      tool_calls: toolCalls.map((c) => c.name),
+      cut: r.cut + a.cut,
+    };
+    this.#thinking.set(id, entry);
+    this.#thinkingChars += entry.reasoning.length + entry.answer.length;
+    while (
+      this.#thinking.size > this.maxThinking ||
+      (this.#thinkingChars > this.maxThinkingChars && this.#thinking.size > 1)
+    ) {
+      const oldest = this.#thinking.keys().next().value;
+      if (oldest === undefined) break;
+      this.#dropThinking(oldest);
+    }
+  }
+
+  #dropThinking(id: string): void {
+    const t = this.#thinking.get(id);
+    if (!t) return;
+    this.#thinkingChars -= t.reasoning.length + t.answer.length;
+    this.#thinking.delete(id);
   }
 
   #dropDetail(id: string): void {
@@ -440,6 +551,8 @@ export class LlmCallLog {
   }
 
   #matches(c: LlmCallRecord, f: LlmCallFilter): boolean {
+    if (f.kind && c.kind !== f.kind) return false;
+    if (f.reasoned && c.reasoning_chars === 0) return false;
     if (f.purpose && c.purpose !== f.purpose) return false;
     if (f.model && c.model !== f.model) return false;
     if (f.module && (c.module ?? "") !== f.module) return false;
@@ -456,10 +569,17 @@ export class LlmCallLog {
         .join(" ")
         .toLowerCase();
       if (!hay.includes(q)) {
+        const t = this.#thinking.get(c.id);
         const d = this.#details.get(c.id);
-        if (!d) return false;
-        const text =
-          `${d.response.text}\n${d.messages.map((m) => m.content).join("\n")}`.toLowerCase();
+        if (!d && !t) return false;
+        const text = [
+          d?.response.text ?? "",
+          ...(d?.messages.map((m) => m.content) ?? []),
+          t?.reasoning ?? "",
+          t?.answer ?? "",
+        ]
+          .join("\n")
+          .toLowerCase();
         if (!text.includes(q)) return false;
       }
     }
@@ -488,6 +608,41 @@ export class LlmCallLog {
       items,
       next_cursor: start + limit < all.length && last ? last.id : null,
       matched: all.length,
+    };
+  }
+
+  /**
+   * Matching calls with their reasoning and answer, newest first (`before` as in `list`), and
+   * how many calls of each kind match the rest of the filter.
+   */
+  thinking(filter: LlmCallFilter = {}, limit = 50, before?: string): LlmThinkingPage {
+    const page = this.list(filter, limit, before);
+    const rest: LlmCallFilter = { ...filter, kind: undefined, reasoned: undefined };
+    const kinds = new Map<LlmCallKind, { calls: number; reasoned: number }>();
+    for (const c of this.#calls) {
+      if (!this.#matches(c, rest)) continue;
+      const k = kinds.get(c.kind) ?? { calls: 0, reasoned: 0 };
+      k.calls += 1;
+      if (c.reasoning_chars > 0) k.reasoned += 1;
+      kinds.set(c.kind, k);
+    }
+    return {
+      items: page.items.map((call) => {
+        const t = this.#thinking.get(call.id);
+        return {
+          call,
+          reasoning: t?.reasoning ?? null,
+          answer: t?.answer ?? null,
+          tool_calls: t ? [...t.tool_calls] : [],
+          cut: t?.cut ?? 0,
+        };
+      }),
+      next_cursor: page.next_cursor,
+      matched: page.matched,
+      by_kind: CALL_KINDS.filter((k) => kinds.has(k)).map((kind) => ({
+        kind,
+        ...(kinds.get(kind) as { calls: number; reasoned: number }),
+      })),
     };
   }
 

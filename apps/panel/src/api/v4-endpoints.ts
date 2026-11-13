@@ -12,6 +12,7 @@ import type {
   PartySnapshot,
   PredictionView,
   QuestsView,
+  ReachedGoal,
   RecentView,
   RemindersView,
   RoomItem,
@@ -33,6 +34,8 @@ export function createV4Api(client: ApiClient) {
     commissions: (o?: Opts) => client.get<{ currency: string; commissions: CommissionView[] }>("/api/economy2/commissions", o),
     predictions: (o?: Opts) => client.get<{ currency: string; predictions: PredictionView[] }>("/api/economy2/predictions", o),
     room: (o?: Opts) => client.get<{ currency: string; room: RoomItem[] }>("/api/economy2/room", o),
+    reachedGoals: (o?: Opts) => client.get<{ goals: ReachedGoal[] }>("/api/economy/goals", o),
+    fulfillGoal: (id: string) => client.post<{ goal: ReachedGoal }>(`/api/economy/goals/${seg(id)}/fulfill`, {}),
     personQuests: (id: string, o?: Opts) => client.get<QuestsView>(`/api/people/${seg(id)}/quests`, o),
 
     workspace: (o?: Opts) => client.get<WorkspaceView>("/api/workspace", o),

@@ -1,4 +1,4 @@
-import type { LlmCallRecord, LlmCallStatus, LlmPricing } from "@/api/types";
+import type { LlmCallKind, LlmCallRecord, LlmCallStatus, LlmPricing } from "@/api/types";
 import type { Tone } from "@/components/status";
 
 /** Purposes in words; unknown ones show their key. */
@@ -27,6 +27,18 @@ export const MODULE_LABEL: Record<string, string> = {
   stage: "舞台",
   voice: "語音",
   game: "遊戲",
+};
+
+/** Kinds of call in words, in the order the chain-of-thought tab lists them. */
+export const KIND_LABEL: Record<LlmCallKind, string> = {
+  mind: "內心想法",
+  chat: "文字聊天",
+  voice: "語音",
+  attention: "要不要回",
+  memory: "記憶",
+  learning: "學習",
+  social: "關係",
+  other: "其他",
 };
 
 export const STATUS_LABEL: Record<LlmCallStatus, string> = {

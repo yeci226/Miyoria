@@ -138,6 +138,12 @@ export const ACTIONS: GameActionSpec[] = [
   { name: "select", description: "切換快捷列:{slot:0-8} 或 {item}", parameters: obj({ slot: int("0–8"), item: str("物品 id") }), budget_s: 10 },
   { name: "respawn", description: "死掉時按重生", parameters: obj({}), budget_s: 15 },
   {
+    name: "drop",
+    description: "丟棄手持物品或背包中的特定物品/欄位",
+    parameters: obj({ item: str("物品 id"), slot: int("欄位 0-35"), all: { type: "boolean", description: "丟出一整組" } }),
+    budget_s: 10,
+  },
+  {
     name: "launch",
     description: "開遊戲(用 Prism Launcher;開始玩的時候系統會自己做,不用呼叫)",
     parameters: obj({}),
@@ -339,6 +345,15 @@ export function toRequests(action: GameAction, opts: MapOptions = {}): BridgeReq
     }
     case "respawn":
       return [{ type: "respawn", params: {} }];
+    case "drop": {
+      const item = id(a.item);
+      const slot = num(a.slot);
+      const all = typeof a.all === "boolean" ? a.all : true;
+      const params: Record<string, unknown> = { all };
+      if (item) params.item = item;
+      if (slot !== undefined) params.slot = Math.round(slot);
+      return [{ type: "drop", params }];
+    }
     default:
       throw new ActionError(`沒有「${action.name}」這個動作`);
   }
@@ -380,6 +395,8 @@ export function describeAction(action: GameAction): string {
       return `說了:${a.message}`;
     case "stop":
       return "停下來了";
+    case "drop":
+      return a.item ? `丟掉了 ${zh(String(a.item))}` : "丟出了手持物品";
     default:
       return `做了 ${action.name}`;
   }

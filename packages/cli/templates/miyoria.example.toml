@@ -128,6 +128,8 @@ reflect = "high"
 # tts = { venv = "workers/.venv-tts-faster", port = 8002 }
 # # offload:sing 工作時先請這些 worker 卸下模型(自動設好 SING_OFFLOAD_URLS,沒有它做歌會爆顯存)
 # sing = { venv = "workers/.venv-sing", port = 8005, offload = ["tts", "asr"] }
+# # 歌曲快取自己清,最久沒用的先刪(預設留 6 GB、14 天;workers/README.md 第 9 節),要改就加 env:
+# # sing = { ..., env = { SING_CACHE_MAX_GB = "10", SING_CACHE_MAX_DAYS = "30" } }
 # # 選用:判斷講完(Smart Turn + Silero,跑在 CPU)。需要自己下載模型(workers/README.md 第 10 節);
 # # 模型沒放好 worker 照常啟動,她會退回安靜多久就算講完,doctor --deep 會提醒
 # turn = { venv = "workers/.venv-turn", port = 8006 }
@@ -342,6 +344,8 @@ dirs = ["extensions"]
 # 唱的時候插話不會打斷,/queue song skip | stop 才會。Go Live 要讓觀眾聽到歌,voice node 要 GOLIVE_AUDIO=true
 # [modules.sing]
 # url = "http://127.0.0.1:8005"
+# fallback_urls = []         # url 連不上時依序改用這些 worker(例:url 是朋友的顯卡,這裡放本機 "http://127.0.0.1:8005");docs/sing-remote-host.md
+# fallback_retry_secs = 30   # 連不上的 worker 這段時間內不再問;一首歌的 worker 連不上超過這麼久,就在下一台重做
 # start = "decide"           # decide:準備好了她挑時機唱;auto:好了就唱
 # max_pending_per_user = 2   # 每個人同時最多幾首在歌單上
 # lyrics = true              # 同步歌詞變成 overlay 字幕
@@ -660,7 +664,7 @@ barge_in = "selective"     # 有人插話時:selective(只有這回合要回的�
 # history_trim = 0.6             # 紀錄超過預算時一次砍到預算的這個比例(0 到 1,不含 0)
 # entry_chars = 600              # 單則上限
 # memory_lines = 20              # 每回合帶進來的記憶最多幾則(0 = 照 [modules.memory] 的 recall_limit)
-# examples_chars = 2000          # 範例對話(0 = 不放);每個 session 輪替一批,同一個 session 內不變,前綴才不會變
+# examples_chars = 4000          # 範例對話(0 = 不放);每個 session 輪替一批,同一個 session 內不變,前綴才不會變
 # loop_tools = ["web_search", "web_read", "recall", "remember", "check_coins", "keep_note", "drop_note", "code_run", "voice_status", "work_list", "work_steer"]
 #                                # 回合內迴圈的工具:結果當場帶回、同一次呼叫鏈接著讀;其他工具(開遊戲、唱歌、
 #                                # 開台、進語音、work_start)交給手,結果回來另開回合。輪數上限是 [modules.agent] 的 max_tool_steps
@@ -669,7 +673,7 @@ barge_in = "selective"     # 有人插話時:selective(只有這回合要回的�
 # loop_budget_ms = 30000         # 文字:一個回合裡迴圈工具加起來最多跑多久(這段時間她占著發言權);用完後的呼叫交給手
 # voice_loop_budget_ms = 12000   # 語音的同一件事(對方在沉默中等)
 # memory_recent_lines = 4        # 檢索除了她回的那句,也看它前面幾句(「好啊」本身什麼都找不到)
-# people_chars = 2400            # 在場的人的檔案(放在對話紀錄前面)
+# people_chars = 3600            # 在場的人的檔案(放在對話紀錄前面)
 # people_refresh_mins = 30       # 檔案只在在場的人變了、或過了這麼久才重寫,中間內容不變,前綴才會留在快取
 # life_chars = 800               # 「今天的她」(她做過的事),放在對話紀錄前面
 # skills_chars = 800             # 她的技能索引(一個名字加一行)
@@ -939,6 +943,7 @@ min_interval_secs = 45           # 兩次之間至少隔多久
 # episode_recency_tau_days = 1.5 # 事件記憶(episode)的新近度衰減:小時到幾天,不是幾週
 # state_note_hours = 12          # 「已經開台」「正在下載」這類現在式的筆記多久後失效(0 = 不失效)
 # followup_max_age_hours = 6     # 追問過了時間這麼久沒人提就自動關掉;先挑最新的(0 = 不自動關)
+# followup_repeat_hours = 24    # 同一個人、同一件事的追問,問過或答過這麼久內不再記一條新的(0 = 只看還沒問的)
 # [modules.memory.repeat]        # 同一個梗在最近回想的 window 則裡出現超過 allowed 次就降權
 # window = 40
 # allowed = 3
@@ -1177,6 +1182,32 @@ max_per_day = 12                 # 她自己開話題:一天最多幾次(0 = 不
 # proxy_memory_mb = 128          # proxy 容器的記憶體(MiB)
 # 跑程式的次數上限在 [modules.actions.limits."code.run"](預設每天 30 次、冷卻 20 秒)
 
+# 生圖(docs/design/imagegen.md):連 ComfyUI 的 API 生圖,給她的其他系統用(目前沒有指令,成員叫不到)。
+# 內建三個模型:krea2(turbo / raw)、moss_image(sft / base)、anima(base / turbo);
+# 或把 ComfyUI 的「Export (API)」存成 <workflows_dir>/<id>.json 當 workflow 用。她唱歌時 GPU 先讓給歌
+# [modules.imagegen]
+# enabled = true
+# url = "http://127.0.0.1:8188"   # ComfyUI;headers = { Authorization = "Bearer ..." } 可加認證標頭
+# output_dir = "data/images"      # 圖存成 <YYYY-MM>/<purpose>/<job>-<n>.png,旁邊有 <job>.json(請求、graph、檔名)
+# workflows_dir = "data/imagegen/workflows"
+# input_dir = "data/imagegen/input"   # 以圖生圖的起始圖只能從這裡拿
+# default_model = "krea2"
+# batch_hours = "02:00-08:00"     # batch 優先度的工作只在這段時間跑(null 為隨時);interactive 隨時
+# pause_while_singing = true      # 唱歌(或準備唱歌)時不送新工作,正在跑的 batch 會中斷、之後重排
+# free_on_sing = true             # 開唱時叫 ComfyUI 卸載模型
+# free_after_idle_s = 120         # 閒置多久卸載模型(0 不卸)
+# timeout_s = 600
+# max_attempts = 3                # ComfyUI 連不上時重試幾次
+# max_queued = 2000
+# max_batch = 8
+# check_files = true              # 送出前確認模型檔在 ComfyUI 裡
+# keep_days = 0                   # 圖保留幾天(0 永久)
+# daily_limits = { gacha = 200 }  # 每個 purpose 每天最多幾張
+# [modules.imagegen.models.krea2]
+# variants.raw.files.diffusion_model = "krea2_raw_fp8_scaled.safetensors"   # RAW 檔名請改成實際下載的
+# [modules.imagegen.models.anima]
+# prompt_prefix = "masterpiece, best quality, score_7, safe, "
+
 # 技能(v4 §8.3):做成功的事寫成一份說明加腳本,放在上面的工作區(skills/<name>/SKILL.md),
 # 用一行描述索引,需要時才載入。需要 [modules.sandbox] 開著而且 workspace 沒關;沒有的話沒有技能也沒有工具。下面都是預設值
 # [modules.skills]
@@ -1245,11 +1276,19 @@ max_per_day = 12                 # 她自己開話題:一天最多幾次(0 = 不
 
 # ---- 上網查資料 --------------------------------------------------------------
 
-# 她的工具 web_search(用 DuckDuckGo 查)和 web_read(讀一個公開網頁的文字)。預設開著,不要就寫 enabled = false。
+# 她的工具 web_search(有 Tavily 金鑰就用 Tavily 查,沒有就用 DuckDuckGo)和 web_read(讀一個公開網頁的文字)。預設開著,不要就寫 enabled = false。
 # 要有 tools.web 才能請她查(member 以上預設有);查到的內容是資料,裡面寫的指令她不會照做。
 # DuckDuckGo 要求驗證或擋下來時她只會說現在查不到,不會繞過。讀網頁只讀 http / https,
 # 內部網路、localhost 和私有位址一律不讀(轉址的每一站都重新檢查)。
+# 查詢服務:search_provider 不寫 = 有 Tavily 金鑰(tavily_api_key 或 .env 的 TAVILY_API_KEY)就用 Tavily,
+# 沒有就用 DuckDuckGo;寫 "duckduckgo" 就一律用 DuckDuckGo。Tavily 沒金鑰時也退回 DuckDuckGo。
+# 金鑰到 https://app.tavily.com 申請,填在 .env 的 TAVILY_API_KEY(不會寫進日誌)。
 # [modules.web]
+# search_provider = "tavily"     # "tavily" 或 "duckduckgo";不寫 = 依有沒有金鑰自動選
+# tavily_api_key = "${TAVILY_API_KEY:-}"
+# tavily_search_depth = "basic"  # basic / fast / ultra-fast 每次 1 點;advanced 每次 2 點、結果更完整
+# tavily_topic = "general"       # general / news / finance
+# tavily_include_answer = false  # true = 讓 Tavily 附一段摘要答案
 # ddg_gap_ms = 4000             # 兩次 DuckDuckGo 搜尋至少隔多久(連查會被擋)
 # ddg_cooldown_s = 600           # DuckDuckGo 擋過一次後休息多久
 # region = "tw-tzh"              # DuckDuckGo 的 kl(地區與語言)

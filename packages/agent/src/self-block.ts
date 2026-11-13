@@ -47,6 +47,7 @@ import {
   type ShownEmotion,
   safeName,
   stanceStale,
+  xmlAttrs,
 } from "@miyoria/types";
 import type { SelfBlock } from "./compiler.js";
 import { herStatusHint, shownHint, unansweredHint } from "./signals.js";
@@ -402,44 +403,76 @@ function stanceCue(level: number, written: number | null): string {
   return affinityStep(level) !== 0 ? `你還沒決定怎麼對他(Lv.${level}),可以自己決定` : "";
 }
 
-/** One line about `p`, or `null` when nothing is known about them. */
-function personLine(p: PresentPerson, src: PeopleSources, crush: PersonId | null): string | null {
-  const parts: string[] = [];
+/** What the people block says of one person (`personTag`); empty values are left out. */
+export interface PersonAttrs {
+  name: string;
+  /** 朋友, 認識, ... */
+  relation?: string | null;
+  /** Her level with them (`Lv.24`). */
+  level?: number | null;
+  /** What she calls them. */
+  call_as?: string | null;
+  /** What she thinks of them. */
+  impression?: string | null;
+  /** What she feels toward them (想念、感激). */
+  toward?: string | null;
+  /** How she decided to treat them. */
+  stance?: string | null;
+  last_seen?: string | null;
+  [more: string]: string | number | null | undefined;
+}
+
+/**
+ * `<person name="…" relation="…" …/>`: one person of the people block, every value escaped
+ * (`xmlAttrs`); the name made inert first (`safeName`).
+ */
+export function personTag(attrs: PersonAttrs): string {
+  return `<person${xmlAttrs({ ...attrs, name: safeName(attrs.name) })}/>`;
+}
+
+/** What is known about `p`, or `null` when nothing is. */
+function personAttrs(
+  p: PresentPerson,
+  src: PeopleSources,
+  crush: PersonId | null,
+): PersonAttrs | null {
+  const attrs: PersonAttrs = { name: p.handle };
   const card: PersonCard | null =
     src.affect?.cardByHandle(p.handle) ??
     (p.person === null ? null : (src.affect?.card(p.person) ?? null));
   if (card !== null) {
-    parts.push(`${card.label}(好感 Lv.${card.level})`);
-    if (card.call_name) parts.push(`你叫他「${safeName(card.call_name, 16)}」`);
-    if (card.feeling.trim() !== "") parts.push(`你覺得:${short(card.feeling, MAX_FEELING)}`);
-    const toward = towardLine(card.emotions);
-    if (toward !== "") parts.push(`對他:${toward}`);
+    attrs.relation = card.label;
+    attrs.level = card.level;
+    if (card.call_name) attrs.call_as = safeName(card.call_name, 16);
+    if (card.feeling.trim() !== "") attrs.impression = short(card.feeling, MAX_FEELING);
+    attrs.toward = towardLine(card.emotions);
     const stance = (card.stance ?? "").trim();
-    if (stance !== "") parts.push(`你的相處方式:${short(stance, MAX_STANCE)}`);
-    const cue = stanceCue(card.level, stance !== "" ? (card.stance_level ?? null) : null);
-    if (cue !== "") parts.push(cue);
+    if (stance !== "") attrs.stance = short(stance, MAX_STANCE);
+    attrs.hint = stanceCue(card.level, stance !== "" ? (card.stance_level ?? null) : null);
   } else {
     const attitude = src.attitude?.(p.account) ?? null;
     if (attitude !== null) {
-      parts.push(relationshipLabel(attitude));
-      if (attitude.call_name) parts.push(`你叫他「${safeName(attitude.call_name, 16)}」`);
+      attrs.relation = relationshipLabel(attitude);
+      if (attitude.call_name) attrs.call_as = safeName(attitude.call_name, 16);
     }
     if (p.person !== null && src.self) {
       const feeling = src.self.feeling(p.person);
-      if (feeling) parts.push(`你覺得:${short(feeling.text, MAX_FEELING)}`);
+      if (feeling) attrs.impression = short(feeling.text, MAX_FEELING);
       const heart = src.self.heart(p.person);
-      const toward = heart ? towardLine(heart.emotions) : "";
-      if (toward !== "") parts.push(`對他:${toward}`);
+      if (heart) attrs.toward = towardLine(heart.emotions);
     }
   }
-  if (p.person !== null && p.person === crush) parts.push("你偷偷喜歡他");
-  return parts.length === 0 ? null : `- ${safeName(p.handle)}:${parts.join(";")}`;
+  if (p.person !== null && p.person === crush) attrs.secret = "你偷偷喜歡他";
+  const known = Object.entries(attrs).some(
+    ([k, v]) => k !== "name" && v !== null && v !== undefined && String(v).trim() !== "",
+  );
+  return known ? attrs : null;
 }
 
 /**
- * The people block body: one line per person she knows something about (speakers first), then
- * the others by name. `crush`: her secret crush (marked on their line). Empty when nobody is
- * there.
+ * The people block body: one `<person/>` per person (speakers first, then the ones she knows
+ * something about, then the others by name only). `crush`: her secret crush (marked on their
+ * tag). Empty when nobody is there.
  */
 export function peopleBody(
   present: readonly PresentPerson[],
@@ -451,16 +484,14 @@ export function peopleBody(
   const others: string[] = [];
   for (const p of sorted) {
     if (src.attitude?.(p.account)?.blocked) continue;
-    let line: string | null;
+    let attrs: PersonAttrs | null;
     try {
-      line = personLine(p, src, crush);
+      attrs = personAttrs(p, src, crush);
     } catch {
-      line = null;
+      attrs = null;
     }
-    if (line === null) others.push(safeName(p.handle));
-    else lines.push(line);
+    if (attrs === null) others.push(personTag({ name: p.handle }));
+    else lines.push(personTag(attrs));
   }
-  if (others.length > 0)
-    lines.push(lines.length === 0 ? others.join("、") : `其他:${others.join("、")}`);
-  return lines.join("\n");
+  return [...lines, ...others].join("\n");
 }

@@ -46,6 +46,17 @@ def test_a_12_gb_card_with_room_shares():
     assert decide(facts(free_mb=6000)).mode == "share"
 
 
+def test_a_stage_that_cannot_stop_while_she_speaks_leaves_her_voice_its_room():
+    # 4096 + 1474 fits in 6000; her RVC model also needs the 1024 she takes while speaking.
+    d = decide(facts(free_mb=6000, pauses=False))
+    assert d.mode == "wait" and "她說話用的" in d.reason
+    assert decide(facts(free_mb=6000, pauses=False, policy="yield")).mode == "offload"
+    assert decide(facts(free_mb=6600, pauses=False)).code == "fits"
+    # Her voice is not on the card: nothing to leave room for.
+    assert decide(facts(free_mb=6000, pauses=False, speech_loaded=False)).code == "fits"
+    assert decide(facts(free_mb=6000, pauses=False, limits=Limits(burst_mb=0))).code == "fits"
+
+
 def test_a_12_gb_card_on_stream_spares_her_voice_while_people_listen():
     assert decide(facts(stage="separate")).mode == "cpu"  # Demucs does not need the card
     d = decide(facts())
@@ -248,7 +259,8 @@ class SimCard:
         monkeypatch.setenv("SING_GPU_POLICY", os.environ.get("SING_GPU_POLICY", "auto"))
         monkeypatch.setenv("SING_GPU_CHECK_S", "0.01")
         monkeypatch.setenv("SING_MOCK_STEPS", os.environ.get("SING_MOCK_STEPS", "8"))
-        monkeypatch.delenv("SING_GPU_POLICY", raising=False)
+        # Only the older switch is cleared: clearing SING_GPU_POLICY here too undid the line above,
+        # so these scenarios ran under the default ``yield`` and failed.
         monkeypatch.delenv("SING_GPU_SHARE", raising=False)
         m = server.state.machine
         m.profile, m.audience, m.gap_until, m.last = Profile(tmp_path), Audience(), 0.0, None
@@ -331,10 +343,35 @@ def test_on_a_24_gb_card_a_song_never_touches_her_voice(sing, machine):  # noqa:
     assert done["song"]["gpu"]["policy"] == "auto" and done["song"]["gpu"]["silenced_s"] == 0
 
 
+def test_her_rvc_models_vram_is_learned_from_the_whole_card(sing, machine, monkeypatch):  # noqa: F811
+    """RVC runs in a subprocess: torch here sees none of it, and it never calls the gate."""
+    server = sys.modules["sing_server"]
+    card = machine(total=24 * GB, others=5000, job=0)
+    b = card.backend
+    monkeypatch.setattr(b, "rvc", True, raising=False)
+
+    def rvc(vocals_wav, out_wav, shift, progress, cancelled, work=None):
+        card.others += 2600  # the subprocess loads her model
+        time.sleep(0.3)
+        card.others -= 2600
+        server._write_wav(out_wav, server._tone(b.seconds, 16_000, 440), 16_000)
+        progress(1.0)
+
+    monkeypatch.setattr(b, "convert", rvc)
+    nobody(sing)
+    done = wait(sing, submit(sing, "sim rvc"))
+    assert done["state"] == "done", done
+    need, measured = card.profile.need("convert", 4096)
+    assert measured and 2600 <= need < 2800, need
+    assert done["gpu"]["stage"] == "convert" and done["gpu"]["code"] == "fits"
+    assert "說話用的" in done["gpu"]["reason"]  # 24 GB: room for her voice next to it
+
+
 def test_on_a_full_12_gb_card_people_keep_her_voice_until_there_is_room(sing, machine, monkeypatch):  # noqa: F811
     card = machine(total=12 * GB, others=4500)
     people(sing)
-    job = submit(sing, "sim 12 gb")
+    # backing="drop" needs the separation, the stage this scenario watches (``_needs_stems``).
+    job = submit(sing, "sim 12 gb", backing="drop")
     until(lambda: job_of(sing, job)["stage"] == "gpu_wait")
     held = job_of(sing, job)
     assert held["gpu"]["mode"] == "wait" and "等空間" in held["gpu"]["reason"]
@@ -351,7 +388,7 @@ def test_on_a_full_12_gb_card_people_keep_her_voice_until_there_is_room(sing, ma
 def test_on_a_12_gb_card_a_song_needed_now_takes_a_bounded_window(sing, machine):  # noqa: F811
     card = machine(total=12 * GB, others=4500)
     people(sing)
-    job = sing.post("/jobs", json={"query": "sim urgent", "exclusive_ack": True}).json()["job"]["id"]
+    job = sing.post("/jobs", json={"query": "sim urgent", "exclusive_ack": True, "backing": "drop"}).json()["job"]["id"]
     people(sing, urgent=[job])
     until(lambda: job_of(sing, job)["exclusive"] == "waiting")
     assert card.calls == []  # she says so first
@@ -431,7 +468,9 @@ def test_a_spill_releases_the_card_and_goes_on_from_where_it_was(sing, machine, 
     assert card.steps == 12  # no step ran twice
     codes = [d["code"] for d in done["song"]["gpu"]["decisions"]]
     assert "spill_free" in codes and "spill_wait" in codes
-    assert card.profile.step("convert") <= 0.02  # the run that spilled taught nothing about normal
+    # The run that spilled (0.2 s a step) taught nothing about normal: the step stays near 0.02.
+    # Not exactly 0.02: a clean step is measured too, and CI once had 0.0201.
+    assert card.profile.step("convert") < 0.05
 
 
 def test_a_spill_in_separation_restarts_it_on_the_cpu(sing, machine, monkeypatch):  # noqa: F811
@@ -439,7 +478,7 @@ def test_a_spill_in_separation_restarts_it_on_the_cpu(sing, machine, monkeypatch
     card = machine(total=12 * GB, others=500, spill_under=99999)
     card.profile.note_step("separate", 0.02)
     people(sing)
-    job = submit(sing, "sim separation spill")
+    job = submit(sing, "sim separation spill", backing="drop")  # separation runs only for it
     until(lambda: len(card.backend.separate_devices) == 2)
     assert card.backend.separate_devices == [None, "cpu"]
     assert card.calls == []

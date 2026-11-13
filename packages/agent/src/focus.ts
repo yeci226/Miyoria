@@ -14,6 +14,7 @@ import {
   type Handle,
   type IncomingMessage,
   type MessageRef,
+  safeName,
   sameAccount,
   type TurnFocus,
   type TurnFocusView,
@@ -163,8 +164,116 @@ export function selectFocus(
   return { reason, focus, background, addressed, authors, kinds: focusKinds };
 }
 
+/**
+ * The input of one turn when several people call her at once: everything up to the next caller's
+ * first call, and what the first caller says after it (`now`); the other callers' messages from
+ * their first call on wait for their own turn (`later`), the first of them next. Lines of people
+ * who do not call her stay with the first turn, as its background.
+ */
+export function oneCaller(
+  inputs: readonly IncomingMessage[],
+  classify: (msg: IncomingMessage) => CallKind,
+): { now: IncomingMessage[]; later: IncomingMessage[] } {
+  let first: AccountRef | null = null;
+  const deferred = new Set<string>();
+  const now: IncomingMessage[] = [];
+  const later: IncomingMessage[] = [];
+  for (const m of inputs) {
+    const key = authorKey(m.author.account);
+    if (first === null && callsHer(classify(m))) first = m.author.account;
+    else if (
+      first !== null &&
+      !sameAccount(first, m.author.account) &&
+      !deferred.has(key) &&
+      callsHer(classify(m))
+    ) {
+      deferred.add(key);
+    }
+    (deferred.has(key) ? later : now).push(m);
+  }
+  return { now, later };
+}
+
 function authorKey(account: AccountRef): string {
   return `${account.platform}:${account.id}`;
+}
+
+/** The argument naming whom a tool call is for, when several people called her at once. */
+export const FOR_ARG = "for_whom";
+
+/** The schema of `FOR_ARG`, offered to tools that act for someone (`Tool.actsFor`) then. */
+export const FOR_PROPERTY = {
+  type: "string",
+  description: "這件事是幫誰做的:要回的訊息(<reply_to>)裡那個人的編號(例如 1)或名字。",
+} as const;
+
+/** What a tool call acts for: the message of the person it is for, or why it cannot tell. */
+export type CallFor =
+  | { ok: true; message: IncomingMessage | undefined }
+  | { ok: false; error: string };
+
+/**
+ * Whom a tool call acts for (2026-11-11: 阿鰻 offered rice with an @-mention, ミルクねこ replied to
+ * her about something else two seconds later, both landed in one turn and the latest speaker paid).
+ *
+ * One person in the focus: theirs (`fallback`), whatever `pick` says. Several: `pick` (the call's
+ * `for_whom`) names one, by the number of the focus block (`targets`, as numbered there) or by name,
+ * and the call is for that person's latest message that asks her (`asks`), else their latest. A
+ * tool that acts for someone (`actsFor`) and does not say whom, or names nobody in the focus, is
+ * refused with the choices, so she can call again; any other tool goes on with `fallback`.
+ */
+export function callFor(
+  focus: readonly IncomingMessage[],
+  targets: readonly { id: string | null; account: AccountRef }[],
+  pick: unknown,
+  actsFor: boolean,
+  asks: (m: IncomingMessage) => boolean,
+  fallback: () => IncomingMessage | undefined,
+): CallFor {
+  const people: IncomingMessage["author"][] = [];
+  for (const m of focus) {
+    if (!people.some((p) => sameAccount(p.account, m.author.account))) people.push(m.author);
+  }
+  if (people.length <= 1) return { ok: true, message: fallback() };
+  const said = typeof pick === "number" ? String(pick) : typeof pick === "string" ? pick : "";
+  const who = said.trim() === "" ? null : pickPerson(people, targets, said);
+  if (who === null) {
+    if (!actsFor && said.trim() === "") return { ok: true, message: fallback() };
+    const choices = people.map((p) => {
+      const n = targets.findIndex((t) => sameAccount(t.account, p.account));
+      return `${n < 0 ? "" : `[${n + 1}] `}${safeName(p.display_name)}`;
+    });
+    const why = said.trim() === "" ? "好幾個人同時叫你" : `${FOR_ARG} 「${safeName(said)}」 對不上`;
+    return {
+      ok: false,
+      error: `${why},沒辦法知道這件事是幫誰做的,所以沒有做。再呼叫一次,用 ${FOR_ARG} 填要回的訊息(<reply_to>)裡的編號或名字:${choices.join("、")}`,
+    };
+  }
+  const theirs = focus.filter((m) => sameAccount(m.author.account, who));
+  return { ok: true, message: theirs.findLast(asks) ?? theirs.at(-1) };
+}
+
+/** The person `said` names: a number of the focus block (`2`, `[2]`) or a name (`@` optional). */
+function pickPerson(
+  people: readonly IncomingMessage["author"][],
+  targets: readonly { id: string | null; account: AccountRef }[],
+  said: string,
+): AccountRef | null {
+  const n = /^\s*[[［(（]?\s*(\d{1,2})\s*[\]］)）]?\s*$/.exec(said)?.[1];
+  if (n !== undefined) {
+    const account = targets[Number(n) - 1]?.account;
+    return account !== undefined && people.some((p) => sameAccount(p.account, account))
+      ? account
+      : null;
+  }
+  const squash = (s: string) =>
+    s
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/[\s@＠]/g, "");
+  const want = squash(said);
+  const found = people.filter((p) => squash(p.display_name) === want);
+  return found.length === 1 ? (found[0]?.account ?? null) : null;
 }
 
 /** How the focus block introduces a message (`Owen 問你:…`). */

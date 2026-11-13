@@ -70,8 +70,9 @@ jobs:
           cache-dependency-path: workers/fake/requirements.txt
       - name: Install light dependencies
         # fake/requirements.txt already brings fastapi, httpx and pytest; numpy is used by the
-        # text-splitting / backend tests. torch, qwen-tts, sherpa-onnx etc. are NOT installed.
-        run: pip install -r fake/requirements.txt numpy
+        # text-splitting / backend tests, soundfile and scipy by the sing tests that mix and read
+        # wav files. torch, qwen-tts, sherpa-onnx etc. are NOT installed.
+        run: pip install -r fake/requirements.txt numpy soundfile scipy
       - run: python -m pytest
 
   # Build the Core image to catch Dockerfile / dependency breakage. Nothing is pushed.

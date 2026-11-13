@@ -1,0 +1,7 @@
+# Lyrics service (workers/lyrics/server.py): light, no GPU and no PyTorch.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9   # multipart upload of the lead vocal for the ASR spot check
+httpx>=0.27
+numpy>=1.26
+soundfile>=0.12

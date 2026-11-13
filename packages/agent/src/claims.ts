@@ -102,11 +102,13 @@ function coins(tool: string, done: string): Claim {
 /**
  * 2026-11-08 15:20-15:23: with the whole conversation in front of her she answered a wallet
  * question, took five bowls, made a deal and agreed to be paid, all in words, with no tool call.
+ * 2026-11-13 02:44: 「好啦，收下收下，這碗我記你帳上」 went out beside accept_food, which refused
+ * (she was full), and she had to take it back a turn later.
  */
 export const COIN_CLAIMS: readonly Claim[] = [
   coins(
     "accept_food",
-    "收下了|[(（]收下[)）]|(?:飯|零食|甜點|這碗)(?:我)?(?:就)?收(?:下|了)|吃掉了|開動了|謝謝招待|扣吧|扣了|從你(?:的)?錢包扣",
+    "收下(?:了|囉|啦|嘍|收下)|[(（]收下[)）]|(?:飯|零食|甜點|這碗)(?:我)?(?:就)?收(?:下|了)|吃掉了|開動了|謝謝招待|扣吧|扣了|從你(?:的)?錢包扣",
   ),
   coins("make_deal", "一言為定|說定了|成交|約定成立|就這麼說好了?|一換一"),
   coins(

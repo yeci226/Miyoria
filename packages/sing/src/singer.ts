@@ -123,13 +123,18 @@ export interface SongRequest
 /** Topic of the stream overlay's screen line (the economy's `SCREEN_TOPIC`, kept as text here). */
 const SCREEN_TOPIC = "economy.screen";
 
+/** A link pasted without its scheme (`www.bilibili.com/video/BV…/`, `youtu.be/…`): one of the usual hosts. */
+const BARE_LINK =
+  /(?<![\w./-])(?:www\.[\w-]+\.[a-z]{2,}|(?:music\.)?youtube\.com|m\.youtube\.com|youtu\.be|bilibili\.com|b23\.tv)\/[^\s<>"'「」]*/i;
+
 /**
  * The worker request for a set list query: a link (anywhere in it, e.g. 「唱這首 https://…」),
  * `library:<path>`, or a search.
  */
 export function workerQuery(query: string, key: number, backing: BackingMode = "keep"): SongQuery {
   const q = query.trim();
-  const link = LINK.exec(q)?.[0];
+  const bare = BARE_LINK.exec(q)?.[0];
+  const link = LINK.exec(q)?.[0] ?? (bare === undefined ? undefined : `https://${bare}`);
   // Only the exception is sent: the worker keeps the backing voices by default.
   const extra = backing === "keep" ? {} : { backing };
   if (link !== undefined) return { url: link, key, ...extra };
@@ -196,6 +201,11 @@ export class Singer implements VoiceFloor, SpeechPause {
   readonly #clips = new Map<string, number>();
   readonly #turnsDone: TurnId[] = [];
   #closed = false;
+  /**
+   * Whether someone is in her voice channel of `guild`: `true` / `false`, or `null` when that is
+   * not known (no member list yet, or an account of another platform such as a web viewer).
+   */
+  #present: (guild: string, who: AccountRef) => boolean | null = () => null;
   /** JSON of the set list last stored. */
   #saved: string | null = null;
   /** Restored songs that never reached the worker. */
@@ -225,7 +235,24 @@ export class Singer implements VoiceFloor, SpeechPause {
     this.list = new SetList(cfg);
   }
 
+  /** Where she learns who is in voice (the module's `VoiceRoom`). */
+  setPresence(present: (guild: string, who: AccountRef) => boolean | null): void {
+    this.#present = present;
+  }
+
   // ----- views -----
+
+  /**
+   * Whether a song that starts on its own waits for its requester: they left the voice channel
+   * she is in (2026-11-12: a song asked for by command was sung to someone who had gone). It
+   * stays ready and starts once they are back; songs whose people are there go first.
+   */
+  waitsForRequester(entry: SongEntry): boolean {
+    if (entry.requester === null || entry.practice === true) return false;
+    const where = this.voiceContext(entry.context?.scope ?? null) ?? this.voiceContext();
+    if (where === null || where.scope === null) return false;
+    return this.#present(where.scope, entry.requester) === false;
+  }
 
   /** `SpeechPause`: speech is off while a song's job has the GPU. */
   paused(): string | null {
@@ -632,10 +659,15 @@ export class Singer implements VoiceFloor, SpeechPause {
     if (!ok) this.#autoStart();
   }
 
-  /** Starts the next song that should start on its own, when she is in voice and free. */
+  /**
+   * Starts the next song that should start on its own, when she is in voice and free. A song
+   * whose requester left the channel is passed over until they are back (`waitsForRequester`).
+   */
   #autoStart(): void {
     if (this.#playing || this.#closed) return;
-    const next = this.list.ready().find((e) => e.practice !== true && !this.#mindDecides(e));
+    const next = this.list
+      .ready()
+      .find((e) => e.practice !== true && !this.#mindDecides(e) && !this.waitsForRequester(e));
     if (!next) return;
     const where = this.voiceContext(next.context?.scope ?? null) ?? this.voiceContext();
     if (where === null || where.scope === null) return;
@@ -713,12 +745,50 @@ export class Singer implements VoiceFloor, SpeechPause {
         await this.waitQuiet(guild, turn, expectMs, both);
         if (!both.aborted) outcome = await this.#sing(entry, guild, both);
       } catch (error) {
+        if (isGone(error) && !both.aborted && (await this.#prepareAgain(entry))) return;
         log.warn({ no: entry.no, err: errorMessage(error) }, "could not sing");
         outcome = "error";
         entry.error = errorMessage(error);
       }
       this.#ended(entry, guild, outcome);
     });
+  }
+
+  /**
+   * The worker's cache cleaned the song out while it sat ready here (`workers/sing/cache.py`):
+   * the same request again makes it again, and it is ready (and offered or started) as before.
+   * Nothing was audible yet, so it keeps its place and its charges. `false`: the worker refused.
+   */
+  async #prepareAgain(entry: SongEntry): Promise<boolean> {
+    let job: WorkerJob;
+    try {
+      job = await this.worker.submit(this.#query(entry.query, entry.key, entry.backing));
+    } catch (error) {
+      log.warn({ no: entry.no, err: errorMessage(error) }, "could not ask for a song again");
+      return false;
+    }
+    log.info(
+      { no: entry.no, job: job.id },
+      "the song worker no longer has the song; making it again",
+    );
+    if (this.#playing?.entry === entry) this.#playing = null;
+    if (entry.song) this.#cue({ state: "ended", song: entry.song.id, outcome: "interrupted" });
+    Object.assign(entry, {
+      state: "preparing",
+      stage: "queued",
+      progress: 0,
+      error: null,
+      song: null,
+      ready_at: null,
+      reminders: 0,
+      last_reminder_ms: null,
+      job: job.id,
+    } satisfies Partial<SongEntry>);
+    this.#apply(entry, job);
+    this.#updatePause();
+    this.#publishPrepare();
+    if (!this.#closed) this.#autoStart();
+    return true;
   }
 
   async #sing(entry: SongEntry, guild: string, signal: AbortSignal): Promise<PlaybackState> {
@@ -1005,6 +1075,10 @@ export class Singer implements VoiceFloor, SpeechPause {
         if (c.scope !== null) this.#speaking.delete(c.scope);
         return;
       }
+      case "voice_participants":
+        // Someone came back: a song that waited for them may start now.
+        this.#autoStart();
+        return;
       case "voice_playback": {
         const guild = event.data.context.scope;
         if (guild === null) return;
@@ -1277,6 +1351,11 @@ export class Singer implements VoiceFloor, SpeechPause {
 }
 
 const NOT_PREPARING: SongPrepare = { no: null, title: "", stage: "", progress: 0, exclusive: null };
+
+/** The worker does not have the song's audio (any more): its cache cleaned it out. */
+function isGone(error: unknown): boolean {
+  return error instanceof SingWorkerError && error.status === 404;
+}
 
 function pct(p: number): string {
   return `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`;

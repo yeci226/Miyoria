@@ -14,22 +14,24 @@ import {
   userMessage,
   withLlmTag,
 } from "@miyoria/llm";
-import type {
-  LogEntry,
-  MemoryFilter,
-  MemoryKind,
-  MemoryRecord,
-  MemoryRecordStore,
-  MemoryScope,
-  MemorySource,
-  MessageLog,
-  PeopleStore,
-  SettingsStore,
+import {
+  embeddingValues,
+  type LogEntry,
+  type MemoryFilter,
+  type MemoryKind,
+  type MemoryRecord,
+  type MemoryRecordStore,
+  type MemoryScope,
+  type MemorySource,
+  type MessageLog,
+  type PeopleStore,
+  type SettingsStore,
 } from "@miyoria/store";
 import {
   type AccountRef,
   type Clock,
   type ContextKey,
+  contextKeyEquals,
   contextKeyString,
   EventLogKey,
   type Followup,
@@ -72,11 +74,23 @@ import {
   type Extraction,
   ExtractionError,
   parseExtraction,
+  pendingBlock,
   systemPrompt,
   transcript,
 } from "./extract.js";
+import { sameMatter } from "./followups.js";
 import { RepeatDamper } from "./repeat.js";
-import { hasScope, isPrivate, scopeEquals, scopeForNew } from "./scope.js";
+import {
+  hasScope,
+  isPrivate,
+  mayRecall,
+  type NamedPerson,
+  noteAbout,
+  scopeEquals,
+  scopeForNew,
+  visibleScopes,
+  visibleToSelf,
+} from "./scope.js";
 import {
   effectiveConfidence,
   fadedConfidence,
@@ -94,7 +108,12 @@ export const WATERMARK_PREFIX = "memory_watermark:";
 export const MAINTENANCE_KEY = "memory_maintenance_last";
 
 const MINUTE_MS = 60_000;
+const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+/** Pending followups shown to the summarizer with a stretch of conversation. */
+const PENDING_FOLLOWUPS = 8;
+/** Followups read when looking for one about the same thing (newest first). */
+const FOLLOWUP_WINDOW = 500;
 
 export class MemoryError extends Error {
   override readonly name = "MemoryError";
@@ -195,6 +214,12 @@ export interface TurnQuery {
   people?: readonly PersonId[];
 }
 
+/** What `MemoryEngine.#twin` compares of a followup (a stored one, or one being written). */
+type FollowupLike = Pick<
+  MemoryRecord,
+  "subjects" | "content" | "done" | "source_context" | "created_at" | "updated_at" | "superseded_by"
+>;
+
 /** Score of the text signal given to a person's key memory found without a shared word. */
 const POINT_TEXT = 0.3;
 
@@ -225,6 +250,11 @@ export interface ConsolidationReport {
   refusedState: number;
   /** Facts and notes left out because no line said to back them. */
   refusedEvidence: number;
+  /**
+   * Followups closed: ones the conversation asked or answered, and those about the same person
+   * and matter (`followups.ts`).
+   */
+  closed: number;
   /** The summarizer's answer was not usable JSON (lines are skipped). */
   malformed: boolean;
 }
@@ -292,6 +322,15 @@ const ms = timestampMs;
  */
 function staleState(record: MemoryRecord): boolean {
   return (record.kind === "fact" || record.kind === "self_note") && isPresentState(record.content);
+}
+
+/**
+ * Cosine between `query` and a record's stored vector, read without decoding `record.embedding`
+ * (which costs about a millisecond per thousand dimensions); null when the record has none.
+ */
+function recordCosine(query: readonly number[], record: MemoryRecord): number | null {
+  const stored = embeddingValues(record);
+  return stored === null ? null : cosine(query, stored);
 }
 
 function sortedUnique(ids: readonly PersonId[]): PersonId[] {
@@ -387,6 +426,11 @@ export class MemoryEngine implements FollowupSource {
   /** The handle directory, when there is one. */
   get handles(): HandleDirectory | null {
     return this.#handles;
+  }
+
+  /** Every handle and whose it is (for `noteAbout`). */
+  #knownNames(): NamedPerson[] {
+    return (this.#handles?.list() ?? []).map((h) => ({ name: h.handle, person: h.person }));
   }
 
   /**
@@ -593,8 +637,7 @@ export class MemoryEngine implements FollowupSource {
       }
       const textSim = textSimilarity(record.content, content);
       const vecSim =
-        hit.vector_score ??
-        (embedding !== null && record.embedding !== null ? cosine(embedding, record.embedding) : 0);
+        hit.vector_score ?? (embedding !== null ? (recordCosine(embedding, record) ?? 0) : 0);
       if (textSim >= dedupe.text_similarity) {
         if (identical === null || textSim > identical[0]) identical = [textSim, record];
       } else if (vecSim >= dedupe.vector_similarity && (similar === null || vecSim > similar[0])) {
@@ -749,8 +792,9 @@ export class MemoryEngine implements FollowupSource {
       signal,
       true,
     );
+    const known = this.#knownNames();
     const wanted = (r: MemoryRecord) =>
-      hasScope(scopes, r.scope) &&
+      mayRecall(scopes, r, known) &&
       kinds.includes(r.kind) &&
       r.superseded_by === null &&
       (options.includeDone || !r.done) &&
@@ -799,11 +843,7 @@ export class MemoryEngine implements FollowupSource {
     const backendWeight = tokens.length > 0 ? 1 : this.config.context_weight;
     const ranked: Searched[] = [];
     for (const [record, text, vectorScore] of candidates.values()) {
-      const vector =
-        vectorScore ??
-        (embedding !== null && record.embedding !== null
-          ? cosine(embedding, record.embedding)
-          : null);
+      const vector = vectorScore ?? (embedding !== null ? recordCosine(embedding, record) : null);
       const backend = maxText > 0 ? (text / maxText) * backendWeight : 0;
       let t = Math.max(
         backend,
@@ -946,6 +986,7 @@ export class MemoryEngine implements FollowupSource {
       skipped: 0,
       refusedState: 0,
       refusedEvidence: 0,
+      closed: 0,
       malformed: false,
     };
     const mark = await this.watermark(context);
@@ -973,11 +1014,18 @@ export class MemoryEngine implements FollowupSource {
 
     const speakers = await this.#speakers(lines);
     const priv = isPrivate(context);
+    const first = speakers[0];
+    const dmPartner = priv && speakers.length === 1 && first ? first.account : null;
+    // What she still means to ask them: the summarizer says which of it this stretch asked or
+    // answered, and words nothing of it anew.
+    const pending = await this.#pendingFollowups(context, speakers, dmPartner, now);
+    const shown = pending.map((r, i) => ({ label: `f${i + 1}`, about: r.content }));
     const request: ChatRequest = {
       messages: [
         systemMessage(systemPrompt(this.config.self_label)),
         userMessage(
-          transcript(lines, this.config.self_label, priv, this.config.utc_offset_minutes),
+          transcript(lines, this.config.self_label, priv, this.config.utc_offset_minutes) +
+            pendingBlock(shown),
         ),
       ],
       temperature: 0.2,
@@ -1030,9 +1078,17 @@ export class MemoryEngine implements FollowupSource {
       }
     }
     this.#carried.delete(contextKeyString(context));
-    const first = speakers[0];
-    const dmPartner = priv && speakers.length === 1 && first ? first.account : null;
-    await this.#apply(extraction, context, dmPartner, speakers, evidence, now, report, signal);
+    await this.#apply(
+      extraction,
+      context,
+      dmPartner,
+      speakers,
+      evidence,
+      now,
+      report,
+      signal,
+      pending,
+    );
     await this.#setWatermark(nextMark);
     log.debug({ context: contextKeyString(context), report }, "consolidated");
     return report;
@@ -1076,6 +1132,7 @@ export class MemoryEngine implements FollowupSource {
     now: Timestamp,
     report: ConsolidationReport,
     signal?: AbortSignal,
+    pending: readonly MemoryRecord[] = [],
   ): Promise<void> {
     const min = this.config.min_importance;
     const evidence = this.config.evidence;
@@ -1086,6 +1143,23 @@ export class MemoryEngine implements FollowupSource {
     const items: NewMemory[] = [];
     const base = { source_context: context, due: null };
     const names = nameWords(speakers.flatMap((s) => s.names));
+    // A note of hers: global when about her alone, the person's when about one person alone,
+    // the server's when about anyone else (`noteAbout`). Its subjects are that one person.
+    const known: NamedPerson[] = [
+      ...speakers.flatMap((s) => s.names.map((name) => ({ name, person: s.person }))),
+      ...this.#knownNames(),
+    ];
+    const noteOf = (content: string, tagged: PersonId[]) => {
+      const where = scopeForNew(
+        this.config,
+        context,
+        dmPartner,
+        "self_note",
+        null,
+        noteAbout(content, tagged, known),
+      );
+      return { scope: where, subjects: where.type === "person" ? [where.person] : tagged };
+    };
     const others = lines.filter((l) => !l.self);
 
     // The lines backing a statement: among the ones the summarizer cited (else any line in
@@ -1162,8 +1236,9 @@ export class MemoryEngine implements FollowupSource {
       items.push({
         ...base,
         kind,
-        scope: scope(kind, global),
-        subjects,
+        ...(kind === "self_note"
+          ? noteOf(fact.statement, subjects)
+          : { scope: scope(kind, global), subjects }),
         content: fact.statement,
         importance: fact.importance,
         confidence: fact.confidence,
@@ -1192,8 +1267,7 @@ export class MemoryEngine implements FollowupSource {
       items.push({
         ...base,
         kind: "self_note",
-        scope: scope("self_note", null),
-        subjects: mentioned(note.note, speakers),
+        ...noteOf(note.note, mentioned(note.note, speakers)),
         content: note.note,
         importance: note.importance,
         confidence: 1,
@@ -1203,9 +1277,24 @@ export class MemoryEngine implements FollowupSource {
       });
     }
 
+    // What this stretch asked or answered is closed, with whatever else holds the same question
+    // about them, before anything new is written: answered just now, it is not asked again.
+    const allNames = speakers.flatMap((s) => s.names);
+    for (const label of x.answered_followups) {
+      const record = pending[Number(label.slice(1)) - 1];
+      if (record) report.closed += await this.#closeFollowup(record, now, allNames);
+    }
+    // In a DM "問他" is the one person there.
+    const partner = dmPartner === null ? null : (speakers[0]?.person ?? null);
+    let asked: FollowupLike[] | null = null;
     for (const f of x.followups) {
       if (repairHandleText(f.about) === null) {
         report.skipped += 1;
+        continue;
+      }
+      const same = f.same_as === null ? undefined : pending[Number(f.same_as.slice(1)) - 1];
+      if (same) {
+        report.reinforced += 1;
         continue;
       }
       let subjects: PersonId[];
@@ -1220,6 +1309,18 @@ export class MemoryEngine implements FollowupSource {
           subjects = mentioned(f.about, speakers);
           break;
       }
+      if (subjects.length === 0 && f.subject.type !== "myself" && partner !== null) {
+        subjects = [partner];
+      }
+      // Reworded, the same question is not a new one: one still open holds it, and one asked or
+      // answered lately means it was asked.
+      asked ??= await this.#followups();
+      const twin = this.#twin(asked, subjects, f.about, context, allNames, now);
+      if (twin !== null) {
+        if (twin.done) report.skipped += 1;
+        else report.reinforced += 1;
+        continue;
+      }
       const minutes = Math.round(f.due_in_hours * 60);
       items.push({
         kind: "followup",
@@ -1232,6 +1333,16 @@ export class MemoryEngine implements FollowupSource {
         due: toTimestamp(ms(now) + minutes * MINUTE_MS),
         origin: "experienced",
         source_events: refsOf(supporting(f.about, lines, evidence, names)),
+      });
+      // Said twice in one answer is still one question.
+      asked.unshift({
+        subjects,
+        content: f.about,
+        done: false,
+        source_context: context,
+        created_at: now,
+        updated_at: now,
+        superseded_by: null,
       });
     }
 
@@ -1695,11 +1806,136 @@ export class MemoryEngine implements FollowupSource {
     const record = await this.records.get(id);
     if (!record) throw new MemoryError(`unknown followup \`${id}\``);
     if (record.kind !== "followup") throw new MemoryError(`memory \`${id}\` is not a followup`);
-    await this.records.upsert({
-      ...record,
-      done: true,
-      updated_at: toTimestamp(this.#clock.now()),
-    });
+    // Brought up: what else holds the same question about them is closed with it.
+    await this.#closeFollowup(record, toTimestamp(this.#clock.now()));
+  }
+
+  /**
+   * Closes `record` and the open followups about the same person and matter (`sameMatter`),
+   * whatever their wording, scope or place: one question asked or answered is all of them
+   * (2026-11-10: answered in a DM, still asked seven times in the channel). A followup that names
+   * nobody is taken to be about anyone. Returns how many were closed.
+   */
+  async #closeFollowup(
+    record: MemoryRecord,
+    now: Timestamp,
+    names: readonly string[] = [],
+  ): Promise<number> {
+    let closed = 0;
+    if (!record.done) {
+      await this.records.upsert({ ...record, done: true, updated_at: now });
+      closed += 1;
+    }
+    const words = [...names, ...(await this.#namesOf(record.subjects))];
+    for (const r of await this.#followups()) {
+      if (r.id === record.id || r.done || r.superseded_by !== null) continue;
+      const together =
+        r.subjects.length === 0 ||
+        record.subjects.length === 0 ||
+        r.subjects.some((p) => record.subjects.includes(p));
+      if (!together || !sameMatter(record.content, r.content, words)) continue;
+      try {
+        await this.records.upsert({ ...r, done: true, updated_at: now });
+        closed += 1;
+      } catch (error) {
+        log.warn({ id: r.id, error: errorMessage(error) }, "closing a followup failed");
+      }
+    }
+    if (closed > 0) this.#version += 1;
+    return closed;
+  }
+
+  /** The latest followups, newest first (empty when the store fails). */
+  async #followups(): Promise<MemoryRecord[]> {
+    try {
+      return await this.records.list(
+        this.profile,
+        memoryFilter(FOLLOWUP_WINDOW, { kind: "followup" }),
+      );
+    } catch (error) {
+      log.warn({ error: errorMessage(error) }, "reading followups failed");
+      return [];
+    }
+  }
+
+  /** Names of `people`, which say nothing about what a followup about them asks. */
+  async #namesOf(people: readonly PersonId[]): Promise<string[]> {
+    const out: string[] = [];
+    for (const person of people) {
+      const name = await this.nameOfPerson(person);
+      if (name !== null) out.push(name);
+    }
+    return out;
+  }
+
+  /**
+   * The followup among `known` that already holds one about `subjects` asking `about`: one still
+   * open, or one brought up or answered within `followup_repeat_hours` (one that closed only
+   * because nobody brought it up in time does not count). They are about the same people when
+   * they share one, or name nobody and come from the same place.
+   */
+  #twin(
+    known: readonly FollowupLike[],
+    subjects: readonly PersonId[],
+    about: string,
+    context: ContextKey,
+    names: readonly string[],
+    now: Timestamp,
+  ): FollowupLike | null {
+    const repeatMs = this.config.followup_repeat_hours * HOUR_MS;
+    for (const r of known) {
+      if (r.superseded_by !== null) continue;
+      if (r.done) {
+        const touched = ms(r.updated_at) > ms(r.created_at);
+        if (repeatMs <= 0 || !touched || ms(now) - ms(r.updated_at) > repeatMs) continue;
+      }
+      const same =
+        subjects.length > 0 && r.subjects.length > 0
+          ? r.subjects.some((p) => subjects.includes(p))
+          : r.source_context !== null && contextKeyEquals(r.source_context, context);
+      if (same && sameMatter(r.content, about, names)) return r;
+    }
+    return null;
+  }
+
+  /**
+   * Open followups about the people of a stretch of conversation that may be shown there (a DM
+   * sees what may be shown to its one person), newest first; ones that name nobody count when
+   * they come from the same place. Shown to the summarizer as `f1`, `f2`, ….
+   */
+  async #pendingFollowups(
+    context: ContextKey,
+    speakers: readonly Speaker[],
+    dmPartner: AccountRef | null,
+    now: Timestamp,
+  ): Promise<MemoryRecord[]> {
+    const persons = speakers.flatMap((s) => (s.person !== null ? [s.person] : []));
+    const scopes = visibleScopes(
+      context,
+      speakers.map((s) => s.account),
+      persons,
+    );
+    const hours = this.config.followup_max_age_hours;
+    const oldest = hours > 0 ? ms(now) - hours * HOUR_MS : null;
+    const partner = dmPartner === null ? null : (speakers[0]?.person ?? null);
+    const shown = (r: MemoryRecord): boolean => {
+      if (r.subjects.length === 0) {
+        return r.source_context !== null && contextKeyEquals(r.source_context, context);
+      }
+      if (!r.subjects.some((p) => persons.includes(p))) return false;
+      return dmPartner !== null
+        ? visibleToSelf(r.scope, dmPartner, partner)
+        : hasScope(scopes, r.scope);
+    };
+    return (await this.#followups())
+      .filter(
+        (r) =>
+          !r.done &&
+          r.superseded_by === null &&
+          (oldest === null || r.due === null || ms(r.due) >= oldest) &&
+          shown(r),
+      )
+      .slice(0, PENDING_FOLLOWUPS);
   }
 }
 

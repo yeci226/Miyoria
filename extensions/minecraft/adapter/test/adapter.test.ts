@@ -108,6 +108,9 @@ describe("actions", () => {
     expect(toRequests({ name: "select", args: { item: "bread" } })).toEqual([{ type: "select_slot", params: { item: "bread" } }]);
     expect(toRequests({ name: "respawn" })).toEqual([{ type: "respawn", params: {} }]);
     expect(toRequests({ name: "stop" })).toEqual([{ type: "stop", params: {} }]);
+    expect(toRequests({ name: "drop", args: { item: "dirt", all: true } })).toEqual([
+      { type: "drop", params: { item: "dirt", all: true } },
+    ]);
   });
 
   it("rejects bad arguments with a message for the model", () => {
@@ -177,6 +180,7 @@ describe("MinecraftAdapter", () => {
       "use",
       "select",
       "respawn",
+      "drop",
       "launch",
       "quit",
     ]);
@@ -352,6 +356,15 @@ describe("tasks with an older mod (no task ids)", () => {
     expect(ends(tasks)).toContainEqual(["f1", "superseded"]);
     await waitFor(() => m.requests.filter((r) => r.type === "baritone").length === 2);
     expect(m.requests.some((r) => r.type === "stop")).toBe(false);
+  });
+
+  it("drop is an instant goal: one request, done when the mod accepts it", async () => {
+    const { mod: m, adapter } = await setup();
+    const tasks = taskEvents(adapter);
+    await adapter.tasks.start(spec("d1", "drop", { item: "rotten_flesh" }));
+    await waitFor(() => ends(tasks).length === 1);
+    expect(ends(tasks)).toEqual([["d1", "done"]]);
+    expect(m.requests.find((r) => r.type === "drop")).toMatchObject({ item: "rotten_flesh", all: true });
   });
 
   it("cancel and timeout stop the mod's work and end the task with the code", async () => {

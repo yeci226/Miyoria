@@ -363,6 +363,7 @@ describe("wallet commands", () => {
       my_pledge: 40,
       deadline: "2026-11-10T00:00:00.000Z",
       status: "open",
+      fulfilled: false,
       ...over,
     });
     state.goals = [goal({}), goal({ id: "g0", title: "舊的", status: "expired" })];
@@ -385,6 +386,11 @@ describe("wallet commands", () => {
 
     state.view = view({ can_earn: false });
     expect(buttons(await run(registry, "me goals"))).toEqual([]);
+    // A reached goal says whether she kept the promise yet.
+    state.goals = [goal({ id: "g2", title: "唱歌", status: "reached" })];
+    expect((await run(registry, "me goals")).text).toContain("上一個：唱歌　達成了，她還沒做到");
+    state.goals = [goal({ id: "g2", title: "唱歌", status: "reached", fulfilled: true })];
+    expect((await run(registry, "me goals")).text).toContain("上一個：唱歌　達成了，她做到了");
   });
 
   it("pledge_goes_to_the_open_goal_privately_and_refusals_are_plain", async () => {
@@ -403,6 +409,7 @@ describe("wallet commands", () => {
         my_pledge: 0,
         deadline: "2026-11-10T00:00:00.000Z",
         status: "open",
+        fulfilled: false,
       },
     ];
     const reply = await run(registry, "me pledge", { amount: 20 });

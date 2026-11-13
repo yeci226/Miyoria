@@ -99,17 +99,28 @@ describe("the 2026-11-10 incident: asked and answered in a DM", () => {
     return log;
   }
 
-  it("a turn in a channel with S as the one she talks with knows it was asked and answered, marked private", async () => {
+  it("a turn in a channel with S as the one she talks with knows it was asked and answered, not what", async () => {
     const r = readers(incident());
     const here = where(guild("lobby"), at(12, 12), [pS], [pS, pT]);
     const text = await r.timeline.render(here, 2000);
-    expect(text).toContain("你問過 Sora「上次面試結果怎麼樣?」");
-    expect(text).toContain("Sora 11:22 在和 Sora 的私訊回了:「還不錯,拿到二面了」");
+    expect(text).toContain(
+      "你問過 Sora 一件事(內容不在這裡說)(和 Sora 的私訊 11:07);Sora 11:22 在和 Sora 的私訊回了(",
+    );
     expect(text).toContain("不要在這裡引用或透露");
+    for (const words of ["面試", "二面", "下週二"]) expect(text).not.toContain(words);
     const thread = await r.threads.thread(pS, here);
     expect(thread?.questions).toHaveLength(1);
     expect(thread?.questions[0]?.answered_at).toBe(at(11, 22));
+    expect(thread?.questions[0]?.answer).toBeNull();
     expect(thread?.questions[0]?.private).toBe(true);
+  });
+
+  it("the DM itself still reads the question and the answer in full", async () => {
+    const r = readers(incident());
+    const here = where(dm("dm-s"), at(12, 12), [pS]);
+    const text = await r.timeline.render(here, 2000);
+    expect(text).toContain("你問過 Sora「上次面試結果怎麼樣?」");
+    expect(text).toContain("Sora 11:22 在這裡回了:「還不錯,拿到二面了」");
   });
 
   it("a turn in a channel where S is present but not the one she talks with gets none of it", async () => {
@@ -167,6 +178,36 @@ describe("the 2026-11-10 incident: asked and answered in a DM", () => {
     const before = await first.timeline.render(here, 2000);
     const again = readers(log);
     expect(await again.timeline.render(here, 2000)).toBe(before);
+  });
+});
+
+// 2026-11-10: in their DM b.netanyahu said 「我好累」「我覺得物理好難」, and six minutes later she
+// told the public channel 「反正你都在喊累了…順便把你那張物理考卷解決掉」. The DM lines were in
+// her "just now" in the channel, marked private; the mark was not enough.
+describe("a DM seen from a channel", () => {
+  function evening(): FakeLog {
+    const log = new FakeLog();
+    log.say(S, "我好累", at(21, 43), dm("dm-s"));
+    log.say(S, "我覺得物理好難", at(21, 44), dm("dm-s"));
+    log.her("那就先休息一下吧", at(21, 44), dm("dm-s"), [S]);
+    return log;
+  }
+
+  it("is one line that they talked, with no words and no topic", async () => {
+    const r = readers(evening());
+    const here = where(guild("lobby"), at(21, 49), [pS]);
+    const text = await r.timeline.render(here, 2000);
+    expect(text).toBe("- 21:43 跟 Sora 私訊聊過(內容不在這裡說)");
+    for (const words of ["累", "物理", "休息"]) expect(text).not.toContain(words);
+    const entries = await r.timeline.entries(here);
+    expect(entries.map((e) => e.text).join("\n")).not.toContain("物理");
+  });
+
+  it("is nothing at all where S is not the one she talks with", async () => {
+    const r = readers(evening());
+    expect(await r.timeline.render(where(guild("lobby"), at(21, 49), [pT], [pS, pT]), 2000)).toBe(
+      "",
+    );
   });
 });
 

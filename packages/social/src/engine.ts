@@ -971,8 +971,14 @@ export class Social implements SocialSignals, RelationshipEffects {
     return true;
   }
 
-  setCallName(person: PersonId, callName: string | null, now: number): Promise<Relationship> {
-    return this.modify(person, "me: call_name", now, (r) => {
+  /** `by` is who set it, for the relationship's delta log: `me` (the person), `her` (a tool). */
+  setCallName(
+    person: PersonId,
+    callName: string | null,
+    now: number,
+    by = "me",
+  ): Promise<Relationship> {
+    return this.modify(person, `${by}: call_name`, now, (r) => {
       r.call_name = callName;
     });
   }

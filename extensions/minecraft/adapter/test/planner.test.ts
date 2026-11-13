@@ -65,4 +65,42 @@ describe("planner", () => {
   it("plans torches through coal", () => {
     expect(lines("torch", { wooden_pickaxe: 1, stick: 1 }, {}, 4)).toEqual(["挖煤炭×1", "做火把×4"]);
   });
+
+  it("plans flint and steel from gravel and iron", () => {
+    expect(lines("flint_and_steel", { iron_ingot: 1 })).toEqual(["挖燧石×1", "做打火石×1"]);
+  });
+
+  it("plans a bed from wool and planks", () => {
+    expect(lines("white_bed", { white_wool: 3, oak_planks: 3 }, { table: true })).toEqual(["做白色床×1"]);
+    // Wool of another colour does not make a white bed.
+    expect(() => plan("white_bed", 1, { red_wool: 3, oak_planks: 3 }, { table: true })).toThrow();
+  });
+
+  it("needs a diamond pickaxe to mine obsidian", () => {
+    expect(lines("obsidian", { diamond_pickaxe: 1 })).toEqual(["挖黑曜石×1"]);
+  });
+
+  it("plans ender eyes from blaze rods and ender pearls", () => {
+    expect(lines("ender_eye", { blaze_rod: 1, ender_pearl: 2 }, {}, 2)).toEqual(["做烈焰粉×2", "做終界之眼×2"]);
+  });
+
+  it("says where mob drops come from instead of planning them", () => {
+    expect(() => plan("ender_eye", 1, {})).toThrow("烈焰棒沒辦法自己做出來");
+    expect(() => plan("ender_eye", 1, { blaze_rod: 1 })).toThrow("終界珍珠沒辦法自己做出來");
+  });
+
+  it("plans obsidian mining through diamonds from stone pickaxe", () => {
+    const steps = plan("obsidian", 10, { stone_pickaxe: 1 }, { table: true, furnace: true });
+    expect(steps.map(describeStep)).toEqual([
+      "挖粗鐵×3",
+      "砍原木×1",
+      "做木材×4",
+      "用熔爐燒鐵錠×3",
+      "做木棒×4",
+      "做鐵鎬×1",
+      "挖鑽石×3",
+      "做鑽石鎬×1",
+      "挖黑曜石×10",
+    ]);
+  });
 });

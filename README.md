@@ -31,66 +31,66 @@ npx miyoria stage obs-setup   # builds her OBS scenes and sources (add --dry-run
 
 Her data lives in `data/miyoria.db` (SQLite through `node:sqlite`, so there is no database to install). `npx miyoria config` changes settings one at a time. `miyoria status`, `miyoria decisions` (why she spoke or stayed quiet) and `miyoria events 'agent.*'` let you watch a running Core. `npx miyoria --help` lists everything.
 
-## 快速開始:從全新的 clone 到「bot 在我的伺服器上線並回話」
+## Quick start: from a fresh clone to the bot online and answering in your server
 
-需要:Node.js 24(其餘 pnpm、Python、ffmpeg 由 `miyoria install` 補)、一個 Discord bot token(Developer Portal → Bot,打開 Message Content Intent;預設還要 Presence 和 Server Members Intent,不想開就之後 `miyoria config set modules."platform.discord.bot".presence_intents false`)、一組 LLM API key(DeepSeek 或任何 OpenAI 相容的服務)。**不需要顯卡**:語音辨識 / 合成、唱歌、VTube Studio、OBS、Minecraft 都是選用,預設全部關著,只有文字聊天。
-
-```bash
-git clone <這個 repo> && cd Miyoria
-node scripts/setup.mjs        # 確認 pnpm(沒有就用 corepack 啟用)、pnpm install、然後開 miyoria init
-```
-
-`miyoria init` 只問必要的:LLM 的 key、Discord token、這台電腦跑什麼(預設「只有 core」= 文字聊天,不用 GPU)。結束時會問要不要現在安裝這台電腦缺的東西,列出清單和大小、只問一次。之後:
+You need Node.js 24 (`miyoria install` fills in pnpm, Python and ffmpeg), a Discord bot token (Developer Portal → Bot, with Message Content Intent turned on; by default she also needs the Presence and Server Members intents, and if you don't want them, run `miyoria config set modules."platform.discord.bot".presence_intents false` later), and an LLM API key (DeepSeek or any OpenAI-compatible service). **No GPU is needed**: speech recognition and synthesis, singing, VTube Studio, OBS and Minecraft are all optional and off by default, so out of the box she only chats in text.
 
 ```bash
-pnpm dev doctor               # 檢查 Node、pnpm、LLM、Discord、資料庫,以及選的角色缺什麼
-pnpm dev start                # 在 Windows Terminal 分頁啟動(其他系統:pnpm dev core)
-pnpm dev chat                 # 或先在終端機跟她聊天,不需要 Discord
+git clone <this repo> && cd Miyoria
+node scripts/setup.mjs        # checks pnpm (enables it through corepack if missing), runs pnpm install, then opens miyoria init
 ```
 
-要加語音、唱歌或直播時,重新執行 `miyoria init` 改角色(`inference` = ASR / TTS / 唱歌,要 NVIDIA 顯卡;`broadcast` = voice node + stage),再 `miyoria install`。
+`miyoria init` only asks what it needs: the LLM key, the Discord token and what this machine runs (the default is "core only", which is text chat with no GPU). At the end it asks once whether to install what this machine is missing now, with a list and the sizes. Then:
 
-哪些只有 Windows:`miyoria start` 的分頁(其他系統用 `miyoria up` 或 `miyoria core`)、`winget` 自動安裝(macOS 用 Homebrew;Linux 會印出 apt / dnf 指令,不替你跑 sudo)、直播機的 OBS / VTube Studio / voice node 的 Go Live(官方只在 Windows 測過)。`miyoria install` 不會裝、只會檢查並說明:NVIDIA 驅動 / CUDA、Docker Desktop、OBS、VTube Studio、Minecraft / Prism Launcher。針對這台電腦的workaround(防毒軟體鎖住 esbuild 暫存檔、WinNAT 保留埠)不是預設步驟,只在出問題時由 `miyoria doctor --deep` 提示。
+```bash
+pnpm dev doctor               # checks Node, pnpm, the LLM, Discord, the database and what the chosen roles still lack
+pnpm dev start                # starts in Windows Terminal tabs (other systems: pnpm dev core)
+pnpm dev chat                 # or chat with her in the terminal first, no Discord needed
+```
 
-## 多台電腦:角色、安裝和啟動
+To add voice, singing or streaming, run `miyoria init` again to change the roles (`inference` = ASR, TTS and singing, needs an NVIDIA GPU; `broadcast` = voice node and stage), then run `miyoria install`.
 
-服務分成三個角色,每台電腦只跑你選的那些(名稱集中在 `packages/cli/src/stack/roles.ts`,之後要改只改那裡):
+Windows only: the tabs of `miyoria start` (other systems use `miyoria up` or `miyoria core`), automatic installs through `winget` (macOS uses Homebrew; on Linux it prints the apt or dnf command and doesn't run sudo for you), and OBS, VTube Studio and the voice node's Go Live on the streaming PC (only tested on Windows). `miyoria install` doesn't install these, it only checks them and explains what to do: NVIDIA drivers and CUDA, Docker Desktop, OBS, VTube Studio, Minecraft and Prism Launcher. Workarounds for a particular machine (antivirus locking esbuild's temp files, ports reserved by WinNAT) are not default steps; `miyoria doctor --deep` only suggests them when something goes wrong.
 
-| 角色 | 服務 | 說明 |
+## Several machines: roles, install and start
+
+The services are split into three roles, and each machine only runs the ones you pick (the names live in `packages/cli/src/stack/roles.ts`, the only place to change them):
+
+| Role | Services | What it does |
 |---|---|---|
-| `broadcast`(直播機) | `voice-node`、`stage` | Discord 語音 + Go Live、VTube Studio / OBS / overlay。OBS、VTube Studio、遊戲也在這台,但不由 Miyoria 啟動 |
-| `core`(Bot 服務機) | `core`、`turn` | Discord bot、所有模組、資料庫、管理面板(:7878);`turn` 是判斷講完的 worker(`vad_engine = "silero"` 用);檔案沙箱要 Docker |
-| `inference`(GPU 推論機) | `asr`、`tts`、`sing` | 全部 AI 模型;三個要在同一台,因為 sing 做歌時要它們讓出顯卡 |
+| `broadcast` (streaming PC) | `voice-node`, `stage` | Discord voice and Go Live, VTube Studio, OBS and the overlay. OBS, VTube Studio and games also run here, but Miyoria doesn't start them |
+| `core` (bot server) | `core`, `turn` | The Discord bot, every module, the database and the admin panel (:7878). `turn` is the worker that decides when someone has finished speaking (used with `vad_engine = "silero"`). The file sandbox needs Docker |
+| `inference` (GPU machine) | `asr`, `tts`, `sing` | Every AI model. The three must be on the same machine, because sing asks the other two to give up the GPU while it makes a song |
 
-在原始碼資料夾裡(`pnpm dev <指令>` 等於 `miyoria <指令>`):
+In the source folder (`pnpm dev <command>` is the same as `miyoria <command>`):
 
 ```bash
-miyoria init                  # 第一題:這台電腦跑什麼(單機全部、只有一個角色、或自訂);多台電腦時再問各角色的區網位址
-miyoria init --yes --roles inference --inference-host 192.168.1.20   # 不互動版(--roles:all、角色或服務名稱,可逗號分隔)
-miyoria install --dry-run     # 只安裝這台電腦需要的:node 套件和建置、每個 worker 的 venv 與 pip;最後列出要手動下載的
+miyoria init                  # first question: what this machine runs (everything, one role, or custom); with several machines it then asks for each role's LAN address
+miyoria init --yes --roles inference --inference-host 192.168.1.20   # non-interactive (--roles: all, role or service names, comma separated)
+miyoria install --dry-run     # installs only what this machine needs: node packages and builds, each worker's venv and pip; lists what to download by hand at the end
 miyoria install
-miyoria doctor                # 這台電腦的角色缺什麼:套件、venv、模型檔、Docker、其他電腦的位址和連線
-miyoria start --dry-run       # 會開哪些分頁、哪些已在執行而略過
-miyoria start                 # 這台電腦設定的角色;每個服務一個 Windows Terminal 分頁
-miyoria start inference       # 或指定角色 / 服務:broadcast、core、inference、all、asr、tts ...
+miyoria doctor                # what this machine's roles lack: packages, venvs, model files, Docker, the other machines' addresses and connections
+miyoria start --dry-run       # which tabs it would open and which it skips because they are already running
+miyoria start                 # the roles set for this machine; one Windows Terminal tab per service
+miyoria start inference       # or name a role or service: broadcast, core, inference, all, asr, tts ...
 ```
 
-`miyoria start` 每個服務開一個分頁(同一個 Windows Terminal 視窗 `miyoria`),看得到輸出,要停就關分頁或在裡面按 Ctrl+C。已經在回應健康檢查、埠上有程式、或分頁還開著的服務不會再開第二份;不會自動重啟,也不會停任何服務。推論機會先開 asr、tts,等它們就緒再開 sing。`miyoria up` 是另一個選擇:背景執行、日誌寫檔、Ctrl+C 一起停,兩個指令都讀同一份 `[machine]`。
+`miyoria start` opens one tab per service (in the same Windows Terminal window, `miyoria`), so you can see the output; close a tab or press Ctrl+C in it to stop that service. A service that already answers its health check, has something on its port or still has its tab open is not started a second time. Nothing is restarted automatically and nothing is stopped. On the GPU machine, asr and tts start first, and sing starts once they are ready. `miyoria up` is the other option: it runs in the background, writes logs to files and stops everything on Ctrl+C. Both commands read the same `[machine]` section.
 
-設定存在 `miyoria.toml`(不進 git):
+The settings are in `miyoria.toml` (not in git):
 
 ```toml
 [machine]
-roles = ["core"]               # broadcast | core | inference,可以多個;單機 = 三個都寫
-# services = ["core", "asr"]   # 自訂:直接列服務,寫了就取代 roles
+roles = ["core"]               # broadcast | core | inference, more than one is fine; one machine = all three
+# services = ["core", "asr"]   # custom: list the services directly; this replaces roles
 [machine.hosts]
-core = "192.168.1.10"          # 跑 core 的電腦:core 綁這個位址(admin API / voice.link / stage.link),直播機連它
-inference = "192.168.1.20"     # 跑 asr / tts / sing 的電腦:worker 綁這個位址,core 連它
+core = "192.168.1.10"          # the machine running core: core binds this address (admin API / voice.link / stage.link), the streaming PC connects to it
+inference = "192.168.1.20"     # the machine running asr / tts / sing: the workers bind this address, core connects to it
 ```
 
-全部在同一台時兩個位址都是 `127.0.0.1`(預設)。分開時 `miyoria init` 會把位址寫到用得到的地方:Core 的 `bind`、stage 的 `core_url`、`.env` 的 `ASR_URL` / `TTS_URL`、`[modules.sing] url`;直播機要用 core 那邊的 `STAGE_LINK_TOKEN` / `VOICE_LINK_TOKEN`(init 會請你貼上),voice node 另外要在 `apps/voice-node/.env` 填 `SELF_TOKEN`。分開跑還有兩件事沒處理(見 [backlog](docs/design/backlog.md)):歌曲影片是推論機上的本機路徑,Minecraft 擴充在 core 那台開遊戲。
+When everything is on one machine, both addresses are `127.0.0.1` (the default). When they are split, `miyoria init` writes the addresses where they are used: Core's `bind`, stage's `core_url`, `ASR_URL` / `TTS_URL` in `.env`, and `[modules.sing] url`. The streaming PC needs core's `STAGE_LINK_TOKEN` / `VOICE_LINK_TOKEN` (init asks you to paste them), and the voice node also needs `SELF_TOKEN` in `apps/voice-node/.env`. One thing is not handled yet when running split (see the [backlog](docs/design/backlog.md)): the Minecraft extension launches the game on the core machine. Song videos are fetched from the sing worker into Core's own `data/songs`, so Core and Stage must share a machine.
 
-沒有 `[machine]` 的舊設定檔行為不變。
+Old config files without `[machine]` behave as before.
 
 ## Autonomy at a glance
 

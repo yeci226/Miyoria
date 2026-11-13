@@ -27,6 +27,7 @@ import {
   type DecisionRecord,
   dataCategory,
   type EconomyDoc,
+  embeddingValues,
   type Goal,
   type GoalPledge,
   type LogEntry,
@@ -906,6 +907,73 @@ function behaviour(open: () => Promise<Store>): void {
     expect(await list({ kind: "fact" })).toEqual([c.id, b.id]);
     expect(await list({ before: c.created_at })).toEqual([b.id, a.id]);
     expect(await list({ subject: bob, kind: "fact", scope: guild })).toEqual([c.id]);
+
+    // `count` selects what `list` selects and ignores the limit.
+    const count = (filter: Partial<MemoryFilter>) =>
+      memories.count?.(profile, { ...baseFilter, limit: 1, ...filter });
+    expect(await count({})).toBe(4);
+    expect(await count({ subject: alice })).toBe(2);
+    expect(await count({ scope: guild })).toBe(2);
+    expect(await count({ kind: "fact" })).toBe(2);
+    expect(await count({ before: c.created_at })).toBe(2);
+    expect(await count({ subject: bob, kind: "fact", scope: guild })).toBe(1);
+    expect(await count({ subject: newId() })).toBe(0);
+  });
+
+  it("memory_embedding_read_late_is_the_same", async () => {
+    const memories = store.memories;
+    const profile = unique("profile");
+    const t0 = Date.now();
+    const r = memory(profile, "fact", { type: "global" }, "late", at(t0));
+    r.embedding = [0.1, -0.2, 0.3];
+    await memories.upsert(r);
+    const stored = (await memories.get(r.id))?.embedding;
+    expect(stored).toHaveLength(3);
+
+    // A listed record keeps its vector when written back without anyone reading it.
+    const [listed] = await memories.list(profile, { ...baseFilter, limit: 10 });
+    expect(listed?.id).toBe(r.id);
+    if (!listed) return;
+    listed.importance = 0.9;
+    await memories.upsert(listed);
+    expect((await memories.get(r.id))?.embedding).toEqual(stored);
+
+    // Copies carry it, and setting it replaces it.
+    const [again] = await memories.list(profile, { ...baseFilter, limit: 10 });
+    if (!again) return;
+    expect({ ...again }.embedding).toEqual(stored);
+    expect(JSON.parse(JSON.stringify(again)).embedding).toEqual(stored);
+    const [replaced] = await memories.list(profile, { ...baseFilter, limit: 10 });
+    if (!replaced) return;
+    replaced.embedding = null;
+    expect(replaced.embedding).toBeNull();
+    expect(Object.keys(replaced)).toEqual(Object.keys(r));
+  });
+
+  it("memory_embedding_values_skip_decoding", async () => {
+    const memories = store.memories;
+    const profile = unique("profile");
+    const r = memory(profile, "fact", { type: "global" }, "values", at(Date.now()));
+    r.embedding = [0.1, -0.2, 0.3];
+    await memories.upsert(r);
+
+    // The stored float32 values come out without decoding `embedding` into decimals.
+    const [listed] = await memories.list(profile, { ...baseFilter, limit: 10 });
+    if (!listed) throw new Error("not listed");
+    const values = embeddingValues(listed);
+    expect(Array.from(values ?? [])).toEqual([0.1, -0.2, 0.3].map(Math.fround));
+    expect(Object.getOwnPropertyDescriptor(listed, "embedding")?.get).toBeDefined();
+    // Reading it afterwards still gives the shortest decimals.
+    expect(listed.embedding).toEqual([0.1, -0.2, 0.3]);
+
+    // Once replaced, the values follow the property.
+    const [replaced] = await memories.list(profile, { ...baseFilter, limit: 10 });
+    if (!replaced) throw new Error("not listed");
+    replaced.embedding = [1, 2];
+    expect(embeddingValues(replaced)).toEqual([1, 2]);
+    replaced.embedding = null;
+    expect(embeddingValues(replaced)).toBeNull();
+    expect(embeddingValues({ embedding: [0.5] })).toEqual([0.5]);
   });
 
   it("memory_touch", async () => {
@@ -1862,6 +1930,16 @@ function behaviour(open: () => Promise<Store>): void {
     expect(
       (await store.goals.list(profile, { statuses: ["open"], limit: 9 })).map((g) => g.title),
     ).toEqual(["lamp"]);
+    // A kept promise: only a reached goal, and the first mark stands.
+    expect(await store.goals.get(first.id)).not.toHaveProperty("fulfilled_at");
+    expect(await store.goals.fulfill(second.id, "owner", at(3_500))).toBe(false);
+    expect(await store.goals.fulfill(first.id, "self", at(4_000))).toBe(true);
+    expect(await store.goals.fulfill(first.id, "owner", at(5_000))).toBe(false);
+    expect(await store.goals.get(first.id)).toMatchObject({
+      fulfilled_at: at(4_000),
+      fulfilled_by: "self",
+    });
+    expect(await store.goals.get(second.id)).not.toHaveProperty("fulfilled_at");
 
     const bounty = (ms: number, task: string): Bounty => ({
       id: newId(),

@@ -31,6 +31,13 @@ still online take the card when that is allowed, else release everything and wai
 her voice already offline, cut the remaining diffusion steps once, then give her voice back and wait
 (offloading did not help, so this job does not try it again). Separation restarts on the CPU.
 
+A stage that does not stop between steps (her RVC model, ``SING_VOICE=rvc`` or ``…+rvc``: one
+subprocess from start to end) cannot give way while she speaks, and its VRAM is not this process's,
+so torch cannot measure it. Its peak is learned from the free VRAM of the whole card, read every
+WATCH_S while it runs, and it shares the card only with SING_SPEECH_BURST_MB more room than it
+needs: what her voice takes while she speaks next to it. Without that room it goes the way of any
+stage that does not fit (her voice offline for it, after she said so).
+
 ``SING_GPU_POLICY`` picks the policy. ``yield`` (the default since 2026-11-09, the owner's call: a
 song should not wait for minutes, or run for a quarter of an hour on the CPU, to spare her a short
 silence): a stage that fits shares the card as above; one that does not takes her voice offline for
@@ -63,6 +70,7 @@ PROFILE_FILE = "_gpu-profile.json"
 PROFILE_VERSION = 1
 PEAKS_KEPT = 5  # a peak grows with the length of the song: the highest of the last few runs
 RECENT_SPILLS = 10
+WATCH_S = 0.25  # how often the card is read while a stage runs that never calls ``tick``
 HISTORY_KEPT = 40
 SPILL_MARGIN_MB = 256  # over the free VRAM at which a spill was seen
 LOW_FREE_READS = 3  # readings in a row before low free VRAM counts
@@ -112,6 +120,7 @@ class Limits:
     yield_patient_s: float = 900.0
     context_ttl_s: float = 20.0
     check_s: float = 1.0
+    burst_mb: int = 1024
 
     @staticmethod
     def from_env() -> "Limits":
@@ -132,6 +141,7 @@ class Limits:
             yield_patient_s=env_float("SING_YIELD_PATIENT_S", 900.0),
             context_ttl_s=env_float("SING_CONTEXT_TTL_S", 20.0),
             check_s=env_float("SING_GPU_CHECK_S", 1.0),
+            burst_mb=env_int("SING_SPEECH_BURST_MB", 1024),
         )
 
 
@@ -408,6 +418,7 @@ class Facts:
     limits: Limits
     cuda: bool
     on_gpu: bool = True  # the stage is set to use the card
+    pauses: bool = True  # the stage stops between steps while she speaks (not her RVC model)
     total_mb: int | None = None
     free_mb: int | None = None
     own_mb: int = 0
@@ -448,8 +459,10 @@ def decide(f: Facts) -> Decision:
         return Decision("cpu", "spill_cpu", "分離在顯示卡上溢出了,改用 CPU,語音不受影響")
 
     room = None if f.free_mb is None else f.free_mb + f.own_mb
-    want = f.need_mb + f.headroom_mb
-    have = f"有 {_gb(room)},要 {_gb(want)}"
+    # A stage that cannot stop while she speaks leaves her voice the room it takes meanwhile.
+    burst = 0 if f.pauses or not f.speech_loaded else limits.burst_mb
+    want = f.need_mb + f.headroom_mb + burst
+    have = f"有 {_gb(room)},要 {_gb(want)}" + (f",含她說話用的 {_gb(burst)}" if burst else "")
     # After a spill or an OOM the estimate was wrong: only more room than then counts.
     fits = room is not None and room >= want and (f.crowded_mb is None or room >= f.crowded_mb + f.need_mb * 0.1)
     separate = f.stage in CPU_STAGES
@@ -465,6 +478,8 @@ def decide(f: Facts) -> Decision:
             return Decision("wait", "offload_useless", f"語音讓出來還是溢出,先等空間({have})")
         return Decision("offload", "policy_offload", "設定是一律獨佔,語音暫時離線")
     if fits:
+        if not f.pauses:
+            return Decision("share", "fits", f"顯示卡放得下({have}),跟語音一起跑")
         return Decision("share", "fits", f"顯示卡放得下({have}),跟語音一起跑,她說話時讓路")
     if f.policy == "wait":
         if separate:
@@ -597,6 +612,7 @@ class GpuJob:
         self._checked = 0.0
         self._free0: int | None = None
         self._free_min: int | None = None
+        self._watched_min: int | None = None  # the lowest free VRAM ``watch`` read in this stage
         self._low_reads = 0
         self._trimmed = False
         self._clean = True
@@ -617,7 +633,7 @@ class GpuJob:
             work += self.audio_s * p.rate(stage)
         return work + p.reload_s()
 
-    def gather(self, stage: str, on_gpu: bool = True) -> Facts:
+    def gather(self, stage: str, on_gpu: bool = True, pauses: bool = True) -> Facts:
         m, limits = self.machine, self.limits
         card = m.card()
         now = self.clock()
@@ -626,7 +642,8 @@ class GpuJob:
         freed = m.profile.freed_mb()
         need, _ = m.profile.need(stage, limits.prior_need_mb)
         return Facts(
-            policy=self.policy, stage=stage, limits=limits, cuda=card.cuda, on_gpu=on_gpu, total_mb=card.total_mb,
+            policy=self.policy, stage=stage, limits=limits, cuda=card.cuda, on_gpu=on_gpu, pauses=pauses,
+            total_mb=card.total_mb,
             free_mb=card.free_mb, own_mb=card.own_mb, need_mb=need, headroom_mb=m.profile.headroom(card.total_mb, limits),
             freed_mb=freed if freed is not None else speech.released_mb, speech_loaded=speech.loaded,
             people=self.people(),
@@ -637,8 +654,8 @@ class GpuJob:
             crowded_mb=self.crowded_mb,
         )
 
-    def decide(self, stage: str, on_gpu: bool = True) -> Decision:
-        self.facts = self.gather(stage, on_gpu)
+    def decide(self, stage: str, on_gpu: bool = True, pauses: bool = True) -> Decision:
+        self.facts = self.gather(stage, on_gpu, pauses)
         d = decide(self.facts)
         self._note(stage, d)
         if d.mode == "wait":
@@ -680,8 +697,38 @@ class GpuJob:
         self.spilling = False
         self._checked = self.clock()
         self._free0 = self._free_min = self.facts.free_mb if self.facts else None
+        self._watched_min = None
         if device == "gpu":
             self._backend("peak_reset")
+
+    def watch(self) -> Callable[[], None]:
+        """Reads the free VRAM of the whole card every WATCH_S until the returned function is called:
+        for a stage that never calls ``tick`` (a subprocess), whose peak torch here cannot see. What
+        it reads counts in ``finished`` like the readings ``tick`` takes."""
+        stop = threading.Event()
+
+        def run() -> None:
+            while not stop.wait(min(WATCH_S, self.limits.check_s)):
+                try:
+                    free = self.machine.card().free_mb
+                except Exception as e:  # noqa: BLE001 - a reading that fails is just not taken
+                    log.debug("cannot read the card while watching: %s", e)
+                    continue
+                if free is not None:
+                    self._watched_min = free if self._watched_min is None else min(self._watched_min, free)
+
+        thread = threading.Thread(target=run, name="sing-vram-watch", daemon=True)
+        thread.start()
+
+        def end() -> None:
+            stop.set()
+            thread.join()
+
+        return end
+
+    def _lowest_free(self) -> int | None:
+        seen = [m for m in (self._free_min, self._watched_min) if m is not None]
+        return min(seen) if seen else None
 
     def _backend(self, name: str) -> Any:
         fn = getattr(self.machine.backend(), name, None)
@@ -693,17 +740,18 @@ class GpuJob:
             return
         p = self.machine.profile
         peak = self._peak()
-        drop = 0 if self._free0 is None or self._free_min is None else self._free0 - self._free_min
+        lowest = self._lowest_free()
+        drop = 0 if self._free0 is None or lowest is None else self._free0 - lowest
         if max(peak, drop) > 0:
             p.note_peak(stage, max(peak, drop))
         step = self.meter.median()
         if self._clean and not self.spilling and step is not None:
             # Nothing to compare with yet: a slow first run only teaches "normal" with room to spare.
             f = self.facts
-            tight = self._free_min is not None and f is not None and self._free_min <= f.headroom_mb
+            tight = lowest is not None and f is not None and lowest <= f.headroom_mb
             if p.step(stage) is not None or step <= self.limits.spill_step_s or not tight:
                 p.note_step(stage, step)
-                p.note_healthy(self._free_min)
+                p.note_healthy(lowest)
             if self.audio_s and not self._resumed:
                 p.note_rate(stage, self.meter.active_s / self.audio_s)
         p.save()

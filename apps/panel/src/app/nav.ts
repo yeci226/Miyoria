@@ -71,6 +71,7 @@ export const ECONOMY_TABS = [
   { tab: "commissions", label: "委託" },
   { tab: "predictions", label: "預測" },
   { tab: "room", label: "房間" },
+  { tab: "goals", label: "目標" },
 ] as const;
 
 export const INNER_TABS = [
@@ -87,6 +88,7 @@ export const INNER_TABS = [
 export const LLM_TABS = [
   { tab: "overview", label: "概況" },
   { tab: "calls", label: "呼叫" },
+  { tab: "thinking", label: "思路" },
   { tab: "prices", label: "價格與用量" },
 ] as const;
 

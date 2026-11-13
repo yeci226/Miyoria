@@ -320,7 +320,9 @@ describe("remind_me", () => {
     });
     expect(set.status).toBe("done");
     if (set.status !== "done") return;
-    expect(set.result.text).toMatch(/^好了,R[0-9A-Z]{5} 11\/10 15:20:看一下烤箱$/);
+    expect(set.result.text).toMatch(
+      /^提醒設好了,還沒到時間,到時候才會提醒你:R[0-9A-Z]{5} 11\/10 15:20:看一下烤箱$/,
+    );
     const forOwen = await registry.invoke({
       principal: Principals.self(CHAT, OWEN),
       capability: "self.remind",

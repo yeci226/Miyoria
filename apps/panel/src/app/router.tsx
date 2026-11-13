@@ -3,24 +3,12 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   redirect,
   type RouterHistory,
 } from "@tanstack/react-router";
-import { AccessPage } from "@/pages/access/AccessPage";
-import { ActivityPage } from "@/pages/activity/ActivityPage";
-import { CharacterPage } from "@/pages/character/CharacterPage";
-import { DataPage } from "@/pages/data/DataPage";
-import { EconomyPage } from "@/pages/economy/EconomyPage";
-import { EvalPage } from "@/pages/eval/EvalPage";
-import { InnerPage } from "@/pages/inner/InnerPage";
-import { LifePage } from "@/pages/life/LifePage";
-import { LivePage } from "@/pages/live/LivePage";
-import { LlmPage } from "@/pages/llm/LlmPage";
+import type { LlmCallKind } from "@/api/types";
 import { NotFoundPage } from "@/pages/NotFound";
-import { OverviewPage } from "@/pages/overview/OverviewPage";
-import { RulesPage } from "@/pages/rules/RulesPage";
-import { SettingsPage } from "@/pages/settings/SettingsPage";
-import { SystemPage } from "@/pages/system/SystemPage";
 import {
   ACTIVITY_TABS,
   type ActivityTab,
@@ -41,6 +29,23 @@ import {
 import { Shell } from "./Shell";
 
 const rootRoute = createRootRoute({ component: Shell, notFoundComponent: NotFoundPage });
+
+// Each page is its own chunk, fetched when it is first opened: the public site and the sign-in
+// screen load without the panel's pages, and the panel loads only the page it opens on.
+const OverviewPage = lazyRouteComponent(() => import("@/pages/overview/OverviewPage"), "OverviewPage");
+const ActivityPage = lazyRouteComponent(() => import("@/pages/activity/ActivityPage"), "ActivityPage");
+const LivePage = lazyRouteComponent(() => import("@/pages/live/LivePage"), "LivePage");
+const CharacterPage = lazyRouteComponent(() => import("@/pages/character/CharacterPage"), "CharacterPage");
+const InnerPage = lazyRouteComponent(() => import("@/pages/inner/InnerPage"), "InnerPage");
+const LifePage = lazyRouteComponent(() => import("@/pages/life/LifePage"), "LifePage");
+const EconomyPage = lazyRouteComponent(() => import("@/pages/economy/EconomyPage"), "EconomyPage");
+const LlmPage = lazyRouteComponent(() => import("@/pages/llm/LlmPage"), "LlmPage");
+const SystemPage = lazyRouteComponent(() => import("@/pages/system/SystemPage"), "SystemPage");
+const RulesPage = lazyRouteComponent(() => import("@/pages/rules/RulesPage"), "RulesPage");
+const EvalPage = lazyRouteComponent(() => import("@/pages/eval/EvalPage"), "EvalPage");
+const AccessPage = lazyRouteComponent(() => import("@/pages/access/AccessPage"), "AccessPage");
+const DataPage = lazyRouteComponent(() => import("@/pages/data/DataPage"), "DataPage");
+const SettingsPage = lazyRouteComponent(() => import("@/pages/settings/SettingsPage"), "SettingsPage");
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() !== "" ? v : undefined);
 
@@ -100,9 +105,12 @@ export interface LlmSearch {
   status?: "ok" | "error" | "aborted" | "streaming";
   trouble?: boolean;
   q?: string;
+  /** The kind of call the chain-of-thought tab shows. */
+  kind?: LlmCallKind;
 }
 
 const STATUSES = ["ok", "error", "aborted", "streaming"] as const;
+const LLM_KINDS: readonly LlmCallKind[] = ["mind", "chat", "voice", "attention", "memory", "learning", "social", "other"];
 
 export const llmRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -118,6 +126,7 @@ export const llmRoute = createRoute({
     status: STATUSES.find((x) => x === s.status),
     trouble: s.trouble === true || s.trouble === "true" ? true : undefined,
     q: str(s.q),
+    kind: LLM_KINDS.find((x) => x === s.kind),
   }),
   component: LlmPage,
 });

@@ -58,7 +58,7 @@ public final class BridgeRuntime implements ActionHandler {
     private BaritoneBridge baritone; // null when Baritone is not installed
     /** Requests that move her body; they wait while a reflex has it (see {@link #dispatch}). */
     private static final Set<String> BODY_REQUESTS = Set.of(Protocol.T_BARITONE, Protocol.T_ALTOCLEF, Protocol.T_LOOK,
-            Protocol.T_USE, Protocol.T_ATTACK, Protocol.T_SELECT_SLOT, Protocol.T_PLACE, Protocol.T_CRAFT, Protocol.T_SMELT);
+            Protocol.T_USE, Protocol.T_ATTACK, Protocol.T_SELECT_SLOT, Protocol.T_PLACE, Protocol.T_CRAFT, Protocol.T_SMELT, Protocol.T_DROP);
     /** Off-client-thread Baritone block lookups (see {@link #handle}). */
     private static final ExecutorService PREWARM = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "miyoria-bridge-prewarm");
@@ -245,6 +245,7 @@ public final class BridgeRuntime implements ActionHandler {
             case Protocol.T_ATTACK -> out.ok(actions.attack(mc, req));
             case Protocol.T_SELECT_SLOT -> out.ok(actions.selectSlot(mc, req));
             case Protocol.T_PLACE -> out.ok(actions.place(mc, req));
+            case Protocol.T_DROP -> out.ok(actions.drop(mc, req));
             case Protocol.T_CRAFT -> {
                 JsonObject started = workbench.craft(mc, req);
                 standStill();

@@ -1,7 +1,7 @@
 // How the panel looks in this browser. Settings live in localStorage, added pictures in
 // IndexedDB; nothing here reaches the Core. The default background is the owner's picture at
-// public/background.local.jpg, kept out of git because it is game art. Where that file is
-// missing, the gradient underneath shows instead.
+// public/background.local.jpg, kept out of git because it is game art. Where that file was
+// missing at build time the gradient shows instead, and the page never asks for the picture.
 
 import { useSyncExternalStore } from "react";
 import { deleteBackgroundImage, loadBackgroundImage, saveBackgroundImage } from "@/lib/image-store";
@@ -23,11 +23,16 @@ export const THEME_IDS = Object.keys(THEMES) as ThemeId[];
 const DUSK =
   "radial-gradient(90% 70% at 78% 8%, #8a6a86 0%, transparent 62%), radial-gradient(80% 80% at 12% 96%, #5c5f8e 0%, transparent 60%), linear-gradient(160deg, #3b4a66 0%, #2e3350 45%, #4a3350 100%)";
 
+/** The default background: the owner's picture over the dusk gradient, or the gradient alone. */
+export function pictureCss(hasPicture: boolean): string {
+  return hasPicture ? `url("/background.local.jpg") 24% 62% / auto 150% no-repeat, ${DUSK}` : DUSK;
+}
+
 export const BACKGROUNDS = [
   {
     id: "picture",
     label: "預設圖",
-    css: `url("/background.local.jpg") 24% 62% / auto 150% no-repeat, ${DUSK}`,
+    css: pictureCss(__PANEL_ART__.background),
   },
   { id: "solid-ink", label: "墨黑", css: "#0b0d12" },
   { id: "solid-night", label: "夜藍", css: "#1b2233" },

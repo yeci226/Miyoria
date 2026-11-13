@@ -78,69 +78,79 @@ export const REFLECT_STATE_KEY = "reflect:state";
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
 
+// Her reply is long and written in one go: one item or a few characters over a limit used to
+// refuse the whole reflection ("her reflection failed"), and the repair try often came back over
+// again. Over-long text is cut, extra items are dropped from the end and numbers are clamped; only
+// a reply that is not the right shape at all is refused.
+const cutText = (s: string, max: number) => {
+  const c = [...s.trim()];
+  return c.length > max ? `${c.slice(0, max - 1).join("")}…` : c.join("");
+};
+/** Non-empty text of at most `max` characters (cut, not refused). */
+const text = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .transform((s) => cutText(s, max));
+/** Text that may be empty, at most `max` characters. */
+const note = (max: number) => z.string().transform((s) => cutText(s, max));
+/** At most `n` items: the first `n` are kept. */
+const upTo = <T extends z.ZodType>(item: T, n: number) =>
+  z.array(item).transform((a) => a.slice(0, n));
+/** A number clamped into [min, max] (rounded when `int`). */
+const within = (min: number, max: number, int = false) =>
+  z.number().transform((v) => Math.min(max, Math.max(min, int ? Math.round(v) : v)));
+
 export const ReflectionSchema = z.object({
-  summary: z.string().min(1).max(1200),
-  insights: z
-    .array(
-      z.object({
-        from: z.array(z.string()).min(1).max(12),
-        content: z.string().min(1).max(400),
-        kind: z.enum(["fact", "self_note"]).default("fact"),
-        importance: z.number().min(0).max(1).default(0.6),
-      }),
-    )
-    .max(8)
-    .default([]),
-  outdated: z
-    .array(z.object({ old: z.string(), by: z.string() }))
-    .max(10)
-    .default([]),
-  documents: z.array(DraftSchema).max(10).default([]),
-  feelings: z
-    .array(z.object({ person: z.string(), note: z.string().min(1).max(300) }))
-    .max(5)
-    .default([]),
-  lessons: z
-    .array(
-      z.object({
-        text: z.string().min(1).max(200),
-        person: z.string().nullable().default(null),
-        place: z.string().nullable().default(null),
-        talk: z.number().min(-1).max(1).nullable().default(null),
-        days: z.number().int().min(1).max(180).nullable().default(null),
-      }),
-    )
-    .max(6)
-    .default([]),
-  drop_lessons: z.array(z.string()).max(20).default([]),
-  goals: z
-    .array(
-      z.object({
-        text: z.string().min(1).max(200),
-        why: z.string().max(200).default(""),
-        days: z.number().int().min(1).max(60).nullable().default(null),
-      }),
-    )
-    .max(5)
-    .default([]),
+  summary: text(1200),
+  insights: upTo(
+    z.object({
+      from: upTo(z.string(), 12).pipe(z.array(z.string()).min(1)),
+      content: text(400),
+      kind: z.enum(["fact", "self_note"]).default("fact"),
+      importance: within(0, 1).default(0.6),
+    }),
+    8,
+  ).default([]),
+  outdated: upTo(z.object({ old: z.string(), by: z.string() }), 10).default([]),
+  documents: upTo(DraftSchema, 10).default([]),
+  feelings: upTo(z.object({ person: z.string(), note: text(300) }), 5).default([]),
+  lessons: upTo(
+    z.object({
+      text: text(200),
+      person: z.string().nullable().default(null),
+      place: z.string().nullable().default(null),
+      talk: within(-1, 1).nullable().default(null),
+      days: within(1, 180, true).nullable().default(null),
+    }),
+    6,
+  ).default([]),
+  drop_lessons: upTo(z.string(), 20).default([]),
+  goals: upTo(
+    z.object({
+      text: text(200),
+      why: note(200).default(""),
+      days: within(1, 60, true).nullable().default(null),
+    }),
+    5,
+  ).default([]),
   /** Person-card tidy-up: small proposed changes (the program caps them). */
-  bonds: z
-    .array(
-      z.object({
-        person: z.string().min(1),
-        attachment: z.number().min(-1).max(1).default(0),
-        affinity: z.number().min(-100).max(100).default(0),
-        trust: z.number().min(-100).max(100).default(0),
-        feeling: z.string().max(300).nullable().default(null),
-        /** Filtered and cut by the program; a bad value here must not cost the reflection. */
-        public_feeling: z.string().nullable().default(null).catch(null),
-        /** Her one-line stance toward them; cut by the program, a bad value costs nothing. */
-        stance: z.string().nullable().default(null).catch(null),
-        why: z.string().max(200).default(""),
-      }),
-    )
-    .max(10)
-    .default([]),
+  bonds: upTo(
+    z.object({
+      person: z.string().min(1),
+      attachment: within(-1, 1).default(0),
+      affinity: within(-100, 100).default(0),
+      trust: within(-100, 100).default(0),
+      feeling: note(300).nullable().default(null),
+      /** Filtered and cut by the program; a bad value here must not cost the reflection. */
+      public_feeling: z.string().nullable().default(null).catch(null),
+      /** Her one-line stance toward them; cut by the program, a bad value costs nothing. */
+      stance: z.string().nullable().default(null).catch(null),
+      why: note(200).default(""),
+    }),
+    10,
+  ).default([]),
 });
 export type ReflectionReply = z.output<typeof ReflectionSchema>;
 
@@ -178,7 +188,7 @@ function rules(kind: "daily" | "light", maxGoals: number, maxBonds: number): str
 - 用 documents 更新你自己整理的資料庫(人物、伺服器、主題),也包括關於你自己的文件(subject "self":你喜歡做什麼、什麼做得好或不好、你的長期目標)。
 - bonds:整理人物卡,最多 ${maxBonds} 個人,每項 {"person": 名字, "attachment": 你多在意他的變化(一小步,-0.03~0.03), "affinity": 好感的變化(-2~2), "trust": 信任的變化(-2~2), "feeling": 整段改寫的你對他的感覺或 null, "public_feeling": 給他本人看的一句話或 null, "stance": 你現在怎麼跟他相處的一句話或 null, "why": 理由}。依累積的互動與感受慢慢調,沒有變化就不要寫;暗戀、在意、疏遠都是這樣一步一步長出來的。實際數值由系統決定,每個人一天最多調一次。
 - public_feeling 是他本人會讀到的一句話,一定是對他說的,只談你和他,不提任何其他人(不寫別人的名字、也不寫「另一個人」「某人」),不寫數字、不寫你的內心盤算;想不出來就給 null。
-- stance 是你自己決定的、「你現在怎麼跟他相處」的一句話(${MAX_STANCE} 字內,用你自己的口氣,例如傲嬌多一點還是少一點、會不會鬧他、說話坦不坦率)。人物卡上標了「好感等級變了」或「還沒決定相處方式」的人,請寫一句新的 stance;你覺得相處方式沒變,就把原本的意思重寫一次也可以,這完全由你決定,不用因為等級變高就變得更親近。沒有要改就給 null。這句只有你自己看得到,可以用名字,不寫數字。
+- stance 是你自己決定的、「你現在怎麼跟他相處」的一句話(${MAX_STANCE} 字內,用你自己的口氣,例如對他比較黏還是比較愛鬧、會不會撒嬌、開心和在意藏不藏得住)。人物卡上標了「好感等級變了」或「還沒決定相處方式」的人,請寫一句新的 stance;你覺得相處方式沒變,就把原本的意思重寫一次也可以,這完全由你決定,不用因為等級變高就變得更親近。沒有要改就給 null。這句只有你自己看得到,可以用名字,不寫數字。
 - feelings:只想改寫對某人的感覺時用,每項 {"person": 名字, "note": 整段改寫的感覺}。
 - goals:最多 ${maxGoals} 個值得花幾天去做的長期目標,每項 {"text": 目標, "why": 理由, "days": 幾天},會放進你的目標;沒有就不要。
 - 人一律用名字(資料裡看到的那樣),地點照資料裡的整串寫,不要自己編代號:記憶、lesson、文件、感覺都是留給以後的你看的。

@@ -7,6 +7,10 @@
 // * the daily quest "hear a song" (quests.ts): whoever was in her voice channel when a song
 //   started and still is when she sang it to the end.
 //
+// A song sung to the end gets one card in her voice channel's text chat (notices.ts): the
+// requester's coins, who finished the quest by listening, and what that unlocked. Without a voice
+// channel there is no card.
+//
 // Only people she knows earn (`EconomyService.earn` checks); keys make a replayed event or a
 // restart pay nothing twice.
 
@@ -24,6 +28,15 @@ import {
 } from "@miyoria/types";
 import type { EconomyConfig } from "./config.js";
 import { type EconomyService, localDay, voiceWindow } from "./economy.js";
+import {
+  amounts,
+  eventCard,
+  postCard,
+  type QuestDone,
+  questParts,
+  unlockLines,
+} from "./notices.js";
+import { someone } from "./receipt.js";
 
 /** A stranger is looked up again after this long. */
 const STRANGER_RETRY_MS = 10 * 60_000;
@@ -47,6 +60,8 @@ export class Earnings {
   #voice: Voice | null = null;
   /** Who was in her voice channel when the song now playing started. */
   #listening = new Map<string, AccountRef>();
+  /** The title of the song now playing, as its start cue said. */
+  #title = "";
   #window = -1;
   /** Who spoke in `#window`. */
   readonly #spoke = new Map<string, AccountRef>();
@@ -169,36 +184,55 @@ export class Earnings {
   }
 
   /** The song was sung to the end: whoever sat through it ticks the daily quest. */
-  async #heard(): Promise<void> {
+  async #heard(): Promise<QuestDone[]> {
     const stayed = [...this.#listening].filter(([key]) => this.#voice?.present.has(key));
     this.#listening = new Map();
+    const done: QuestDone[] = [];
     for (const [, account] of stayed) {
       const who = await this.#economy.member(account);
-      if (who) await this.#economy.v2.questDone(who, "listen_song");
+      const result = who ? await this.#economy.v2.questDone(who, "listen_song") : null;
+      if (result?.status === "paid") done.push({ account, result });
     }
+    return done;
   }
 
-  /** A song ended: its requester earns when she sang it to the end. */
+  /** A song ended: its requester earns when she sang it to the end; one card says what moved. */
   async #song(payload: Parameters<typeof parseSongCue>[0]): Promise<void> {
     const cue = parseSongCue(payload);
-    if (cue?.state === "started") this.#listening = new Map(this.#voice?.present ?? []);
+    if (cue?.state === "started") {
+      this.#listening = new Map(this.#voice?.present ?? []);
+      this.#title = cue.title;
+    }
     if (cue?.state !== "ended" || cue.outcome !== "finished") return;
-    await this.#heard();
+    // Where the song was heard, read before anything awaits.
+    const context = this.#voice?.context ?? null;
+    const heard = await this.#heard();
     const list = this.#services.get(SingerKey)?.list.all() ?? [];
     const entry = list
       .filter((e) => e.song?.id === cue.song && e.requester !== null && e.state === "done")
       .sort((a, b) => b.no - a.no)[0];
-    if (!entry?.requester) return;
-    const title = [...(entry.song?.title || entry.query)].slice(0, 100).join("");
-    const paid = await this.#economy.earn(
-      entry.requester,
-      "song",
-      this.#config.song_finished,
-      `song:${entry.no}:${entry.created_at}`,
-      title,
-    );
-    if (paid === null) return;
-    const who = await this.#economy.member(entry.requester);
-    if (who) await this.#economy.v2.afterEarn(who);
+    const title = [...(entry?.song?.title || entry?.query || this.#title)].slice(0, 100).join("");
+    const lines: string[] = [];
+    const extras: string[] = [];
+    if (entry?.requester) {
+      const paid = await this.#economy.earn(
+        entry.requester,
+        "song",
+        this.#config.song_finished,
+        `song:${entry.no}:${entry.created_at}`,
+        title,
+      );
+      if (paid !== null) {
+        lines.push(`${someone(entry.requester)} 點的,+${paid.delta}`);
+        const who = await this.#economy.member(entry.requester);
+        if (who)
+          extras.push(...unlockLines(await this.#economy.v2.afterEarn(who), entry.requester));
+      }
+    }
+    const quests = questParts(heard);
+    if (quests.paid.length > 0) lines.push(`聽完的人:${amounts(quests.paid)}(每日任務)`);
+    extras.unshift(...quests.bonuses);
+    extras.push(...quests.unlocks);
+    postCard(this.#economy, context, eventCard(`🎵 唱完〈${title || "這首歌"}〉`, lines, extras));
   }
 }

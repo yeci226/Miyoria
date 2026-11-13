@@ -117,6 +117,12 @@ export function waitLine(tools: readonly string[], random: () => number = Math.r
   return pick ?? "等我一下。";
 }
 
+/** The same person by name, as tools and wishes write it (`@` and case aside). */
+function samePersonName(a: string, b: string): boolean {
+  const n = (s: string) => s.trim().replace(/^@/, "").toLowerCase();
+  return n(a) === n(b);
+}
+
 /** Tools that say something to one person: using one for a wish is asking it. */
 const TALK_TOOLS: ReadonlySet<string> = new Set(["message_dm", "message.dm"]);
 /** Tool calls of turns that raised a wish, remembered until they finish. */
@@ -941,7 +947,7 @@ export class MainTurn {
       throw error;
     }
     hands.answered(job, result);
-    this.#raises(tool, job);
+    this.#raises(tool, job, parsed);
     const accepted = job.state === "accepted";
     if (accepted) job.report = this.claim.muted ? "prompt" : "turn";
     return { run: result, accepted };
@@ -980,10 +986,15 @@ export class MainTurn {
    * A talking tool of a turn opened for a wish: once it is done she asked (`MainLine.#raised`).
    * Called before the job ends for the output's tools, after it for the loop's.
    */
-  #raises(tool: string, job: Job): void {
+  #raises(tool: string, job: Job, args: JsonValue): void {
     if (!TALK_TOOLS.has(tool)) return;
     const wish = this.#main.wishOf(this.claim);
     if (wish === null) return;
+    // A message to someone else raised their wish, not this one (2026-11-11: a turn opened for
+    // 御坂's wish DM'd 莎露朵; 御坂's was marked asked and 莎露朵's fired again). Their own wish
+    // closes when the message is done (`WishBook`'s DM result).
+    const to = isJsonObject(args) && typeof args.to === "string" ? args.to : null;
+    if (wish.person !== null && to !== null && !samePersonName(wish.person, to)) return;
     if (job.state === "done") this.#main.wishes()?.asked(wish.key);
     else if (job.state === "running") this.#main.noteWishCall(job.event, wish.key);
   }
@@ -1226,7 +1237,7 @@ export class MainTurn {
       requester,
       cause: this.#decision,
     });
-    this.#raises(action.tool, job);
+    this.#raises(action.tool, job, args);
     const work =
       action.tool === STEER_TOOL
         ? main.steer(job, isJsonObject(args) ? args : {}, this.#decision)

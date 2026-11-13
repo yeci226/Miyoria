@@ -625,11 +625,12 @@ class HangingServer {
     return server;
   }
 
-  config(connectTimeoutMs: number): OpenAiConfig {
+  config(connectTimeoutMs: number, connectRetries = 0): OpenAiConfig {
     const config = new OpenAiConfig(this.baseUrl);
     config.connectTimeoutMs = connectTimeoutMs;
     config.timeoutMs = 10_000;
     config.maxRetries = 2;
+    config.connectRetries = connectRetries;
     config.retryBackoffMs = 10;
     return config;
   }
@@ -660,6 +661,14 @@ describe("connect timeout", () => {
     expect(server.hits).toBe(1);
     // The connection is closed, not left hanging.
     await expect.poll(() => server.closed).toBe(1);
+  });
+
+  it("retries a connect timeout the configured number of times, then gives up", async () => {
+    const server = await HangingServer.start();
+    const provider = new OpenAiProvider("hang", server.config(100, 1));
+    const error = await provider.stream(request()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ProviderTimeoutError);
+    expect(server.hits).toBe(2);
   });
 
   it("a caller abort while waiting wins over the connect timeout", async () => {

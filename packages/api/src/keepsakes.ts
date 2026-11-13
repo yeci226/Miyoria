@@ -11,13 +11,14 @@ import {
   type AccountRef,
   accountRefString,
   type KeepsakeCard,
+  type KeepsakeCardOrder,
   type KeepsakeCards,
   type KeepsakeFortune,
   type KeepsakeResult,
   type Keepsakes,
   type KeepsakeWho,
 } from "@miyoria/types";
-import { canIssue, issueCard, memberCards, posesFor } from "./card.js";
+import { canIssue, issueCard, memberCards, posesFor, rerollCard } from "./card.js";
 import { ApiError } from "./errors.js";
 import { drawFortune, fortuneTodayOf } from "./fortune-routes.js";
 import { cardHolder, cardView, cardWords, loadMemberOf, namesFor } from "./member.js";
@@ -27,6 +28,7 @@ const log = getLogger("api.keepsakes");
 
 const BUSY = "太頻繁了,請稍後再試";
 const FAILED = "現在沒辦法,請稍後再試";
+const NOT_OFFERED = "這個現在不能買";
 
 function refused(error: unknown): { ok: false; status: number; message: string } {
   if (error instanceof ApiError) return { ok: false, status: error.status, message: error.message };
@@ -59,34 +61,73 @@ export class KeepsakeService implements Keepsakes {
     const who = await loadMemberOf(this.state, account);
     const holder = cardHolder({ account, name: "", avatar_url: null }, who);
     const cards = await memberCards(this.state, holder, cardView(this.state, who, null));
-    return { latest: cards.latest, today: cards.today, per_day: cards.per_day };
+    return {
+      latest: cards.latest,
+      today: cards.today,
+      per_day: cards.per_day,
+      prices: { foil: cards.prices.foil, reroll: cards.prices.reroll },
+      rerolls_left: cards.rerolls_left,
+    };
   }
 
-  async issueCard(who: KeepsakeWho, key: string): Promise<KeepsakeResult<KeepsakeCard>> {
+  async issueCard(
+    who: KeepsakeWho,
+    key: string,
+    order: KeepsakeCardOrder = {},
+  ): Promise<KeepsakeResult<KeepsakeCard>> {
+    const foil = order.foil === true;
+    return this.#card(who, "member.card", async (state, holder, view, write) => {
+      const price = foil ? (await memberCards(state, holder, view)).prices.foil : 0;
+      if (price === null) return { card: null, charged: 0 };
+      const card = await issueCard(state, holder, view, write(true), { pose: null, foil, key });
+      return { card, charged: price };
+    });
+  }
+
+  async rerollCard(who: KeepsakeWho, key: string): Promise<KeepsakeResult<KeepsakeCard>> {
+    return this.#card(who, "member.card.reroll", async (state, holder, view, write) => {
+      const price = (await memberCards(state, holder, view)).prices.reroll;
+      if (price === null) return { card: null, charged: 0 };
+      const card = await rerollCard(state, holder, view, write(false), key);
+      return { card, charged: price };
+    });
+  }
+
+  /**
+   * One card issued for `who` by `run`, audited as `action`, with what is left in the wallet.
+   * `run` gets her writer (`checked`: only while the day's limit allows a card) and answers
+   * `card: null` when the paid extra is not on offer.
+   */
+  async #card(
+    who: KeepsakeWho,
+    action: string,
+    run: (
+      state: ApiState,
+      holder: ReturnType<typeof cardHolder>,
+      view: ReturnType<typeof cardView>,
+      write: (checked: boolean) => () => Promise<Awaited<ReturnType<typeof cardWords>> | null>,
+    ) => Promise<{ card: KeepsakeCard | null; charged: number }>,
+  ): Promise<KeepsakeResult<KeepsakeCard>> {
     const { state } = this;
     try {
       const member = await loadMemberOf(state, who.account);
       const names = member.hidden ? null : await namesFor(state, member);
       const holder = cardHolder(who, member);
       const view = cardView(state, member, names);
-      const card = await issueCard(
-        state,
-        holder,
-        view,
-        async () =>
-          (await canIssue(state, holder))
-            ? cardWords(state, who.name, member, view, posesFor(view.affinity))
-            : null,
-        { pose: null, foil: false, key },
-      );
+      const write = (checked: boolean) => async () =>
+        !checked || (await canIssue(state, holder))
+          ? cardWords(state, who.name, member, view, posesFor(view.affinity))
+          : null;
+      const { card, charged } = await run(state, holder, view, write);
+      if (card === null) return { ok: false, status: 503, message: NOT_OFFERED };
       const actor = accountRefString(who.account);
-      await state.auditAs(actor, "member.card", actor, { serial: card.serial }, true);
+      await state.auditAs(actor, action, actor, { serial: card.serial }, true);
       const balance = await state
         .optional(EconomyKey)
         ?.wallet(who.account)
         .then((w) => w.balance)
         .catch(() => null);
-      return { ok: true, value: card, charged: 0, balance: balance ?? null };
+      return { ok: true, value: card, charged, balance: balance ?? null };
     } catch (error) {
       return refused(error);
     }

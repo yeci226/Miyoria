@@ -72,7 +72,7 @@ export interface LiveView {
   link: Link;
   /** `null` until the first `hello`. */
   now: LiveSnapshot | null;
-  /** Bumped whenever someone (anyone) pats her, so the figure can react to others' pats too. */
+  /** Bumped whenever someone (anyone) pats her, so a picture can show where others patted her. */
   patSeq: number;
   /** Where the latest pat landed on the video, `null` when it carried no spot. */
   patSpot: LiveSpot | null;

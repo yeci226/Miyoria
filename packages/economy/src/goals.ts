@@ -6,16 +6,21 @@
 //   owners' rules and what is hers to decide.
 // * A pledge is held (a `goal_pledge` row of the pledger's wallet, so it cannot be spent twice).
 //   When the total reaches the target the goal is `reached`, the held coins become hers (one
-//   `goal_funds` row of the purse) and she is told it is a promise now. Short at the deadline, or
+//   `goal_funds` row of the purse) and she is told it is a promise now; a card says so where the
+//   pledge that met it was made (none without a place, notices.ts). Short at the deadline, or
 //   if she withdraws it, every pledge is returned once.
 // * Goals persist in `GoalStore`; a sweep ends what ran out and finishes what a restart cut short.
+// * A reached goal's promise is owed until it is marked kept (`fulfill`): by the owner on the panel,
+//   or by her when she says she did it. Until then her purse block reminds her; after, it does not.
 
 import { errorMessage } from "@miyoria/kernel";
-import { type Goal, GoalStoreKey } from "@miyoria/store";
+import { type Goal, type GoalFulfiller, GoalStoreKey } from "@miyoria/store";
 import { type AccountRef, type ContextKey, newId, toTimestamp } from "@miyoria/types";
 import { cleanText, guardTask } from "./deals.js";
 import type { EconomyService } from "./economy.js";
 import { STRANGER } from "./economy.js";
+import { postCard } from "./notices.js";
+import { receipt } from "./receipt.js";
 import { EconomyError, type GoalView, type PledgeResult } from "./types.js";
 
 export const MAX_TITLE_CHARS = 30;
@@ -23,6 +28,8 @@ export const MAX_PROMISE_CHARS = 60;
 export const OPEN_GOAL = "已經有一個目標在進行了";
 export const NO_GOAL = "現在沒有進行中的目標";
 export const GOAL_OVER = "這個目標已經結束了";
+export const NOT_OWED = "沒有湊滿、還沒做到的目標";
+export const ALREADY_KEPT = "這個目標已經記成做到了";
 const DAY_MS = 86_400_000;
 const VIEW_LIMIT = 10;
 
@@ -144,6 +151,7 @@ export class GoalDesk {
     goalId: string,
     amount: number,
     key: string,
+    context: ContextKey | null = null,
   ): Promise<PledgeResult> {
     if (!Number.isInteger(amount) || amount < 1) throw new EconomyError(400, "至少 1");
     const who = await this.e.member(account);
@@ -218,13 +226,13 @@ export class GoalDesk {
       `{who}投了 ${out.pledge.pledged} ${c.currency}給你的目標「${out.goal.title}」(${out.pledge.raised}/${out.goal.target})`,
       who.name,
     );
-    if (out.pledge.reached) await this.#reach(out.goal);
+    if (out.pledge.reached) await this.#reach(out.goal, out.pledge.raised, context);
     else await this.e.purse.refresh();
     return out.pledge;
   }
 
-  /** The target is met: the pledges are hers, and so is the promise. */
-  async #reach(goal: Goal): Promise<void> {
+  /** The target is met: the pledges are hers, and so is the promise; a card says so, once. */
+  async #reach(goal: Goal, raised: number, context: ContextKey | null): Promise<void> {
     const moved = await this.e.serial(() =>
       this.#store().transition(goal.id, ["open"], {
         status: "reached",
@@ -232,6 +240,15 @@ export class GoalDesk {
       }),
     );
     if (!moved) return;
+    postCard(
+      this.e,
+      context,
+      receipt(
+        `🎯「${goal.title}」湊滿了!`,
+        `她答應的:${goal.promise}`,
+        `大家湊了 ${raised} ${this.e.config.currency}`,
+      ),
+    );
     await this.#fund(goal);
   }
 
@@ -247,6 +264,43 @@ export class GoalDesk {
         `你答應過要:${goal.promise}。這是你對大家的承諾,記得做到。`,
     );
     await this.e.purse.refresh();
+  }
+
+  // ---- the promise ----------------------------------------------------------------------
+
+  /** Reached goals, newest first, kept or still owed (the panel lists them). */
+  async reached(): Promise<Goal[]> {
+    return this.#store().list(this.e.profile, { statuses: ["reached"], limit: VIEW_LIMIT });
+  }
+
+  /**
+   * Marks a reached goal's promise kept. `goalId` `null`: the newest one still owed (her own
+   * report). Throws `EconomyError` 409 when there is none or it was marked already.
+   */
+  async fulfill(goalId: string | null, by: GoalFulfiller): Promise<Goal> {
+    const store = this.#store();
+    const kept = await this.e.serial(async (): Promise<Goal> => {
+      const goal =
+        goalId === null
+          ? ((await this.reached()).find((g) => g.fulfilled_at === undefined) ?? null)
+          : await store.get(goalId);
+      if (!goal || goal.profile !== this.e.profile || goal.status !== "reached") {
+        throw new EconomyError(409, NOT_OWED);
+      }
+      if (goal.fulfilled_at !== undefined) throw new EconomyError(409, ALREADY_KEPT);
+      const at = toTimestamp(this.e.now());
+      if (!(await store.fulfill(goal.id, by, at))) throw new EconomyError(409, ALREADY_KEPT);
+      return { ...goal, fulfilled_at: at, fulfilled_by: by };
+    });
+    this.e.purse.audit("economy.goal.fulfilled", { goal: kept.id, by });
+    this.e.purse.news(
+      `goal:${kept.id}:fulfilled`,
+      by === "owner"
+        ? `主人把目標「${kept.title}」記成做到了(你答應的:${kept.promise}),謝謝大家。`
+        : `你把目標「${kept.title}」記成做到了(你答應的:${kept.promise})。`,
+    );
+    await this.e.purse.refresh();
+    return kept;
   }
 
   // ---- time -----------------------------------------------------------------------------
@@ -313,6 +367,7 @@ export class GoalDesk {
           .reduce((n, p) => n + p.amount, 0),
         deadline: g.deadline,
         status: g.status,
+        fulfilled: g.fulfilled_at !== undefined,
       });
     }
     return out;

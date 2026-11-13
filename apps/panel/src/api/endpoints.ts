@@ -94,6 +94,8 @@ import type {
   LlmCallDetail,
   LlmCallRecord,
   LlmCallsPage,
+  LlmThinkingPage,
+  LlmThinkingQuery,
   LlmCallsQuery,
   LlmCallStats,
   ActivitySnapshot,
@@ -316,6 +318,18 @@ export function createApi(client: ApiClient) {
       }),
     llmCall: (id: string, o?: Opts) =>
       client.get<{ call: LlmCallRecord; detail: LlmCallDetail | null }>(`/api/llm/calls/${seg(id)}`, o),
+    llmThinking: (q: LlmThinkingQuery, limit: number, before: string | null, o?: Opts) =>
+      client.get<LlmThinkingPage>("/api/llm/thinking", {
+        ...o,
+        query: {
+          kind: q.kind,
+          reasoned: q.reasoned ? "true" : undefined,
+          since: q.since,
+          q: q.q,
+          limit,
+          before: before ?? undefined,
+        },
+      }),
     llmStats: (minutes: number | null, o?: Opts) =>
       client.get<LlmCallStats>("/api/llm/stats", { ...o, query: { minutes: minutes ?? undefined } }),
 

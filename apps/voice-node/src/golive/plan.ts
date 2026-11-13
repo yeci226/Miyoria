@@ -15,6 +15,11 @@ export interface GoLivePlan {
   inputOptions: string[];
   /** A live feed (RTMP / SRT / UDP / RTSP) rather than a file: lowers the input latency. */
   live: boolean;
+  /**
+   * ffmpeg pulls the feed from a server (a hub such as MediaMTX) instead of being the one OBS pushes
+   * to: the feed starts mid-stream, so the probe has to wait for a keyframe.
+   */
+  pull: boolean;
   /** Output size; undefined = derive from the other side keeping the aspect ratio. */
   width: number | undefined;
   height: number | undefined;
@@ -32,7 +37,7 @@ export interface GoLivePlan {
 export type PlanResult = { ok: true; plan: GoLivePlan } | { ok: false; error: string };
 
 export type SourceResult =
-  | { ok: true; source: string; inputOptions: string[]; live: boolean }
+  | { ok: true; source: string; inputOptions: string[]; live: boolean; pull: boolean }
   | { ok: false; error: string };
 
 const ALLOWED_SCHEMES = new Set(["rtmp", "rtmps", "srt", "udp", "rtsp", "http", "https", "file"]);
@@ -79,14 +84,15 @@ export function normalizeSource(raw: string, listen?: boolean): SourceResult {
     } else if (scheme === "srt") {
       out = withSrtMode(source, listen === false ? "caller" : "listener");
     }
-    return { ok: true, source: out, inputOptions, live };
+    const pull = listen === false && (scheme === "rtmp" || scheme === "rtmps" || scheme === "srt");
+    return { ok: true, source: out, inputOptions, live, pull };
   }
   // No `://`: a local path. `name:rest` forms (pipe:, concat:, subfile:, lavfi:...) are ffmpeg protocols, not files;
   // a single letter before the colon is a Windows drive.
   if (/^[a-z][a-z0-9+.,_=-]+:/i.test(source)) {
     return { ok: false, error: "unsupported source (looks like an ffmpeg protocol, not a URL or a file path)" };
   }
-  return { ok: true, source, inputOptions: [], live: false };
+  return { ok: true, source, inputOptions: [], live: false, pull: false };
 }
 
 function withSrtMode(url: string, mode: "listener" | "caller"): string {
@@ -127,6 +133,7 @@ export function planGoLive(req: GoLiveStartMessage, defaults: GoLiveConfig): Pla
       source: src.source,
       inputOptions: src.inputOptions,
       live: src.live,
+      pull: src.pull,
       width,
       height,
       fps: req.fps ?? defaults.fps,

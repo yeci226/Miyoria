@@ -26,6 +26,7 @@ import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/kernel";
 import { newId } from "@miyoria/types";
 import { registerV2, unregisterV2 } from "./commands-v2.js";
 import { MAX_LETTER_CHARS, STRANGER, WALLET_NODE } from "./economy.js";
+import { mutedText, unlockLines } from "./notices.js";
 import { NO_RECEIVER } from "./transfer.js";
 import {
   type Economy,
@@ -113,9 +114,11 @@ export function walletText(view: WalletView): string {
   return lines.join("\n");
 }
 
-/** A neutral result card (written into the `/me i` panel when pressed there). */
-function result(text: string): CommandReply {
-  return cardReply([{ type: "text", text }], { accent: "neutral" });
+/** A neutral result card (written into the `/me i` panel when pressed there), extras muted. */
+function result(text: string, muted: string | null = null): CommandReply {
+  const blocks: CardBlock[] = [{ type: "text", text }];
+  if (muted) blocks.push({ type: "muted", text: muted });
+  return cardReply(blocks, { accent: "neutral" });
 }
 
 class Handler {
@@ -179,6 +182,7 @@ class Handler {
       const view = await economy.wallet(inv.invoker);
       return result(
         `簽到了，+${r.gained} ${view.currency}。連續 ${r.streak} 天，現在有 ${r.balance} ${view.currency}。`,
+        mutedText(unlockLines(r.unlocked)),
       );
     });
   }
@@ -189,7 +193,10 @@ class Handler {
       const r = await economy.feed(inv.invoker, item, 1, `discord:${newId()}`);
       if (!r.accepted) return result(r.message);
       const view = await economy.wallet(inv.invoker);
-      return result(`${r.message}，花了 ${r.charged} ${view.currency}，剩 ${r.balance}。`);
+      return result(
+        `${r.message}，花了 ${r.charged} ${view.currency}，剩 ${r.balance}。`,
+        mutedText(unlockLines(r.unlocked)),
+      );
     });
   }
 
@@ -308,7 +315,7 @@ class Handler {
       const id =
         goalId ?? (await economy.goals(inv.invoker)).find((g) => g.status === "open")?.id ?? null;
       if (id === null) return notice("info", "她現在沒有開著的目標");
-      const r = await economy.pledge(inv.invoker, id, amount, `discord:${newId()}`);
+      const r = await economy.pledge(inv.invoker, id, amount, `discord:${newId()}`, inv.context);
       const view = await economy.wallet(inv.invoker);
       const tail = r.reached ? "目標到了。" : "";
       return result(
@@ -352,7 +359,8 @@ function goalEnded(g: GoalView): string {
     cancelled: "取消了，已退回",
     open: "",
   }[g.status];
-  return `${g.title}　${word}`;
+  const kept = g.status === "reached" ? (g.fulfilled ? "，她做到了" : "，她還沒做到") : "";
+  return `${g.title}　${word}${kept}`;
 }
 
 function unregister(registry: CommandRegistry): void {

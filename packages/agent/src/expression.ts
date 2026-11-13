@@ -17,6 +17,11 @@ import { asciiLower, utf8Len } from "./util.js";
 
 /** Longest tag (bytes) the parser waits for before giving up and treating `<` as text. */
 const MAX_TAG_LEN = 48;
+/**
+ * Longest tag with quoted attributes (bytes): `<react emoji="<:miyo_smug:112233445566778899>"/>`
+ * holds a Discord emoji reference.
+ */
+const MAX_ATTR_TAG_LEN = 128;
 const VOICE_OPEN = "<voice>";
 const VOICE_CLOSE = "</voice>";
 /** Longest `<voice>` span (UTF-16 units) the parser waits for its closing tag. */
@@ -64,6 +69,8 @@ export class ExpressionParser {
   #held = "";
   /** The `<voice>` span being held was announced (`spoken_start`). */
   #announced = false;
+  /** A DSML tool call began: everything after it is dropped. */
+  #dropRest = false;
 
   push(chunk: string): Segment[] {
     this.#held += chunk;
@@ -76,6 +83,10 @@ export class ExpressionParser {
   }
 
   #drain(eof: boolean): Segment[] {
+    if (this.#dropRest) {
+      this.#held = "";
+      return [];
+    }
     const input = this.#held;
     this.#held = "";
     const out: Segment[] = [];
@@ -149,6 +160,18 @@ export class ExpressionParser {
       if (scan.kind === "tag") {
         flush();
         if (scan.segment.type !== "markup") out.push(scan.segment);
+        // A tool call written out in DeepSeek's syntax: what follows is its arguments, not words.
+        if (
+          DSML_OPEN.test(
+            input
+              .slice(start + 1, start + scan.len - 1)
+              .trim()
+              .toLowerCase(),
+          )
+        ) {
+          this.#dropRest = true;
+          return out;
+        }
         pos = start + scan.len;
       } else if (scan.kind === "partial" && !eof) {
         flush();
@@ -174,14 +197,40 @@ type Scan =
 
 /** `s` starts with `<`. */
 function scanTag(s: string): Scan {
-  const end = s.indexOf(">");
+  // `<name key="…">`: a `>` inside the quotes does not end the tag (`emoji="<:smug:1>"`).
+  const quoted = ATTR_START.test(s);
+  const max = quoted ? MAX_ATTR_TAG_LEN : MAX_TAG_LEN;
+  const end = quoted ? (tagEnd(s) ?? s.indexOf(">")) : s.indexOf(">");
   if (end !== -1) {
-    if (utf8Len(s.slice(0, end)) > MAX_TAG_LEN) return { kind: "not_a_tag" };
+    if (utf8Len(s.slice(0, end)) > max) return { kind: "not_a_tag" };
     const segment = parseTag(s.slice(1, end));
-    return segment ? { kind: "tag", segment, len: end + 1 } : { kind: "not_a_tag" };
+    if (segment) return { kind: "tag", segment, len: end + 1 };
+    if (quoted && tagEnd(s) === null && utf8Len(s) <= max && isTagPrefix(s.slice(1))) {
+      return { kind: "partial" };
+    }
+    return { kind: "not_a_tag" };
   }
-  if (utf8Len(s) <= MAX_TAG_LEN && isTagPrefix(s.slice(1))) return { kind: "partial" };
+  if (utf8Len(s) <= max && isTagPrefix(s.slice(1))) return { kind: "partial" };
   return { kind: "not_a_tag" };
+}
+
+/** A tag name followed by whitespace: its attributes may be quoted. */
+const ATTR_START = /^<\/?[a-z][a-z0-9_]*\s/i;
+
+/** Index of the `>` that ends the tag at the start of `s`, skipping quoted values; `null` if none. */
+function tagEnd(s: string): number | null {
+  let quote: string | null = null;
+  for (let i = 1; i < s.length; i++) {
+    const c = s[i] as string;
+    if (quote !== null) {
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (c === ">") {
+      return i;
+    }
+  }
+  return null;
 }
 
 function trimEndSpaces(s: string): string {
@@ -220,17 +269,47 @@ function parseTag(raw: string): Segment | null {
   const tag = asciiLower(raw);
   const emotion = /^span\s+emo\s*=\s*["']?([a-z0-9_-]+)["']?$/.exec(tag);
   if (emotion !== null) return { type: "emotion", emotion: emotion[1] as string };
-  if (SPAN_TAG.test(tag)) return { type: "markup" };
+  if (HTML_TAG.test(tag)) return { type: "markup" };
+  if (DSML_TAG.test(tag)) return { type: "markup" };
+  // `<react emoji="👍"/>`: the react tool imitated as a tag (2026-11-12). Hidden from the text and
+  // logged as a tool written as text, so she is asked once to call it for real.
+  if (REACT_TAG.test(tag)) return { type: "tool", name: "react" };
   if (TOOL_TAG.test(tag)) return { type: "tool", name: tag };
+  const call = TOOL_CALL_TAG.exec(tag);
+  if (call !== null) return { type: "tool", name: call[1] as string };
   return null;
 }
 
-/** `<span>` and `</span>`, exactly: `a < b 和 c > d` is not a tag. */
-const SPAN_TAG = /^\/?span(?:\s[a-z0-9_ ="'-]*)?$/;
+/**
+ * HTML she writes as if the chat rendered it (2026-11-10/11: `<p>`, `</p>`, `<section>`,
+ * `<h>我沒有亂…`): the tag is dropped, the text stays. Only these names, with their attributes:
+ * `a < b 和 c > d`, `vector<int>`, `a<i>b`, `<Sakana2486>` and Discord's `<@id>`, `<#id>`,
+ * `<:name:id>`, `<t:…>` are not tags.
+ */
+const HTML_TAG =
+  /^\/?(?:h[1-6]?|p|section|div|span|br|hr|em|strong|small|ul|ol|li|article|header|footer|blockquote|center|font|mark)(?:\s[a-z0-9_ ="'-]*)?\s*\/?$/;
+/**
+ * DeepSeek's own tool-call syntax written into the text (`<｜｜DSML｜｜ invoke name=…>`,
+ * `</｜DSML｜ parameter>`, 2026-11-08/11): never words for people. Bars full or half width.
+ */
+const DSML_TAG = /^\/?[｜|]+\s*dsml/;
+const DSML_OPEN = /^[｜|]+\s*dsml/;
+const REACT_TAG = /^react(?:\s[^<>]*)?$/;
 /** Tool names are snake_case; an ordinary word in brackets stays text. */
 const TOOL_TAG = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
-/** What a tag above can look like before its `>` arrives. */
-const MARKUP_PREFIX = /^\/?[a-z][a-z0-9_]*(?:\s[a-z0-9_ ="'-]*)?$/;
+/**
+ * A tool written as a tag with its arguments as attributes, any value in the quotes
+ * (2026-11-11: `<react emoji="👍"/>` went out as text), or as a bare self-closing tag
+ * (`<react/>`). The name needs no underscore here: the quoted attribute or the `/` marks it.
+ */
+const TOOL_CALL_TAG =
+  /^([a-z][a-z0-9_]*)(?:(?:\s+[a-z_][a-z0-9_-]*\s*=\s*(?:"[^"]*"|'[^']*'))+\s*\/?|\s*\/)$/u;
+/**
+ * What a tag above can look like before its `>` arrives. A quoted value may hold anything
+ * (an emoji), and may still be open.
+ */
+const MARKUP_PREFIX =
+  /^\/?[a-z][a-z0-9_]*(?:\s(?:[a-z0-9_ =/-]|"[^"]*"|'[^']*')*(?:"[^"]*|'[^']*)?)?\/?$/u;
 
 function isNameChar(c: string): boolean {
   return /^[A-Za-z0-9_-]$/.test(c);
@@ -251,6 +330,8 @@ const PREFIXES: readonly [string, (c: string) => boolean][] = [
 function isTagPrefix(rest: string): boolean {
   const lower = asciiLower(rest);
   if (MARKUP_PREFIX.test(lower)) return true;
+  if (/^\/?[｜|]/.test(lower)) return true;
+  if (/^react\s/.test(lower)) return !/[<]/.test(lower);
   return PREFIXES.some(
     ([keyword, ok]) =>
       keyword.startsWith(lower) ||

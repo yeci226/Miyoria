@@ -3,7 +3,9 @@
 // reward (`achievement_small`, `achievement_big`) under the day's `achievement_cap`. Unlocking is a
 // ledger row (reason `achievement`, ref the id, key `achv:<id>`), so it is paid once per person
 // across all their accounts and survives restarts. When the day's cap is reached nothing is posted
-// and the milestone is simply found again at the next check.
+// and the milestone is simply found again at the next check. She is told with a silent note (one
+// per person and achievement); people see it where the earning that unlocked it is reported
+// (notices.ts).
 //
 // A title is the name an achievement gives (a series' completed set gives its own), shown beside
 // the person's wallet; titles from her shop come with the shop (shop.ts). Nothing here ranks
@@ -250,7 +252,7 @@ export class AchievementDesk {
         this.e.tell(
           who,
           "economy.achievement",
-          `economy:achv:${def.id}`,
+          `economy:achv:${def.id}:${who.person.id}`,
           `${who.name}解鎖了成就「${def.label}」(稱號「${def.title}」)`,
         );
       }

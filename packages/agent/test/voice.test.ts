@@ -247,7 +247,9 @@ describe("voice", () => {
     expect(msgs.length).toBe(4);
     expect(msgs[1]?.content).toBe("Owen(語音): 我跟你說\nOwen(語音): 今天考試考完了");
     expect(msgs[2]?.role).toBe("user");
-    expect(msgs[2]?.content).toContain("標題=語音頻道裡的人⟧\nOwen、阿明");
+    expect(msgs[2]?.content).toContain(
+      'title="語音頻道裡的人">\n<person name="Owen"/>\n<person name="阿明"/>',
+    );
     // The voice rules are part of the fixed system part.
     expect(msgs[0]?.content ?? "").toContain("有人在聽");
     // Spoken replies start right away: no reasoning (`[llm.reasoning] chat_voice`).

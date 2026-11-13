@@ -244,7 +244,7 @@ describe("a task runs as its own loop", () => {
     expect(last).toContain("只在沼澤晚上出現");
     expect(r.provider.work.every((q) => q.reasoning_purpose === WORK_PURPOSE)).toBe(true);
     // Results are data, never instructions.
-    expect(last).toContain("⟦資料 來源=tool");
+    expect(last).toContain('<data source=\\"tool\\"');
     const end = ended(r);
     expect(end).toHaveLength(1);
     expect(end[0]).toMatchObject({ type: "done" });
@@ -708,11 +708,11 @@ describe("a page read inside a turn (v4 §4.2)", () => {
     expect(results).toHaveLength(2);
     const [first, second] = results.map((m) => String(m.content));
     // The whole page, inside a whole block.
-    expect(first).toContain("頁尾\n⟦/資料⟧");
+    expect(first).toContain("頁尾\n</data>");
     // The second page is what is left of the round, and says so; its block still closes.
     expect(second).not.toContain("頁尾");
     expect(second).toContain("這一輪的結果加起來太長");
-    expect(second).toContain("再讀)\n⟦/資料⟧");
+    expect(second).toContain("再讀)\n</data>");
     expect((first?.length ?? 0) + (second?.length ?? 0)).toBeLessThan(16_000 + 600);
   });
 });

@@ -44,6 +44,8 @@ export interface CapabilityTool {
    * under review.
    */
   followup?: boolean;
+  /** Low risk only: it only looks, so it may run next to other such calls (`Tool.readOnly`). */
+  readOnly?: boolean;
 }
 
 /** What the owners' approval card shows instead of the raw arguments. */

@@ -323,37 +323,34 @@ afterEach(() => {
 });
 
 describe("an anonymous visitor", () => {
-  it("gets the login screen, Discord first, and nothing of hers", async () => {
+  it("gets her landing cover: who she is, what she is doing, Discord login, and nothing of the panel", async () => {
     core();
     renderApp();
-    const link = await screen.findByRole("link", { name: "使用 Discord 登入" });
-    expect(link).toHaveAttribute("href", "/api/auth/oauth/login?next=%2F");
+    const placard = await screen.findByRole("heading", { level: 1 });
+    expect(placard).toHaveTextContent("Miyoria");
+    const logins = await screen.findAllByRole("link", { name: "用 Discord 登入" });
+    for (const link of logins) expect(link).toHaveAttribute("href", "/api/auth/oauth/login?next=%2F");
+    const board = screen.getByRole("region", { name: "她現在" });
+    expect(await within(board).findByText(/她在唱歌/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Admin token")).toBeNull();
-    expect(screen.queryByRole("region", { name: "現在" })).toBeNull();
     expect(screen.queryByText("她眼中的你")).toBeNull();
-    for (const name of ["總覽", "直播", "內心", "權限", "資料", "設定", "緊急停止"]) {
+    for (const name of ["總覽", "內心", "權限", "資料", "設定", "緊急停止"]) {
       expect(screen.queryByText(name)).toBeNull();
     }
-    expect(screen.queryByRole("navigation")).toBeNull();
   });
 
-  it("calls nothing but the routes that say who is asking", async () => {
+  it("calls nothing but the routes that say who is asking and her public ones", async () => {
     const { fn } = core();
     renderApp();
-    await screen.findByRole("link", { name: "使用 Discord 登入" });
+    await screen.findAllByRole("link", { name: "用 Discord 登入" });
+    await waitFor(() => expect(paths(fn)).toContain("/api/public/songs"));
     expect([...new Set(paths(fn))].sort()).toEqual([
       "/api/auth/methods",
       "/api/auth/session",
       "/api/member/session",
+      "/api/public/songs",
       "/api/public/status",
     ]);
-  });
-
-  it("can open the token form, for the owner", async () => {
-    core();
-    renderApp();
-    await userEvent.click(await screen.findByRole("button", { name: "管理員用 token 登入" }));
-    expect(await screen.findByLabelText("Admin token")).toBeInTheDocument();
   });
 
   it("gets the token form at once when the Core has no public side", async () => {
@@ -369,18 +366,21 @@ describe("an anonymous visitor", () => {
     expect(await screen.findByLabelText("Admin token")).toBeInTheDocument();
   });
 
-  it("gets the token form when Discord login is off", async () => {
+  it("gets her landing without a login when Discord login is off, and her live page as the way in", async () => {
     core({ discord: false });
     renderApp();
-    expect(await screen.findByLabelText("Admin token")).toBeInTheDocument();
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.queryByRole("link", { name: "用 Discord 登入" })).toBeNull();
+    const watch = screen.getAllByRole("link", { name: /直播/ }).map((a) => a.getAttribute("href"));
+    expect(watch).toContain("/watch");
   });
 
-  it("sees why a Discord login failed, on the login screen", async () => {
+  it("sees why a Discord login failed, on her cover, with the login right below", async () => {
     window.history.replaceState(null, "", "/login?error=cancelled");
     core();
     renderApp();
     expect(await screen.findByRole("alert")).toHaveTextContent("已取消 Discord 授權");
-    expect(screen.getByRole("link", { name: "使用 Discord 登入" })).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "用 Discord 登入" }).length).toBeGreaterThan(0);
   });
 });
 
@@ -414,7 +414,7 @@ describe("a member", () => {
     core({ member: USER });
     renderApp();
     const now = await screen.findByRole("region", { name: "現在" });
-    expect(await within(now).findByText("她在唱歌")).toBeInTheDocument();
+    expect(await within(now).findByText(/她在唱歌/)).toBeInTheDocument();
     expect(within(now).getByText("3 首")).toBeInTheDocument();
     const songs = screen.getByRole("region", { name: "歌單" });
     expect(await within(songs).findByText("歌名還不知道")).toBeInTheDocument();

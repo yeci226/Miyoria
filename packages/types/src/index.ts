@@ -82,6 +82,24 @@ export {
   ProfileIdKey,
   type TurnId,
 } from "./ids.js";
+export {
+  IMAGEGEN_TOPIC,
+  type ImageGen,
+  ImageGenKey,
+  type ImageGenStatus,
+  type ImageJob,
+  type ImageJobEvent,
+  type ImageJobFilter,
+  type ImageJobPriority,
+  type ImageJobState,
+  type ImageLora,
+  type ImageModelInfo,
+  type ImageOutput,
+  type ImageRequest,
+  type ImageRequestInput,
+  type ImageSubmitOptions,
+  type ImageWorkflowInfo,
+} from "./imagegen.js";
 export { isJsonObject, type JsonObject, type JsonPrimitive, type JsonValue } from "./json.js";
 export {
   CONVERSATION_FOLDED_TOPIC,
@@ -277,11 +295,15 @@ export {
   DATA_OPEN,
   dataBlock,
   escapeData,
+  escapeTags,
+  escapeXml,
   filterOutgoing,
   MASKED,
   maskSecrets,
   neutralize,
+  PROMPT_TAGS,
   safeName,
+  xmlAttrs,
 } from "./untrusted.js";
 export {
   type PlaybackState,
@@ -629,6 +651,7 @@ export {
 } from "./impulse.js";
 export {
   type KeepsakeCard,
+  type KeepsakeCardOrder,
   type KeepsakeCards,
   type KeepsakeField,
   type KeepsakeFortune,
@@ -893,6 +916,7 @@ export {
   VoiceTurnsKey,
 } from "./voice-turn.js";
 export {
+  DM_SAME_WISH,
   sameWish,
   stopsAsking,
   WISH_SOURCE,

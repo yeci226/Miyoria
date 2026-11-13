@@ -1,7 +1,9 @@
 import { type ContextKind, type IncomingMessage, newId, toTimestamp } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
+  answersHer,
   asideOf,
+  followsHerLine,
   type LookFacts,
   lookTriggers,
   openingCall,
@@ -195,14 +197,93 @@ describe("attention", () => {
       expect(a.reasons.some((r) => r.startsWith("anti-spam"))).toBe(true);
     });
 
-    it("someone else right after her line gets one look, and the next speaker none", () => {
+    it("someone else right after she answered one person is not talking with her", () => {
+      // 2026-11-10 21:33: 「高科」 written to someone else, right after she answered `a`, was
+      // answered at probability 1, and he said 「靠杯我不是在跟你說話」.
       const s = backAndForth();
-      const b = said(s, "b", "你們在聊什麼");
-      expect(conversing(s, b, Date.now())).toBe(true);
-      // She passed. `c` was never talking with her: two lines went by without her.
+      const b = said(s, "b", "高科");
+      expect(conversing(s, b, Date.now())).toBe(false);
+      expect(followsHerLine(s, b, Date.now(), NAMES)).toBe(false);
+      const a = quiet(s, b);
+      expect(handedOver(a), a.reasons.join("; ")).toBe(false);
+      expect(a.reasons.some((r) => r.startsWith("follow-up"))).toBe(false);
+      // `c` was never talking with her either: two lines went by without her.
       const c = said(s, "c", "不知道欸");
       expect(conversing(s, c, Date.now())).toBe(false);
       expect(handedOver(quiet(s, c))).toBe(false);
+    });
+
+    it("someone else who replies to her, @-mentions her or calls her name is talking with her", () => {
+      const s = backAndForth();
+      const hers = s.history().at(-1);
+      const m = msg("channel", "b", "那你呢");
+      m.id = { ...m.id, id: newId() };
+      m.reply_to_self = true;
+      m.reply_to = { context: tctx("channel"), id: hers?.id ?? "hers" };
+      s.recordMessage(m, false);
+      expect(conversing(s, [m], Date.now(), NAMES)).toBe(true);
+      expect(followsHerLine(s, [m], Date.now(), NAMES)).toBe(true);
+      const t = backAndForth();
+      const at = said(t, "b", "@DeepSeek-chan 那你呢");
+      (at[0] as IncomingMessage).mentions_self = true;
+      expect(conversing(t, at, Date.now(), NAMES)).toBe(true);
+      const u = backAndForth();
+      expect(conversing(u, said(u, "b", "小鯨魚你呢"), Date.now(), NAMES)).toBe(true);
+    });
+
+    it("after a line she started herself anyone may go on with her", () => {
+      const s = sessionWith([]);
+      said(s, "a", "晚安");
+      // Long after `a`'s line: she starts something of her own.
+      s.recordOwn("Her", me, "欸你們有沒有人在玩 Minecraft", newId(), Date.now() + 600_000, []);
+      const b = said(s, "b", "我有");
+      expect(conversing(s, b, Date.now() + 600_000)).toBe(true);
+      expect(followsHerLine(s, b, Date.now() + 600_000, NAMES)).toBe(true);
+      expect(handedOver(quiet(s, b))).toBe(true);
+      // Known from the platform only (no turn wrote down whom it answered): nobody spoke within
+      // the follow-up window before her line, so she started it.
+      const t = sessionWith([]);
+      const early = tmsg("channel", "a", "晚安", { ts: Date.now() - 600_000 });
+      early.id = { ...early.id, id: newId() };
+      t.recordMessage(early, false);
+      t.recordOwn("Her", me, "有人在嗎", newId(), Date.now());
+      expect(conversing(t, said(t, "c", "我在"), Date.now())).toBe(true);
+    });
+
+    it("whom her turn answered decides, not who spoke right before her line", () => {
+      const s = sessionWith([]);
+      said(s, "a", "推薦一首歌");
+      said(s, "b", "路過");
+      // Her turn answered `a`, though `b` spoke last.
+      s.recordOwn("Her", me, "這首", newId(), Date.now(), [tacc("a")]);
+      expect(conversing(s, said(s, "b", "喔"), Date.now())).toBe(false);
+      const t = sessionWith([]);
+      said(t, "a", "推薦一首歌");
+      t.recordOwn("Her", me, "這首", newId(), Date.now(), [tacc("a")]);
+      expect(conversing(t, said(t, "a", "好聽"), Date.now())).toBe(true);
+    });
+
+    it("her notices and receipts are not lines she said", () => {
+      // 2026-11-10: 15 turns opened right after one of her cards (song prep, a vote, a receipt).
+      const s = sessionWith([]);
+      said(s, "x", "閒聊");
+      const card = msg("channel", "her", "開始準備 夜に駆ける(#3,大約一到兩分鐘)。");
+      card.id = { ...card.id, id: newId() };
+      card.card = true;
+      s.recordMessage(card, true);
+      const b = said(s, "b", "今天好冷");
+      expect(conversing(s, b, Date.now())).toBe(false);
+      expect(answersHer(s, b, Date.now())).toBe(false);
+      expect(followsHerLine(s, b, Date.now(), NAMES)).toBe(false);
+      expect(handedOver(quiet(s, b))).toBe(false);
+      expect(s.lastSelfAt()).toBeNull();
+      // A card after she answered `a`: `a` still goes on with her, someone else does not.
+      const t = backAndForth();
+      t.recordMessage({ ...card, id: { ...card.id, id: newId() } }, true);
+      expect(conversing(t, said(t, "a", "好"), Date.now())).toBe(true);
+      const u = backAndForth();
+      u.recordMessage({ ...card, id: { ...card.id, id: newId() } }, true);
+      expect(conversing(u, said(u, "b", "好"), Date.now())).toBe(false);
     });
 
     it("the one she answered may go on after one line of someone else", () => {

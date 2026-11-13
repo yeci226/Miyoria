@@ -18,6 +18,7 @@ import net.minecraft.item.BlockItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
+import net.minecraft.screen.slot.Slot;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
@@ -238,6 +239,73 @@ public final class GameActions {
         at.addProperty("y", spot.getY());
         at.addProperty("z", spot.getZ());
         out.add("position", at);
+        return out;
+    }
+
+    /**
+     * Drops item(s) from inventory.
+     * {@code {"slot":0-35}} or {@code {"item":"cobblestone"}} or current selected hotbar slot.
+     * {@code {"all":true}} (default true) drops whole stack, false drops 1 item.
+     */
+    public JsonObject drop(MinecraftClient mc, Request req) throws ProtocolException {
+        ClientPlayerEntity p = mc.player;
+        if (p == null) throw new ProtocolException(Protocol.E_NOT_IN_GAME, "not in game");
+        if (p.isDead()) throw new ProtocolException(Protocol.E_INVALID_ARGS, "she is dead");
+        if (mc.currentScreen != null) throw new ProtocolException(Protocol.E_INVALID_ARGS, "a screen is open; close it first");
+
+        PlayerInventory inv = p.getInventory();
+        int slot = -1;
+        boolean all = req.optBool("all", true);
+        if (req.has("slot")) {
+            slot = req.optInt("slot", -1);
+            if (slot < 0 || slot > 35) throw new ProtocolException(Protocol.E_INVALID_ARGS, "slot must be 0-35");
+        } else if (req.has("item")) {
+            String want = Ids.qualify(req.str("item").toLowerCase());
+            for (int i = 0; i < inv.main.size(); i++) {
+                ItemStack s = inv.main.get(i);
+                if (!s.isEmpty() && Registries.ITEM.getId(s.getItem()).toString().equals(want)) {
+                    slot = i;
+                    break;
+                }
+            }
+            if (slot < 0) throw new ProtocolException(Protocol.E_MISSING_ITEMS, "no \"" + req.str("item") + "\" in inventory");
+        } else {
+            slot = inv.selectedSlot;
+        }
+
+        ItemStack targetStack = inv.main.get(slot);
+        if (targetStack.isEmpty()) {
+            JsonObject out = new JsonObject();
+            out.addProperty("slot", slot);
+            out.addProperty("count", 0);
+            return out;
+        }
+
+        String itemId = Ids.normalize(Registries.ITEM.getId(targetStack.getItem()).toString());
+        int countBefore = targetStack.getCount();
+
+        if (slot < 9 && slot == inv.selectedSlot) {
+            p.dropSelectedItem(all);
+        } else {
+            int handlerSlot = -1;
+            for (Slot s : p.playerScreenHandler.slots) {
+                if (s.inventory == inv && s.getIndex() == slot) {
+                    handlerSlot = s.id;
+                    break;
+                }
+            }
+            if (handlerSlot >= 0 && mc.interactionManager != null) {
+                mc.interactionManager.clickSlot(p.playerScreenHandler.syncId, handlerSlot, all ? 1 : 0, SlotActionType.THROW, p);
+            } else if (slot < 9) {
+                inv.selectedSlot = slot;
+                p.dropSelectedItem(all);
+            }
+        }
+
+        JsonObject out = new JsonObject();
+        out.addProperty("slot", slot);
+        out.addProperty("item", itemId);
+        out.addProperty("count", all ? countBefore : 1);
         return out;
     }
 

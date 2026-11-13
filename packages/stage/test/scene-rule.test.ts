@@ -4,6 +4,7 @@
 import type { ActivitySnapshot } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CURTAIN_GRACE_MS,
   factsOf,
   NO_FACTS,
   pickScene,
@@ -251,6 +252,28 @@ describe("director on snapshots", () => {
     expect(closed).toBe(false);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(closed).toBe(true);
+    t.director.stop();
+  });
+
+  it("after the curtain's hold the ending scene stays until the stream stops", async () => {
+    // CI 2026-11-10: a switch back to chat went out between the hold and the stop.
+    const t = await rig(config({ ending_ms: 50, starting_ms: 0 }));
+    t.director.onSnapshot(snap({ broadcast: LIVE }));
+    await vi.advanceTimersByTimeAsync(10);
+    let closed = false;
+    void t.director.close().then(() => {
+      closed = true;
+    });
+    await vi.advanceTimersByTimeAsync(60);
+    expect(closed).toBe(true);
+    expect(t.current()).toBe("Ending");
+    // The stop is late; someone talks meanwhile.
+    t.director.onActivity();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(t.current()).toBe("Ending");
+    // It never came: after the grace the director lets go.
+    await vi.advanceTimersByTimeAsync(CURTAIN_GRACE_MS);
+    expect(t.current()).not.toBe("Ending");
     t.director.stop();
   });
 

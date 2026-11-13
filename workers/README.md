@@ -7,6 +7,7 @@
 | `asr/` | `POST /asr`、`GET /health`、`GET /busy` | 8001 | `ASR_BACKEND=sensevoice`(sherpa-onnx,CPU,附情緒 / 事件標記)或 `qwen3`(Qwen3-ASR,GPU) |
 | `tts/` | `POST /tts`、`GET /health`、`GET /busy`、`GET /voices`、`POST /voices/reload` | 8002 | Qwen3-TTS,聲音由 `VOICES_DIR` 註冊;後端 `faster-qwen3-tts`(真串流,推薦)或官方 `qwen-tts`(句子級,備案) |
 | `sing/` | `POST /jobs`、`GET /jobs/{id}`、`GET /songs`、`GET /songs/{id}/files/{name}`、`POST /songs/{id}/lyrics`、`GET /library`、`GET /health` | 8005 | 點歌翻唱:yt-dlp / 本機歌庫 → RoFormer 人聲分離 → BS-RoFormer 切主唱 → 她的 RVC 模型轉主唱(可選先過 YingMusic / Seed-VC)→ 依伴唱模式混音 + 同步歌詞(lrclib / 網易雲,找不到再問 LLM);見第 9 節 |
+| `lyrics/` | `POST /lyrics`、`GET /health` | 8007 | 給「翻唱 worker 在別台電腦」用:幫它找同步歌詞(重用 `sing/lyrics.py`:lrclib / 網易雲 / Core 的 LLM / ASR 抽查),跑在 Core 那台。翻唱 worker 設 `SING_LYRICS_URL=http://<這台>:8007`;沒設就像以前在 worker 內找。啟動:`cd workers/lyrics && ../.venv-lyrics/Scripts/python server.py`(`pip install -r lyrics/requirements.txt`),沒有認證,只綁私有位址 |
 | `turn/` | `POST /turn`、`WS /vad`、`GET /health` | 8006 | 判斷講完:Smart Turn v3 + Silero VAD,CPU、不需要 PyTorch;見第 10 節 |
 | `fake/` | 兩個端點都有 | 8000 | 不需要 GPU 的假 worker(固定文字 / 正弦波「聲音」),用來做端對端測試 |
 | `tests/` | pytest | | 契約測試(預設打 fake,也可以打真的 worker) |
@@ -509,6 +510,21 @@ curl -X POST http://127.0.0.1:8005/songs/yt-KTZ-y85Erus/lyrics -H "content-type:
 
 做好的歌快取在 `data/songs/<id>/`(`meta.json` 有來源、音高、歌詞、各階段耗時與 VRAM 峰值);同一個查詢 / 連結 / 檔案 + 同樣的音高設定再點一次是馬上好。`data/` 是本機資料:下載的歌、模型權重、參考音都不要提交。
 
+**快取自己清**(`cache.py`):一首歌 150–260 MB、一個下載(`_sources/`)約 130 MB,不清的話很快就十幾 GB。worker 記每首歌最後一次被用到的時間(做好、點歌命中快取、Core 開唱時抓音軌、猜歌遊戲抓片段、重找歌詞;記在 `data/songs/_usage.json`,舊的歌沒記錄就看資料夾的修改時間),啟動時、每做完一首、每小時各清一次(背景執行緒,不擋工作):
+
+1. 不刪:排隊中 / 正在做的工作用到的歌和下載,和 `SING_CACHE_PROTECT_HOURS` 內用過的。
+2. 超過 `SING_CACHE_MAX_DAYS` 天沒用的歌刪掉。
+3. 歌 + 下載合計超過 `SING_CACHE_MAX_GB`,從最久沒用的歌開始刪,直到低於上限。
+4. 下載只在沒有任何歌還是用它做的時候才刪(重點同一首換 key 會沿用分離好的音軌);`queries.json` 裡指到它的查詢一起拿掉。
+
+大小一個檔案只算一次(歌的 `video.mp4` 是下載那份的硬連結)。刪的時候先把資料夾改名移開,檔案正被打開(OBS 正在放影片)就改不了名,留到下次。被刪掉的歌再點一次就重做(沒有下載就重新下載),Core 開唱時才發現歌不見了(404)也會自己重新點、好了再唱。`library/`、`_ytdlp-cache/`、`_lyrics/`、`_gpu-profile.json` 不動;`data/rvc-test`、`data/rvc-train-songs` 是手動放的訓練資料,不在快取裡,也不會被清。
+
+```bash
+curl -s http://127.0.0.1:8005/cache                                   # 大小、幾首、上限、上次清了什麼
+curl -s -X POST "http://127.0.0.1:8005/cache/prune?dry_run=true"      # 只列出會刪什麼
+curl -s -X POST http://127.0.0.1:8005/cache/prune                     # 現在清
+```
+
 **安裝(原生 Windows,Git Bash)**
 
 ```bash
@@ -549,6 +565,8 @@ curl -s http://127.0.0.1:8005/jobs/<id>          # state / stage / progress;done
 |---|---|---|
 | `SING_BACKEND` | `seed-vc` | `mock` = 正弦波假歌(測試用) |
 | `SING_DATA_DIR` / `SING_LIBRARY_DIR` | `<repo>/data/songs` / `<data>/library` | 快取與本機歌庫 |
+| `SING_CACHE_MAX_GB` / `SING_CACHE_MAX_DAYS` | 6 / 14 | 歌 + 下載最多留多大(最久沒用的先刪)/ 幾天沒用就刪;0 = 不限,兩個都 0 = 不清 |
+| `SING_CACHE_PROTECT_HOURS` / `SING_CACHE_EVERY_S` | 6 / 3600 | 這麼近用過的不刪 / 除了啟動和每首做完,多久再清一次 |
 | `SING_REF` / `SING_SEEDVC_DIR` | `../voices/deepseek-chan/ref.wav` / `../models/seed-vc` | 參考音、Seed-VC 原始碼 |
 | `SING_DEVICE` / `SING_SEPARATE_DEVICE` | `cuda` | 分離 OOM 時自動退到 CPU |
 | `SING_DIFFUSION_STEPS` / `SING_CFG_RATE` | 30 / 0.7 | 步數越多越穩、越慢 |
@@ -568,6 +586,7 @@ curl -s http://127.0.0.1:8005/jobs/<id>          # state / stage / progress;done
 | `SING_LYRICS_LLM_URL` / `_KEY` / `_MODEL` | (空) | 歌詞專用的 LLM(OpenAI 相容的 base url、金鑰、模型 id;URL 和 MODEL 都有才用),沒設就讀 `miyoria.toml` |
 | `SING_LYRICS_LLM_TIMEOUT_S` / `SING_LYRICS_BUDGET_S` | 20 / 45 | 一次 LLM 呼叫最久 / 一首歌找歌詞最久(超過就用手上最好的,沒有就沒有) |
 | `SING_LYRICS_NETEASE` | 1 | 也查網易雲音樂的公開歌詞介面(0 = 只用 lrclib) |
+| `SING_LYRICS_URL` | (空) | 歌詞服務(`workers/lyrics`)的網址:翻唱 worker 跟 Core 不在同一台時,找歌詞(含 LLM、ASR 抽查)交給它,主唱音軌以 16 kHz 單聲道傳過去;對齊仍在 worker。服務不通就沒有歌詞 |
 | `SING_LYRICS_ASR` / `SING_LYRICS_ASR_URL` | auto / `http://127.0.0.1:8003` | 用 ASR 聽主唱抽查歌詞:`auto` = 只查信心不到 0.85 的、`1` = 都查、`0` = 不查;ASR 離線(offload)時略過 |
 | `SING_VIDEO` / `SING_VIDEO_MAX_HEIGHT` / `SING_VIDEO_MAX_MB` / `SING_VIDEO_WAIT_S` | 1 / 1080 / 300 / 120 | 抓原曲影片 / 最高解析度 / 最大檔案 / 音訊好了之後最多再等幾秒 |
 | `HOST` / `PORT` | `127.0.0.1` / `8005` | 只聽本機 |
@@ -588,6 +607,7 @@ Go Live 直播要讓觀眾聽到歌,voice node 的 `GOLIVE_AUDIO` 要開(`true`)
 |---|---|---|
 | `SING_GPU_SHARE` | 0 | 1 = 卡上放得下就不卸載 |
 | `SING_SHARE_MIN_FREE_MB` | 4096 | 共用需要的剩餘 VRAM |
+| `SING_SPEECH_BURST_MB` | 1024 | 她說話時 TTS 要多用的 VRAM。她的 RVC 模型(`SING_VOICE=rvc` 或 `…+rvc`)在子程序裡一口氣跑完,她說話時停不下來,所以要多留這麼多才跟語音共用顯示卡,不夠就走獨佔流程;它用掉多少 VRAM 從整張卡的剩餘量學 |
 | `SING_SHARE_WAIT_S` | 0 | 放不下時先等這麼久 |
 | `SING_YIELD_URLS` | `SING_OFFLOAD_URLS` | 共用時要讓路的 worker |
 | `SING_YIELD_POLL_MS` / `SING_YIELD_HOLD_MS` / `SING_YIELD_MAX_S` | 100 / 300 / 120 | 問的頻率 / 閒下來後再等多久 / 一首歌最多讓多久 |

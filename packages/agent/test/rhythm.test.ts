@@ -165,7 +165,7 @@ describe("a look instead of the dice (§7.2)", () => {
     expect(first?.respond).toBe(true);
     expect(first?.reasons.some((r) => r.startsWith("a look: topic `鯨魚`"))).toBe(true);
     // The ladder is in her prompt.
-    expect(llm.prompt(0)).toContain("用 react 按一個表情(不算你講話)");
+    expect(llm.prompt(0)).toContain("呼叫 react 工具按一個表情(不算你講話");
     expect(h.sink.reactions()).toHaveLength(1);
     expect(h.sink.texts()).toEqual([]);
     // One look an hour here: the next is seen, not looked at.

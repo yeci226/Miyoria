@@ -40,6 +40,8 @@ export interface ExFollowup {
   subject: SubjectName;
   about: string;
   due_in_hours: number;
+  /** The label (`f2`) of a pending followup it is the same as: nothing new is written. */
+  same_as: string | null;
 }
 
 /** What the summarizer extracted from one stretch of conversation. */
@@ -48,6 +50,8 @@ export interface Extraction {
   facts: ExFact[];
   self_notes: ExNote[];
   followups: ExFollowup[];
+  /** Labels (`f1`) of pending followups this conversation asked or answered. */
+  answered_followups: string[];
   /** Items that were present but malformed. */
   skipped: number;
 }
@@ -70,7 +74,8 @@ export function systemPrompt(selfLabel: string): string {
   "episode": {"summary": "一兩句話描述這段對話發生了什麼(我的角度)", "importance": 0.0到1.0, "emotion": "我當時的心情,一個詞"} 或 null,
   "facts": [{"subject_name": "這件事是關於誰(用逐字稿裡的名字),關於我自己就寫 \\"self\\"", "statement": "例如:Owen 喜歡吃拉麵", "importance": 0.0到1.0, "confidence": 0.0到1.0, "global": true 或 false, "valid_hours": null 或 幾小時內仍然成立, "lines": [它根據的行號]}],
   "self_notes": [{"note": "我說過的承諾、表達過的意見、我自己的經歷,例如:我答應 Owen 下次陪他打 Minecraft", "importance": 0.0到1.0, "valid_hours": null 或 幾小時內仍然成立, "lines": [它根據的行號]}],
-  "followups": [{"subject_name": "要追問誰", "about": "之後想問或提起的事,例如:問 Owen 明天的考試考得怎樣", "due_in_hours": 幾小時後適合提起}]
+  "followups": [{"subject_name": "要追問誰", "about": "之後想問或提起的事,例如:問 Owen 明天的考試考得怎樣", "due_in_hours": 幾小時後適合提起, "same_as": null 或 待追問的編號(例如 "f2")}],
+  "answered_followups": [這段對話裡已經問過、或對方已經回答的待追問編號,例如 "f1"]
 }
 
 規則:
@@ -79,7 +84,10 @@ export function systemPrompt(selfLabel: string): string {
 - valid_hours:只有「現在正在發生的狀態」才填(例如「正在下載歌」「已經開台」「Owen 在打 osu」),填它大概還會成立幾小時;長久成立的事(喜好、關係、承諾、經歷)填 null。
 - 提到人一律寫名字,不要寫 u1、p2 這類代號。
 - global 只在「名字、希望我怎麼稱呼他、代名詞」這類到哪裡都適用、而且一點都不私密的事實才設 true,其他一律 false。
-- 沒有值得記的就給空陣列或 null,不要硬湊。`;
+- 沒有值得記的就給空陣列或 null,不要硬湊。
+- 逐字稿後面可能附上「待追問」:你之前記下、還沒問的事,每條有編號 f1、f2…
+  - 逐字稿裡你已經問了、或對方已經回答的,把編號放進 answered_followups,不要再為它寫新的 followup。
+  - 想追問的事跟某條待追問是同一件事(換句話說也算),same_as 填那條的編號,不要當成新的事。`;
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -112,6 +120,20 @@ export function transcript(
   return out;
 }
 
+/** A followup she still has to bring up, as the summarizer is shown it. */
+export interface PendingFollowup {
+  /** `f1`, `f2`, … */
+  label: string;
+  about: string;
+}
+
+/** The pending followups shown after the transcript (none: nothing is added). */
+export function pendingBlock(pending: readonly PendingFollowup[]): string {
+  if (pending.length === 0) return "";
+  const lines = pending.map((p) => `[${p.label}] ${p.about.replaceAll("\n", " ")}`);
+  return `\n待追問(你之前記下、還沒問的事):\n${lines.join("\n")}\n`;
+}
+
 /**
  * Parses the summarizer's answer. Tolerates code fences, prose around the object, trailing
  * commas, a bare array of facts, string numbers and 0..10 / 0..100 scales; malformed items are skipped (counted in `skipped`). Fails
@@ -119,7 +141,14 @@ export function transcript(
  */
 export function parseExtraction(text: string): Extraction {
   const value = findObject(text);
-  const out: Extraction = { episode: null, facts: [], self_notes: [], followups: [], skipped: 0 };
+  const out: Extraction = {
+    episode: null,
+    facts: [],
+    self_notes: [],
+    followups: [],
+    answered_followups: [],
+    skipped: 0,
+  };
 
   const episode = value.episode;
   if (episode === undefined || episode === null) {
@@ -198,13 +227,20 @@ export function parseExtraction(text: string): Extraction {
       subject: subject(item),
       about,
       due_in_hours: Math.min(24 * 90, Math.max(0, hours)),
+      same_as: pendingLabel(item.same_as),
     });
+  }
+  for (const item of array(value, "answered_followups")) {
+    const label = pendingLabel(item);
+    if (label !== null && !out.answered_followups.includes(label)) {
+      out.answered_followups.push(label);
+    }
   }
   return out;
 }
 
 /** Keys that mark an object (or an array's items) as an extraction rather than stray JSON. */
-const OBJECT_KEYS = ["episode", "facts", "self_notes", "followups"];
+const OBJECT_KEYS = ["episode", "facts", "self_notes", "followups", "answered_followups"];
 const ITEM_KEYS = ["statement", "fact", "note", "about", "summary"];
 
 /** Removes trailing commas before `}` / `]` (outside strings); nothing else is repaired. */
@@ -365,6 +401,14 @@ function unit(value: JsonValue | undefined): number | null {
   if (n > 10) n /= 100;
   else if (n > 1) n /= 10;
   return Math.min(1, Math.max(0, n));
+}
+
+/** A pending followup's label: `f2`, `F2`, `[f2]` or the bare number `2`; else `null`. */
+function pendingLabel(value: JsonValue | undefined): string | null {
+  if (typeof value === "number") return Number.isInteger(value) && value >= 1 ? `f${value}` : null;
+  if (typeof value !== "string") return null;
+  const m = /^\[?\s*f?(\d+)\s*\]?$/i.exec(value.trim());
+  return m ? `f${Number(m[1])}` : null;
 }
 
 function boolean(value: JsonValue | undefined): boolean {

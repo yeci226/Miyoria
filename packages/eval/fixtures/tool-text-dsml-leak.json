@@ -36,7 +36,5 @@
       "rule": "no_markup_in_speech"
     }
   ],
-  "status": "xfail",
-  "reason": "the expression parser drops only the tags it recognises (snake_case names); the rest of the model's function-call text reaches the speech as plain words",
-  "flips_with": "agent: expression parser drops tool-call markup it cannot parse (and the tool-as-text retry)"
+  "status": "pass"
 }

@@ -17,7 +17,8 @@ function segmenter(): Jieba {
   return jieba;
 }
 
-function simplify(text: string): string {
+/** `text` with traditional Han characters converted to simplified (OpenCC, Taiwan to mainland). */
+export function simplify(text: string): string {
   const convert: (text: string) => string =
     toSimplified ?? OpenCC.Converter({ from: "tw", to: "cn" });
   toSimplified = convert;

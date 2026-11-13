@@ -240,6 +240,7 @@ async function memoryCount(state: ApiState, profile: ProfileId, person: PersonId
     limit: 100_000,
   };
   try {
+    if (records.count) return await records.count(profile, filter);
     return (await records.list(profile, filter)).length;
   } catch {
     return 0;

@@ -585,8 +585,10 @@ export function remindCapability(book: ReminderBook): Capability {
               person: args.person ?? null,
               for_account: p.requester,
             });
+            // Only set: 「好了」 alone read as the reminder going off, and she told Owen at 07:30
+            // that a 10:30 reminder had rung (2026-11-12 23:38).
             return {
-              text: `好了,${line(r, offset)}`,
+              text: `提醒設好了,還沒到時間,到時候才會提醒你:${line(r, offset)}`,
               data: { id: r.id, key: r.key, due: r.due },
             };
           } catch (error) {

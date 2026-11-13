@@ -40,6 +40,7 @@
     "@miyoria/ext-host": "workspace:*",
     "@miyoria/facts": "workspace:*",
     "@miyoria/game": "workspace:*",
+    "@miyoria/imagegen": "workspace:*",
     "@miyoria/kernel": "workspace:*",
     "@miyoria/learning": "workspace:*",
     "@miyoria/live": "workspace:*",

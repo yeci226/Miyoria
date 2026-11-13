@@ -10,9 +10,21 @@
 //   `Participation`, so a person's "joined" coins and the game's own pay stay separate.
 // * One person failing (a ledger error) does not stop the others; the first error is thrown after
 //   everyone was tried, and `@miyoria/party` logs it and does not retry.
+// * One card in the game's voice channel says what moved (notices.ts): each player's coins, who
+//   finished the daily quest by playing, and what that unlocked. Nothing moved, no card.
 
 import type { AccountRef, PartyRewardRequest, PartyRewards } from "@miyoria/types";
 import type { EconomyService } from "./economy.js";
+import {
+  amounts,
+  type Earned,
+  eventCard,
+  postCard,
+  type QuestDone,
+  questParts,
+  unlockLines,
+} from "./notices.js";
+import type { AchievementUnlocked, QuestResult } from "./v2-types.js";
 
 /** What a game's coins read as in a wallet ("finished a game"). */
 const PARTY_REF = "game_finish";
@@ -24,6 +36,9 @@ export class PartyRewardDesk implements PartyRewards {
     if (request.id.trim() === "") return;
     const idem = `play:party:${request.id}`;
     const seen: AccountRef[] = [];
+    const paid: Earned[] = [];
+    const quests: QuestDone[] = [];
+    const unlocks: string[] = [];
     let failure: unknown = null;
     for (const award of request.awards) {
       const coins = Math.floor(award.coins);
@@ -36,17 +51,41 @@ export class PartyRewardDesk implements PartyRewards {
       }
       seen.push(award.account);
       try {
-        await this.#pay(award.account, coins, idem);
+        const out = await this.#pay(award.account, coins, idem);
+        if (out === null) continue;
+        if (out.paid > 0) paid.push({ account: award.account, paid: out.paid });
+        if (out.quest?.status === "paid")
+          quests.push({ account: award.account, result: out.quest });
+        unlocks.push(...unlockLines(out.unlocked, award.account));
       } catch (error) {
         failure ??= error;
       }
     }
+    const q = questParts(quests);
+    const lines: string[] = [];
+    if (paid.length > 0) lines.push(`這場拿到:${amounts(paid)}`);
+    if (q.paid.length > 0) lines.push(`每日任務:${amounts(q.paid)}`);
+    const title = request.title.trim() || request.game;
+    postCard(
+      this.e,
+      request.context,
+      eventCard(`🎮 玩完「${title}」`, lines, [...q.bonuses, ...q.unlocks, ...unlocks]),
+    );
     if (failure !== null) throw failure;
   }
 
-  async #pay(account: AccountRef, coins: number, idem: string): Promise<void> {
+  /** One player's coins; `null` for someone who earns nothing. */
+  async #pay(
+    account: AccountRef,
+    coins: number,
+    idem: string,
+  ): Promise<{
+    paid: number;
+    quest: QuestResult | null;
+    unlocked: AchievementUnlocked[];
+  } | null> {
     const who = await this.e.member(account);
-    if (!who) return;
+    if (!who) return null;
     const paid = await this.e.serial(() =>
       this.e.faucet(
         who,
@@ -59,8 +98,13 @@ export class PartyRewardDesk implements PartyRewards {
       ),
     );
     // Playing counts for the daily quest even when today's coins for play are all paid.
-    if (paid.status === "paid" || paid.status === "capped") {
-      await this.e.v2.questDone(who, "play_game");
-    }
+    const quest =
+      paid.status === "paid" || paid.status === "capped"
+        ? await this.e.v2.questDone(who, "play_game")
+        : null;
+    // A paid quest checked the achievements already; the game's own coins may reach one too.
+    const unlocked =
+      quest?.status !== "paid" && paid.status === "paid" ? await this.e.v2.afterEarn(who) : [];
+    return { paid: paid.paid, quest, unlocked };
   }
 }

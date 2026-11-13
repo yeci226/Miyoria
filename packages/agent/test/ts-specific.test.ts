@@ -113,7 +113,12 @@ describe("ts port", () => {
 
   it("with two people at once, [回覆 N] picks who each line quotes; unmarked quotes nobody", async () => {
     // 2026-11-08 14:07: one turn answered two people and quoted the first while talking to the second.
-    const config = { attention: { llm_check: false }, reply_reference: true };
+    // One turn for both: what voice still does (text gives each caller a turn of their own).
+    const config = {
+      attention: { llm_check: false },
+      reply_reference: true,
+      one_caller_per_turn: false,
+    };
     const marked = new MockProvider("chat").reply(
       "[回覆 2] 那是她的專長沒錯\n[回覆 1] 中文的話我很行",
     );
@@ -148,6 +153,32 @@ describe("ts port", () => {
       x.payload.type === "send_message" ? [x.payload.message.reply_to] : [],
     );
     expect(replyTo).toEqual([null]);
+  });
+
+  it("two people calling her at once in text get a turn each, each quoting its own", async () => {
+    // 2026-11-13 03:06: one turn answered 阿鰻 and When You See It, and the second answer read as
+    // said to 阿鰻.
+    const config = { attention: { llm_check: false }, reply_reference: true };
+    const llm = new MockProvider("chat").reply("中文的話我很行").reply("那是她的專長沒錯");
+    const h = await Harness.create("mention-only", config, llm);
+    const c = channel("c");
+    const a = mention(c, "Sakana", "中文");
+    const b = mention(c, "Owen", "Claude 專長是寫程式沒錯呀");
+    h.say(a);
+    h.say(b);
+    await wait(6000);
+    const sent = h.sink.actions.flatMap((x) =>
+      x.payload.type === "send_message"
+        ? [[x.payload.message.text, x.payload.message.reply_to]]
+        : [],
+    );
+    expect(sent).toEqual([
+      ["中文的話我很行", a.id],
+      ["那是她的專長沒錯", b.id],
+    ]);
+    const first = contentText(llm.requests()[0]?.messages.at(-2)?.content ?? "");
+    expect(first).toContain("Sakana");
+    expect(first).not.toContain("[1]");
   });
 
   it("tool and emotion events carry the legacy JSON payloads", async () => {

@@ -360,6 +360,14 @@ adapter 應該從這個檔案讀 `port` 與 `token`(同一台機器上)。
 
 關掉遊戲,跟按視窗的關閉鈕一樣(離開世界時單人世界會存檔,然後客戶端結束)。在主選單也可以。先回 `data: {"quitting": true}` 再關,之後連線會斷。adapter 只在 `quit_on_stop` 允許時才送(預設只關她自己開的遊戲)。
 
+### 5.15 `drop`
+
+```json
+{"id":"30","type":"drop","item":"rotten_flesh","all":true}
+```
+
+把背包裡的東西丟出去(丟在她面前,也就是給面前的玩家):`item` 找第一格有這個物品的,或 `slot`(0–35,0–8 是快捷列),都沒給就丟手上那格。`all`(預設 `true`)丟一整組,`false` 只丟一個。要先關掉畫面;是會動到身體的請求,反射進行中會等它結束。`data: {"slot","item","count"}`(那格是空的時只有 `slot` 和 `count:0`)。拒絕:`missing_items`(背包裡沒有這個物品)、`invalid_args`(`slot` 超出範圍、開著畫面、已經死了)。
+
 ## 6. 事件
 
 | name | 何時送出 | `data` |

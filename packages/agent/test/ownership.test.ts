@@ -86,11 +86,13 @@ describe("cancellation table", () => {
     await wait(15_000);
     expect(h.sink.cancelled).toEqual([]);
     expect(slow.calls).toBe(2);
-    // The first reply went out; the rest became the next turn (阿明 is its focus now).
+    // The first reply went out; the rest became the next turn (阿明 is its focus now). She
+    // answered Owen, so 阿明 speaking after her is not a reply to her (2026-11-10).
     expect(h.sink.texts()).toEqual(["reply 1", "reply 2"]);
     const focus = payloads<TurnFocus>(h.drain(), "agent.turn.focus");
     const second = focus.filter((f) => f.phase === "generating")[1];
-    expect(second?.reason).toBe("reply_to_her");
+    expect(second?.reason).toBe("ambient");
+    expect(second?.addressed_by).toEqual([]);
     expect(second?.background.length).toBe(1);
   });
 
@@ -111,6 +113,28 @@ describe("cancellation table", () => {
     await wait(10_000);
     expect(outcomes(h.drain())).toEqual([
       { type: "cancelled", cause: "superseded", by: "Owen" },
+      { type: "sent", parts: 1 },
+    ]);
+  });
+
+  it("a_result_someone_waits_for_finishes_before_the_next_person", async () => {
+    const slow = new SlowProvider(5000);
+    const h = await Harness.create(
+      "ambient",
+      { attention: { llm_check: false, cooldown_ms: 0 } },
+      slow,
+    );
+    const c = channel("c");
+    h.publish({
+      type: "agent_initiative",
+      data: { context: c, reason: "action_result", hint: "收下了", about: [] },
+    });
+    await wait(1000);
+    h.say(mention(c, "Owen", "DeepSeek 妳在嗎"));
+    await wait(15_000);
+    expect(h.sink.cancelled).toEqual([]);
+    expect(outcomes(h.drain())).toEqual([
+      { type: "sent", parts: 1 },
       { type: "sent", parts: 1 },
     ]);
   });

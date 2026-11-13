@@ -73,7 +73,9 @@ describe("agent module", () => {
     expect(msgs[1]?.role).toBe("user");
     expect(msgs[1]?.content).toBe("Owen: 早安\nOwen: DeepSeek 在嗎\n阿明: 安安");
     expect(msgs[2]?.role).toBe("user");
-    expect(msgs[2]?.content).toContain("標題=在場的人⟧\n阿明、Owen\n⟦/資料⟧");
+    expect(msgs[2]?.content).toContain(
+      'title="在場的人">\n<person name="阿明"/>\n<person name="Owen"/>\n</data>',
+    );
     // The focus: Owen called her, 阿明 is background.
     expect(msgs[2]?.content).toMatch(/# 要回的訊息.*\nOwen 問你:DeepSeek 在嗎$/);
     expect(msgs[3]?.role).toBe("system");
@@ -471,6 +473,25 @@ describe("agent module", () => {
       .map((e) => (e.event.type === "custom" ? e.event.data.payload : null));
     expect(toolEvents.length).toBe(1);
     expect(toolEvents[0]).toMatchObject({ tool: "react", ok: true });
+  });
+
+  it("react_takes_several_emoji_in_one_call", async () => {
+    // "Can't she press more than one?": she can, one reaction per emoji, in order.
+    const mock = new MockProvider("chat")
+      .events([toolCall(0, "a", "react", '{"emojis":["💀","😭",":cry:","💀"]}'), done()])
+      .reply("<silence/>")
+      .events([toolCall(0, "b", "react", '{"emojis":["1","2","3","4","5","6"]}'), done()])
+      .reply("太多了啦");
+    const h = await Harness.create("always", noCheck(), mock);
+    const c = channel("c");
+    h.say(incoming(c, "Brian", "多按幾個"));
+    await wait(3000);
+    expect(h.sink.reactions().map(([, e]) => e)).toEqual(["💀", "😭", ":cry:"]);
+    h.say(incoming(c, "Brian", "按六個"));
+    await wait(3000);
+    expect(h.sink.reactions().length).toBe(3);
+    const results = (mock.requests()[3]?.messages ?? []).filter((m) => m.role === "tool");
+    expect(String(results.at(-1)?.content)).toContain("at most 5");
   });
 
   it("text_beside_tool_calls_is_sent_once", async () => {

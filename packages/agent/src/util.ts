@@ -129,3 +129,24 @@ export async function timeout<T>(
     parent.removeEventListener("abort", onParent);
   }
 }
+
+/**
+ * Splits calls, in order, into the groups that may run together: a run of calls that only look
+ * (`readOnly`) is one group, every other call is a group of its own. Running the groups one after
+ * another keeps every call that changes something in the order the model gave.
+ */
+export function toolBatches<T>(calls: readonly T[], readOnly: (call: T) => boolean): T[][] {
+  const out: T[][] = [];
+  let run: T[] = [];
+  for (const call of calls) {
+    if (readOnly(call)) {
+      run.push(call);
+      continue;
+    }
+    if (run.length > 0) out.push(run);
+    run = [];
+    out.push([call]);
+  }
+  if (run.length > 0) out.push(run);
+  return out;
+}

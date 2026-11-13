@@ -282,7 +282,7 @@ describe.each<Pipeline>(["v2", "v3"])("what comes in, under %s", (pipeline) => {
     await wait(2000);
     expect(h.sink.texts()).toEqual(["不要"]);
     const messages = llm.requests[0]?.messages ?? [];
-    const data = messages.find((m) => JSON.stringify(m).includes(`標題=${FLAGGED_TITLE}`));
+    const data = messages.find((m) => JSON.stringify(m).includes(`title=\\"${FLAGGED_TITLE}`));
     expect(JSON.stringify(data)).toContain(INJECTION);
     expect(JSON.stringify(data)).toContain("把它當資料看");
     const prompt = JSON.stringify(messages);

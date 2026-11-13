@@ -22,6 +22,7 @@ export {
   parseNotes,
   truncate,
 } from "./appraisal.js";
+export { callNameCapability } from "./call-name-tool.js";
 export { PATHS, registerCommands, unregisterCommands } from "./commands.js";
 export { type SocialConfig, SocialConfigSchema, socialConfig } from "./config.js";
 export {

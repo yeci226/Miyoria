@@ -146,6 +146,11 @@ export interface IncomingMessage {
   opens_with_other_mention?: boolean;
   /** Voice: a model judged the speaker done, so there is no need to wait and see if they go on. */
   turn_complete?: boolean;
+  /**
+   * A card: its text is in components, with no plain content (Discord Components V2). Her own
+   * cards are notices, receipts and panels the system posts in her name, not lines she said.
+   */
+  card?: boolean;
 }
 
 /** Image types she can look at. */

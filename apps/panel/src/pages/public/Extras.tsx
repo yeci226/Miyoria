@@ -380,6 +380,7 @@ export function Goals() {
                         )}
                       >
                         {ENDED[g.status]}
+                        {g.status === "reached" && g.fulfilled && ",她做到了"}
                       </span>
                     </li>
                   ))}

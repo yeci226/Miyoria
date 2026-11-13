@@ -8,10 +8,13 @@
 //   provides the router as `LlmRouterKey`.
 
 export {
+  CALL_KINDS,
+  callKind,
   callUsage,
   clip,
   type LlmCallDetail,
   type LlmCallFilter,
+  type LlmCallKind,
   LlmCallLog,
   type LlmCallRecord,
   type LlmCallStats,
@@ -21,6 +24,8 @@ export {
   type LlmGroupStats,
   type LlmHourStats,
   type LlmMessageView,
+  type LlmThinking,
+  type LlmThinkingPage,
   MAX_CALLS,
   MAX_DETAILS,
   redactSecrets,

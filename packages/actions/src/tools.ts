@@ -58,12 +58,17 @@ export class CapabilityTool implements Tool {
   readonly spec: ToolSpec;
   /** The gate checks the requester's permission itself (so `on_own` stays possible). */
   readonly permission = null;
+  /** A request on behalf of the person who asked: with several asking, the call says whom for. */
+  readonly actsFor = true;
+  readonly readOnly: boolean;
 
   constructor(
     readonly registry: ActuatorRegistry,
     readonly capability: Capability,
   ) {
     this.spec = spec(capability);
+    // Medium and high risk count against limits or wait for a review: never side by side.
+    this.readOnly = capability.risk === "low" && capability.tool?.readOnly === true;
   }
 
   async call(ctx: ToolContext, raw: JsonValue): Promise<string> {

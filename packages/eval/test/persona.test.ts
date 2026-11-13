@@ -178,8 +178,8 @@ describe("counters", () => {
     ]);
     expect(c.replies).toBe(6);
     expect(c.silent).toBe(1);
-    expect(c.catchphrases["好啦"]).toBe(1);
-    expect(c.catchphrases["哼"]).toBe(1);
+    expect(c.catchphrases.好啦).toBe(1);
+    expect(c.catchphrases.哼).toBe(1);
     expect(c.catchphrase_rate).toBe(0.4);
     expect(c.question_rate).toBe(0.2);
     expect(c.openings.stock_opener_rate).toBe(0.4);

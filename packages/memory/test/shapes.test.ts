@@ -34,6 +34,7 @@ describe("shapes", () => {
       episode_recency_tau_days: 1.5,
       state_note_hours: 12,
       followup_max_age_hours: 6,
+      followup_repeat_hours: 24,
       repeat: { window: 40, allowed: 3, penalty: 0.15, floor: 0.4, similarity: 0.6 },
       guild_scope: "guild",
       allow_global_from_dm: false,

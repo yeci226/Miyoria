@@ -8,6 +8,7 @@
 //       identity.md        # sections, in the order listed in profile.toml
 //       style.md
 //       examples/*.md      # few-shot dialogues
+//     lorebook.toml        # World Info: kaomoji by mood, reminders brought up by words or moods
 //     voice.toml
 //     avatar.toml
 
@@ -114,6 +115,55 @@ export type MoodBaseline = z.output<typeof MoodBaselineSchema>;
 export type BehaviorConfig = z.output<typeof BehaviorConfigSchema>;
 export type Temperament = z.output<typeof TemperamentSchema>;
 
+/**
+ * One group of `lorebook.toml`'s kaomoji: the faces for a feeling, and the emotion names (her
+ * `<emo:…>` tags and the self module's emotions) that bring it up.
+ */
+export const KaomojiGroupSchema = z.object({
+  group: z.string(),
+  moods: z.array(z.string()).default([]),
+  faces: z.array(z.string()).default([]),
+});
+
+/** One entry of `lorebook.toml` (World Info): a reminder shown when its keys or moods come up. */
+export const LoreEntrySchema = z.object({
+  id: z.string(),
+  /** Words that bring it up in the last few messages or the message she answers (any case). */
+  keys: z.array(z.string()).default([]),
+  /** Her current emotions that bring it up. */
+  moods: z.array(z.string()).default([]),
+  text: z.string(),
+  /** Higher first when more entries come up than are shown. */
+  priority: z.number().default(0),
+  channel: z.enum(["text", "voice", "both"]).default("both"),
+});
+
+/** `lorebook.toml`. */
+export const LorebookSchema = z.object({
+  kaomoji: z.array(KaomojiGroupSchema).default([]),
+  entries: z.array(LoreEntrySchema).default([]),
+});
+export type KaomojiGroup = z.output<typeof KaomojiGroupSchema>;
+export type LoreEntry = z.output<typeof LoreEntrySchema>;
+export type Lorebook = z.output<typeof LorebookSchema>;
+
+/** Parses `lorebook.toml` text. Throws `ProfileError`. */
+export function parseLorebook(text: string, source = "lorebook.toml"): Lorebook {
+  let raw: unknown;
+  try {
+    raw = parseToml(text);
+  } catch (error) {
+    throw new ProfileError(`parsing ${source}: ${(error as Error).message}`, { cause: error });
+  }
+  const parsed = LorebookSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new ProfileError(`parsing ${source}: ${z.prettifyError(parsed.error)}`, {
+      cause: parsed.error,
+    });
+  }
+  return parsed.data;
+}
+
 /** Parses `profile.toml` text. Throws `ProfileError`. */
 export function parseProfileManifest(text: string, source = "profile.toml"): ProfileManifest {
   let raw: unknown;
@@ -184,6 +234,8 @@ export class Profile {
   readonly voice: JsonObject | null;
   /** `avatar.toml`, if present. */
   readonly avatar: JsonObject | null;
+  /** `lorebook.toml`, if present. */
+  readonly lorebook: Lorebook | null;
 
   constructor(init: {
     dir: string;
@@ -192,6 +244,7 @@ export class Profile {
     examples: string[];
     voice: JsonObject | null;
     avatar: JsonObject | null;
+    lorebook?: Lorebook | null;
   }) {
     this.id = init.manifest.id;
     this.dir = init.dir;
@@ -200,6 +253,7 @@ export class Profile {
     this.examples = init.examples;
     this.voice = init.voice;
     this.avatar = init.avatar;
+    this.lorebook = init.lorebook ?? null;
   }
 
   /** Loads `profilesDir/<id>`. */
@@ -227,6 +281,19 @@ export class Profile {
       }
     }
 
+    const lorebookPath = join(dir, "lorebook.toml");
+    let lorebook: Lorebook | null = null;
+    try {
+      lorebook = parseLorebook(await readFile(lorebookPath, "utf8"), lorebookPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        if (error instanceof ProfileError) throw error;
+        throw new ProfileError(`reading ${lorebookPath}: ${(error as Error).message}`, {
+          cause: error,
+        });
+      }
+    }
+
     return new Profile({
       dir,
       manifest,
@@ -234,6 +301,7 @@ export class Profile {
       examples,
       voice: await readOptionalTable(join(dir, "voice.toml")),
       avatar: await readOptionalTable(join(dir, "avatar.toml")),
+      lorebook,
     });
   }
 

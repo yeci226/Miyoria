@@ -16,7 +16,11 @@ const STRONG: readonly RegExp[] = [
   /(?:語氣|口吻|表現|反應)要(?:傲嬌|別扭|短|收|帶)/,
   /(?:用|選|標)\s*(?:neutral|happy|smug|annoyed|angry|embarrassed|sad|surprised|thinking)\s*(?:吧|比較|好了|就好)/i,
   /<\/?(?:think|thinking|reasoning)>/i,
+  // The prompt's own tags and lines echoed back (`PROMPT_TAGS`, the style note's kaomoji line).
+  /<\s*\/?\s*(?:data|reply_to|turn|now|style_note|examples|example|chat|reply|person)(?=[\s/>]|$)/i,
+  /⟦\/?資料|(?:source|title)="[^"]*"\s*>|這回合想用顏文字的話/,
   /^(?:思考|推理|分析|草稿|Reasoning|Thinking)[:：]/i,
+  /^(?:要回的訊息|參考資料|style_note|reply_to)[:：]/i,
   /(?:現在)?(?:情緒|語氣)方面[:：]/,
   /我(?:該|應該|要)(?:驗收|回覆|回答|接著說|先說)/,
 ];

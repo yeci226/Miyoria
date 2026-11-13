@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -18,8 +19,15 @@ const test: InlineConfig = {
   restoreMocks: true,
 };
 
+// The owner's pictures are game art kept out of git (`public/*.local.*`). The page refers to one
+// only when it is there at build time; elsewhere it would ask for it on every load and get a 404.
+const art = (name: string) => existsSync(fileURLToPath(new URL(`./public/${name}`, import.meta.url)));
+
 const config = defineConfig({
   plugins: [react(), tailwindcss()],
+  define: {
+    __PANEL_ART__: JSON.stringify({ background: art("background.local.jpg"), login: art("login.local.jpg") }),
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

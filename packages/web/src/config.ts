@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * `[modules.web]`: her web search (DuckDuckGo's HTML endpoint) and page reader.
+ * `[modules.web]`: her web search (Tavily when a key is set, else DuckDuckGo's HTML endpoint) and page reader.
  *
  * ```toml
  * [modules.web]
@@ -22,6 +22,20 @@ export const WebConfigSchema = z.object({
   ddg_gap_ms: z.number().int().min(0).max(60_000).default(4000),
   /** After a challenge DuckDuckGo is left alone this long, so a block is not prolonged. */
   ddg_cooldown_s: z.number().int().min(0).max(86_400).default(600),
+  /**
+   * Who answers `web_search`. Unset: Tavily when a key is set (`tavily_api_key`, else the
+   * `TAVILY_API_KEY` environment variable), DuckDuckGo otherwise. Tavily without a key falls back
+   * to DuckDuckGo.
+   */
+  search_provider: z.enum(["tavily", "duckduckgo"]).optional(),
+  /** Tavily API key (`${TAVILY_API_KEY:-}`); never logged. */
+  tavily_api_key: z.string().max(500).default(""),
+  /** Tavily `search_depth`: `basic`, `fast` and `ultra-fast` cost 1 credit, `advanced` 2. */
+  tavily_search_depth: z.enum(["basic", "advanced", "fast", "ultra-fast"]).default("basic"),
+  /** Tavily `topic`. */
+  tavily_topic: z.enum(["general", "news", "finance"]).default("general"),
+  /** Ask Tavily for its short LLM answer and show it above the results. */
+  tavily_include_answer: z.boolean().default(false),
   /** Results `web_search` returns when she does not say (she may ask for 1..8). */
   search_results: z.number().int().min(1).max(8).default(5),
   /** Characters of page text `web_read` keeps (v4 plan §4.2: a page, 12,000). */

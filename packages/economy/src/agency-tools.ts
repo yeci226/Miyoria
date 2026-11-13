@@ -412,6 +412,34 @@ export function cancelBountyCapability(economy: EconomyService): Capability {
   }) as Capability;
 }
 
+/** `economy.goal_done` (tool `goal_done`): she says she kept a reached goal's promise. */
+export function goalDoneCapability(economy: EconomyService): Capability {
+  return defineCapability<NoArgs>({
+    name: "economy.goal_done",
+    summary: "記下她已經做到湊滿的目標答應的事",
+    risk: "low",
+    args: NoArgs,
+    permission: PERMISSION,
+    limits: { per_day: 5, per_person_per_day: 5, cooldown_ms: 0 },
+    tool: {
+      name: "goal_done",
+      description:
+        "大家湊滿的目標,你答應的事已經真的做到了(例如答應的歌唱完了),就呼叫,記成做到了。" +
+        `還沒做就不要呼叫;記下來之後就不會再提醒你。${OWN}`,
+      properties: {},
+    },
+    async execute() {
+      return answering("沒有記下來", async () => {
+        const goal = await economy.goalDesk.fulfill(null, "self");
+        return {
+          text: `記下來了:目標「${goal.title}」答應的「${goal.promise}」做到了。`,
+          data: { done: true, goal: goal.id },
+        };
+      });
+    },
+  }) as Capability;
+}
+
 /** Every tool for her own money. */
 export function agencyCapabilities(economy: EconomyService): Capability[] {
   return [
@@ -419,6 +447,7 @@ export function agencyCapabilities(economy: EconomyService): Capability[] {
     buyForSelfCapability(economy),
     proposeGoalCapability(economy),
     cancelGoalCapability(economy),
+    goalDoneCapability(economy),
     postBountyCapability(economy),
     awardBountyCapability(economy),
     cancelBountyCapability(economy),

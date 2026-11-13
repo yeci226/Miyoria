@@ -14,12 +14,14 @@ import type {
 } from "@miyoria/types";
 import { MessageType } from "discord.js";
 import {
+  displayName,
   hasContent,
   incomingMessage,
   type MentionsLike,
   type MessageLike,
   PLATFORM,
   quotedMessage,
+  type UserLike,
 } from "./mapping.js";
 
 const log = getLogger("discord.history");
@@ -50,6 +52,8 @@ export interface MessageManagerLike {
 /** The parts of a discord.js `Client` used here. */
 export interface HistoryClientLike {
   channels: { fetch(id: string): Promise<unknown> };
+  /** Names for mentions a message's own data lacks (her cards are sent without pings). */
+  users?: { cache: { get(id: string): UserLike | undefined } };
 }
 
 function isList(value: FetchedLike | FetchedList): value is FetchedList {
@@ -155,6 +159,14 @@ export class DiscordHistory implements PlatformHistory {
       }
     }
     const repliedAuthor = m.mentions.repliedUser?.id ?? parent?.author.id ?? null;
-    return incomingMessage(m, context.kind, this.selfIds, repliedAuthor, referenced);
+    const users = this.client.users?.cache;
+    const names =
+      users === undefined
+        ? null
+        : (id: string) => {
+            const user = users.get(id);
+            return user === undefined ? null : displayName(user);
+          };
+    return incomingMessage(m, context.kind, this.selfIds, repliedAuthor, referenced, names);
   }
 }

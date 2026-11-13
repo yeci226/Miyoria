@@ -135,6 +135,40 @@ describe("call log", () => {
   });
 });
 
+describe("chain of thought", () => {
+  it("keeps each call's reasoning after its request is dropped, by kind of call", () => {
+    const log = new LlmCallLog(10, 1, 1_000_000);
+    const calls: [string, { module: string; label?: string }, string][] = [
+      ["c0", { module: "mind", label: "plan" }, "想一下今天做什麼"],
+      ["c1", { module: "agent", label: "reply" }, "回他一句"],
+      ["c2", { module: "agent", label: "voice" }, "語音要短"],
+      ["c3", { module: "social", label: "appraisal" }, ""],
+    ];
+    for (const [i, [id, tag, reasoning]] of calls.entries()) {
+      log.open(id, new Date(1_000 + i).toISOString(), "chat", "chat", { messages: [] }, true, tag);
+      log.respond(id, `answer ${id} sk-abcdefghijklmnop1234`, reasoning, []);
+    }
+    expect(log.get("c0")?.kind).toBe("mind");
+    expect(log.detail("c0")).toBeNull();
+
+    const all = log.thinking({ reasoned: true });
+    expect(all.items.map((t) => [t.call.id, t.call.kind, t.reasoning])).toEqual([
+      ["c2", "voice", "語音要短"],
+      ["c1", "chat", "回他一句"],
+      ["c0", "mind", "想一下今天做什麼"],
+    ]);
+    expect(all.items[0]?.answer).not.toContain("abcdefghijklmnop");
+    expect(all.by_kind).toEqual([
+      { kind: "mind", calls: 1, reasoned: 1 },
+      { kind: "chat", calls: 1, reasoned: 1 },
+      { kind: "voice", calls: 1, reasoned: 1 },
+      { kind: "social", calls: 1, reasoned: 0 },
+    ]);
+    expect(log.thinking({ kind: "voice" }).items.map((t) => t.call.id)).toEqual(["c2"]);
+    expect(log.thinking({ q: "今天" }).items.map((t) => t.call.id)).toEqual(["c0"]);
+  });
+});
+
 describe("redactSecrets", () => {
   it("hides keys, tokens and image bytes and keeps the words", () => {
     const text = [

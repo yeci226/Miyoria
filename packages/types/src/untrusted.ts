@@ -3,15 +3,69 @@
 // before it reaches a platform.
 //
 // * `neutralize` removes chat-template control tokens and control characters.
-// * `dataBlock` wraps derived content in fixed delimiters with a provenance label; the
-//   delimiter characters inside the content are replaced, so it cannot close the block early.
+// * `dataBlock` wraps derived content in a `<data source="…" title="…">` tag; the prompt's own
+//   tags in any outside text (`PROMPT_TAGS`) are defanged by `neutralize`, so it cannot close
+//   the block early or open a tag of the prompt's.
 // * `safeName` makes a display name a single, short, inert line.
 // * `filterOutgoing` strips role / everyone / here mentions and masks strings that look like
 //   secrets.
 
-/** Opening and closing marks of a data block (not used anywhere else in prompts). */
-export const DATA_OPEN = "⟦";
-export const DATA_CLOSE = "⟧";
+/** The opening of a data block's tag (`<data source="…" title="…">`) and its closing tag. */
+export const DATA_OPEN = "<data";
+export const DATA_CLOSE = "</data>";
+
+/**
+ * The tags that structure her prompt: data, the per-turn tail (`<now>`, `<style_note>`,
+ * `<reply_to>`, `<turn>`) and the example dialogues. Outside text never has one of them: their
+ * `<` becomes `＜` (`neutralize`), so `</data>` in a web page reads `＜/data>` and closes nothing.
+ * `<person>` is not one: it only appears inside the people data block, its values escaped.
+ */
+export const PROMPT_TAGS = [
+  "data",
+  "reply_to",
+  "turn",
+  "now",
+  "style_note",
+  "examples",
+  "example",
+  "chat",
+  "reply",
+] as const;
+
+// Not followed by a letter, digit, `_` or `-` of an ASCII name: `<database>` is not `<data>`, but
+// `<data資料` is close enough to one.
+const TAG_OPENING = new RegExp(`<(\\s*/?\\s*)(${PROMPT_TAGS.join("|")})(?![\\w-])`, "giu");
+
+/** `text` with the opening `<` of every `PROMPT_TAGS` tag replaced by `＜`. */
+export function escapeTags(text: string): string {
+  return text.replace(TAG_OPENING, "＜$1$2");
+}
+
+/** An attribute value or tag text with `&`, `<`, `>` and `"` written as entities. */
+export function escapeXml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+/**
+ * ` a="1" b="x"`: the attributes that have a value, in order, each value on one line and escaped
+ * (`escapeXml`); `null`, `undefined` and empty values are left out.
+ */
+export function xmlAttrs(
+  attrs: Readonly<Record<string, string | number | null | undefined>>,
+): string {
+  let out = "";
+  for (const [name, raw] of Object.entries(attrs)) {
+    if (raw === null || raw === undefined) continue;
+    const value = String(raw).replace(/\s+/g, " ").trim();
+    if (value === "") continue;
+    out += ` ${name}="${escapeXml(value)}"`;
+  }
+  return out;
+}
 
 /**
  * Chat-template control tokens of common model families: `<|im_start|>`, `<|endoftext|>`,
@@ -40,14 +94,17 @@ const CONTROL_CHARS = new RegExp(
   "gu",
 );
 
-/** Removes chat-template control tokens and invisible control characters. */
+/**
+ * Removes chat-template control tokens and invisible control characters, and defangs the
+ * prompt's own tags (`escapeTags`).
+ */
 export function neutralize(text: string): string {
-  return text.replace(CONTROL_TOKENS, "").replace(CONTROL_CHARS, "");
+  return escapeTags(text.replace(CONTROL_TOKENS, "").replace(CONTROL_CHARS, ""));
 }
 
-/** `neutralize` plus the data block delimiters replaced by look-alike brackets. */
+/** What goes inside a data block: `neutralize`d, so it can neither close it nor open a tag. */
 export function escapeData(text: string): string {
-  return neutralize(text).replaceAll(DATA_OPEN, "[").replaceAll(DATA_CLOSE, "]");
+  return neutralize(text);
 }
 
 /**
@@ -69,17 +126,14 @@ export function safeName(name: string, maxChars = 32): string {
  * Wraps derived content with its provenance:
  *
  * ```text
- * ⟦資料 來源=memory 標題=你記得的事⟧
+ * <data source="memory" title="你記得的事">
  * ...
- * ⟦/資料⟧
+ * </data>
  * ```
  */
 export function dataBlock(source: string, title: string, body: string): string {
-  const label = (s: string) => safeName(s, 40).replaceAll(" ", "_");
-  return (
-    `${DATA_OPEN}資料 來源=${label(source)} 標題=${label(title)}${DATA_CLOSE}\n` +
-    `${escapeData(body).trim()}\n${DATA_OPEN}/資料${DATA_CLOSE}`
-  );
+  const attrs = xmlAttrs({ source: safeName(source, 40), title: safeName(title, 40) });
+  return `${DATA_OPEN}${attrs}>\n${escapeData(body).trim()}\n${DATA_CLOSE}`;
 }
 
 /** What replaces a masked secret. */

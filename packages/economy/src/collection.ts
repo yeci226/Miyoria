@@ -309,8 +309,9 @@ export class Collection {
         );
       })
       .then(async (r) => {
-        await this.e.v2.afterEarn(who);
-        return { ...r, balance: await this.e.ledger().balance(this.e.profile, who.wallet) };
+        const unlocked = await this.e.v2.afterEarn(who);
+        const balance = await this.e.ledger().balance(this.e.profile, who.wallet);
+        return unlocked.length > 0 ? { ...r, balance, unlocked } : { ...r, balance };
       });
   }
 

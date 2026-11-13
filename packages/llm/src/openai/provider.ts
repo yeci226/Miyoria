@@ -81,6 +81,11 @@ export class OpenAiConfig {
    * ready (e.g. Ollama loading a model).
    */
   connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS;
+  /**
+   * Retries of a connect timeout (a dropped or stalled connection is often fine a moment later;
+   * 11-11 night, 294 turns failed on one). Each waits another `connectTimeoutMs`.
+   */
+  connectRetries = 1;
   /** Retries for 429 / 5xx / network errors before the stream starts. */
   maxRetries = 2;
   /** First retry delay; doubles on every attempt unless `Retry-After` is sent. */
@@ -157,6 +162,7 @@ export class OpenAiConfig {
       reasoning: this.reasoning,
       timeoutMs: this.timeoutMs,
       connectTimeoutMs: this.connectTimeoutMs,
+      connectRetries: this.connectRetries,
       maxRetries: this.maxRetries,
       retryBackoffMs: this.retryBackoffMs,
     };
@@ -210,6 +216,7 @@ export class OpenAiProvider implements ChatProvider {
   readonly #fallbackSession = `miyoria-${randomBytes(8).toString("hex")}`;
   readonly #timeoutMs: number;
   readonly #connectTimeoutMs: number;
+  readonly #connectRetries: number;
   readonly #maxRetries: number;
   readonly #retryBackoffMs: number;
   readonly #fetch: typeof fetch;
@@ -239,6 +246,7 @@ export class OpenAiProvider implements ChatProvider {
     this.#reasoning = config.reasoning;
     this.#timeoutMs = config.timeoutMs;
     this.#connectTimeoutMs = config.connectTimeoutMs;
+    this.#connectRetries = config.connectRetries;
     this.#maxRetries = config.maxRetries;
     this.#retryBackoffMs = config.retryBackoffMs;
     this.#fetch = options.fetch ?? fetch;
@@ -296,14 +304,15 @@ export class OpenAiProvider implements ChatProvider {
 
   /**
    * Sends the request, retrying transient failures. Resolves once a 2xx response arrives,
-   * i.e. before any of the stream is consumed. A connect timeout is not retried: it rejects
-   * with `ProviderTimeoutError` so the router can try the next model.
+   * i.e. before any of the stream is consumed. A connect timeout is retried `connectRetries`
+   * times, then rejects with `ProviderTimeoutError` so the router can try the next model.
    */
   async #send(
     body: string,
     headers: Record<string, string>,
     signal: AbortSignal | undefined,
   ): Promise<{ response: Response; idle: IdleTimer }> {
+    let connectAttempt = 0;
     for (let attempt = 0; ; attempt++) {
       const idle = new IdleTimer(this.#timeoutMs);
       // Only runs until the headers arrive; the idle timer then guards the body alone.
@@ -327,6 +336,14 @@ export class OpenAiProvider implements ChatProvider {
         connect?.clear();
         if (signal?.aborted) throw signal.reason;
         if (connect?.signal.aborted) {
+          if (connectAttempt < this.#connectRetries) {
+            connectAttempt++;
+            const delay = this.#backoff(attempt);
+            log.warn({ provider: this.name, delay_ms: delay }, "LLM connect timed out, retrying");
+            noteProviderRetry("connect timeout");
+            await sleep(delay, signal);
+            continue;
+          }
           throw new ProviderTimeoutError(
             `${this.name}: request failed: no response within ${connectMs} ms (connect timeout)`,
             "connect",

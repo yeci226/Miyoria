@@ -10,7 +10,7 @@
 // The order keeps the provider's prefix cache warm (persona and history only grow at the end);
 // the authority split is what §3.5 asks for: her own state (`SELF_BLOCK_KEYS`, rendered from
 // the blackboard services in self-block.ts) is a system message she follows, everything else is
-// a `⟦資料⟧` block. Contributor sections whose concept the compiler renders itself (`SUPERSEDED`:
+// a `<data>` block. Contributor sections whose concept the compiler renders itself (`SUPERSEDED`:
 // mood, emotion, self, social) are left out, so every concept has one renderer.
 //
 // Every block has a budget (characters of its body). Over it, a block is cut on its own: a

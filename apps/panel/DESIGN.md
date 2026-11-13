@@ -78,7 +78,9 @@ clamped on read), the owner's picture in IndexedDB (`miyoria-panel`). Never a li
 The default background is the owner's picture, `public/background.local.jpg`. It is game art, so it
 is ignored by git and never ships; where the file is missing the 暮色 gradient shows instead. The
 login card's right half shows `public/login.local.jpg` the same way, at 82% over the frosted
-backdrop, beside a lighter glass (`--login`) than the floating surfaces.
+backdrop, beside a lighter glass (`--login`) than the floating surfaces. Whether each file is there
+is read at build time (`__PANEL_ART__` in `vite.config.ts`): a build without them never asks for
+them, so adding or removing one takes a rebuild.
 
 ## Color
 
@@ -216,7 +218,7 @@ token form stays at `#/login`, with no link to it from the page.
 
 | Who | Sees |
 |---|---|
-| Anyone | 現在, 今天, 歌單, and a Discord login button |
+| Anyone not logged in | Her landing (see "Landing" below): who she is, what she is doing now, today's numbers, Discord login |
 | Logged in | Also 她眼中的你, 一起的回憶, 你點的歌, and a rail with 點歌 and 你的資料 |
 | Someone she does not know, or a blocked person | The same page, "她還不認識你", no 點歌. The two cannot be told apart |
 
@@ -238,18 +240,52 @@ token form stays at `#/login`, with no link to it from the page.
   HLS only where there is no Media Source, i.e. iOS Safari). It starts muted with an 開啟聲音
   button (the choice and the volume are remembered in `localStorage`), a live dot, play, volume
   and fullscreen in a bar under the picture, outside the touch layer. A network or media error is
-  recovered; when it will not come back, or OBS stops, the stage falls back to the drawn figure
-  (`Mascot`, an original figure, never her Live2D model), and tries the picture again after 20 s.
+  recovered; when it will not come back, or OBS stops, the stage drops the picture (no drawn
+  stand-in for her), and tries the picture again after 20 s.
   Her state line, her lines and the pat button sit under the picture.
   Touch: a member with pats open clicks or taps the picture, and the page posts `{x, y}`, 0..1
   on the picture itself (`touch.ts` maps the click through `object-fit: contain`; a click on a bar
   is nothing). A hand and a heart show at once at the spot; other viewers' pats that carry a spot
   show as small hands there. A visitor sees a 登入後摸摸她 hint on hover and the click goes to the
   login; while pats are closed the picture takes no touch. The 摸摸頭 button stays for the
-  keyboard and posts `{}`. Over the drawn figure a pat is a hand and hearts and the face follows
-  her emotion. Her lines come as they are said, with a cursor until a line is final. All motion is
-  CSS and stops under `prefers-reduced-motion` (the hands and hearts just stay a moment).
+  keyboard and posts `{}`. Without a picture a pat shows only in the note and the count. Her lines
+  come as they are said, with a cursor until a line is final. All motion is CSS and stops under
+  `prefers-reduced-motion` (the hands and hearts just stay a moment).
 - 請她忘記我 confirms with what goes and what stays, in the words `/me memory forget` uses.
+
+## Landing
+
+What someone who is not logged in sees at `/` (`pages/public/landing/`, loaded on demand). It is its
+own world, black with her in it, and the panel's operate-mode rules above do not bind it; real data
+does. Strategy and the direction contract live in `.impeccable/surfaces/src-pages-public-landing.md`.
+
+- Black base `#000`, type `#f4f4f5`, muted `#a1a1aa`, rules white at 10%. Geist with the system
+  Chinese faces; Geist Mono only for the real commands. Her name on the site is Miyoria.
+- Cover: a real black hole (`blackhole.ts`, the passes of sayed1145/glsl-black-hole, MIT, licence
+  kept in `blackhole-glsl.ts`). The lensing map is traced once, each frame re-lights the disc and
+  blooms it; it only renders while the cover is on screen. Her animated picture stands to the
+  right, her name as the `h1` with the Discord login and her live page.
+- Under the cover: the night sea (`sea.ts`, our own shader), a fixed canvas of sharp-crested waves
+  lit by the sky and a moon; scrolling moves the camera forward.
+- Glass is light (6-8 px blur) and only where something sits over the water: tiles, the player,
+  the terminal.
+- Nav: a flat bar on the cover that scrolls away with it; no sticky bar over the sections.
+- Mark: a crescent moon whose lower tip curls up into a whale's tail, one solid shape in a single
+  colour (`docs/assets/logo/`: `miyoria-mark.svg` black, `miyoria-mark-white.svg`, and
+  `miyoria-icon.svg` white on a dark tile, which is also the favicon). On the page it takes
+  `currentColor`.
+- Sections are pictures, not lists: 她在 Discord 的樣子 (her with mock Discord messages that pop in as
+  a conversation, and a voice channel), 歌單 from `/api/public/songs`, 直播間 (a stage that links to
+  `/watch`), and 自己養一隻 with the real setup commands typed out.
+- Her pictures (`landing/her/*.webm`, `.webp` posters) are short loops recorded from the official
+  free Live2D model by 神宫凉子. Only the recordings ship; the model and PSD stay out of the repo, as
+  their guidelines ask. The footer credits the illustrator and the black hole and has no picture.
+- Phones get their own layout: her above the words on the cover, each tile with the chat on top
+  and her under it, a tall stage, and a three-column footer.
+- Motion: headings come in a character at a time, sections rise as they arrive, her pictures drift
+  with scroll. All of it stops under `prefers-reduced-motion`, and the shaders draw one frame.
+- Without WebGL the cover and sea are plain black.
+- The token form stays at `/login` with no link from the landing.
 
 ## Charts
 

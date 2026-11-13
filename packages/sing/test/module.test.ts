@@ -40,6 +40,7 @@ import {
   SPEECH_PAUSE_TOPIC,
   SpeechPauseKey,
   VoiceFloorKey,
+  type VoiceParticipant,
   type VoicePlayer,
   VoicePlayerKey,
   v2Payload,
@@ -56,6 +57,7 @@ import {
   SingModule,
   type SingWorker,
   SingWorkerError,
+  type SongEntry,
   type SongMeta,
   type SongPayments,
   SongPaymentsKey,
@@ -71,6 +73,16 @@ const VOICE: ContextKey = { platform: "discord", scope: "g1", channel: "voice1",
 const TEXT: ContextKey = { platform: "discord", scope: "g1", channel: "text1", kind: "channel" };
 const OWEN: AccountRef = { platform: "discord", id: "7" };
 const AMY: AccountRef = { platform: "discord", id: "8" };
+
+function listener(account: AccountRef): VoiceParticipant {
+  return {
+    account,
+    display_name: account.id === OWEN.id ? "Owen" : "Amy",
+    is_self: false,
+    muted: false,
+    deafened: false,
+  };
+}
 const BOB: AccountRef = { platform: "discord", id: "9" };
 
 class AllowAll extends BaseAuthorizer {
@@ -195,12 +207,27 @@ class FakeWorker implements SingWorker {
     return structuredClone(this.library);
   }
 
+  /** Songs its cache cleaned out (`/songs/{id}/files/*` answers 404). */
+  readonly cleaned = new Set<string>();
+
   async audio(song: string, track: SongTrack): Promise<Int16Array> {
+    if (this.cleaned.has(song)) {
+      throw new SingWorkerError(`song ${song} has no ${track}`, { status: 404 });
+    }
     const seconds =
       [...this.jobs.values()].find((j) => j.song?.id === song)?.song?.duration_s ??
       this.library.find((m) => m.id === song)?.duration_s ??
       1;
     return new Int16Array(RATE * seconds).fill(track === "play_mix.pcm" ? 1000 : 500);
+  }
+
+  /** Video files the module asked the worker for (nothing is written in the tests). */
+  readonly downloaded: { song: string; file: string; dest: string }[] = [];
+  downloadFails = false;
+
+  async download(song: string, file: string, dest: string): Promise<void> {
+    if (this.downloadFails) throw new SingWorkerError("no video", { status: 404 });
+    this.downloaded.push({ song, file, dest });
   }
 
   async health(): Promise<string | null> {
@@ -414,9 +441,21 @@ class Harness {
     await settle();
   }
 
-  async join(): Promise<void> {
+  /** She joins the voice channel; Owen and Amy are there (requesters are listening). */
+  async join(people: AccountRef[] = [OWEN, AMY]): Promise<void> {
     this.voice.channels.set("g1", "voice1");
-    await this.publish({ type: "voice_joined", data: { context: VOICE, participants: [] } });
+    await this.publish({
+      type: "voice_joined",
+      data: { context: VOICE, participants: people.map(listener) },
+    });
+  }
+
+  /** Who is in her voice channel now. */
+  async members(people: AccountRef[]): Promise<void> {
+    await this.publish({
+      type: "voice_participants",
+      data: { context: VOICE, participants: people.map(listener) },
+    });
   }
 
   invoke(principal: Principal, capability: string, args: JsonValue, turn: string | null = null) {
@@ -856,6 +895,54 @@ describe("sing module", () => {
     expect(h.sink.sent).toHaveLength(0);
   });
 
+  it("a commanded song waits while its requester is out of the voice channel", async () => {
+    h = await Harness.create();
+    await h.invoke(Principals.command(OWEN, TEXT), "sing.request", { query: "Song A", by: "Owen" });
+    await h.invoke(Principals.command(AMY, TEXT), "sing.request", { query: "Song B", by: "Amy" });
+    h.worker.finish("j1", "Song A", 1);
+    await settle(200);
+    // Owen asked first, but he is not here: it waits, and the card says why.
+    await h.join([AMY]);
+    await settle(6000 + 400);
+    expect(h.voice.plays).toHaveLength(0);
+    expect(h.singer.waitsForRequester(h.singer.list.get(1) as SongEntry)).toBe(true);
+    expect(await h.command("queue song list")).toContain("不在語音裡，回來再唱");
+    // Amy's is ready and she is here: hers goes first.
+    h.worker.finish("j2", "Song B", 1);
+    await settle(200 + 6000 + 400);
+    expect(h.voice.plays).toHaveLength(1);
+    expect(["playing", "done"]).toContain(h.singer.list.get(2)?.state);
+    expect(h.singer.list.get(1)?.state).toBe("ready");
+    await settle(3000);
+    // Owen comes back: his song starts.
+    await h.members([AMY, OWEN]);
+    await settle(6000 + 400);
+    expect(h.voice.plays).toHaveLength(2);
+    expect(["playing", "done"]).toContain(h.singer.list.get(1)?.state);
+  });
+
+  it("asks again for a ready song the worker's cache cleaned out, and sings it once it is made", async () => {
+    h = await Harness.create();
+    await h.command("queue song request", { song: "Song A" });
+    h.worker.finish("j1", "Song A", 1);
+    await settle(200);
+    expect(h.singer.list.get(1)?.state).toBe("ready");
+    h.worker.cleaned.add("s-j1");
+    await h.join();
+    await settle(6000 + 400);
+    // Not sung, not failed: the same request went to the worker again.
+    expect(h.voice.plays).toHaveLength(0);
+    expect(h.worker.submitted).toHaveLength(2);
+    expect(h.worker.submitted[1]).toEqual(h.worker.submitted[0]);
+    const entry = h.singer.list.get(1);
+    expect(entry?.state).toBe("preparing");
+    expect(entry?.job).toBe("j2");
+    expect(h.singer.playing()).toBeNull();
+    h.worker.finish("j2", "Song A", 1);
+    await settle(200 + 6000 + 400);
+    expect(h.voice.plays).toHaveLength(1);
+  });
+
   it("tells the worker who is listening and which songs are needed now", async () => {
     h = await Harness.create();
     h.sup.services.provide("world", WorldStateKey, {
@@ -907,6 +994,22 @@ describe("sing module", () => {
       duration_ms: 1000,
     });
     expect(started[1]).not.toHaveProperty("video");
+    // The worker may be on another machine: Core fetched the video into its own cache dir.
+    expect(h.worker.downloaded).toEqual([
+      { song: "s-j1", file: "video.mp4", dest: join(dir, "s-j1", "video.mp4") },
+    ]);
+  });
+
+  it("sings without a video when the worker cannot give it", async () => {
+    h = await Harness.create({ video_dir: resolve("songs-cache") });
+    await h.join();
+    h.worker.cacheHit = true;
+    h.worker.downloadFails = true;
+    await h.command("queue song request", { song: "Song MV" });
+    await settle(6000 + 400 + 2000);
+    const started = h.cues().find((c) => c.state === "started");
+    expect(started).toBeDefined();
+    expect(started).not.toHaveProperty("video");
   });
 
   it("[modules.sing] video = false sends no video", async () => {
@@ -1271,6 +1374,10 @@ describe("sing module", () => {
 
     const none = await h.invoke(Principals.self(VOICE), "sing.play", {});
     expect(none.status).toBe("denied");
+    // A model that fills the optional number with 0 means "the first ready", not a bad argument.
+    const zero = await h.invoke(Principals.self(VOICE), "sing.play", { song: 0 });
+    expect(zero.status).toBe("denied");
+    expect(zero.status === "denied" && zero.decision.reason).toBe("no song is ready");
   });
 
   describe("paid extras", () => {
@@ -1773,6 +1880,18 @@ describe("practising a song (v4 §8.1)", () => {
 });
 
 describe("workerQuery", () => {
+  it("takes a link pasted without its scheme as a link", () => {
+    expect(workerQuery("www.bilibili.com/video/BV1j7cuejE6k/", 1)).toEqual({
+      url: "https://www.bilibili.com/video/BV1j7cuejE6k/",
+      key: 1,
+    });
+    expect(workerQuery("唱 youtu.be/abc?si=x", 2)).toEqual({
+      url: "https://youtu.be/abc?si=x",
+      key: 2,
+    });
+    expect(workerQuery("bilibili 的歌", 3)).toEqual({ query: "bilibili 的歌", key: 3 });
+  });
+
   it("tells links, library files and searches apart", () => {
     expect(workerQuery("https://youtu.be/abc", 1)).toEqual({ url: "https://youtu.be/abc", key: 1 });
     expect(workerQuery("library:My Song.mp3", 0)).toEqual({ path: "My Song.mp3", key: 0 });

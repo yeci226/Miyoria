@@ -91,7 +91,7 @@ describe("mind module: Plan", () => {
     expect(system.startsWith("你是住在深海的鯨魚娘。\n\n# 計畫")).toBe(true);
     for (const derived of ["Owen", "聊天室", "海豚"])
       expect(system, derived).not.toContain(derived);
-    expect(data).toContain("⟦資料 來源=world");
+    expect(data).toContain('<data source="world"');
     expect(data).toContain("Owen 進了語音頻道");
     expect(data).toContain(`${VOICE_REF}:語音頻道 v1`);
 

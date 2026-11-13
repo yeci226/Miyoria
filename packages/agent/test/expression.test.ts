@@ -208,6 +208,68 @@ describe("markup the model imitates", () => {
     expect(e.tools).toEqual(["sing_start"]);
   });
 
+  it("takes a react tag out of the text and logs it as a tool", () => {
+    for (const tag of ['<react emoji="👍"/>', '<react emoji=":BongoWow:"/>']) {
+      const e = Expression.parse(`${tag}好喔`);
+      expect(e.text).toBe("好喔");
+      expect(e.tools).toEqual(["react"]);
+    }
+  });
+
+  it("holds a react tag that arrives in pieces", () => {
+    const parser = new ExpressionParser();
+    const e = new Expression();
+    for (const s of [
+      ...parser.push('<react emoji="'),
+      ...parser.push('👍"/>可以'),
+      ...parser.finish(),
+    ]) {
+      e.apply(s);
+    }
+    expect(e.text).toBe("可以");
+    expect(e.tools).toEqual(["react"]);
+  });
+
+  it("drops a DeepSeek tool call written as text, arguments and all", () => {
+    const e = Expression.parse(
+      '好喔<｜｜DSML｜｜ function_calls><｜｜DSML｜｜ invoke name="keep_note"><｜｜DSML｜｜ parameter name="text">等修好再唱</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke></｜｜DSML｜｜ function_calls>',
+    );
+    expect(e.text).toBe("好喔");
+  });
+
+  it("drops stray DSML closing tags", () => {
+    expect(Expression.parse("等修好再唱</｜DSML｜ parameter></｜DSML｜ invoke>").text).toBe(
+      "等修好再唱",
+    );
+  });
+
+  // 2026-11-11 in the channel: 「<react emoji="👍"/>」 went out as the first line of a reply.
+  it("takes a tool written as a tag with attributes out of the text", () => {
+    const cases: [string, string][] = [
+      ['<react emoji="👍"/>\n可以啊,你看', "\n可以啊,你看"],
+      ["<react emoji='💀' />笑死", "笑死"],
+      ['好<react emoji="<:miyo_smug:112233445566778899>"/>', "好"],
+      ['<remember text="他喜歡貓" about="owen">記住了', "記住了"],
+      ["<react/>嗯", "嗯"],
+    ];
+    for (const [input, out] of cases) {
+      const e = Expression.parse(input);
+      expect(e.text, input).toBe(out);
+      expect(e.tools.length, input).toBe(1);
+    }
+    expect(Expression.parse('<react emoji="👍"/>').tools).toEqual(["react"]);
+    expect(Expression.parse('<react emoji="👍"/>').isSilent()).toBe(true);
+  });
+
+  it("also when the attribute tag arrives in pieces", () => {
+    const tool: Segment = { type: "tool", name: "react" };
+    expect(parseChunks(["<react emo", 'ji="', "👍", '"/', ">可以啊"])).toEqual([
+      tool,
+      text("可以啊"),
+    ]);
+    expect(parseChunks(['<react emoji="<:miyo', ":1122>", '"/>好'])).toEqual([tool, text("好")]);
+  });
+
   it("drops a span, also across chunks", () => {
     const parser = new ExpressionParser();
     const e = new Expression();
@@ -225,6 +287,44 @@ describe("markup the model imitates", () => {
   it("leaves what people really type alone", () => {
     for (const text of ["我愛你 <3", "<_<", "a < b 和 c > d", "<看什麼>"]) {
       expect(Expression.parse(text).text).toBe(text);
+    }
+  });
+
+  // 2026-11-10/11 in the channel: 「<h>我沒有亂…」, a line of `<section>`, `<p>…` and `</p>`.
+  it("drops stray HTML tags and keeps their text", () => {
+    const cases: [string, string][] = [
+      ["<h>我沒有亂，只是同時有四件事在跑。", "我沒有亂，只是同時有四件事在跑。"],
+      ["<section>", ""],
+      ["<p>滑 X 吧，至少會看到有人在吵架。</p>", "滑 X 吧，至少會看到有人在吵架。"],
+      ["</p>", ""],
+      ['<div class="x">好<br/>啦</div>', "好啦"],
+      ["<H2>標題</H2><strong>重點</strong>", "標題重點"],
+      ["<emo:smug><em>哼</em><pause 200/>才不要", "哼才不要"],
+    ];
+    for (const [input, out] of cases) expect(Expression.parse(input).text, input).toBe(out);
+    expect(Expression.parse("<emo:smug><p>哼</p>").emotions).toEqual(["smug"]);
+  });
+
+  it("also when a tag arrives in pieces", () => {
+    expect(parseChunks(["<h", ">我沒有亂", "<", "/h", ">"])).toEqual([text("我沒有亂")]);
+    expect(parseChunks(["<sec", "tion", ">"])).toEqual([]);
+  });
+
+  it("leaves Discord markup, code and names in brackets alone", () => {
+    for (const text of [
+      "<@123456789> 你好",
+      "<#987654321>",
+      "<:miyo_smug:112233>",
+      "<a:dance:445566>",
+      "<t:1794350884:R>",
+      "<https://example.com>",
+      "#include <bits/stdc++.h>",
+      "vector<int> v; pair<int, int> p;",
+      "for (int i = 0; i<n; i++) if (a<b && b>c) x = a<i>b;",
+      "<Sakana2486> 說的",
+      "<unistd.h>",
+    ]) {
+      expect(Expression.parse(text).text, text).toBe(text);
     }
   });
 });

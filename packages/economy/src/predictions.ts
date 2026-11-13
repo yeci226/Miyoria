@@ -369,7 +369,7 @@ export class PredictionDesk {
 
   async #close(bet: EconomyDoc, status: string, payout: number): Promise<void> {
     const cur = await this.#docs().get(this.e.profile, BET, bet.id);
-    if (!cur || cur.status !== "open") return;
+    if (cur?.status !== "open") return;
     await this.#docs().update(this.e.profile, BET, bet.id, cur.version, {
       status,
       data: { ...cur.data, payout },

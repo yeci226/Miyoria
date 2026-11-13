@@ -16,6 +16,7 @@ export const v4Keys = {
   commissions: ["economy2", "commissions"] as const,
   predictions: ["economy2", "predictions"] as const,
   room: ["economy2", "room"] as const,
+  goals: ["economy", "goals"] as const,
   personQuests: (id: string) => ["people", "quests", id] as const,
   workspace: ["workspace"] as const,
   skills: ["skills"] as const,
@@ -63,6 +64,20 @@ export function useCancelReminder() {
 export function useActivities() {
   const api = useV4Api();
   return useQuery({ queryKey: v4Keys.activities, queryFn: ({ signal }) => api.activities({ signal }), refetchInterval: poll(30_000), retry: false });
+}
+
+export function useReachedGoals() {
+  const api = useV4Api();
+  return useQuery({ queryKey: v4Keys.goals, queryFn: ({ signal }) => api.reachedGoals({ signal }), refetchInterval: poll(60_000), retry: false });
+}
+
+export function useFulfillGoal() {
+  const api = useV4Api();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.fulfillGoal(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: v4Keys.goals }),
+  });
 }
 
 export function useEconomyHealth() {

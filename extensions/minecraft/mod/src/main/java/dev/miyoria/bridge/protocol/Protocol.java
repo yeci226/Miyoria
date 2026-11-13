@@ -23,6 +23,7 @@ public final class Protocol {
     public static final String T_CRAFT = "craft";
     public static final String T_SMELT = "smelt";
     public static final String T_PLACE = "place";
+    public static final String T_DROP = "drop";
     /** Close the game the way the window's close button does (saves and leaves the world). */
     public static final String T_QUIT = "quit";
 

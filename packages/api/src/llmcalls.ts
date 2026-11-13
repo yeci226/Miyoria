@@ -4,11 +4,14 @@
 //   → `{ items, next_cursor, matched, kept }` (newest first; `before` is the last id shown)
 // * `GET /api/llm/calls/{id}` → `{ call, detail }` (`detail` `null` once the request and
 //   response were dropped from the ring; secrets are redacted)
+// * `GET /api/llm/thinking?kind=&reasoned=1&q=&since=&limit=&before=` → `{ items, next_cursor,
+//   matched, by_kind, kept }`: calls with their chain of thought and answer, newest first, and
+//   how many calls of each kind (`mind`, `chat`, `voice`, ...) match the rest of the filter
 // * `GET /api/llm/stats?minutes=` → breakdowns per purpose, model, module and hour, the latency
 //   distribution, error kinds, the most expensive and slowest calls, and the prices
 // * `GET /api/mind/thoughts/{id}` → one thought with what it saw and its calls
 
-import { LlmRouterKey } from "@miyoria/llm";
+import { CALL_KINDS, LlmRouterKey } from "@miyoria/llm";
 import { MindKey } from "@miyoria/types";
 import { z } from "zod";
 import { ApiError } from "./errors.js";
@@ -33,6 +36,18 @@ const CallsQuerySchema = z.object({
   limit: usizeParam.optional(),
   before: z.string().optional(),
 });
+
+const ThinkingQuerySchema = z.object({
+  kind: z.enum(CALL_KINDS).optional(),
+  reasoned: boolParam.optional(),
+  since: z.string().optional(),
+  q: z.string().optional(),
+  limit: usizeParam.optional(),
+  before: z.string().optional(),
+});
+
+const DEFAULT_THINKING = 30;
+const MAX_THINKING_PAGE = 200;
 
 const StatsQuerySchema = z.object({
   minutes: usizeParam.optional(),
@@ -81,6 +96,20 @@ export function llmCallRoutes(state: ApiState): Route[] {
         const call = log.get(id);
         if (!call) throw ApiError.notFound(`no LLM call \`${id}\` (older calls are not kept)`);
         return json({ call, detail: log.detail(id) });
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/llm/thinking",
+      handler: (c) => {
+        const q = readQuery(c, ThinkingQuerySchema);
+        const log = router().calls;
+        const page = log.thinking(
+          { kind: q.kind, reasoned: q.reasoned, since: given(q.since), q: given(q.q) },
+          Math.min(Math.max(q.limit ?? DEFAULT_THINKING, 1), MAX_THINKING_PAGE),
+          given(q.before),
+        );
+        return json({ ...page, kept: log.size });
       },
     },
     {

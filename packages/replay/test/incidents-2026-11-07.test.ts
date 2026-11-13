@@ -209,13 +209,13 @@ describe.each(["v2", "v3"] as const)("pipeline %s", (under) => {
       const plans = r.llm.requests.filter((q) => q.reasoning_purpose === "plan");
       expect(plans.length).toBeGreaterThanOrEqual(1);
       const text = JSON.stringify(plans[0]?.messages);
-      expect(text).toContain("來源=heard");
+      expect(text).toContain('source=\\"heard\\"');
       expect(text).toContain("Alice: Miyoria, please stop playing Minecraft.");
       // The rule that makes it count: a request to stop is not made up for with another reason.
       expect(text).toContain("叫你停下或別做某件事");
       // The Plan before anyone said anything (the daily one) has no such block.
       const daily = r.llm.requests.find((q) => q.reasoning_purpose === "plan_daily");
-      expect(JSON.stringify(daily?.messages)).not.toContain("來源=heard");
+      expect(JSON.stringify(daily?.messages)).not.toContain('source=\\"heard\\"');
     });
   });
 

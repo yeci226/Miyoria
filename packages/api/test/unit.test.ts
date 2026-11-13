@@ -31,7 +31,7 @@ import {
   userName,
   validId,
 } from "../src/oauth.js";
-import { pickDir } from "../src/panel.js";
+import { pickDir, pickEncoding } from "../src/panel.js";
 import { absoluteHistory } from "../src/people.js";
 import {
   checkAccess,
@@ -339,6 +339,26 @@ describe("panel", () => {
       expect(pickDir(undefined, "")).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("picks the encoding the client weighs highest", () => {
+    for (const [header, want] of [
+      [null, null],
+      ["", null],
+      ["gzip, deflate, br", "br"],
+      ["br;q=0.1, gzip", "gzip"],
+      ["gzip;q=0.5, br;q=0.8", "br"],
+      ["gzip;q=1, br;q=1", "br"],
+      ["br;q=0, gzip;q=0.5", "gzip"],
+      ["*;q=0, gzip", "gzip"],
+      ["*", "br"],
+      ["gzip;q=0.5, identity", null],
+      ["identity;q=0.4, gzip;q=0.5", "gzip"],
+      ["br;q=0, gzip;q=0", null],
+      ["deflate", null],
+    ] as const) {
+      expect(pickEncoding(header), String(header)).toBe(want);
     }
   });
 });

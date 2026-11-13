@@ -106,6 +106,23 @@ describe("one wish, one key", () => {
     expect(written.at(-1)?.body).toMatchObject({ wish: { key: wish?.key, state: "closed" } });
   });
 
+  it("a DM that paraphrases a long wish still asks it; an unrelated DM does not", async () => {
+    // 2026-11-11: the topic carried its plan's steps and the DM reworded it (0.30 shared).
+    const r = await rig();
+    r.book.hold(
+      "S",
+      "冷卻一過先私訊S一句:〈雪は何色〉做好了想唱給她聽,順口問她 tuyu 練得怎樣。 確認她還在線 一句話問 tuyu／提〈雪は何色〉,不長篇 她回就接,沒回就收,不追第二句",
+      "goal:g1",
+    );
+    r.dm("欸,上次那張圖我看了,還不錯");
+    expect(r.book.of("goal:g1")?.state).toBe("open");
+    r.advance(HOUR);
+    r.dm(
+      "欸,跟你說一件小事——〈雪は何色〉我練好了,想唱給你聽。你哪時候方便就講一聲,我人在語音。對了,tuyu 你練得怎樣了?",
+    );
+    expect(r.book.of("goal:g1")).toMatchObject({ state: "asked", asked: 1 });
+  });
+
   it("'you asked me already' closes every wish about them for good", async () => {
     const r = await rig();
     r.book.hold("S", "問 S 期末報告的結果", "goal:g1");

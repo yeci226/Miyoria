@@ -59,7 +59,7 @@ export interface Rig {
   docs: MemoryDocs;
   /** What `random()` returns next (cycled); empty: `0.5`. */
   dice: { values: number[] };
-  observed: { summary: string; source: string }[];
+  observed: { summary: string; source: string; key: string }[];
 }
 
 let stores: SqliteStore[] = [];
@@ -114,8 +114,8 @@ export async function rig(
   } as never);
   const observed: Rig["observed"] = [];
   services.provide(k, EventLogKey, {
-    observe: (o: { summary: string; source: string }) => {
-      observed.push({ summary: o.summary, source: o.source });
+    observe: (o: { summary: string; source: string; attention_key: string }) => {
+      observed.push({ summary: o.summary, source: o.source, key: o.attention_key });
       return {} as never;
     },
   } as never);

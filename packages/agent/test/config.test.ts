@@ -118,6 +118,7 @@ describe("config", () => {
       reply_ttl_ms: 120_000,
       max_message_chars: 1900,
       reply_reference: true,
+      one_caller_per_turn: true,
       typing_refresh_ms: 8000,
       tools_enabled: true,
       max_tool_steps: 3,

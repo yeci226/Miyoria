@@ -51,6 +51,7 @@ export {
   type PaidItem,
   type PledgeResult,
   type Purchase,
+  type ReachedGoalView,
   SCREEN_TOPIC,
   type ScreenEvent,
   type ShopItem,

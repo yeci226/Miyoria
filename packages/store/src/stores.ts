@@ -42,6 +42,7 @@ import type {
   EconomyDoc,
   FortuneRecord,
   Goal,
+  GoalFulfiller,
   GoalPatch,
   GoalPledge,
   GoalStatus,
@@ -261,6 +262,11 @@ export interface GoalStore {
     profile: ProfileId,
     filter: { statuses?: readonly GoalStatus[]; limit: number },
   ): Promise<Goal[]>;
+  /**
+   * Marks a reached goal's promise kept; `false` when the goal is not reached or was marked
+   * already (the first mark stands).
+   */
+  fulfill(id: string, by: GoalFulfiller, at: Timestamp): Promise<boolean>;
   addPledge(pledge: GoalPledge): Promise<void>;
   /** Every pledge of a goal, oldest first. */
   pledges(goal: string): Promise<GoalPledge[]>;
@@ -361,6 +367,8 @@ export interface MemoryRecordStore {
   search(query: MemoryQuery): Promise<MemoryHit[]>;
   /** Newest first. */
   list(profile: ProfileId, filter: MemoryFilter): Promise<MemoryRecord[]>;
+  /** How many records `list` would return without `filter.limit`; optional for test doubles. */
+  count?(profile: ProfileId, filter: MemoryFilter): Promise<number>;
   /** Records access (bumps `access_count`, sets `last_accessed`). */
   touch(ids: readonly string[], at: Timestamp): Promise<void>;
   /**

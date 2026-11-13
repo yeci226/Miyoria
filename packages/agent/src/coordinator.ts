@@ -27,10 +27,11 @@
 // `voice.speculate_max_per_min`, counted in `miyoria_agent_voice_speculation_*`).
 //
 // An initiative request starts a turn without input, but only when the context is quiet: no
-// turn in flight, no debounce pending, no speech of hers still queued. While the Arbiter runs
-// that is all the coordinator decides (the Arbiter retries a busy place); every rule (cooldowns,
-// the level's gap, caps) is the Arbiter's. Without it the old checks apply here: her last words
-// a few seconds old and the level's gap.
+// turn in flight, no debounce pending, no speech of hers still queued; a wish or followup about
+// someone also waits while she answers them, and a minute after (`ANSWERED_HOLD_MS`). While the
+// Arbiter runs that is all the coordinator decides (the Arbiter retries a busy place); every rule
+// (cooldowns, the level's gap, caps) is the Arbiter's. Without it the old checks apply here: her
+// last words a few seconds old and the level's gap.
 //
 // An intent (something her mind loop decided) waits instead: it never interrupts a turn in
 // flight, waiting messages or her speech still queued or playing (nor, in voice, someone still
@@ -48,6 +49,7 @@
 
 import { errorMessage, metrics } from "@miyoria/kernel";
 import {
+  type AccountRef,
   ActionSinkKey,
   type ContextKey,
   type ImpulseRun,
@@ -63,9 +65,16 @@ import {
   timestampMs,
   toTimestamp,
 } from "@miyoria/types";
-import { answersHer, asideOf, directReason, isQuestion } from "./attention.js";
+import { answersHer, asideOf, directReason, followsHerLine, isQuestion } from "./attention.js";
 import { maxDebounceMs, voiceMaxDebounceMs } from "./config.js";
-import { type CallKind, callKind, callsHer, type FocusSelection, selectFocus } from "./focus.js";
+import {
+  type CallKind,
+  callKind,
+  callsHer,
+  type FocusSelection,
+  oneCaller,
+  selectFocus,
+} from "./focus.js";
 import { UNCAPPED_INITIATIVES } from "./levels.js";
 import type { Agent, Inbox, Initiative, Input, IntentTurn } from "./runtime.js";
 import type { Session } from "./session.js";
@@ -77,6 +86,18 @@ const VOICE_LATENCY_TOPIC = "voice.latency";
 const MINUTE_MS = 60_000;
 /** How long a dropped early start is given to let go of the Floor before the merged turn. */
 const DROP_WAIT_MS = 1_000;
+
+/**
+ * Initiatives that tell someone what came of their request: not chatter of hers to give way. A
+ * result turn superseded by the next person who called her was never told again (2026-11-13
+ * 10:35: 「再來 給你白飯」 got 「稍等喔。」, the rice was taken, the result turn was cancelled by
+ * Sakana's line, and the second round of lines never came).
+ */
+const OWED_INITIATIVES: readonly string[] = ["action_result", "notice"];
+
+function owedInitiative(initiative: Initiative | null): boolean {
+  return initiative !== null && OWED_INITIATIVES.includes(initiative.reason);
+}
 
 /** Voice turns that started before the wait was over, by what came of them. */
 export const speculations = metrics.counter("miyoria_agent_voice_speculation_total", {
@@ -129,7 +150,10 @@ interface Running {
   promise: Promise<void>;
   done: boolean;
   plan: TurnPlan;
-  /** She started it herself (initiative, intent): it has no focus. */
+  /**
+   * She started it herself (initiative, intent): it has no focus, and someone calling her
+   * supersedes it. Not a result someone waits for (`OWED_INITIATIVES`): that one finishes first.
+   */
   selfStarted: boolean;
   /** One of her intents (not an answer to messages or an initiative). */
   intent: boolean;
@@ -164,6 +188,27 @@ type Wake =
 
 /** A question nobody answered gets its look a moment after it stood long enough. */
 const RECHECK_SLACK_MS = 50;
+
+/**
+ * How long after she answered someone her own wishes and followups for them wait. Right after
+ * her reply in a DM, a followup turn asked something else and the turn telling the result of
+ * that DM answered the person's last message a second time (2026-11-10, 「失敗了誒」).
+ */
+export const ANSWERED_HOLD_MS = 60_000;
+
+/** A turn of hers that answered someone: when it ended, and whom. */
+interface Answered {
+  at: number;
+  accounts: AccountRef[];
+}
+
+/**
+ * An initiative that brings something up of her own accord (a wish or a memory followup), not a
+ * result, notice, song or game line someone waits for.
+ */
+function bringsUp(initiative: Initiative): boolean {
+  return initiative.claim === "wish" || initiative.reason === "followup";
+}
 
 /** Debounce window (clock ms): when it opened and when the turn should start. */
 interface Window {
@@ -257,6 +302,8 @@ export class Coordinator {
       const until = speaking.heard + cfg.voice.speak_ttl_ms;
       return now < until ? until : null;
     };
+    /** Her turns that answered someone, in the last `ANSWERED_HOLD_MS`. */
+    let answered: Answered[] = [];
     for (;;) {
       // Voice contexts live until she leaves the channel.
       const idle =
@@ -385,12 +432,14 @@ export class Coordinator {
               break;
             }
             case "initiative": {
+              answered = answered.filter((a) => now - a.at < ANSWERED_HOLD_MS);
               const started = await this.#initiative(
                 input.initiative,
                 running !== null,
                 pending.length > 0 || waiting !== null,
                 unplayed !== null && now < unplayed.since + cfg.voice.speak_ttl_ms,
                 input.reply ?? null,
+                this.#justAnswered(input.initiative, answered),
               );
               if (started) running = started;
               break;
@@ -441,8 +490,16 @@ export class Coordinator {
             restarts = 0;
             break;
           }
-          const inputs = pending;
-          pending = [];
+          // Text: several people calling her at once get a turn each, in the order they called.
+          // One turn for all of them mixed the answers, unquoted, and read as said to the first
+          // (2026-11-13 03:06: 「那站遠一點」 was for When You See It, under 阿鰻's question).
+          const { now: inputs, later } =
+            voice || !cfg.one_caller_per_turn
+              ? { now: pending, later: [] }
+              : oneCaller(pending, (m) => this.#callKind(m));
+          pending = later;
+          // The next caller's turn starts as soon as this one is done (`timed` waits for it).
+          if (later.length > 0) window = { opened: now, deadline: now, wait: debounce };
           const heard = voice && heardAt !== null ? { heardAt, hold: null } : null;
           running = this.#start(inputs, null, signal, null, restarts, false, heard);
           restarts = 0;
@@ -464,6 +521,10 @@ export class Coordinator {
           running = null;
           // An early start that ended on its own (it failed) took the window's input with it.
           if (r.early !== null) window = null;
+          const reason = r.plan.focus.reason;
+          if (reason === "addressed" || reason === "reply_to_her") {
+            answered.push({ at: now, accounts: [...r.plan.focus.addressed_accounts] });
+          }
           const flags = r.flags;
           if (voice && flags.queued && !flags.committed && !flags.interrupted) {
             unplayed = { turn: r.turn, inputs: r.inputs, since: now };
@@ -634,6 +695,7 @@ export class Coordinator {
     messagesWaiting: boolean,
     speechQueued: boolean,
     reply: ((run: ImpulseRun) => void) | null,
+    answering: string | null = null,
   ): Promise<Running | null> {
     const busy = turnRunning
       ? "a turn is in flight"
@@ -641,7 +703,7 @@ export class Coordinator {
         ? "messages are waiting for a turn"
         : speechQueued
           ? "her speech is still queued"
-          : null;
+          : answering;
     if (reply !== null) {
       if (busy !== null || (this.#voice && this.#session.someoneSpeaking())) {
         reply({ status: "busy", detail: busy ?? "someone is speaking" });
@@ -658,9 +720,7 @@ export class Coordinator {
     // Live game commentary is rate-limited by the game director itself, and a result someone
     // is waiting for (`action_result`, `notice`) is no chatter to space out.
     const last =
-      initiative.reason === "game" ||
-      initiative.reason === "action_result" ||
-      initiative.reason === "notice"
+      initiative.reason === "game" || owedInitiative(initiative)
         ? null
         : this.#session.lastSelfAt();
     const capped = !UNCAPPED_INITIATIVES.includes(initiative.reason);
@@ -687,6 +747,27 @@ export class Coordinator {
     return this.#start([], initiative, this.#agent.ctx.signal);
   }
 
+  /**
+   * Why `initiative` waits because she is talking with the person it is about: she answered them
+   * here within `ANSWERED_HOLD_MS` (in a DM, the one person there), or a turn answering them is in
+   * flight anywhere. `null`: it does not wait for that. Only what she brings up of her own accord
+   * waits (`bringsUp`); a result someone waits for does not.
+   */
+  #justAnswered(initiative: Initiative, answered: readonly Answered[]): string | null {
+    if (!bringsUp(initiative)) return null;
+    const about = initiative.about;
+    const theirs = (accounts: readonly AccountRef[]) =>
+      accounts.some((a) => about.some((b) => sameAccount(a, b)));
+    if (answered.some((a) => this.#key.kind === "dm" || theirs(a.accounts))) {
+      return "she just answered them";
+    }
+    for (const focus of this.#agent.focusBoard.all()) {
+      if (focus.reason !== "addressed" && focus.reason !== "reply_to_her") continue;
+      if (theirs(focus.addressed_accounts)) return "she is answering them";
+    }
+    return null;
+  }
+
   /** What a new turn is for: its focus split and the focus record. */
   #plan(
     turn: TurnId,
@@ -697,7 +778,16 @@ export class Coordinator {
     let selection: FocusSelection | null = null;
     let reason: TurnReason;
     if (inputs.length > 0) {
-      const follows = answersHer(this.#session, inputs, this.#now);
+      // Only a line hers to take up is `reply_to_her`: someone else right after she answered one
+      // person is ambient (2026-11-10, `followsHerLine`), and never in `addressed`.
+      const roster = this.#voice ? this.#session.voiceMembers().map((m) => m.display_name) : [];
+      const follows = followsHerLine(
+        this.#session,
+        inputs,
+        this.#now,
+        this.#agent.persona.names(),
+        roster,
+      );
       selection = selectFocus(inputs, (m) => this.#callKind(m), follows);
       reason = selection.reason;
     } else {
@@ -754,7 +844,7 @@ export class Coordinator {
       promise: Promise.resolve(),
       done: false,
       plan,
-      selfStarted: inputs.length === 0,
+      selfStarted: inputs.length === 0 && !owedInitiative(initiative),
       intent: intent !== null,
       early: null,
     };

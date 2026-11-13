@@ -145,6 +145,24 @@ export class EmojiUsage {
 
 /** `:name:` not part of `<:name:id>` / `<a:name:id>` and not followed by an id. */
 const SHORTCODE = /(?<![<\w]):(\w{2,32}):(?!\d)/g;
+/** Raw custom emoji markup, `<:name:id>` / `<a:name:id>`. */
+const MARKUP = /<a?:(\w{2,32}):\d{1,20}>/g;
+/** An emoji alone in inline code: `` `<:name:id>` `` or `` `:name:` ``. */
+const CODED = /`\s*(<a?:\w{2,32}:\d{1,20}>|:\w{2,32}:)\s*`/g;
+
+/**
+ * Raw emoji markup she copied (from a message she saw, a tool result) back to `:name:`, and an
+ * emoji she put in inline code out of it: inside backticks Discord shows the markup as text
+ * instead of the emoji. `renderEmoji` then turns the names it knows back into markup.
+ */
+export function loosenEmoji(text: string): string {
+  return uncodeEmoji(text).replace(MARKUP, (_m, name: string) => `:${name}:`);
+}
+
+/** Only takes emoji out of inline code (when server emoji are off). */
+export function uncodeEmoji(text: string): string {
+  return text.replace(CODED, "$1");
+}
 
 /**
  * Her text with `:name:` turned into server emoji markup, within `limits` given what she used
@@ -157,6 +175,7 @@ export function renderEmoji(
   recent: readonly (readonly string[])[],
   limits: EmojiLimits,
 ): { text: string; used: string[] } {
+  const source = loosenEmoji(text);
   // Her previous messages that share the window with this one.
   const lately = limits.window_messages <= 1 ? [] : recent.slice(-(limits.window_messages - 1));
   const withEmoji = lately.filter((u) => u.length > 0).length;
@@ -164,7 +183,7 @@ export function renderEmoji(
   let allowed = withEmoji >= limits.max_in_window ? 0 : limits.per_message;
   const used: string[] = [];
   let removed = false;
-  const out = text.replace(SHORTCODE, (whole, name: string) => {
+  const out = source.replace(SHORTCODE, (whole, name: string) => {
     const emoji = lookup(name);
     if (!emoji) return whole;
     if (allowed <= 0 || lastUsed.includes(emoji.name) || used.includes(emoji.name)) {
@@ -184,7 +203,7 @@ export function renderEmoji(
     .trim();
   if (tidy !== "") return { text: tidy, used };
   // A message that was nothing but emoji keeps its first one: an empty message cannot be sent.
-  for (const m of text.matchAll(SHORTCODE)) {
+  for (const m of source.matchAll(SHORTCODE)) {
     const emoji = lookup(m[1] as string);
     if (emoji) return { text: emojiMarkup(emoji), used: [emoji.name] };
   }
@@ -192,13 +211,18 @@ export function renderEmoji(
 }
 
 /**
- * A reaction as Discord's API takes it: a server emoji written `:name:` or `name` becomes
- * `name:id`; anything else is passed on unchanged.
+ * A reaction as Discord's API takes it: a server emoji written `:name:`, `name` or as markup
+ * `<:name:id>` becomes `name:id`; anything else is passed on unchanged.
  */
 export function reactionEmoji(
   emoji: string,
   lookup: (name: string) => ServerEmoji | undefined,
 ): string {
+  const markup = /^<a?:(\w{2,32}):(\d{1,20})>$/.exec(emoji.trim());
+  if (markup) {
+    const found = lookup(markup[1] as string);
+    return found ? `${found.name}:${found.id}` : `${markup[1]}:${markup[2]}`;
+  }
   const m = /^:?(\w{2,32}):?$/.exec(emoji.trim());
   if (!m) return emoji;
   const found = lookup(m[1] as string);

@@ -66,6 +66,7 @@ export {
 } from "./link/commands.js";
 export { checkHello, type HelloOutcome, tokenMatches } from "./link/conn.js";
 export {
+  CURTAIN_GRACE_MS,
   type GoLiveState,
   type RoleSwitcher,
   SceneDirector,

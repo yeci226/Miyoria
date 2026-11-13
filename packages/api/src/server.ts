@@ -17,6 +17,7 @@ import { directiveRoutes } from "./directives.js";
 import { ApiError, NO_SUCH_ENDPOINT } from "./errors.js";
 import { factRoutes } from "./facts.js";
 import { fortuneRoutes } from "./fortune-routes.js";
+import { goalAdminRoutes } from "./goals-admin.js";
 import { innerRoutes } from "./inner.js";
 import { learningRoutes } from "./learning.js";
 import { liveRoutes } from "./live.js";
@@ -157,6 +158,7 @@ export function routes(state: ApiState, options: AppOptions = {}): Route[] {
     ...sessionRoutes(),
     ...peopleRoutes(state),
     ...personWalletRoutes(state),
+    ...goalAdminRoutes(state),
     ...memoryRoutes(state),
     ...roleRoutes(state),
     ...opsRoutes(state),

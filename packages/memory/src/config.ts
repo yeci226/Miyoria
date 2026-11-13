@@ -276,6 +276,12 @@ export const MemoryConfigSchema = z.object({
    * offered (0 = never).
    */
   followup_max_age_hours: z.number().min(0).default(6),
+  /**
+   * A followup about the same person and matter as one brought up or answered within this many
+   * hours is not written again (`followups.ts`; 0 = only open ones count). Reworded, the same
+   * question came back ten times in a day (2026-11-10).
+   */
+  followup_repeat_hours: z.number().min(0).default(24),
   repeat: RepeatConfigSchema.prefault({}),
   guild_scope: GuildScopeSchema.default("guild"),
   /**

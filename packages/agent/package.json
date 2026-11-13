@@ -30,6 +30,7 @@
     "@miyoria/store": "workspace:*",
     "@miyoria/tools": "workspace:*",
     "@miyoria/types": "workspace:*",
+    "opencc-js": "^1.4.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {

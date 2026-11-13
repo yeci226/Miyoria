@@ -30,7 +30,16 @@ import {
   type Whereabouts,
 } from "@miyoria/types";
 import type { RecentConfig } from "./config.js";
-import { disclose, PRIVATE_MARK, placeRef, type Viewer } from "./places.js";
+import {
+  disclose,
+  PRIVATE_MARK,
+  partnerOf,
+  placeRef,
+  quotable,
+  type Viewer,
+  WITHHELD,
+  withheldTalk,
+} from "./places.js";
 import type { RecentLog, Window } from "./recent-log.js";
 import { questionLine, questions, visibleQuestion } from "./threads.js";
 
@@ -152,7 +161,8 @@ export class Timeline implements JustNow {
     for (const h of window.happenings) {
       if (h.at > nowMs) continue;
       const d = disclose(h.context, viewer);
-      if (d === "hide") continue;
+      // What went on in a DM is not a channel's business, not even as a title.
+      if (d === "hide" || !quotable(d, viewer)) continue;
       const place = placeRef(h.context, viewer);
       const prev = [...out].reverse().find((e) => e.key === h.key);
       const at = toTimestamp(h.at);
@@ -211,12 +221,28 @@ export class Timeline implements JustNow {
   /** People who talked to her elsewhere and what she answered, the newest `talk_entries`. */
   #talk(window: Window, viewer: Viewer, nowMs: number, cfg: RecentConfig): JustNowEntry[] {
     const out: JustNowEntry[] = [];
+    // DM → when its last withheld line was, so one stretch of talk is one line.
+    const withheld = new Map<string, number>();
     for (const s of window.said) {
       if (!s.addressed || s.at > nowMs) continue;
       // This place is in the transcript already.
       if (contextKeyEquals(s.context, viewer.context)) continue;
       const d = disclose(s.context, viewer, [s.handle]);
       if (d === "hide") continue;
+      if (!quotable(d, viewer)) {
+        const key = contextKeyString(s.context);
+        const last = withheld.get(key);
+        withheld.set(key, s.at);
+        if (last !== undefined && s.at - last <= cfg.coalesce_mins * MINUTE_MS) continue;
+        out.push({
+          at: toTimestamp(s.at),
+          kind: "talk",
+          place: { kind: "dm", label: "", context: s.context },
+          text: withheldTalk(partnerOf(viewer, s.context)),
+          private: true,
+        });
+        continue;
+      }
       const reply = window.her.find(
         (h) =>
           contextKeyEquals(h.context, s.context) && h.at >= s.at && h.at - s.at <= 3 * MINUTE_MS,
@@ -240,10 +266,10 @@ export class Timeline implements JustNow {
   }
 }
 
-/** `- 14:05 語音 唱了〈X〉`, private ones marked. */
+/** `- 14:05 語音 唱了〈X〉`, private ones marked (a withheld one has nothing to mark). */
 export function entryLine(entry: JustNowEntry, now: Timestamp, offset: number): string {
   const where = entry.place.label === "" || entry.kind === "asked" ? "" : `${entry.place.label} `;
-  const mark = entry.private ? `(${PRIVATE_MARK})` : "";
+  const mark = entry.private && !entry.text.endsWith(WITHHELD) ? `(${PRIVATE_MARK})` : "";
   return `- ${clockOf(entry.at, now, offset)} ${where}${entry.text}${mark}`;
 }
 

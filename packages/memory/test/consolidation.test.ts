@@ -18,6 +18,7 @@ import {
   memoryFilter,
   PROMPT_KINDS,
   requestScopes,
+  rescoped,
   SECTION_TITLE,
   visibleScopes,
   WATERMARK_PREFIX,
@@ -41,6 +42,7 @@ import {
   TableEmbedder,
   t0,
 } from "./helpers.js";
+import { FakeHandles } from "./recent-helpers.js";
 
 const GUILD_JSON = `{
   "episode": {"summary": "我跟 Owen、Amy 聊了拉麵,Owen 推薦了一家豚骨拉麵店", "importance": 0.6, "emotion": "開心"},
@@ -59,8 +61,9 @@ const G1: MemoryScope = { type: "guild", platform: "discord", guild: "g1" };
 async function guildSetup(
   backend: Backend,
   llm: MockProvider,
+  handles: FakeHandles | null = null,
 ): Promise<[Env, ContextKey, PersonId, PersonId]> {
-  const e = await envWith(backend, memoryConfig(), llm, null);
+  const e = await envWith(backend, memoryConfig(), llm, null, handles);
   const owen = await e.person(acct("2"), "Owen");
   const amy = await e.person(acct("3"), "Amy");
   const ctx = guildCtx("g1", "c1");
@@ -125,6 +128,10 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
     const promise = find(records, "答應 Amy");
     expect(promise.kind).toBe("self_note");
     expect(promise.subjects, "names in notes become subjects").toEqual([amy]);
+    expect(promise.scope, "a note about one person alone is theirs").toEqual({
+      type: "person",
+      person: amy,
+    });
 
     const followup = find(records, "期末考");
     expect(followup.kind).toBe("followup");
@@ -154,6 +161,191 @@ describe.each(BACKENDS)("consolidation (%s store)", (backend) => {
     expect(third.reinforced).toBe(2);
     expect(third.refusedEvidence).toBe(4);
     expect(await e.all()).toHaveLength(records.length);
+  });
+
+  // 2026-11-09: a note written in the server about a card someone posted there was global, so in
+  // another person's DM she thanked that person for it.
+  it("server_notes_about_others_never_reach_a_dm", async () => {
+    const json = `{
+      "self_notes": [
+        {"note": "我答應 Amy 下次一起去吃拉麵", "importance": 0.8},
+        {"note": "我答應 Amy 和 Owen 下次一起去吃拉麵", "importance": 0.8},
+        {"note": "有人幫我做了一張拉麵卡片", "importance": 0.8},
+        {"note": "我沒吃過拉麵", "importance": 0.8}
+      ]
+    }`;
+    const llm = new MockProvider("sum").reply(json);
+    const handles = new FakeHandles();
+    const [e, ctx, owen, amy] = await guildSetup(backend, llm, handles);
+    const cara = await e.person(acct("4"), "Cara");
+    handles.add("Owen", owen, acct("2")).add("Amy", amy, acct("3")).add("Cara", cara, acct("4"));
+    await e.log(
+      ctx,
+      acct("3"),
+      "Amy",
+      "我做了一張拉麵卡片給你,下次和 Owen 一起去吃",
+      t0(-MINUTE),
+      false,
+    );
+    await e.engine.consolidate(ctx, t0());
+    const records = await e.all();
+    const amyOnly = find(records, "答應 Amy 下次");
+    expect([amyOnly.scope, amyOnly.subjects], "about Amy alone").toEqual([
+      { type: "person", person: amy },
+      [amy],
+    ]);
+    expect(find(records, "Amy 和 Owen").scope, "about two people").toEqual(G1);
+    expect(find(records, "有人幫我").scope, "someone, unnamed, is still someone").toEqual(G1);
+    expect(find(records, "沒吃過拉麵").scope, "about her alone").toEqual({ type: "global" });
+
+    const dmOf = (n: string, person: PersonId) => ({
+      scopes: visibleScopes(dmCtx(`d-${n}`), [acct(n)], [person]),
+      person,
+    });
+    const recallIn = async (dm: ReturnType<typeof dmOf>) =>
+      (await e.engine.recall(dm.scopes, [dm.person], "拉麵", PROMPT_KINDS, 20, t0())).map(
+        (r) => r.record.content,
+      );
+    const owenDm = dmOf("2", owen);
+    const amyDm = dmOf("3", amy);
+    const caraDm = dmOf("4", cara);
+    const shows = (got: string[], note: string) => got.some((c) => c.includes(note));
+
+    // Written now: the note about Amy alone comes back in her DM, not in anyone else's.
+    expect(shows(await recallIn(amyDm), "答應 Amy 下次")).toBe(true);
+    for (const dm of [owenDm, caraDm]) {
+      const got = await recallIn(dm);
+      expect(shows(got, "我沒吃過拉麵"), "about her alone, everywhere").toBe(true);
+      expect(shows(got, "答應 Amy 下次")).toBe(false);
+    }
+    for (const dm of [owenDm, amyDm, caraDm]) {
+      const got = await recallIn(dm);
+      for (const leak of ["Amy 和 Owen", "有人幫我"]) expect(shows(got, leak), leak).toBe(false);
+    }
+
+    // Written before this, still global, then moved: they read the same before and after.
+    const old = async (content: string, subjects: PersonId[]) =>
+      e.engine.store(
+        {
+          kind: "self_note",
+          scope: { type: "global" },
+          subjects,
+          content,
+          importance: 0.8,
+          confidence: 1,
+          source_context: ctx,
+          origin: "experienced",
+          source_events: [],
+          due: null,
+        },
+        t0(-HOUR),
+      );
+    await old("我懷疑 Amy 的拉麵是泡麵", [amy]);
+    await old("我說過 Owen 的拉麵最好吃", []);
+    await old("我說 Owen 和 Amy 的拉麵一樣難吃", [owen, amy]);
+    await old("我收下了大家送的拉麵貼圖", []);
+    await old("我收藏了一個拉麵碗", []);
+    const expected = (got: string[]) => ({
+      amy: shows(got, "Amy 的拉麵是泡麵"),
+      owen: shows(got, "Owen 的拉麵最好吃"),
+      both: shows(got, "一樣難吃"),
+      everyone: shows(got, "大家送的"),
+      self: shows(got, "拉麵碗"),
+    });
+    const before = {
+      owen: expected(await recallIn(owenDm)),
+      amy: expected(await recallIn(amyDm)),
+      cara: expected(await recallIn(caraDm)),
+    };
+    expect(before).toEqual({
+      owen: { amy: false, owen: true, both: false, everyone: false, self: true },
+      amy: { amy: true, owen: false, both: false, everyone: false, self: true },
+      cara: { amy: false, owen: false, both: false, everyone: false, self: true },
+    });
+
+    // The migration (scripts/rescope-self-notes.ts) moves them by `rescoped`.
+    const names = [
+      { name: "Owen", person: owen },
+      { name: "Amy", person: amy },
+      { name: "Cara", person: cara },
+    ];
+    for (const record of await e.all()) {
+      if (record.kind !== "self_note" || record.scope.type !== "global") continue;
+      const to = rescoped(e.engine.config, record, names);
+      if (to !== null) await e.engine.records.upsert({ ...record, ...to });
+    }
+    const moved = await e.all();
+    expect(find(moved, "Owen 的拉麵最好吃").scope).toEqual({ type: "person", person: owen });
+    expect(find(moved, "Owen 的拉麵最好吃").subjects, "named only, now tagged").toEqual([owen]);
+    expect(find(moved, "一樣難吃").scope).toEqual(G1);
+    expect(find(moved, "大家送的").scope).toEqual(G1);
+    expect(find(moved, "拉麵碗").scope).toEqual({ type: "global" });
+    expect({
+      owen: expected(await recallIn(owenDm)),
+      amy: expected(await recallIn(amyDm)),
+      cara: expected(await recallIn(caraDm)),
+    }).toEqual(before);
+
+    // In the server, with both there, they are all there.
+    const here = visibleScopes(ctx, [acct("2"), acct("3")], [owen, amy]);
+    const all = (await e.engine.recall(here, [owen, amy], "拉麵", PROMPT_KINDS, 30, t0())).map(
+      (r) => r.record.content,
+    );
+    for (const note of ["答應 Amy 下次", "Amy 和 Owen", "有人幫我", "Amy 的拉麵", "一樣難吃"]) {
+      expect(shows(all, note), note).toBe(true);
+    }
+
+    // Another server, with both there too: none of g1's notes about anyone. A note about Amy is
+    // hers in g1 and in her DM, never in a server it was not written in.
+    const g2 = visibleScopes(guildCtx("g2", "c9"), [acct("2"), acct("3")], [owen, amy]);
+    const elsewhere = (await e.engine.recall(g2, [owen, amy], "拉麵", PROMPT_KINDS, 30, t0())).map(
+      (r) => r.record.content,
+    );
+    for (const note of [
+      "答應 Amy 下次",
+      "Amy 的拉麵",
+      "Owen 的拉麵最好吃",
+      "Amy 和 Owen",
+      "有人幫我",
+      "一樣難吃",
+    ]) {
+      expect(shows(elsewhere, note), note).toBe(false);
+    }
+  });
+
+  it("an old global note about someone stays in its server before it is moved too", async () => {
+    const e = await env(backend);
+    const amy = await e.person(acct("3"), "Amy");
+    const ctx = guildCtx("g1", "c1");
+    await e.engine.store(
+      {
+        kind: "self_note",
+        scope: { type: "global" },
+        subjects: [amy],
+        content: "我懷疑 Amy 的拉麵是泡麵",
+        importance: 0.8,
+        confidence: 1,
+        source_context: ctx,
+        origin: "experienced",
+        source_events: [],
+        due: null,
+      },
+      t0(-HOUR),
+    );
+    const recallIn = async (where: ContextKey, n: string) =>
+      (
+        await e.engine.recall(
+          visibleScopes(where, [acct(n)], [amy]),
+          [amy],
+          "拉麵",
+          PROMPT_KINDS,
+          5,
+          t0(),
+        )
+      ).length;
+    expect(await recallIn(ctx, "3"), "its server").toBe(1);
+    expect(await recallIn(dmCtx("d-amy"), "3"), "her DM").toBe(1);
+    expect(await recallIn(guildCtx("g2", "c9"), "3"), "another server").toBe(0);
   });
 
   it("followups_are_due_and_can_be_marked_done", async () => {

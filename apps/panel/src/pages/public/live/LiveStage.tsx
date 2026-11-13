@@ -19,14 +19,9 @@ import {
   type SourceFactory,
 } from "./feed";
 import { LivePlayer, type Spot, type TouchMode } from "./LivePlayer";
-import { Mascot, type Pose } from "./Mascot";
 
-/** How long one pat holds her face and the hand on her head. */
-export const PAT_MS = 1_300;
-/** How long a heart flies. */
-const HEART_MS = 1_400;
-/** Hearts on screen at most. */
-const MAX_HEARTS = 8;
+/** How long a hand stays where she was touched. */
+const HAND_MS = 1_400;
 /** Touches on the picture at most. */
 const MAX_SPOTS = 12;
 /** How long a picture that failed is left alone before it is tried again. */
@@ -47,14 +42,6 @@ export function placeLabel(now: LiveSnapshot): string {
   const { place, game } = now.presence;
   if (place === "playing" && game) return `她在玩 ${GAMES[game] ?? game}`;
   return PLACE[place].label;
-}
-
-export function poseOf(now: LiveSnapshot | null): Pose {
-  if (now === null || now.presence.place === "offline") return "asleep";
-  const kind = now.activity?.kind;
-  if (kind === "singing" || now.presence.place === "singing") return "singing";
-  if (kind === "thinking" || kind === "synthesizing") return "thinking";
-  return "idle";
 }
 
 /** What a pat came back with, in her page's words. */
@@ -92,36 +79,32 @@ export interface LiveStageProps {
   loginUrl?: string | null;
   /** The stream's source; tests pass their own. Default: the browser's `EventSource`. */
   source?: SourceFactory | null;
-  /** `page`: the stage is the whole page (`/live`), so she is drawn larger. */
+  /** `page`: the stage is the whole page (`/watch`), so her lines are set larger. */
   size?: "section" | "page";
 }
 
 /**
  * 現場: her, and what she is up to. While OBS publishes it is the real picture, which a member
- * touches where she is on it; otherwise (or when the picture will not play) the figure the page
- * draws. Either way the line she is saying, her state and a button to pat her with. The pat shows at
- * once; whether she says anything is hers, and arrives through the feed like any line.
+ * touches where she is on it; otherwise (or when the picture will not play) no picture at all.
+ * Either way the line she is saying, her state and a button to pat her with. Whether she says
+ * anything back is hers, and arrives through the feed like any line.
  */
 export function LiveStage({ member, loginUrl = null, source, size = "section" }: LiveStageProps) {
   const large = size === "page";
   const { client } = useConnection();
   const view = useLive(source);
   const now = view.now;
-  const [patting, setPatting] = useState(false);
-  const [hearts, setHearts] = useState<number[]>([]);
   const [spots, setSpots] = useState<Spot[]>([]);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const [note, setNote] = useState<PatNote>(null);
   const [busy, setBusy] = useState(false);
-  const nextHeart = useRef(1);
+  const nextSpot = useRef(1);
   const ownPats = useRef(0);
-  const patTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
     const all = timers.current;
     return () => {
-      clearTimeout(patTimer.current);
       for (const t of all) clearTimeout(t);
     };
   }, []);
@@ -139,36 +122,25 @@ export function LiveStage({ member, loginUrl = null, source, size = "section" }:
   const picture = useRef(showVideo);
   picture.current = showVideo;
 
-  /** The hand, a heart, her face for a moment. */
-  const react = useCallback(() => {
-    const id = nextHeart.current++;
-    setHearts((h) => [...h.slice(-(MAX_HEARTS - 1)), id]);
-    later(HEART_MS, () => setHearts((h) => h.filter((x) => x !== id)));
-    setPatting(true);
-    clearTimeout(patTimer.current);
-    patTimer.current = setTimeout(() => setPatting(false), PAT_MS);
-  }, [later]);
-
   /** A hand on the picture where she was touched (a heart too, for one's own). */
   const touchAt = useCallback(
     (spot: LiveSpot, own: boolean) => {
-      const id = nextHeart.current++;
+      const id = nextSpot.current++;
       setSpots((all) => [...all.slice(-(MAX_SPOTS - 1)), { id, x: spot.x, y: spot.y, own }]);
-      later(HEART_MS, () => setSpots((all) => all.filter((s) => s.id !== id)));
+      later(HAND_MS, () => setSpots((all) => all.filter((s) => s.id !== id)));
     },
     [later],
   );
 
-  // Somebody else patted her: the same reaction, so a page shows everyone's pats. Over the picture
-  // a pat that says where shows a small hand there; one that does not has nowhere to be drawn.
+  // Somebody else patted her: over the picture a pat that says where shows a small hand there; one
+  // that does not, or one while there is no picture, only shows in the count.
   const seenSeq = useRef(view.patSeq);
   useEffect(() => {
     if (view.patSeq === seenSeq.current) return;
     seenSeq.current = view.patSeq;
     if (ownPats.current > 0) ownPats.current -= 1;
-    else if (!picture.current) react();
-    else if (view.patSpot) touchAt(view.patSpot, false);
-  }, [view.patSeq, view.patSpot, react, touchAt]);
+    else if (picture.current && view.patSpot) touchAt(view.patSpot, false);
+  }, [view.patSeq, view.patSpot, touchAt]);
 
   // A picture that failed is given up for a while, then tried again.
   const failVideo = useCallback(() => {
@@ -181,7 +153,6 @@ export function LiveStage({ member, loginUrl = null, source, size = "section" }:
     async (spot?: LiveSpot) => {
       if (busy) return;
       if (picture.current) touchAt(spot ?? { x: 0.5, y: 0.5 }, true);
-      else react();
       ownPats.current += 1;
       setBusy(true);
       let next: PatNote;
@@ -198,10 +169,9 @@ export function LiveStage({ member, loginUrl = null, source, size = "section" }:
       // A short breath between pats, so one held key is not a burst.
       later(350, () => setBusy(false));
     },
-    [busy, client, react, touchAt, later],
+    [busy, client, touchAt, later],
   );
 
-  const pose = poseOf(now);
   const open = now?.pats.open ?? false;
   const line = now?.line ?? null;
   const shownLine = line !== null && line.text !== "" ? line : null;
@@ -298,35 +268,7 @@ export function LiveStage({ member, loginUrl = null, source, size = "section" }:
           <div className="px-1 sm:px-2 sm:pb-1">{info}</div>
         </div>
       ) : (
-        <div
-          className={cn(
-            "glass-well grid items-center gap-x-10 gap-y-4 rounded-md px-4 py-5 sm:px-8",
-            large
-              ? "sm:grid-cols-[minmax(0,19rem)_minmax(0,1fr)] sm:py-8"
-              : "sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]",
-          )}
-        >
-          <div className={cn("relative mx-auto w-full", large ? "max-w-[19rem]" : "max-w-[15rem]")}>
-            <Mascot
-              className="block h-auto w-full"
-              emotion={now?.emotion.name ?? "neutral"}
-              intensity={now?.emotion.intensity ?? 0}
-              speaking={now?.speaking ?? false}
-              pose={pose}
-              patting={patting}
-              hearts={hearts}
-            />
-            {canPat && (
-              // The figure is the big target for a pointer; the button below is the one for a keyboard.
-              <button
-                type="button"
-                tabIndex={-1}
-                aria-hidden
-                className="absolute inset-x-[18%] top-[8%] h-[46%] cursor-pointer rounded-full"
-                onClick={() => void pat()}
-              />
-            )}
-          </div>
+        <div className={cn("glass-well rounded-md px-4 py-5 sm:px-8", large && "sm:py-8")}>
           {info}
         </div>
       )}

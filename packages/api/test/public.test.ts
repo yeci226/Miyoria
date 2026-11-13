@@ -1988,6 +1988,7 @@ describe("the wallet", () => {
     expect(shape(read.body)).toEqual(
       [
         "goals[].deadline",
+        "goals[].fulfilled",
         "goals[].id",
         "goals[].my_pledge",
         "goals[].promise",
@@ -2071,6 +2072,28 @@ describe("the wallet", () => {
       (await r.spend("/api/member/goals/goal-1/pledge", bob, { amount: 5 }, "p-c")).status,
     ).toBe(409);
     expect(await r.coins.goals.get("goal-1")).toMatchObject({ status: "reached" });
+
+    // The owner sees it owed and marks it kept, once; a member cannot.
+    const owed = await raw(r.base, "GET", "/api/economy/goals", { token: TOKEN });
+    expect(owed.body).toMatchObject({
+      goals: [{ id: "goal-1", promise: "學三種貓叫", fulfilled_at: null, fulfilled_by: null }],
+    });
+    const memberTry = await r.post("/api/economy/goals/goal-1/fulfill", alice, {});
+    expect([401, 403]).toContain(memberTry.status);
+    const mark = (id: string) =>
+      raw(r.base, "POST", `/api/economy/goals/${id}/fulfill`, {
+        token: TOKEN,
+        json: {},
+        headers: { "x-miyoria-request": "1" },
+      });
+    const kept = await mark("goal-1");
+    expect(kept.status).toBe(200);
+    expect(kept.body).toMatchObject({ goal: { id: "goal-1", fulfilled_by: "owner" } });
+    expect((await mark("goal-1")).status).toBe(409);
+    expect((await mark("nope")).status).toBe(409);
+    expect(
+      ((await r.get("/api/member/goals", alice)).body as { goals: unknown[] }).goals[0],
+    ).toMatchObject({ status: "reached", fulfilled: true });
   });
 
   it("checks in once a day", async () => {
@@ -2309,6 +2332,32 @@ describe("the wallet", () => {
       const res = await r.spend("/api/member/card", cookie, { foil: true }, "d-x");
       expect(res.status).toBe(429);
       expect(await balance(r)).toBe(100);
+    });
+
+    it("a command orders foil and a reroll through the Keepsakes service, at the page's prices", async () => {
+      const r = await walletRig();
+      await r.fund(ALICE, 100);
+      const keepsakes = r.sup.services.require(KeepsakesKey);
+      const who = { account: discord(ALICE), name: "Alice", avatar_url: null };
+      expect(await keepsakes.rerollCard(who, "k-r0")).toMatchObject({ ok: false, status: 409 });
+      const foil = await keepsakes.issueCard(who, "k-f", { foil: true });
+      expect(foil).toMatchObject({ ok: true, value: { foil: true }, charged: 50, balance: 50 });
+      expect(await keepsakes.cardsToday(who.account)).toMatchObject({
+        today: 1,
+        prices: { foil: 50, reroll: 30 },
+        rerolls_left: 2,
+      });
+      const redone = await keepsakes.rerollCard(who, "k-r1");
+      expect(redone).toMatchObject({ ok: true, charged: 30, balance: 20 });
+      expect(redone.ok && foil.ok && redone.value.number).toBe(foil.ok ? foil.value.number : -1);
+      // The page sees the reroll the command made.
+      const cookie = await r.login("alice");
+      const page = (await r.get("/api/member/card", cookie)).body as { latest: Card };
+      expect(page.latest.serial).toBe(redone.ok ? redone.value.serial : "");
+      // Not enough left for another foil card: refused in words, nothing charged.
+      const poor = await keepsakes.issueCard(who, "k-f2", { foil: true });
+      expect(poor).toMatchObject({ ok: false, status: 402 });
+      expect(await balance(r)).toBe(20);
     });
 
     it("rerolls today's newest card: charged, the old one void, the new one outside the day's count", async () => {

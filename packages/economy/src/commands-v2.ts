@@ -17,6 +17,7 @@ import {
 import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/kernel";
 import { newId } from "@miyoria/types";
 import { STRANGER, WALLET_NODE } from "./economy.js";
+import { unlockLines } from "./notices.js";
 import { NO_RECEIVER } from "./transfer.js";
 import { EconomyError } from "./types.js";
 import { COMMISSION_KINDS, type CommissionKind, type Economy2, Economy2Key } from "./v2-types.js";
@@ -93,7 +94,13 @@ class Handler2 {
             type: "text",
             text: `**${r.item.label}**　${r.item.rarity}　${r.item.series}\n${tail}${r.by_pity ? "（保底）" : ""}`,
           },
-          { type: "muted", text: `花了 ${r.charged} ${e.currency}，剩 ${r.balance}` },
+          {
+            type: "muted",
+            text: [
+              `花了 ${r.charged} ${e.currency}，剩 ${r.balance}`,
+              ...unlockLines(r.unlocked),
+            ].join("\n"),
+          },
         ],
         { accent: "neutral", title: "抽收藏" },
       );

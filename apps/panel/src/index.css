@@ -286,7 +286,8 @@
 
   /*
    * Frosts the backdrop and takes back some of its dimming, then lays the owner's login picture
-   * over it, a little see-through. `public/login.local.jpg` is game art kept out of git; without it the backdrop shows.
+   * over it, a little see-through. `public/login.local.jpg` is game art kept out of git: the page
+   * sets `--login-art` only when it was there at build time; without it the backdrop shows.
    */
   .login-window {
     position: relative;
@@ -298,7 +299,7 @@
     content: "";
     position: absolute;
     inset: 0;
-    background: url("/login.local.jpg") 64% 30% / cover no-repeat;
+    background: var(--login-art, none) 64% 30% / cover no-repeat;
     opacity: 0.82;
   }
 

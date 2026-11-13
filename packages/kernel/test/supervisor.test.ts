@@ -168,6 +168,45 @@ describe("Supervisor", () => {
     await sup.stopAll();
   });
 
+  it("enable and restart reject with the reason the start failed", async () => {
+    vi.useFakeTimers();
+    const sup = new Supervisor();
+    let starts = 0;
+    let failing = true;
+    const listener: Module = {
+      manifest: defineManifest("listener", "Listener"),
+      async start() {
+        starts++;
+        if (failing) throw new Error("listen EADDRINUSE: address already in use :::8080");
+      },
+    };
+    const web = new TestModule(defineManifest("web", "Web", { requires: ["listener"] }));
+    await sup.register(listener, null, false);
+    await sup.register(web, null, true);
+    await sup.startAll();
+    expect(state(sup, "web")).toBe("stopped");
+
+    await expect(sup.enable("listener")).rejects.toThrow(
+      "module `listener` did not start: start failed: listen EADDRINUSE: address already in use :::8080",
+    );
+    expect(state(sup, "listener")).toBe("failed");
+    expect(sup.list().find((m) => m.id === "listener")?.reason).toMatch(/EADDRINUSE/);
+    expect(state(sup, "web")).toBe("stopped");
+
+    await expect(sup.restart("listener")).rejects.toThrow(
+      /did not start: start failed: listen EADDRINUSE/,
+    );
+    expect(starts).toBe(2);
+
+    // The backoff restart still comes, and the dependent starts with it.
+    failing = false;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(starts).toBe(3);
+    expect(state(sup, "listener")).toBe("running");
+    expect(state(sup, "web")).toBe("running");
+    await sup.stopAll();
+  });
+
   it("failure of a requirement stops dependents and both come back", async () => {
     vi.useFakeTimers();
     const sup = new Supervisor();

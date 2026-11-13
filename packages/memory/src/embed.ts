@@ -163,7 +163,7 @@ export function buildEmbedder(config: EmbeddingConfig): Embedder {
 }
 
 /** Cosine similarity; 0 for empty or mismatched vectors. */
-export function cosine(a: readonly number[], b: readonly number[]): number {
+export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
   if (a.length !== b.length || a.length === 0) return 0;
   let dot = 0;
   let na = 0;

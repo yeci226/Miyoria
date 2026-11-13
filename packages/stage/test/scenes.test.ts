@@ -124,7 +124,7 @@ describe("scene roles", () => {
     const req = provider.requests[0];
     expect(req?.json_mode).toBe(true);
     // The names are data in the prompt.
-    expect(req?.messages[1]?.content).toContain("⟦資料 來源=obs");
+    expect(req?.messages[1]?.content).toContain('<data source="obs"');
     expect(req?.messages[1]?.content).toContain("- Gameplay");
     expect(r.resolve("chat")).toBe("Camera");
     expect(r.resolve("starting")).toBeNull();

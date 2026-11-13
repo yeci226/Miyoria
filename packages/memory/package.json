@@ -19,7 +19,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "rescope-self-notes": "tsx --conditions=@miyoria/source scripts/rescope-self-notes.ts"
   },
   "dependencies": {
     "@miyoria/commands": "workspace:*",

@@ -38,7 +38,8 @@
 //   the panel, see `control.ts`)
 // * `GET /api/telemetry?minutes=360` (a minute's samples of her state and the LLM counters)
 // * `GET /api/llm/calls?purpose=&model=&module=&status=&trouble=&thought=&turn=&since=&until=&q=`,
-//   `GET /api/llm/calls/{id}` (request and response, redacted), `GET /api/llm/stats?minutes=`
+//   `GET /api/llm/calls/{id}` (request and response, redacted), `GET /api/llm/stats?minutes=`,
+//   `GET /api/llm/thinking?kind=&reasoned=&q=` (chains of thought by kind of call)
 //   (the call inspector, see `llmcalls.ts`), `GET /api/mind/thoughts/{id}` (one thought in full)
 // * `GET /api/self` (her inner state), `GET /api/world` (what she perceives); read-only
 // * `GET /api/data`, `GET /api/data/export?categories=`, `POST /api/data/wipe`,

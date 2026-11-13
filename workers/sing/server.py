@@ -16,6 +16,8 @@
                                       play_mix.pcm · play_vocals.pcm (s16le mono 48 kHz) · meta.json ·
                                       video.mp4 (library: video.<ext>) when ``has_video``
     GET    /library             -> {"entries": [...]}      the owner's local song folder
+    GET    /cache               -> {bytes, songs, sources, limits, last}   the song cache (cache.py)
+    POST   /cache/prune         {dry_run?} -> what the cleanup removed (or would remove)
     GET    /health
 
 Pipeline per job (one job at a time; models load per stage and are freed after it):
@@ -66,13 +68,19 @@ has the TTS / ASR workers of SING_OFFLOAD_URLS drop their models (exclusive.py: 
 and the job's ``exclusive`` field, waiting · offloading · active · reloading · done, tell Core).
 
 A finished song is cached under SING_DATA_DIR/<song id>; asking again (same query, link or file,
-the same pitch settings and backing mode) answers at once with ``cached: true``.
+the same pitch settings and backing mode) answers at once with ``cached: true``. The cache cleans
+up after itself (cache.py): least recently used songs first, then the downloads no song needs, at
+start, after every job and every hour; a song it removed is made again when it is asked for.
 
 Environment
     SING_BACKEND           seed-vc | mock                         (default seed-vc)
     SING_DATA_DIR          cache root                             (default <repo>/data/songs)
     SING_LIBRARY_DIR       local songs                            (default <data dir>/library)
     SING_LIBRARY_FIRST     1 = a query that matches a library entry uses it (default 1)
+    SING_CACHE_MAX_GB      songs + downloads kept, least recently used go first (default 6; 0 = no cap)
+    SING_CACHE_MAX_DAYS    a song not used for this long goes      (default 14; 0 = no limit; both 0 = no cleanup)
+    SING_CACHE_PROTECT_HOURS  used this recently: never removed    (default 6; nor the songs of queued / running jobs)
+    SING_CACHE_EVERY_S     how often the cleanup runs besides at start and after every job (default 3600)
     SING_REF               her reference voice                    (default ../voices/deepseek-chan/ref.wav)
     SING_SEEDVC_DIR        Seed-VC checkout                       (default ../models/seed-vc)
     SING_DEVICE            cuda | cpu                             (default cuda when available)
@@ -120,6 +128,8 @@ Environment
     SING_EXCLUSIVE_WAIT_S  wait this long for Core's go (exclusive_ack) (default 30)
     SING_SHARE_MIN_FREE_MB what a stage is assumed to need until it was measured here (default 4096)
     SING_GPU_HEADROOM_PCT  share of the card to keep free           (default 12; a spill raises it)
+    SING_SPEECH_BURST_MB   what her voice takes while she speaks, kept free next to a stage that cannot
+                           stop between steps (her RVC model) to share the card    (default 1024)
     SING_SHARE_WAIT_S      wait this long for room before taking speech offline, also with nobody
                            listening                                (default 0)
     SING_DEFER_S           people listening: wait this long before a short silence (default 120)
@@ -143,6 +153,8 @@ Environment
     SING_RELOAD_TIMEOUT_S  longest wait for a worker to reload    (default 300)
     SING_MOCK_SECONDS      mock: song length                      (default 3)
     SING_MOCK_STAGE_MS     mock: delay per stage                  (default 0)
+    SING_LYRICS_URL        lyrics service (workers/lyrics) that finds the lyrics, for a worker on another
+                           machine than Core                       (default empty: look them up here)
     HOST / PORT            bind address                           (default 127.0.0.1 / 8005)
 """
 
@@ -173,6 +185,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from cache import Cache, Janitor, Protected  # noqa: E402
 from engine import Cancelled, ConvertWork, JobError, Suspended, allowed_url, env_float, env_int, is_oom  # noqa: E402
 from exclusive import Exclusive, http_post, parse_urls  # noqa: E402
 from gpu import CPU_FALLBACK, CPU_STAGES, Action, Audience, GpuJob, Limits, Machine, Profile  # noqa: E402
@@ -477,7 +490,11 @@ class _RealAdapter:
         if os.environ.get("SING_LYRICS", "1") == "0":
             return None
         from lyrics import hints_of, search
+        from lyrics_remote import remote_url, search_remote
 
+        url = remote_url()  # the lyrics service next to Core's language model and ASR (workers/lyrics)
+        if url:
+            return search_remote(url, hints_of(src), duration, audio, fresh)
         return search(hints_of(src), duration, cache_dir=self.b.store.root / "_lyrics", audio=audio, fresh=fresh)
 
     def lyrics_hints(self, url: str) -> dict[str, Any]:
@@ -561,6 +578,8 @@ class State:
     thread: threading.Thread | None = None
     stopping: threading.Event
     machine: Machine
+    cache: Cache
+    janitor: Janitor | None = None
     offload_post = staticmethod(http_post)  # replaced in tests
     busy_get = staticmethod(http_get)  # replaced in tests
 
@@ -918,6 +937,12 @@ def _start_gpu(job: Job, audio_s: float | None) -> None:
                                max_s=job.gpu.yield_allowance()).start()
 
 
+def _stage_pauses(stage: str) -> bool:
+    """Whether the stage stops between steps while she speaks. Her RVC model (``SING_VOICE=rvc``, or
+    the ``+rvc`` pass after the conversion) runs as one subprocess from start to end."""
+    return not (stage == "convert" and getattr(state.backend, "rvc", False))
+
+
 def _stage_uses_gpu(stage: str) -> bool:
     if stage not in CPU_STAGES:
         return True
@@ -959,7 +984,7 @@ def _place(job: Job, stage: str) -> str:
         while True:
             if job.cancel.is_set():
                 raise Cancelled()
-            d = g.decide(stage, _stage_uses_gpu(stage))
+            d = g.decide(stage, _stage_uses_gpu(stage), _stage_pauses(stage))
             if d.mode == "wait":
                 job.stage = "gpu_wait"
                 job.cancel.wait(g.limits.check_s)
@@ -1028,8 +1053,14 @@ def _gpu_stage(job: Job, stage: str, wav: Path, duration_s: float | None, run: C
         device = _place(job, stage)
         _arm(job, stage, work)
         g.started(stage, device, resumed)
+        # torch here cannot see a subprocess's VRAM, and it never calls the gate: read the card.
+        unwatch = g.watch() if device == "gpu" and not _stage_pauses(stage) else None
         try:
-            out = run(device)
+            try:
+                out = run(device)
+            finally:
+                if unwatch is not None:
+                    unwatch()  # before ``finished`` / ``stopped`` look at what it read
         except Suspended as e:
             log.info("job %s lets go of the GPU in %s: %s", job.id, stage, e.code)
             g.stopped()
@@ -1165,6 +1196,9 @@ def _run_job(job: Job) -> None:
     job.source = src.public()
     sid = song_id(src.key, req.pitch, req.key, req.backing)
     job.song_id = sid
+    # In use from here on (the cleanup leaves the job's song and download alone); a song or download
+    # it removed just before is simply made again.
+    state.cache.touch(song=sid, source=src.key)
     sdir = store.source_dir(src.key)
     cached = None if req.force else store.meta(sid)
     if cached is not None and _other_voice(cached, state.backend):
@@ -1328,6 +1362,7 @@ def _run_job(job: Job) -> None:
         "created_at": now_iso(),
     }
     store.write_meta(sid, meta)
+    state.cache.touch(song=sid, source=src.key)
     log.info("song %s ready: %s (%s)", sid, src.title, timings)
 
 
@@ -1360,6 +1395,29 @@ def worker_loop() -> None:
                 state.backend.idle()  # here: a job that failed no longer holds the models through its traceback
             except Exception:  # noqa: BLE001
                 log.exception("could not let go of the models")
+            if state.janitor is not None:
+                state.janitor.poke()
+
+
+def _protected() -> Protected:
+    """The songs and downloads of queued and running jobs (cache.py never removes them). A queued
+    search the worker has seen before already names its download."""
+    p = Protected()
+    with state.lock:
+        jobs = [state.jobs[j] for j in state.order if j in state.jobs]
+    for job in jobs:
+        if job.state not in ("queued", "running"):
+            continue
+        if job.song_id:
+            p.songs.add(safe_id(job.song_id, 96))
+        key = (job.source or {}).get("key")
+        req = job.request
+        if not key and req.query:
+            key = state.store.query_source(req.query)
+        if key:
+            p.sources.add(safe_id(key, 96))
+            p.songs.add(song_id(key, req.pitch, req.key, req.backing))
+    return p
 
 
 def _prune() -> None:
@@ -1402,9 +1460,13 @@ async def lifespan(app: FastAPI):
     state.machine = Machine(lambda: state.backend, Profile(root), Audience(),
                             lambda url, timeout: state.busy_get(url, timeout))
     threading.Thread(target=_recover_speech, name="sing-recover", daemon=True).start()
+    state.cache = Cache(root, state.store.library, _protected, state.store.forget_sources)
+    # The cache cleans up after itself on its own thread: now, after every job and every hour.
+    state.janitor = Janitor(state.cache, env_float("SING_CACHE_EVERY_S", 3600.0)).start()
     state.thread = threading.Thread(target=worker_loop, name="sing-worker", daemon=True)
     state.thread.start()
     yield
+    state.janitor.stop()
     state.stopping.set()
     for j in state.jobs.values():
         j.cancel.set()
@@ -1443,6 +1505,8 @@ async def submit(req: JobRequest) -> JSONResponse:
         if req.query:
             key = state.store.query_source(req.query)
         sid = song_id(key, req.pitch, req.key, req.backing) if key else None
+        if sid:
+            state.cache.touch(song=sid, source=key)  # first: the cleanup leaves it alone from here on
         meta = state.store.meta(sid) if sid else None
         info = state.store.source_info(key or "") if meta is not None else None
         # (A song from before videos existed goes through the queue to get its video.)
@@ -1547,6 +1611,7 @@ def refetch_lyrics(sid: str, req: LyricsRequest | None = None) -> JSONResponse:
                  uploader=hints.get("uploader"),
                  extra={k: hints[k] for k in ("raw_title", "track", "meta_artist", "alt_title", "description", "tags")
                         if k in hints})
+    state.cache.touch(song=sid)
     sdir = state.store.song_dir(sid)
     heard = next((p for p in (sdir / "lead.wav", sdir / "vocals.wav", state.store.source_dir(hints["key"]) / "lead.wav")
                   if p.exists()), None)
@@ -1568,7 +1633,9 @@ async def get_file(sid: str, name: str):
     if name not in SONG_FILES:
         return _error(404, f"no file {name}")
     p = state.store.song_dir(safe_id(sid, 96)) / name
-    if not p.exists():
+    if p.exists():
+        state.cache.touch(song=sid)  # she is about to sing it (or play a clip of it)
+    if not p.exists():  # (also when the cleanup took it just now: asking for the song again makes it again)
         return _error(404, f"song {sid} has no {name}")
     headers = {"X-Sample-Rate": str(PLAY_RATE)} if name.endswith(".pcm") else {}
     media = SONG_FILES[name] + (f"; rate={PLAY_RATE}; channels=1" if name.endswith(".pcm") else "")
@@ -1586,6 +1653,22 @@ class GpuContext(BaseModel):
 async def gpu_context(req: GpuContext) -> dict[str, Any]:
     state.machine.audience.update(req.in_voice, req.listeners, req.live, req.urgent)
     return {"ok": True}
+
+
+@app.get("/cache")
+def cache_status() -> dict[str, Any]:
+    """The song cache: its size, songs and downloads, the limits, and what the last cleanup did."""
+    return state.cache.status()
+
+
+class PruneRequest(BaseModel):
+    dry_run: bool = False  # only say what would go
+
+
+@app.post("/cache/prune")
+def cache_prune(req: PruneRequest | None = None, dry_run: bool = False) -> dict[str, Any]:
+    """Runs the cleanup now (``dry_run`` in the body or the query: nothing is removed)."""
+    return state.cache.prune(dry_run=dry_run or bool(req and req.dry_run))
 
 
 @app.get("/library")

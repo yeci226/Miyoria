@@ -28,7 +28,13 @@
 // interrupt scale) and every cooldown are gone: how often she starts something on her own is
 // the Arbiter's (`[modules.arbiter]`), and her feelings already moved her talkativeness.
 
-import { type IncomingMessage, imageType, sameAccount, timestampMs } from "@miyoria/types";
+import {
+  type AccountRef,
+  type IncomingMessage,
+  imageType,
+  sameAccount,
+  timestampMs,
+} from "@miyoria/types";
 import type { Activeness, AttentionConfig, ChannelMode } from "./config.js";
 import { type Ceiling, cappedTalk } from "./levels.js";
 import type { HistoryEntry, Session } from "./session.js";
@@ -569,26 +575,68 @@ export function assess(input: AttentionInput): Assessment {
   return done({ kind: "sample", probability });
 }
 
-/** Someone in this turn answers what she just said (see `answersHer`). */
+/** Someone in this turn takes up what she just said (`followsHerLine`). */
 function followsHer(input: AttentionInput): boolean {
-  return answersHer(input.session, input.inputs, input.now);
+  return followsHerLine(
+    input.session,
+    input.inputs,
+    input.now,
+    input.names,
+    input.voice?.roster ?? [],
+  );
 }
 
 /**
  * Someone is answering what she just said: she spoke among the last three history entries
  * other than `inputs` (which are already in the history; her reply may have landed between
- * them), within the last 3 minutes.
+ * them), within the last 3 minutes. Her cards are left out (`conversation`).
  */
 export function answersHer(
   session: Session,
   inputs: readonly IncomingMessage[],
   now: number,
 ): boolean {
-  const her = earlier(session, inputs)
+  const her = conversation(session, inputs)
     .reverse()
     .slice(0, 3)
     .find((e) => e.isSelf);
   return her !== undefined && Math.trunc((now - her.ts) / 1000) < FOLLOW_UP_SECS;
+}
+
+/**
+ * `answersHer`, and the turn is hers to take up: it says so (a reply to her, an @-mention, her
+ * name), or its speaker is someone her latest lines answered, or they answered nobody (she
+ * started it herself, so anyone may go on with her).
+ *
+ * 2026-11-10: a line right after hers was taken as said to her whoever wrote it. 「高科」 written to
+ * someone else got 「高科就高雄科技大學啊…」 and 「靠杯我不是在跟你說話」; a line to the room got an
+ * answer ending 「不過我剛才問的是 Sakana2486，不是問你」. Of 304 times she spoke through the
+ * `conversing` gate that evening, in 137 the speaker was not the one she had just answered.
+ */
+export function followsHerLine(
+  session: Session,
+  inputs: readonly IncomingMessage[],
+  now: number,
+  names: readonly string[] = [],
+  roster: readonly string[] = [],
+): boolean {
+  if (!answersHer(session, inputs, now)) return false;
+  if (callsHerOut(inputs, names, roster)) return true;
+  const speaker = inputs.at(-1)?.author.account;
+  const her = herLines(conversation(session, inputs));
+  if (speaker === undefined || her === null) return false;
+  return her.answered === null || her.answered.some((a) => sameAccount(a, speaker));
+}
+
+/** A line of `inputs` says it is for her: a reply to her, an @-mention, her name, a DM. */
+function callsHerOut(
+  inputs: readonly IncomingMessage[],
+  names: readonly string[],
+  roster: readonly string[],
+): boolean {
+  return inputs.some(
+    (m) => m.reply_to_self || m.mentions_self || directReason(m, names, roster) !== null,
+  );
 }
 
 /** A line this long after hers no longer follows it. */
@@ -606,12 +654,86 @@ function earlier(session: Session, inputs: readonly IncomingMessage[]): HistoryE
 }
 
 /**
- * This turn goes on talking with her, which is narrower than `answersHer`: her lines are the
- * last thing said before it, or one other line came between and the speaker is the one her
- * lines answered (who spoke right before them). A reply to someone else's message is not.
+ * `earlier` without her cards: notices, receipts and panels posted in her name (song prep
+ * 「開始準備…」, 「投票跳過…」, coin receipts) are not lines she said. 2026-11-10: 15 turns the
+ * `conversing` gate opened came right after one of them, as if the next speaker answered her.
+ */
+function conversation(session: Session, inputs: readonly IncomingMessage[]): HistoryEntry[] {
+  return earlier(session, inputs).filter((e) => !(e.isSelf && e.card === true));
+}
+
+/** Her latest lines in a row (indices into the history they came from) and whom they answered. */
+interface HerLines {
+  first: number;
+  last: number;
+  /** The people they answered; `null`: nobody, she started it herself. */
+  answered: AccountRef[] | null;
+}
+
+/** Her latest lines in `rest` (`conversation`), if she said anything. */
+function herLines(rest: readonly HistoryEntry[]): HerLines | null {
+  const last = rest.findLastIndex((e) => e.isSelf);
+  if (last < 0) return null;
+  // Her reply may be several messages.
+  let first = last;
+  while (first > 0 && rest[first - 1]?.isSelf === true) first -= 1;
+  return { first, last, answered: answeredBy(rest, first, last) };
+}
+
+/**
+ * Whom her lines `rest[first..last]` answered. Her turn wrote it down (`answering`: its focus);
+ * for a line known only from the platform, whom it replies to or @-mentions, else who spoke right
+ * before it (within `FOLLOW_UP_SECS`). `null`: nobody, she started it.
+ */
+function answeredBy(
+  rest: readonly HistoryEntry[],
+  first: number,
+  last: number,
+): AccountRef[] | null {
+  const lines = rest.slice(first, last + 1);
+  const out: AccountRef[] = [];
+  const add = (a: AccountRef): void => {
+    if (!out.some((o) => sameAccount(o, a))) out.push(a);
+  };
+  const known = lines.filter((e) => e.answering !== undefined);
+  if (known.length > 0) {
+    for (const e of known) for (const a of e.answering ?? []) add(a);
+    return out.length > 0 ? out : null;
+  }
+  for (const e of lines) {
+    const to =
+      e.replyTo === null
+        ? undefined
+        : (rest.find((x) => x.id === e.replyTo) ?? e.parents.find((p) => p.id === e.replyTo));
+    if (to !== undefined && !to.isSelf) add(to.account);
+    for (const a of e.mentions ?? []) add(a);
+  }
+  if (out.length > 0) return out;
+  const before = rest[first - 1];
+  const start = rest[first];
+  if (
+    before !== undefined &&
+    start !== undefined &&
+    !before.isSelf &&
+    start.ts - before.ts < FOLLOW_UP_SECS * 1000
+  ) {
+    return [before.account];
+  }
+  return null;
+}
+
+/**
+ * This turn goes on talking with her, which is narrower than `followsHerLine`: her lines are
+ * the last thing said before it (cards left out), or one other line came between. Right after
+ * her lines, the speaker must be someone they answered, or they answered nobody (she started
+ * it); with one line between, the one they answered, or whoever took up her opening going on.
+ * A line that says it is for her (a reply to her, an @-mention, her name) always is; a reply to
+ * someone else's message never.
  *
  * Narrow on purpose: every such turn costs a call and may make her speak. Once two lines passed
- * without her, the conversation went on without her and the score decides again.
+ * without her, the conversation went on without her and the score decides again. Someone else
+ * speaking right after she answered one person takes the look and the score like any line
+ * (2026-11-10, `followsHerLine`).
  */
 export function conversing(
   session: Session,
@@ -625,17 +747,19 @@ export function conversing(
   if (inputs.some((m) => (m.reply_to ?? null) !== null && !m.reply_to_self)) return false;
   // Words that say it is for someone else win over coming right after her (`saidToOthers`).
   if (inputs.some((m) => saidToOthers(m, names, roster) !== null)) return false;
-  const rest = earlier(session, inputs);
-  const last = rest.findLastIndex((e) => e.isSelf);
-  const her = rest[last];
-  if (her === undefined || last < rest.length - 2) return false;
-  if (Math.trunc((now - her.ts) / 1000) >= FOLLOW_UP_SECS) return false;
-  if (last === rest.length - 1) return true;
-  // Her reply may be several messages: who spoke before the first of them.
-  let first = last;
-  while (first > 0 && rest[first - 1]?.isSelf === true) first -= 1;
-  const answered = rest[first - 1];
-  return answered !== undefined && sameAccount(answered.account, speaker);
+  const rest = conversation(session, inputs);
+  const her = herLines(rest);
+  const line = her === null ? undefined : rest[her.last];
+  if (her === null || line === undefined || her.last < rest.length - 2) return false;
+  if (Math.trunc((now - line.ts) / 1000) >= FOLLOW_UP_SECS) return false;
+  if (callsHerOut(inputs, names, roster)) return true;
+  const theirs = her.answered?.some((a) => sameAccount(a, speaker)) ?? false;
+  if (her.last === rest.length - 1) return her.answered === null || theirs;
+  const between = rest[rest.length - 1];
+  return (
+    theirs ||
+    (her.answered === null && between !== undefined && sameAccount(between.account, speaker))
+  );
 }
 
 /** Openings that change the subject. */

@@ -7,7 +7,9 @@
 // * a DM is shown only while the other person in it is one she is talking with, and then as
 //   private ("do not quote or reveal it here"). 2026-11-10: she asked someone the same thing four
 //   times in a channel because nothing there knew their DM had answered it; knowing is fine,
-//   telling the channel is not;
+//   telling the channel is not. Outside a private place only that it happened is shown, never what
+//   was said (`quotable`): the same evening she told a channel what someone had just told her in
+//   their DM, the mark notwithstanding;
 // * another place of the same guild is shown unless the owner hid it or `PlaceAccess` says
 //   someone here cannot see it; another guild never is;
 // * seen from a DM, a guild place is shown only for what the person she is talking with took
@@ -97,3 +99,20 @@ export function placeRef(place: ContextKey | null, viewer: Viewer): PlaceRef {
 
 /** The mark a private entry carries. */
 export const PRIVATE_MARK = "私訊裡的事,只給你知道,不要在這裡引用或透露";
+
+/** What stands in for the words of a DM where they may not be quoted. */
+export const WITHHELD = "(內容不在這裡說)";
+
+/**
+ * Whether the words of what `disclose` allowed may be quoted to `viewer`: what is shown, and a DM
+ * only from a private place. In a channel, a DM is known to have happened and nothing more.
+ */
+export function quotable(disclosure: Disclosure, viewer: Pick<Viewer, "context">): boolean {
+  if (disclosure === "show") return true;
+  return disclosure === "private" && isPrivate(viewer.context);
+}
+
+/** `跟 X 私訊聊過(內容不在這裡說)`: a DM as a channel may know of it. */
+export function withheldTalk(partner: Handle | null): string {
+  return `${partner === null ? "有人" : `跟 ${safeName(partner)} `}私訊聊過${WITHHELD}`;
+}

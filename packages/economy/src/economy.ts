@@ -22,6 +22,8 @@ import {
   type CoinLedgerStore,
   CoinLedgerStoreKey,
   type CoinRule,
+  type Goal,
+  type GoalFulfiller,
   PeopleStoreKey,
   type Person,
 } from "@miyoria/store";
@@ -31,6 +33,7 @@ import {
   AuthorizerKey,
   accountRefString,
   type Clock,
+  type ContextKey,
   customEvent,
   type Event,
   EventLogKey,
@@ -90,6 +93,7 @@ import {
   type PaidItem,
   type PledgeResult,
   type Purchase,
+  type ReachedGoalView,
   SCREEN_TOPIC,
   type ShopItem,
   type SpendResult,
@@ -98,6 +102,7 @@ import {
   type WalletView,
 } from "./types.js";
 import { labelV2, V2 } from "./v2.js";
+import type { AchievementUnlocked } from "./v2-types.js";
 
 export const STRANGER = "她還不認識你,先和她說說話吧";
 /** Permission node of a wallet (`me.*`): a role without it, like `blocked`, has a stranger's. */
@@ -438,8 +443,24 @@ export class EconomyService implements Economy {
     return this.goalDesk.view(account);
   }
 
-  pledge(account: AccountRef, goal: string, amount: number, key: string): Promise<PledgeResult> {
-    return this.goalDesk.pledge(account, goal, amount, key);
+  /** Reached goals, kept or still owed, newest first (the panel). */
+  async reachedGoals(): Promise<ReachedGoalView[]> {
+    return (await this.goalDesk.reached()).map(reachedView);
+  }
+
+  /** Marks a reached goal's promise kept (`goalId` `null`: the newest one owed). */
+  async fulfillGoal(goalId: string | null, by: GoalFulfiller): Promise<ReachedGoalView> {
+    return reachedView(await this.goalDesk.fulfill(goalId, by));
+  }
+
+  pledge(
+    account: AccountRef,
+    goal: string,
+    amount: number,
+    key: string,
+    context: ContextKey | null = null,
+  ): Promise<PledgeResult> {
+    return this.goalDesk.pledge(account, goal, amount, key, context);
   }
 
   bounties(): Promise<BountyView[]> {
@@ -921,8 +942,10 @@ export class EconomyService implements Economy {
       if (post.status !== "posted") throw new EconomyError(409, ALREADY_CHECKED_IN);
       return { gained, streak, balance: post.balance };
     });
-    await this.v2.afterEarn(who);
-    return done;
+    const unlocked = await this.v2.afterEarn(who);
+    if (unlocked.length === 0) return done;
+    // What an achievement paid is in the balance too.
+    return { ...done, balance: await this.#balance(who), unlocked };
   }
 
   /**
@@ -1025,6 +1048,7 @@ export class EconomyService implements Economy {
     if (!("entry" in spent)) return spent;
     const { item: ate, eaten } = fedOf(spent.entry);
     const label = ate === null ? "東西" : feedLabel(ate, eaten);
+    let unlocked: AchievementUnlocked[] = [];
     if (spent.fresh && ate !== null) {
       await this.#gift(who, spent.entry, ate, eaten, label);
       if (ate === "big_bowl") this.#bigBowl();
@@ -1033,14 +1057,15 @@ export class EconomyService implements Economy {
       await this.deals.paid(who).catch((error: unknown) => {
         this.#d.log.warn({ err: errorMessage(error) }, "cannot check a deal against a feed");
       });
-      await this.v2.afterEarn(who);
+      unlocked = await this.v2.afterEarn(who);
     }
     return {
       accepted: true,
       eaten,
       charged: -spent.entry.delta,
-      balance: spent.balance,
+      balance: unlocked.length > 0 ? await this.#balance(who) : spent.balance,
       message: `她吃了${label}`,
+      ...(unlocked.length > 0 ? { unlocked } : {}),
     };
   }
 
@@ -1536,3 +1561,16 @@ export function voiceWindow(ms: number): number {
 }
 
 export { VOICE_WINDOW_MS };
+
+/** A reached goal as the owner sees it. */
+function reachedView(g: Goal): ReachedGoalView {
+  return {
+    id: g.id,
+    title: g.title,
+    promise: g.promise,
+    target: g.target,
+    reached_at: g.closed_at,
+    fulfilled_at: g.fulfilled_at ?? null,
+    fulfilled_by: g.fulfilled_by ?? null,
+  };
+}

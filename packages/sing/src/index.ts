@@ -26,6 +26,7 @@ export {
   type SingPermissions,
   SingPermissionsSchema,
 } from "./config.js";
+export { type FailoverOptions, FailoverSingWorker } from "./failover.js";
 export {
   type CardView,
   LyricsCard,

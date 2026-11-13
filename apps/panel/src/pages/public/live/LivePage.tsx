@@ -4,18 +4,9 @@ import { Logo } from "@/components/logo";
 import { Page } from "@/components/page";
 import { LiveStage } from "./LiveStage";
 import type { SourceFactory } from "./feed";
+import { LIVE_PAGE } from "./path";
 
-/**
- * The address of the live page: anyone may open it, logged in or not. Not `/live`: that is the
- * admin panel's 直播 page.
- */
-export const LIVE_PAGE = "/watch";
-
-/** Whether `path` (path and query) is the live page. */
-export function isLivePath(path: string): boolean {
-  const bare = path.split(/[?#]/)[0] ?? "";
-  return bare === LIVE_PAGE || bare === `${LIVE_PAGE}/`;
-}
+export { isLivePath, LIVE_PAGE } from "./path";
 
 /**
  * `/watch`: her, for anyone with the link. Watching needs nothing; patting needs a Discord login,
