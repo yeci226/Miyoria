@@ -46,6 +46,11 @@ describe("describe", () => {
       detail: "規則擋下",
     });
     expect(say(ev("a", 0, "result", "delivery.voice", { delivery: "interrupted", reason: null })).title).toBe("被打斷");
+    expect(say(ev("a", 0, "action", "agent.tool", { turn: "T", tool: "web_search", ok: true, result: "三個結果" }))).toEqual({
+      title: "web_search",
+      detail: "三個結果",
+    });
+    expect(say(ev("a", 0, "action", "agent.tool", { turn: "T", tool: "web_search", ok: false, result: "逾時" })).title).toBe("工具失敗 · web_search");
     expect(say(ev("a", 0, "result", "agent", { turn_outcome: { turn: "T", outcome: { type: "sent", parts: 2 } } })).title).toBe("說了 2 則");
     expect(say(ev("a", 0, "steer", "activity", { phase: "request", owner: "game.minecraft", task: "k", patch: {}, why: "先去找鐵", by: "self" }))).toEqual({
       title: "先去找鐵",

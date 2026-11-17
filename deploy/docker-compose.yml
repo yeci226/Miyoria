@@ -1,41 +1,16 @@
-# Miyoria 的 Docker 部署。兩種用法:
+# Miyoria 的 Docker 部署:Core 容器(server 部署)。資料存在 core-data volume 裡的 SQLite。
 #
-#   只要 PostgreSQL(本機開發,Core 用 `npx miyoria core` / `pnpm dev:core` 在宿主機跑):
-#     cp deploy/.env.example deploy/.env      # 改 POSTGRES_PASSWORD
-#     docker compose -f deploy/docker-compose.yml up -d postgres
-#   (不想用 Postgres 就不需要這個檔案:Core 預設用 SQLite)
+#     cp deploy/.env.example deploy/.env      # 可選:改埠、映像檔、設定檔
+#     pnpm dlx miyoria init                        # 在專案根目錄產生 .env(LLM key、Discord token、各種 token)
+#     docker compose -f deploy/docker-compose.yml up -d --build
 #
-#   Core 也放進 Docker(server 部署):
-#     cp deploy/.env.example deploy/.env      # 改 POSTGRES_PASSWORD
-#     npx miyoria init                        # 在專案根目錄產生 .env(LLM key、Discord token、各種 token)
-#     docker compose -f deploy/docker-compose.yml --profile core up -d --build
-#
-# `core` 服務掛在 compose profile `core` 後面,所以不加 --profile 時只會啟動 postgres。
+# 不用 Docker 也能跑(`pnpm dlx miyoria core`),Core 預設用 SQLite,不需要另外裝資料庫。
 # 容器內的 Admin API / voice link / stage link 綁 0.0.0.0(deploy/miyoria.docker.toml),
 # 對外只由下面的 `127.0.0.1:` 埠映射決定。詳細步驟、升級、備份見 docs/OPERATIONS.md。
 name: miyoria
 
 services:
-  postgres:
-    image: pgvector/pgvector:pg17
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-miyoria}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
-      POSTGRES_DB: ${POSTGRES_DB:-miyoria}
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-
   core:
-    profiles: ["core"]
     image: ${MIYORIA_IMAGE:-miyoria-core:local}
     build:
       context: ..
@@ -45,14 +20,10 @@ services:
     env_file:
       - ../.env
     environment:
-      # 覆寫 .env 裡給宿主機用的位址:容器內預設用 compose 網路上的 postgres。
-      # 想改用 SQLite(存在 core-data volume),在 deploy/.env 設 CORE_DATABASE_URL=sqlite:/data/miyoria.db
-      DATABASE_URL: ${CORE_DATABASE_URL:-postgres://${POSTGRES_USER:-miyoria}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@postgres:5432/${POSTGRES_DB:-miyoria}}
+      # 覆寫 .env 裡給宿主機用的相對路徑:容器內的 SQLite 存在 core-data volume(/data)。
+      DATABASE_URL: ${CORE_DATABASE_URL:-sqlite:/data/miyoria.db}
       # 日誌層級:fatal | error | warn | info | debug | trace(見 docs/OPERATIONS.md §8)
       MIYORIA_LOG_LEVEL: ${MIYORIA_LOG_LEVEL:-info}
-    depends_on:
-      postgres:
-        condition: service_healthy
     # 讓容器連得到宿主機上的 ASR / TTS worker(Linux 需要這行;Docker Desktop 本來就有)
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -77,5 +48,4 @@ services:
       - ALL
 
 volumes:
-  pgdata:
   core-data:

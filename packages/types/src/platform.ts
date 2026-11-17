@@ -1,15 +1,32 @@
+import type {
+  AccountRef,
+  Attachment,
+  ContextKey,
+  Embed,
+  IncomingMessage,
+  MessageRef,
+  Sticker,
+} from "@miyoria/contracts/wire";
 import type { PlatformId } from "./ids.js";
 import { serviceKey } from "./service-key.js";
-import type { Timestamp } from "./time.js";
 
-/**
- * An account on a platform. Platform user ids are globally unique per platform, so the bot and
- * self accounts on Discord resolve the same person to the same `AccountRef`.
- */
-export interface AccountRef {
-  platform: PlatformId;
-  id: string;
-}
+// The shapes of accounts, contexts and messages are contracts (`@miyoria/contracts/wire`). What
+// is here works on them: the text forms, the equality checks, and the in-process services a
+// platform provides.
+export type {
+  AccountRef,
+  Attachment,
+  Author,
+  ContextKey,
+  ContextKind,
+  Embed,
+  ForwardedMessage,
+  IncomingMessage,
+  MentionedAccount,
+  MessageRef,
+  QuotedMessage,
+  Sticker,
+} from "@miyoria/contracts/wire";
 
 /** `"<platform>:<id>"`, e.g. `"discord:1234"` (the form used in config and `edited_by` fields). */
 export function accountRefString(account: AccountRef): string {
@@ -18,20 +35,6 @@ export function accountRefString(account: AccountRef): string {
 
 export function sameAccount(a: AccountRef, b: AccountRef): boolean {
   return a.platform === b.platform && a.id === b.id;
-}
-
-export type ContextKind = "channel" | "thread" | "dm" | "voice";
-
-/**
- * Identifies one conversation context. It is independent of which connection (bot or self
- * account) observed it.
- */
-export interface ContextKey {
-  platform: PlatformId;
-  /** Guild / server id. `null` for DMs. */
-  scope: string | null;
-  channel: string;
-  kind: ContextKind;
 }
 
 /**
@@ -51,106 +54,6 @@ export function contextKeyEquals(a: ContextKey, b: ContextKey): boolean {
   return (
     a.platform === b.platform && a.scope === b.scope && a.channel === b.channel && a.kind === b.kind
   );
-}
-
-export interface MessageRef {
-  context: ContextKey;
-  id: string;
-}
-
-export interface Author {
-  account: AccountRef;
-  display_name: string;
-  is_bot: boolean;
-}
-
-export interface Attachment {
-  url: string;
-  filename: string;
-  content_type: string | null;
-  /** Platform id of the attachment (stable, unlike signed CDN URLs); the download cache key. */
-  id?: string | null;
-  /** Size in bytes, when the platform reports it. */
-  size?: number | null;
-  /** Alt text the author wrote. */
-  description?: string | null;
-}
-
-/** A sticker sent with a message. */
-export interface Sticker {
-  id: string;
-  name: string;
-}
-
-/** A rich embed (link preview, bot card): only the parts worth reading. */
-export interface Embed {
-  title: string | null;
-  description: string | null;
-  url: string | null;
-}
-
-/** The message another one replies to, as far as the platform delivered it with the reply. */
-export interface QuotedMessage {
-  author: AccountRef | null;
-  author_name: string;
-  text: string;
-}
-
-/** A forwarded message's snapshot (the forwarder's message itself is usually empty). */
-export interface ForwardedMessage {
-  text: string;
-  attachments: Attachment[];
-  stickers: Sticker[];
-  embeds: Embed[];
-}
-
-/** Someone other than her that a message @-mentions (people and bots, never roles). */
-export interface MentionedAccount {
-  account: AccountRef;
-  display_name: string;
-  is_bot: boolean;
-}
-
-/**
- * A message as the platform delivered it.
- *
- * The fields after `ts` were added later (autonomy phase E). They are optional so producers
- * that predate them (extensions, the CLI platform, stored events) stay valid; consumers treat
- * a missing field as `null` / empty.
- */
-export interface IncomingMessage {
-  id: MessageRef;
-  author: Author;
-  /** Text with mentions and custom emoji resolved to names by the platform adapter. */
-  text: string;
-  /** The message @-mentions one of her accounts. */
-  mentions_self: boolean;
-  /** The message replies to one of her messages. */
-  reply_to_self: boolean;
-  attachments: Attachment[];
-  ts: Timestamp;
-  /** The message this one replies to. */
-  reply_to?: MessageRef | null;
-  /** Author and text of `reply_to`, when the platform had it at hand. */
-  referenced?: QuotedMessage | null;
-  stickers?: Sticker[];
-  embeds?: Embed[];
-  forwarded?: ForwardedMessage[];
-  /**
-   * Accounts other than her that the text @-mentions, in order of appearance. Reply pings that
-   * are not written in the text are not listed. Together with `reply_to_self` it tells
-   * "a reply to her" apart from "a reply to her that talks to someone else".
-   */
-  mentions_others?: MentionedAccount[];
-  /** The text opens with a mention of someone other than her: it is probably said to them. */
-  opens_with_other_mention?: boolean;
-  /** Voice: a model judged the speaker done, so there is no need to wait and see if they go on. */
-  turn_complete?: boolean;
-  /**
-   * A card: its text is in components, with no plain content (Discord Components V2). Her own
-   * cards are notices, receipts and panels the system posts in her name, not lines she said.
-   */
-  card?: boolean;
 }
 
 /** Image types she can look at. */
@@ -177,11 +80,59 @@ export function imageType(a: Attachment): string | null {
   return IMAGE_EXTENSIONS[ext] ?? null;
 }
 
+/** png / jpeg / webp / gif by their first bytes, else `null`: what the bytes are, not what was said. */
+export function sniffImage(bytes: Uint8Array): string | null {
+  const at = (i: number, text: string) =>
+    [...text].every((c, k) => bytes[i + k] === c.charCodeAt(0));
+  if (bytes[0] === 0x89 && at(1, "PNG")) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (at(0, "GIF87a") || at(0, "GIF89a")) return "image/gif";
+  if (at(0, "RIFF") && at(8, "WEBP")) return "image/webp";
+  return null;
+}
+
 /** `[圖片: cat.png(一隻橘貓)]` for images, `[附件: notes.pdf]` for other files. */
 export function attachmentLabel(a: Attachment): string {
   const alt = a.description?.trim() ?? "";
   const kind = imageType(a) === null ? "附件" : "圖片";
   return alt === "" ? `[${kind}: ${a.filename}]` : `[${kind}: ${a.filename}(${alt})]`;
+}
+
+/**
+ * The preview picture of a link embed (its large image, else its thumbnail) as an attachment of
+ * its message, so it is looked at, limited and labelled like one. The URL is the platform's own
+ * proxy copy (`Embed.image`), never the original. The platform checked that it is a picture but
+ * does not say which kind, so the type is a guess from the name; the download is checked again
+ * against what the server says and the bytes.
+ */
+export function embedPicture(e: Embed): Attachment | null {
+  const url = (e.image ?? e.thumbnail)?.trim() ?? "";
+  if (url === "") return null;
+  let name = "";
+  let format = "";
+  try {
+    const parsed = new URL(url);
+    name = decodeURIComponent(parsed.pathname.split("/").at(-1) ?? "");
+    format = parsed.searchParams.get("format")?.toLowerCase() ?? "";
+  } catch {
+    return null;
+  }
+  const ext = name.split(".").at(-1)?.toLowerCase() ?? "";
+  const type = IMAGE_EXTENSIONS[ext] ?? IMAGE_EXTENSIONS[format] ?? "image/jpeg";
+  return { url, filename: name === "" ? "preview" : name, content_type: type };
+}
+
+/** The attachments of a message and the preview pictures of its embeds, in that order. */
+export function picturesOf(msg: {
+  attachments: readonly Attachment[];
+  embeds?: readonly Embed[] | undefined;
+}): Attachment[] {
+  const out = [...msg.attachments];
+  for (const e of msg.embeds ?? []) {
+    const picture = embedPicture(e);
+    if (picture !== null) out.push(picture);
+  }
+  return out;
 }
 
 function embedLabel(e: Embed): string | null {
@@ -201,7 +152,10 @@ function bodyText(
 ): string {
   const parts = [text.trim()];
   for (const s of stickers) parts.push(`[貼圖: ${s.name}]`);
-  for (const e of embeds) parts.push(embedLabel(e) ?? "");
+  for (const e of embeds) {
+    parts.push(embedLabel(e) ?? "");
+    if (embedPicture(e) !== null) parts.push("[圖片: 連結預覽]");
+  }
   for (const a of attachments) parts.push(attachmentLabel(a));
   return parts.filter((p) => p !== "").join(" ");
 }
@@ -221,20 +175,102 @@ export function incomingText(msg: IncomingMessage): string {
   return out;
 }
 
-/** A file on this machine to send with a message. */
-export interface OutgoingFile {
-  name: string;
-  path: string;
-  contentType: string;
+/**
+ * A file that goes out with a message: an artifact of the artifact store, named by its id. Never a
+ * host path and never bytes: the platform sink asks the `AttachmentSource` for the content when it
+ * sends, and the source checks again that the destination may see it (v5-architecture §11.2).
+ */
+export interface OutgoingAttachment {
+  artifact_id: string;
 }
 
 export interface OutgoingMessage {
+  /** May be empty when `attachments` is not. */
   text: string;
   reply_to: MessageRef | null;
-  files?: OutgoingFile[];
-  /** `false`: nobody is pinged, not even users. */
-  mentions?: boolean;
+  /**
+   * Files sent with the message. A sink without `attachmentLimit` cannot take any: senders check
+   * `attachmentLimit` first and do not put attachments on a message for such a sink.
+   */
+  attachments?: OutgoingAttachment[];
 }
+
+/** Why an attachment did not go out. */
+export type AttachmentRefusal =
+  /** Nothing here can resolve artifacts (no artifact store, or the platform takes no files). */
+  | "unavailable"
+  /** No such artifact, or it is gone (expired, deleted, taken down). */
+  | "not_found"
+  /** The destination may not see it. */
+  | "not_visible"
+  /** It may never leave as a file (a song cover). */
+  | "not_shareable"
+  /** Larger than the platform takes there. */
+  | "too_large"
+  /** More files than one message takes. */
+  | "too_many"
+  /** Its bytes are missing or are not the ones recorded. */
+  | "damaged"
+  /** The platform refused the upload (no permission to attach files there, its own limits). */
+  | "platform";
+
+/** An attachment could not be sent; `message` says why in plain words (for logs and the tool). */
+export class AttachmentError extends Error {
+  override readonly name = "AttachmentError";
+
+  constructor(
+    readonly code: AttachmentRefusal,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+  }
+}
+
+/** The `AttachmentError` in `error` or its causes, if any. */
+export function attachmentErrorOf(error: unknown): AttachmentError | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
+    if (current instanceof AttachmentError) return current;
+    current = current.cause;
+  }
+  return null;
+}
+
+/** An attachment resolved for one send: its upload name, sniffed type and bytes. */
+export interface AttachmentFile {
+  artifact_id: string;
+  /** Cleaned by the artifact store; never a path. */
+  filename: string;
+  content_type: string;
+  size: number;
+  data: Uint8Array;
+}
+
+export interface AttachmentOpenOptions {
+  /** The largest file the platform takes at the destination, in bytes. */
+  maxBytes: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Resolves outgoing attachments at send time. Provided by the app over the artifact store
+ * (`AttachmentSourceKey`); platform sinks look it up per message.
+ */
+export interface AttachmentSource {
+  /**
+   * The content of artifact `artifactId` for a message into `destination`. Checks, now, that the
+   * artifact is still there, may be downloaded, is visible at the destination and fits `maxBytes`.
+   * Throws an `AttachmentError` otherwise.
+   */
+  open(
+    artifactId: string,
+    destination: ContextKey,
+    options: AttachmentOpenOptions,
+  ): Promise<AttachmentFile>;
+}
+
+export const AttachmentSourceKey = serviceKey<AttachmentSource>("AttachmentSource");
 
 /**
  * Implemented by platform adapters so the scheduler can execute output actions without knowing
@@ -245,18 +281,14 @@ export type SentMessage = MessageRef & { blocked?: string };
 
 export interface PlatformSink {
   readonly platform: PlatformId;
-  /** Whether `files` reach the people there; a sink without it drops them. */
-  readonly sendsFiles?: boolean;
   send(context: ContextKey, message: OutgoingMessage, signal?: AbortSignal): Promise<SentMessage>;
   react(message: MessageRef, emoji: string, signal?: AbortSignal): Promise<void>;
   typing(context: ContextKey, signal?: AbortSignal): Promise<void>;
   /**
-   * Replaces the text of a message she sent (e.g. the lyrics card while she sings). Optional;
-   * platforms that cannot edit leave it out and callers skip what needs it.
+   * The largest attachment `send` takes in `context`, in bytes; `null` when it takes none there.
+   * Optional: a platform without it has no attachments at all, and `send` ignores them.
    */
-  edit?(message: MessageRef, text: string, signal?: AbortSignal): Promise<void>;
-  /** Deletes a message she sent (e.g. the lyrics card once the song ends). Optional. */
-  delete?(message: MessageRef, signal?: AbortSignal): Promise<void>;
+  attachmentLimit?(context: ContextKey): number | null;
   /**
    * Sets the status line of the voice channel `context` (`""` clears it). Optional; platforms
    * without one leave it out.

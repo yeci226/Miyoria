@@ -1,7 +1,7 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { Ban, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { DirectiveRecord } from "@/api/types";
+import type { DirectiveRecord } from "@miyoria/contracts/api";
 import { useBlocksToday, useDirectiveMutations, useDirectives } from "@/app/queries";
 import { ConfirmDialog } from "@/components/confirm";
 import { DataTable } from "@/components/data-table";

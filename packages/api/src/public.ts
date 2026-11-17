@@ -1,8 +1,10 @@
 // The public side of the panel (docs/design/v3-architecture.md §17.1): what anyone may see, with no
 // login, at `/api/public/*`.
 //
-// * `GET /api/public/status`: what she is doing and today's aggregate numbers.
-// * `GET /api/public/songs`: what is playing, what is coming up, what she just sang.
+// * `GET /api/public/status`: what she is doing and today's aggregate numbers (on the route table,
+//   `publicRpc`).
+// * `GET /api/public/songs`: what is playing, what is coming up, what she just sang (on the route
+//   table too, `publicRpc`).
 //
 // Every response is built field by field in this file: internal objects are never spread into
 // one, so a field added to `SongEntry` or `ActivitySnapshot` stays private until someone names it
@@ -12,23 +14,6 @@
 // reaches neither the store nor the voice path. Nothing here publishes anything or writes where
 // she can read it: being looked at changes nothing about her.
 
-import { getLogger, type ModuleContext } from "@miyoria/kernel";
-import { SingerKey, type SongEntry } from "@miyoria/sing";
-import { knownNames, type SettingsStore } from "@miyoria/store";
-import {
-  ActivityManagerKey,
-  type ActivitySnapshot,
-  type Envelope,
-  isJsonObject,
-  type KnownName,
-  ModerationKey,
-  parseSongCue,
-  SONG_TOPIC,
-} from "@miyoria/types";
-import { z } from "zod";
-import { ApiError } from "./errors.js";
-import type { Route } from "./route.js";
-import type { ApiContext, ApiState } from "./state.js";
 import type {
   PublicDay,
   PublicSong,
@@ -36,7 +21,26 @@ import type {
   PublicState,
   PublicStatus,
   PublicToday,
-} from "./types.js";
+} from "@miyoria/contracts/api";
+import { getLogger, type ModuleContext } from "@miyoria/runtime/kernel";
+import { SingerKey, type SongEntry } from "@miyoria/sing";
+import { knownNames, type SettingsStore } from "@miyoria/store";
+import {
+  ActivityManagerKey,
+  type ActivitySnapshot,
+  accountRefString,
+  type Envelope,
+  Events,
+  isJsonObject,
+  type JsonValue,
+  type KnownName,
+  ModerationKey,
+  parseSongCue,
+} from "@miyoria/types";
+import { z } from "zod";
+import { os, type RpcContext } from "./contract.js";
+import { ApiError } from "./errors.js";
+import type { ApiContext, ApiState } from "./state.js";
 
 const log = getLogger("api.public");
 
@@ -66,6 +70,8 @@ const NAMES_TTL_MS = MINUTE_MS;
 
 /** Logins started per client and minute: each one holds a place among the logins in flight. */
 const LOGINS_PER_MINUTE = 20;
+/** Join attempts per client and minute: a code is the only credential, so guessing is slowed. */
+const JOINS_PER_MINUTE = 5;
 /** Requests per member and minute. */
 const MEMBER_PER_MINUTE = 60;
 /** Exports and forgets per member and hour: both walk every memory. */
@@ -159,16 +165,16 @@ export function clientKey(c: ApiContext): string {
   return network(c.req.header("cf-connecting-ip")?.trim() || "local");
 }
 
+/** Throws `429` when the member behind `c` has been asking too much. */
+export function limitMember(state: ApiState, c: ApiContext): void {
+  const { account } = c.get("member");
+  const wait = state.publicSide.admitMember(accountRefString(account));
+  if (wait !== null) throw ApiError.tooMany(wait);
+}
+
 /** `429` with how long to wait. */
 export function tooMany(waitMs: number): Response {
-  return new Response(JSON.stringify({ error: "too many requests" }), {
-    status: 429,
-    headers: {
-      "content-type": "application/json",
-      "cache-control": "no-store",
-      "retry-after": String(Math.max(Math.ceil(waitMs / 1000), 1)),
-    },
-  });
+  return ApiError.tooMany(waitMs).toResponse();
 }
 
 // ---- today's numbers ------------------------------------------------------------------------
@@ -234,8 +240,8 @@ export class PublicStats {
 
   /** A bus envelope: a song she sang to the end counts. */
   handle(env: Envelope, now: number): void {
-    if (env.event.type !== "custom" || env.event.data.topic !== SONG_TOPIC) return;
-    const cue = parseSongCue(env.event.data.payload);
+    if (env.type !== Events.SingCue.type) return;
+    const cue = parseSongCue(env.data as JsonValue);
     if (cue?.state !== "ended" || cue.outcome !== "finished") return;
     this.#roll(now);
     this.#songs += 1;
@@ -334,10 +340,11 @@ export class PublicSide {
   readonly #clients: RateWindow;
   readonly #everyone: RateWindow;
   readonly #logins = new RateWindow(LOGINS_PER_MINUTE, MINUTE_MS);
+  readonly #joins = new RateWindow(JOINS_PER_MINUTE, MINUTE_MS);
   readonly #members = new RateWindow(MEMBER_PER_MINUTE, MINUTE_MS);
   readonly #heavy = new RateWindow(HEAVY_PER_HOUR, HOUR_MS);
   readonly #cardChecks = new RateWindow(CARD_CHECKS_PER_MINUTE, MINUTE_MS);
-  readonly #bodies = new Map<string, { at: number; body: string }>();
+  readonly #bodies = new Map<string, { at: number; value: unknown; body: string }>();
   readonly #verdicts = new Map<string, boolean>();
   #names: { at: number; names: KnownName[] | null } | null = null;
 
@@ -361,6 +368,11 @@ export class PublicSide {
     return this.#logins.hit(client, this.#now());
   }
 
+  /** A machine joining the cluster with a code. */
+  admitJoin(client: string): number | null {
+    return this.#joins.hit(client, this.#now());
+  }
+
   admitMember(account: string): number | null {
     return this.#members.hit(account, this.#now());
   }
@@ -376,16 +388,26 @@ export class PublicSide {
 
   /** The body under `key`, built at most once per `cache_secs`. */
   cached(key: string, build: () => unknown): string {
+    return this.#entry(key, build).body;
+  }
+
+  /** Like `cached`, the value itself, for a route that serialises its own answer. */
+  cachedValue<T>(key: string, build: () => T): T {
+    return this.#entry(key, build).value as T;
+  }
+
+  #entry(key: string, build: () => unknown): { value: unknown; body: string } {
     const now = this.#now();
     const hit = this.#bodies.get(key);
-    if (hit && now - hit.at < this.config.cache_secs * 1000) return hit.body;
+    if (hit && now - hit.at < this.config.cache_secs * 1000) return hit;
     try {
-      const body = JSON.stringify(build());
-      this.#bodies.set(key, { at: now, body });
-      return body;
+      const value = build();
+      const entry = { at: now, value, body: JSON.stringify(value) };
+      this.#bodies.set(key, entry);
+      return entry;
     } catch (error) {
       log.warn({ error: String(error) }, "cannot build a public response");
-      if (hit) return hit.body;
+      if (hit) return hit;
       throw ApiError.unavailable("not available right now");
     }
   }
@@ -489,35 +511,26 @@ export function publicSongs(state: ApiState): PublicSongs {
   };
 }
 
-function serve(state: ApiState, c: ApiContext, key: string, build: () => unknown): Response {
+/**
+ * The answer of a public view: one value serves everyone for `cache_secs`, shared by every client,
+ * after the client's own rate limit (`429`). It carries the cache headers the public views have.
+ */
+export function servePublic<T>(context: RpcContext, key: string, build: () => T): T {
+  const { state, c } = context;
   const side = state.publicSide;
   const wait = side.admit(clientKey(c));
-  if (wait !== null) return tooMany(wait);
-  return new Response(side.cached(key, build), {
-    status: 200,
-    headers: {
-      "content-type": "application/json",
-      "cache-control": `public, max-age=${Math.ceil(side.config.cache_secs)}`,
-      "x-content-type-options": "nosniff",
-    },
-  });
+  if (wait !== null) throw ApiError.tooMany(wait);
+  context.resHeaders?.set("cache-control", `public, max-age=${Math.ceil(side.config.cache_secs)}`);
+  context.resHeaders?.set("x-content-type-options", "nosniff");
+  return side.cachedValue(key, build);
 }
 
-/** The public routes; none when `[modules.api.public] enabled` is off. */
-export function publicViewRoutes(state: ApiState): Route[] {
-  if (!state.publicSide.config.enabled) return [];
-  return [
-    {
-      method: "GET",
-      path: "/api/public/status",
-      public: true,
-      handler: (c) => serve(state, c, "status", () => publicStatus(state)),
-    },
-    {
-      method: "GET",
-      path: "/api/public/songs",
-      public: true,
-      handler: (c) => serve(state, c, "songs", () => publicSongs(state)),
-    },
-  ];
-}
+/** `GET /api/public/status`, `GET /api/public/songs`; served only while the public side is on (see `rpc.ts`). */
+export const publicRpc = {
+  status: os.public.status.handler(({ context }) =>
+    servePublic(context, "status", () => publicStatus(context.state)),
+  ),
+  songs: os.public.songs.handler(({ context }) =>
+    servePublic(context, "songs", () => publicSongs(context.state)),
+  ),
+};

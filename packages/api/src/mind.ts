@@ -4,25 +4,15 @@
 // /api/mind/pause|resume` (the emergency stop: `emergency` says how each of its steps went).
 // Changes need the owner-level node `owner.autonomy.approve` (the bearer token has every right).
 
-import { ActuatorRegistryKey, NODE_APPROVE } from "@miyoria/actions";
-import { AuthorizerKey, MindKey } from "@miyoria/types";
+import type { MindView, PendingApproval, ThoughtSummary } from "@miyoria/contracts/api";
+import { ActuatorRegistryKey } from "@miyoria/gate/actions";
+import { MindKey } from "@miyoria/types";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { json, param, type Route } from "./route.js";
 import { type ApiContext, type ApiState, actorOf, toJson } from "./state.js";
-import type { MindView } from "./types.js";
 
 const DEFAULT_THOUGHTS = 50;
 const MAX_THOUGHTS = 300;
-
-/** The request's account must hold the owner-level node (the token always may). */
-function requireOwner(state: ApiState, c: ApiContext): void {
-  const principal = c.get("principal");
-  if (principal.kind === "token") return;
-  const authorizer = state.optional(AuthorizerKey);
-  if (!authorizer?.allows(principal.record.account, NODE_APPROVE)) {
-    throw new ApiError(403, `this needs \`${NODE_APPROVE}\``);
-  }
-}
 
 function mindView(state: ApiState): MindView {
   const registry = state.optional(ActuatorRegistryKey);
@@ -30,25 +20,28 @@ function mindView(state: ApiState): MindView {
   return {
     paused: registry?.paused ?? false,
     running: mind !== undefined,
-    accepting: mind?.accepting ?? false,
     stats: mind?.stats() ?? null,
     pending_approvals: registry?.escalations.pending().length ?? 0,
     emergency: registry?.emergency.last ?? null,
   };
 }
 
-async function answer(state: ApiState, c: ApiContext, approved: boolean): Promise<Response> {
-  requireOwner(state, c);
+/** Needs the owner-level node (the route's permission). */
+async function answer(
+  state: ApiState,
+  c: ApiContext,
+  id: string,
+  approved: boolean,
+): Promise<PendingApproval[]> {
   const registry = state.service(ActuatorRegistryKey, "actuator registry");
-  const id = param(c, "id");
   const known = registry.escalations.resolve(id, approved, `panel:${actorOf(c)}`);
   await state.audit(c, approved ? "autonomy.approve" : "autonomy.deny", id, {}, known);
   if (!known) throw ApiError.notFound("no such pending approval (answered or expired)");
-  return json(registry.escalations.pending());
+  return registry.escalations.pending();
 }
 
-async function setPaused(state: ApiState, c: ApiContext, paused: boolean): Promise<Response> {
-  requireOwner(state, c);
+/** Needs the owner-level node (the route's permission). */
+async function setPaused(state: ApiState, c: ApiContext, paused: boolean): Promise<MindView> {
   const registry = state.service(ActuatorRegistryKey, "actuator registry");
   const actor = actorOf(c);
   const report = paused
@@ -62,48 +55,39 @@ async function setPaused(state: ApiState, c: ApiContext, paused: boolean): Promi
     toJson(report),
     ok,
   );
-  return json(mindView(state));
+  return mindView(state);
 }
 
-export function mindRoutes(state: ApiState): Route[] {
-  return [
-    { method: "GET", path: "/api/mind", handler: () => json(mindView(state)) },
-    {
-      method: "GET",
-      path: "/api/mind/thoughts",
-      handler: (c) => {
-        const mind = state.service(MindKey, "mind module");
-        const raw = Number(c.req.query("limit") ?? DEFAULT_THOUGHTS);
-        const limit = Number.isFinite(raw)
-          ? Math.min(Math.max(Math.trunc(raw), 1), MAX_THOUGHTS)
-          : DEFAULT_THOUGHTS;
-        // What each thought saw and the reasoning are large: `GET /api/mind/thoughts/{id}`.
-        return json(
-          mind.thoughts(limit).map(({ input: _input, reasoning, ...t }) => ({
-            ...t,
-            has_input: _input != null,
-            has_reasoning: reasoning != null && reasoning !== "",
-          })),
-        );
-      },
-    },
-    {
-      method: "GET",
-      path: "/api/mind/approvals",
-      handler: () =>
-        json(state.service(ActuatorRegistryKey, "actuator registry").escalations.pending()),
-    },
-    {
-      method: "POST",
-      path: "/api/mind/approvals/:id/approve",
-      handler: (c) => answer(state, c, true),
-    },
-    {
-      method: "POST",
-      path: "/api/mind/approvals/:id/deny",
-      handler: (c) => answer(state, c, false),
-    },
-    { method: "POST", path: "/api/mind/pause", handler: (c) => setPaused(state, c, true) },
-    { method: "POST", path: "/api/mind/resume", handler: (c) => setPaused(state, c, false) },
-  ];
+/** `GET /api/mind/thoughts?limit=`: newest first, without what each saw and its reasoning. */
+function thoughts(state: ApiState, limitText: string | number | undefined): ThoughtSummary[] {
+  const mind = state.service(MindKey, "mind module");
+  const raw = Number(limitText ?? DEFAULT_THOUGHTS);
+  const limit = Number.isFinite(raw)
+    ? Math.min(Math.max(Math.trunc(raw), 1), MAX_THOUGHTS)
+    : DEFAULT_THOUGHTS;
+  // What each thought saw and the reasoning are large: `GET /api/mind/thoughts/{id}`.
+  return mind.thoughts(limit).map(({ input, reasoning, ...t }) => ({
+    ...t,
+    has_input: input != null,
+    has_reasoning: reasoning != null && reasoning !== "",
+  }));
 }
+
+/** The mind routes on the route table (`@miyoria/contracts/api`). */
+export const mindRpc = {
+  status: os.mind.status.handler(({ context }) => mindView(context.state)),
+  thoughts: os.mind.thoughts.handler(({ input, context }) =>
+    thoughts(context.state, input.query.limit),
+  ),
+  approvals: os.mind.approvals.handler(({ context }) =>
+    context.state.service(ActuatorRegistryKey, "actuator registry").escalations.pending(),
+  ),
+  approve: os.mind.approve.handler(({ input, context }) =>
+    answer(context.state, context.c, input.params.id, true),
+  ),
+  deny: os.mind.deny.handler(({ input, context }) =>
+    answer(context.state, context.c, input.params.id, false),
+  ),
+  pause: os.mind.pause.handler(({ context }) => setPaused(context.state, context.c, true)),
+  resume: os.mind.resume.handler(({ context }) => setPaused(context.state, context.c, false)),
+};

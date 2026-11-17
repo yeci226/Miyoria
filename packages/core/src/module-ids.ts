@@ -1,13 +1,14 @@
-// Module ids the core knows about, in boot order (legacy `boot.rs` `MODULES`). Kept free of
+// Module ids the core knows about, in boot order. Kept free of
 // imports so the CLI can list configured modules without loading any module package.
 
-import type { Config } from "@miyoria/kernel";
+import type { Config } from "@miyoria/runtime/kernel";
 
 /** Every module the core knows about, for `miyoria module list`. */
 export const MODULE_IDS: readonly string[] = [
   "facts",
   "moderation",
   "llm",
+  "cluster",
   "speech",
   "voice.link",
   "voice",
@@ -18,8 +19,7 @@ export const MODULE_IDS: readonly string[] = [
   "actions",
   "directive",
   "activity",
-  "social",
-  "mood",
+  "heart",
   "world",
   "self",
   "memory",
@@ -32,19 +32,18 @@ export const MODULE_IDS: readonly string[] = [
   "game",
   "game.chat",
   "sing",
-  "share",
-  "watch",
   "mcp",
   "stage.link",
+  "economy",
   "web",
   "sandbox",
   "imagegen",
   "skills",
   "live",
   "party",
+  "eval",
   "extensions",
   "platform.discord.bot",
-  "recorder",
   "replay",
   "api",
 ];
@@ -58,11 +57,26 @@ export const NEEDS_TOKEN: readonly string[] = [
 ];
 
 /**
+ * Modules that cannot be turned off, in the config file or at runtime, and why: the agent owns her
+ * mouth and the arbiter decides when she speaks, so nothing speaks while either is down; the heart
+ * is who people are and how she feels about them (`SocialSignalsKey`), which the gate, the queue,
+ * her prompt and her feel all read.
+ */
+export const REQUIRED_MODULE_REASONS: Readonly<Record<string, string>> = {
+  agent: "nothing speaks while it is down",
+  arbiter: "nothing speaks while it is down",
+  heart: "who people are and how she feels about them live there",
+};
+
+/** The ids of `REQUIRED_MODULE_REASONS`. */
+export const REQUIRED_MODULES: readonly string[] = Object.keys(REQUIRED_MODULE_REASONS);
+
+/**
  * Modules that are off unless their section says `enabled = true` (a missing section or a
  * missing `enabled` key means disabled): high-risk ones, and ones that need a server of their own
  * (`imagegen` needs ComfyUI).
  */
-export const OPT_IN_MODULES: readonly string[] = ["sandbox", "share", "watch", "imagegen"];
+export const OPT_IN_MODULES: readonly string[] = ["sandbox", "imagegen"];
 
 /** Whether the config file enables module `id` (`OPT_IN_MODULES` need `enabled = true`). */
 export function moduleEnabled(config: Config, id: string): boolean {

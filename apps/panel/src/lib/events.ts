@@ -1,28 +1,42 @@
-import type { BusEvent, Envelope } from "../api/types";
+import type * as Bus from "@miyoria/contracts/events";
 import { accountString, contextShort } from "./format";
 
-/** Mirrors `eventTopic()` in `packages/types/src/event.ts`. */
-const TOPICS: Record<Exclude<BusEvent["type"], "custom">, string> = {
-  platform_ready: "platform.ready",
-  platform_message_created: "platform.message.created",
-  platform_typing: "platform.typing",
-  agent_turn_started: "agent.turn.started",
-  agent_decision: "agent.decision",
-  agent_turn_completed: "agent.turn.completed",
-  action_completed: "action.completed",
-  voice_joined: "voice.joined",
-  voice_left: "voice.left",
-  voice_participants: "voice.participants",
-  voice_speaking: "voice.speaking",
-  voice_utterance: "voice.utterance",
-  voice_playback: "voice.playback",
-  agent_initiative: "agent.initiative",
-  module_state_changed: "system.module.state",
+/** A bus envelope as the event stream sends it (`GET /api/events`). */
+export type BusEnvelope = Bus.BusEnvelopeJson;
+
+/** A bus envelope of the event `D` defines: its `type`, and `data` as its payload. */
+type Of<D extends Bus.AnyEventDefinition> = Omit<BusEnvelope, "type" | "data"> & {
+  type: D["type"];
+  data: Bus.EventPayload<D>;
 };
 
-export function topicOf(event: BusEvent): string {
-  if (event.type === "custom") return event.data.topic;
-  return TOPICS[event.type] ?? event.type;
+/** The events the list puts in words; any other shows its payload. */
+type Worded =
+  | Of<typeof Bus.PlatformReady>
+  | Of<typeof Bus.PlatformMessageCreated>
+  | Of<typeof Bus.PlatformTyping>
+  | Of<typeof Bus.AgentTurnStarted>
+  | Of<typeof Bus.AgentDecision>
+  | Of<typeof Bus.AgentTurnCompleted>
+  | Of<typeof Bus.ActionCompleted>
+  | Of<typeof Bus.VoiceJoined>
+  | Of<typeof Bus.VoiceLeft>
+  | Of<typeof Bus.VoiceParticipants>
+  | Of<typeof Bus.VoiceSpeaking>
+  | Of<typeof Bus.VoiceUtteranceEvent>
+  | Of<typeof Bus.VoicePlaybackEvent>
+  | Of<typeof Bus.AgentInitiative>
+  | Of<typeof Bus.SystemModuleState>;
+
+/** The payload of one of those types: `Payload<"voice.utterance">`. */
+export type Payload<T extends Worded["type"]> = Extract<Worded, { type: T }>["data"];
+
+/**
+ * `env` as the event its `type` names, for the types the panel reads the payload of. The payload
+ * is not checked: the Core checked it against the contract before sending it.
+ */
+export function asEvent(env: BusEnvelope): Worded {
+  return env as Worded;
 }
 
 /**
@@ -62,57 +76,55 @@ export interface EventSummary {
 }
 
 /** One-line, human description of an envelope for tickers and lists. */
-export function summarize(env: Envelope): EventSummary {
-  const e = env.event;
+export function summarize(env: BusEnvelope): EventSummary {
+  const e = asEvent(env);
   switch (e.type) {
-    case "platform_ready":
+    case "platform.ready":
       return { text: `${e.data.platform} 已連線(${accountString(e.data.self_account)})`, tone: "ok" };
-    case "platform_message_created":
+    case "platform.message.created":
       return { text: `${e.data.author.display_name}:${clip(e.data.text)}`, tone: "neutral" };
-    case "platform_typing":
+    case "platform.typing":
       return { text: `${accountString(e.data.account)} 正在輸入…`, tone: "neutral" };
-    case "agent_turn_started":
+    case "agent.turn.started":
       return { text: `回合開始 · ${contextShort(e.data.context)}`, tone: "accent" };
-    case "agent_decision":
+    case "agent.decision":
       return {
         text: `${e.data.respond ? "回應" : "略過"} · 分數 ${e.data.score.toFixed(2)}${e.data.reasons[0] ? ` · ${clip(e.data.reasons[0], 60)}` : ""}`,
         tone: e.data.respond ? "accent" : "neutral",
       };
-    case "agent_turn_completed":
+    case "agent.turn.completed":
       return { text: `她說:${clip(e.data.text)}`, tone: "accent" };
-    case "action_completed":
+    case "action.completed":
       return e.data.ok
         ? { text: "動作完成", tone: "ok" }
         : { text: `動作失敗:${clip(e.data.error ?? "未知錯誤")}`, tone: "danger" };
-    case "voice_joined":
+    case "voice.joined":
       return { text: `加入語音 · ${e.data.participants.length} 人`, tone: "ok" };
-    case "voice_left":
+    case "voice.left":
       return { text: `離開語音${e.data.reason ? `(${e.data.reason})` : ""}`, tone: "neutral" };
-    case "voice_participants":
+    case "voice.participants":
       return { text: `語音成員變動 · ${e.data.participants.length} 人`, tone: "neutral" };
-    case "voice_speaking":
+    case "voice.speaking":
       return { text: `${accountString(e.data.account)} ${e.data.speaking ? "開始說話" : "停止說話"}`, tone: "neutral" };
-    case "voice_utterance":
+    case "voice.utterance":
       return { text: `${e.data.speaker.display_name}(語音):${clip(e.data.text)}`, tone: "neutral" };
-    case "voice_playback": {
+    case "voice.playback": {
       const label = { started: "開始播放", finished: "播放結束", interrupted: "被打斷", failed: "播放失敗" }[e.data.state];
       return { text: `${label} · ${clip(e.data.text, 60)}`, tone: e.data.state === "failed" ? "danger" : e.data.state === "interrupted" ? "warn" : "accent" };
     }
-    case "agent_initiative":
+    case "agent.initiative":
       return { text: `主動發言:${e.data.reason}${e.data.hint ? ` · ${clip(e.data.hint, 60)}` : ""}`, tone: "accent" };
-    case "module_state_changed": {
+    case "system.module.state": {
       const s = e.data.state;
       return {
         text: `${e.data.module} → ${s}${e.data.reason ? `(${clip(e.data.reason, 60)})` : ""}`,
         tone: s === "failed" ? "danger" : s === "degraded" ? "warn" : s === "running" ? "ok" : "neutral",
       };
     }
-    case "custom": {
-      const payload = e.data.payload;
+    default: {
+      const payload = env.data;
       const text = payload === null || payload === undefined ? "" : clip(JSON.stringify(payload), 100);
-      return { text, tone: e.data.topic === "llm.budget" ? "warn" : "neutral" };
+      return { text, tone: env.type === "llm.budget" ? "warn" : "neutral" };
     }
-    default:
-      return { text: "", tone: "neutral" };
   }
 }

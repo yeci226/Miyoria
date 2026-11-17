@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>羈絆環示意圖</title>
+<style>
+  /* Tokens copied from apps/panel/src/index.css (櫻花). */
+  :root {
+    --background: #0b0d12; --foreground: #f1f0f4; --muted-foreground: #dedce4;
+    --muted: rgba(255,255,255,.1); --border: rgba(255,255,255,.11); --line-soft: rgba(255,255,255,.06);
+    --primary: #f29dc4; --secondary: #7355e8;
+    --secondary-line: color-mix(in oklab, var(--secondary) 62%, white);
+    --sheet: rgba(9,10,16,.6);
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--background); }
+  body { margin: 0; color: var(--foreground); font: 14px/1.5 "Geist Variable", Geist, "PingFang TC", "Microsoft JhengHei UI", "Noto Sans TC", system-ui, sans-serif;
+    background: linear-gradient(160deg, #2a2140 0%, #141826 45%, #0b0d12 100%) fixed; min-height: 100vh; }
+  ::selection { background: color-mix(in oklab, var(--primary) 45%, transparent); }
+  main { background: var(--sheet); min-height: 100vh; padding: 28px; display: grid; gap: 32px; align-content: start; }
+  @media (max-width: 640px) { main { padding: 16px; } }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 14px; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .dim { color: var(--muted-foreground); }
+
+  .states { display: flex; flex-wrap: wrap; gap: 28px 36px; }
+  .states figure { margin: 0; width: 132px; }
+  .states svg { display: block; width: 132px; height: 132px; }
+  .states figcaption { margin-top: 10px; font-size: 12px; display: flex; justify-content: space-between; }
+
+  .person { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 36px; align-items: start; max-width: 860px; }
+  @media (max-width: 640px) { .person { grid-template-columns: 1fr; } }
+  .person .ring svg { width: 176px; height: 176px; display: block; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 12px 0 0; }
+  .facts div { font-size: 12px; }
+  .facts b { display: block; font-size: 14px; font-weight: 500; color: var(--foreground); }
+  .rows { border-top: 1px solid var(--border); }
+  .row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 52px; gap: 16px; align-items: center;
+    padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .row .v { text-align: right; }
+  .meter { position: relative; height: 4px; border-radius: 2px; background: var(--muted); overflow: hidden; }
+  .meter i { position: absolute; top: 0; bottom: 0; background: var(--secondary-line); }
+  .meter s { position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: rgba(241,240,244,.3); }
+  .log .row { grid-template-columns: 64px 96px minmax(0, 1fr); }
+  .log q { quotes: "「" "」"; }
+
+  table { border-collapse: collapse; width: 100%; max-width: 860px; font-size: 13px; }
+  th { text-align: left; font-weight: 500; font-size: 12px; color: var(--muted-foreground); padding: 0 16px 8px 0; }
+  td { padding: 8px 16px 8px 0; border-top: 1px solid var(--border); vertical-align: middle; }
+  td svg { width: 28px; height: 28px; display: block; }
+  .bond { display: flex; align-items: center; gap: 10px; }
+
+  .public { display: flex; align-items: center; gap: 20px; }
+  .public svg { width: 96px; height: 96px; display: block; }
+  .public b { display: block; font-size: 15px; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <h2>羈絆環</h2>
+    <div class="states" id="states"></div>
+  </section>
+
+  <section>
+    <h2>人物頁</h2>
+    <div class="person">
+      <div class="ring">
+        <div id="personRing"></div>
+        <div class="facts">
+          <div class="dim">羈絆<b class="num">342</b></div>
+          <div class="dim">分級<b>心有靈犀 II</b></div>
+          <div class="dim">下一階<b>心有靈犀 III</b></div>
+          <div class="dim">在意<b class="num">0.71</b></div>
+        </div>
+      </div>
+      <div>
+        <div class="rows" id="bars"></div>
+        <h3 style="margin-top:24px">今天的額度</h3>
+        <div class="rows">
+          <div class="row"><span class="dim">羈絆</span><div class="meter"><i style="left:0;width:58%"></i></div><span class="v num">3.5 / 6</span></div>
+          <div class="row"><span class="dim">默契</span><div class="meter"><i style="left:0;width:67%"></i></div><span class="v num">.04 / .06</span></div>
+        </div>
+        <h3 style="margin-top:24px">最近的變化</h3>
+        <div class="rows log">
+          <div class="row"><span class="dim num">21:14</span><span>默契 <span class="num">+0.04</span></span><q>他接了我上次那個梗</q></div>
+          <div class="row"><span class="dim num">20:52</span><span>羈絆 <span class="num">+1.5</span></span><q>記得我說想吃的東西</q></div>
+          <div class="row"><span class="dim num">19:30</span><span>一起</span><span class="dim">在你的語音頻道一起待了 42 分鐘</span></div>
+          <div class="row"><span class="dim num">昨天</span><span>心結 <span class="num">−0.10</span></span><q>他道歉了,我也沒那麼氣了</q></div>
+        </div>
+        <h3 style="margin-top:24px">分級的共同記憶</h3>
+        <div class="rows log">
+          <div class="row"><span class="dim">心有靈犀</span><span class="dim num">11/02</span><q>那天他陪我把整首歌練完</q></div>
+          <div class="row"><span class="dim">莫逆之交</span><span class="dim num">10/19</span><q>他幫我擋掉那個一直洗頻的人</q></div>
+        </div>
+        <h3 style="margin-top:24px">她寫的</h3>
+        <div class="rows log">
+          <div class="row" style="grid-template-columns:96px minmax(0,1fr)"><span class="dim">怎麼相處</span><span>會鬧他,但他認真的時候不鬧</span></div>
+          <div class="row" style="grid-template-columns:96px minmax(0,1fr)"><span class="dim">印象</span><span>記性很好,答應的事會做</span></div>
+          <div class="row" style="grid-template-columns:96px minmax(0,1fr)"><span class="dim">還沒聊完</span><span>他換工作的事</span></div>
+          <div class="row" style="grid-template-columns:96px minmax(0,1fr)"><span class="dim">你們的梗</span><span>香菜</span></div>
+          <div class="row" style="grid-template-columns:96px minmax(0,1fr)"><span class="dim">對他說的</span><span>我還沒說你就知道了……不准偷看我在想什麼!</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>人</h2>
+    <table>
+      <thead><tr><th>名字</th><th>分級</th><th>羈絆</th><th>最近</th></tr></thead>
+      <tbody id="list"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>公開頁和 Discord</h2>
+    <div class="public"><div id="pub"></div><div><b>心有靈犀 II</b><span class="dim">離「心有靈犀 III」還有一段</span></div></div>
+  </section>
+</main>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+// Lucide "heart", the icon set the panel uses.
+const HEART = "M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z";
+const TRACK = "rgba(255,255,255,.07)";
+function el(name, attrs, parent) {
+  const n = document.createElementNS(NS, name);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function band(svg, r, w, frac, color) {
+  const c = 2 * Math.PI * r;
+  const n = el("circle", { cx: 80, cy: 80, r, fill: "none", "stroke-width": w,
+    "stroke-dasharray": (c * frac) + " " + c, transform: "rotate(-90 80 80)" }, svg);
+  n.style.stroke = color;
+  // A lap that is still being filled ends round, like the panel's bars and columns.
+  if (frac < 1) {
+    n.setAttribute("stroke-linecap", "round");
+    const cap = w / 2;
+    n.setAttribute("stroke-dasharray", Math.max(c * frac - cap * 2, 0.01) + " " + c);
+    n.setAttribute("transform", "rotate(" + (-90 + (cap / c) * 360) + " 80 80)");
+  }
+  return n;
+}
+// The ring of the lap being filled, and round it a thin ring of ten segments: one lit segment,
+// one lap done. Ten segments are read at a glance, like the hours of a clock.
+function ring(bond, number) {
+  const svg = el("svg", { viewBox: "0 0 160 160", role: "img", "aria-label": "羈絆環" });
+  const laps = Math.min(Math.floor(Math.max(bond, 0) / 100), 10);
+  const frac = bond >= 1000 ? 1 : (Math.max(bond, 0) % 100) / 100;
+  const RO = 75, CO = 2 * Math.PI * RO, SEG = CO / 10, GAP = 5;
+  for (let i = 0; i < 10; i++) {
+    const n = el("circle", { cx: 80, cy: 80, r: RO, fill: "none", "stroke-width": 4, "stroke-linecap": "round",
+      "stroke-dasharray": (SEG - GAP - 4) + " " + CO, transform: "rotate(" + (-90 + i * 36 + ((GAP / 2 + 2) / CO) * 360) + " 80 80)" }, svg);
+    n.style.stroke = i < laps ? "var(--primary)" : "rgba(255,255,255,.14)";
+  }
+  el("circle", { cx: 80, cy: 80, r: 58, fill: "none", stroke: TRACK, "stroke-width": 14 }, svg);
+  if (bond > 0 && frac > 0) band(svg, 58, 14, frac, "var(--primary)");
+  if (bond < 0) {
+    band(svg, 58, 14, Math.abs(bond) / 100, "rgba(241,240,244,.38)")
+      .setAttribute("transform", "rotate(-90 80 80) scale(1 -1) translate(0 -160)");
+  }
+  const g = el("g", { transform: "translate(80 81) scale(2.5) translate(-12 -12)" }, svg);
+  const h = el("path", { d: HEART, "stroke-width": 1.6, "stroke-linejoin": "round" }, g);
+  if (bond <= 0) { h.style.fill = "none"; h.style.stroke = "rgba(241,240,244,.45)"; }
+  else { h.style.fill = "var(--foreground)"; h.style.stroke = "var(--foreground)"; }
+  if (number !== false) {
+    const text = String(Math.round(bond)).replace("-", "−");
+    const t = el("text", { x: 80, y: 79, "text-anchor": "middle", "dominant-baseline": "central",
+      "font-size": text.length >= 4 ? 15 : text.length === 3 ? 17.5 : 19, "font-weight": 650 }, svg);
+    t.style.fill = bond <= 0 ? "var(--muted-foreground)" : "#1f1218";
+    t.style.fontVariantNumeric = "tabular-nums";
+    t.textContent = text;
+  }
+  return svg;
+}
+// The list's 28 px mark: only the current lap and the heart; the detail belongs to the person page.
+function mark(bond) {
+  const svg = el("svg", { viewBox: "0 0 160 160", "aria-hidden": "true" });
+  const lap = Math.min(Math.floor(bond / 100), 9), frac = bond >= 1000 ? 1 : (bond % 100) / 100;
+  el("circle", { cx: 80, cy: 80, r: 66, fill: "none", stroke: "rgba(255,255,255,.1)", "stroke-width": 22 }, svg);
+  band(svg, 66, 22, frac, "var(--primary)");
+  const g = el("g", { transform: "translate(80 82) scale(3) translate(-12 -12)" }, svg);
+  el("path", { d: HEART }, g).style.fill = "var(--foreground)";
+  return svg;
+}
+const states = document.getElementById("states");
+for (const b of [35, 160, 480, 730, 1000]) {
+  const f = document.createElement("figure");
+  f.appendChild(ring(b));
+  const c = document.createElement("figcaption");
+  c.innerHTML = '<span class="dim">' + (b >= 1000 ? "滿" : "第 " + (Math.floor(b / 100) + 1) + " 圈") + '</span><span class="num">' + b + "</span>";
+  f.appendChild(c); states.appendChild(f);
+}
+for (const b of [0, -40]) {
+  const f = document.createElement("figure");
+  f.appendChild(ring(b));
+  const c = document.createElement("figcaption");
+  c.innerHTML = '<span class="dim">' + (b < 0 ? "負的" : "還沒有") + '</span><span class="num">' + String(b).replace("-", "−") + "</span>";
+  f.appendChild(c); states.appendChild(f);
+}
+document.getElementById("personRing").appendChild(ring(342));
+document.getElementById("pub").appendChild(ring(342, false));
+const BARS = [["信任", 62, 0, 100, "62"], ["熟悉", 48, 0, 100, "48"], ["好感", 0.35, -1, 1, "+0.35"], ["敬意", 0.1, -1, 1, "+0.10"],
+  ["自在", 0.7, 0, 1, "0.70"], ["心結", 0.15, 0, 1, "0.15"], ["想念", 0.4, 0, 1, "0.40"], ["默契", 0.55, 0, 1, "0.55"]];
+const bars = document.getElementById("bars");
+for (const [name, v, lo, hi, text] of BARS) {
+  const bip = lo < 0;
+  const left = bip ? (v >= 0 ? 50 : 50 + v * 50) : 0;
+  const width = bip ? Math.abs(v) * 50 : ((v - lo) / (hi - lo)) * 100;
+  const row = document.createElement("div"); row.className = "row";
+  row.innerHTML = '<span class="dim">' + name + '</span><div class="meter">' + (bip ? "<s></s>" : "") +
+    '<i style="left:' + left + "%;width:" + width + '%"></i></div><span class="v num">' + text + "</span>";
+  bars.appendChild(row);
+}
+const LIST = [["小明", "心有靈犀 II", 342, "剛剛"], ["阿哲", "朋友 II", 28, "2 小時前"], ["Mika", "無可取代 I", 780, "昨天"], ["路人", "認識 II", 6, "3 天前"]];
+const list = document.getElementById("list");
+for (const [name, tier, bond, when] of LIST) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = "<td>" + name + "</td><td>" + tier + '</td><td><div class="bond"></div></td><td class="dim">' + when + "</td>";
+  const cell = tr.querySelector(".bond"); cell.appendChild(mark(bond));
+  const n = document.createElement("span"); n.className = "num"; n.textContent = bond; cell.appendChild(n);
+  list.appendChild(tr);
+}
+</script>
+</body>
+</html>

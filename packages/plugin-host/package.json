@@ -1,0 +1,48 @@
+{
+  "name": "@miyoria/plugin-host",
+  "version": "0.1.0",
+  "description": "ext-host: Extension host: manifests, discovery, JSON-RPC over stdio, proxies for tools, commands and prompts; mcp: MCP client (external tools into the registry) and optional read-only MCP server",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    "./ext-host": {
+      "@miyoria/source": "./ext-host/src/index.ts",
+      "types": "./dist/ext-host/src/index.d.ts",
+      "default": "./dist/ext-host/src/index.js"
+    },
+    "./mcp": {
+      "@miyoria/source": "./mcp/src/index.ts",
+      "types": "./dist/mcp/src/index.d.ts",
+      "default": "./dist/mcp/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miyoria/commands": "workspace:*",
+    "@miyoria/contracts": "workspace:*",
+    "@miyoria/gate": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
+    "@miyoria/sdk": "workspace:*",
+    "@miyoria/store": "workspace:*",
+    "@miyoria/types": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@miyoria/ext-hello": "workspace:*",
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12",
+    "vscode-jsonrpc": "^10.0.0"
+  }
+}

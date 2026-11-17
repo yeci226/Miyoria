@@ -1,20 +1,20 @@
 // What economy 2.0 keeps besides the ledger: collection items, predictions and their bets,
 // commissions and what the audience has funded of her room (docs/design/v4-plan.md §10). The
-// types and the service key live in `@miyoria/store`, which implements them (one `economy_docs`
-// table on SQLite and Postgres); the in-memory `MemoryDocs` here is what the tests run against and
+// types and the service key are in `records.ts`; the economy plugin's `economy_docs` table
+// implements them (`tables.ts`). The in-memory `MemoryDocs` here is what the tests run against and
 // what the module falls back to (with a warning) when no store provides `EconomyDocsKey`.
 //
 // Coins never live here: every balance change is a ledger row. A document says what the coins were
 // for and where the thing stands; if one is lost, the ledger still shows who paid what.
 
+import { type ProfileId, sameAccount } from "@miyoria/types";
 import {
   type DocFilter,
   type DocUpdate,
   type EconomyDoc,
   type EconomyDocStore,
   EconomyDocsKey,
-} from "@miyoria/store";
-import { type ProfileId, sameAccount } from "@miyoria/types";
+} from "./records.js";
 
 export { type DocFilter, type DocUpdate, type EconomyDoc, type EconomyDocStore, EconomyDocsKey };
 
@@ -24,34 +24,37 @@ export function newestFirst(a: EconomyDoc, b: EconomyDoc): number {
   return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
 }
 
-/** The in-memory store: same behaviour as the real one, gone on restart. */
+/**
+ * The in-memory store: same behaviour as the real one, gone on restart. One database is one
+ * character, so the profile a caller names is not part of the key, as in the table.
+ */
 export class MemoryDocs implements EconomyDocStore {
   readonly #docs = new Map<string, EconomyDoc>();
 
-  #key(profile: ProfileId, kind: string, id: string): string {
-    return `${profile}\u0000${kind}\u0000${id}`;
+  #key(kind: string, id: string): string {
+    return JSON.stringify([kind, id]);
   }
 
   async create(doc: EconomyDoc): Promise<boolean> {
-    const key = this.#key(doc.profile, doc.kind, doc.id);
+    const key = this.#key(doc.kind, doc.id);
     if (this.#docs.has(key)) return false;
     this.#docs.set(key, structuredClone(doc));
     return true;
   }
 
-  async get(profile: ProfileId, kind: string, id: string): Promise<EconomyDoc | null> {
-    const doc = this.#docs.get(this.#key(profile, kind, id));
+  async get(_profile: ProfileId, kind: string, id: string): Promise<EconomyDoc | null> {
+    const doc = this.#docs.get(this.#key(kind, id));
     return doc ? structuredClone(doc) : null;
   }
 
   async update(
-    profile: ProfileId,
+    _profile: ProfileId,
     kind: string,
     id: string,
     expected: number,
     next: DocUpdate,
   ): Promise<boolean> {
-    const key = this.#key(profile, kind, id);
+    const key = this.#key(kind, id);
     const doc = this.#docs.get(key);
     if (!doc || doc.version !== expected) return false;
     this.#docs.set(key, {
@@ -65,10 +68,10 @@ export class MemoryDocs implements EconomyDocStore {
     return true;
   }
 
-  async list(profile: ProfileId, kind: string, filter: DocFilter): Promise<EconomyDoc[]> {
+  async list(_profile: ProfileId, kind: string, filter: DocFilter): Promise<EconomyDoc[]> {
     const out: EconomyDoc[] = [];
     for (const doc of this.#docs.values()) {
-      if (doc.profile !== profile || doc.kind !== kind) continue;
+      if (doc.kind !== kind) continue;
       if (filter.statuses && !filter.statuses.includes(doc.status)) continue;
       if (filter.owners) {
         const owner = doc.owner;

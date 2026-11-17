@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import sys
 import wave
@@ -11,17 +12,26 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "sing"))
-sys.path.insert(0, str(ROOT / "lyrics"))
 
 pytest.importorskip("multipart")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import lyrics  # noqa: E402
 import lyrics_remote  # noqa: E402
-import server  # noqa: E402  (lyrics/server.py)
+from response_contract import ContractError  # noqa: E402
 
+# By path and under its own name: the other workers have a `server` module too, and a plain
+# `import server` here would be the one their tests get afterwards.
+_spec = importlib.util.spec_from_file_location("lyrics_server", ROOT / "lyrics" / "server.py")
+assert _spec and _spec.loader
+server = importlib.util.module_from_spec(_spec)
+sys.modules["lyrics_server"] = server
+_spec.loader.exec_module(server)
+
+# What `lyrics.search` finds (`lyrics.result_of`), all of it: the service hands it on as it is.
 FOUND = {"provider": "lrclib", "synced": True, "lrc": "[00:01.00]a", "plain": None, "track": "t", "artist": "a",
-         "how": "title", "confidence": 0.95}
+         "how": "title", "confidence": 0.95, "matched": {"query": "t a", "duration_s": 201.0},
+         "checks": {"title": 1.0, "artist": 1.0, "duration_diff_s": 0.5, "fit": None}, "tried": 1, "llm": None}
 
 
 @pytest.fixture()
@@ -111,3 +121,10 @@ def test_search_remote_without_asr_does_not_upload_audio(client, monkeypatch, tm
 
 def test_search_remote_survives_an_unreachable_service():
     assert lyrics_remote.search_remote("http://127.0.0.1:9", {"title": "t"}, None, timeout=1.0) is None
+
+
+@pytest.mark.xfail(strict=True, raises=ContractError,
+                   reason="the lyrics service has no error handlers: a missing form field gets FastAPI's own "
+                          "422 {'detail': [...]}, not {'error': ...} (WorkersError) as every other worker")
+def test_a_missing_field_is_answered_with_an_error_body(client):
+    client.post("/lyrics", data={})

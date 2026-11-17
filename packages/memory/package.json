@@ -1,16 +1,41 @@
 {
   "name": "@miyoria/memory",
   "version": "0.1.0",
-  "description": "Long-term memory: consolidation, hybrid retrieval, privacy scopes, followups, memory tools and commands",
+  "description": "memory: Long-term memory: consolidation, hybrid retrieval, privacy scopes, followups, memory tools and commands; facts: The V3 fact layer: EventLog, Observation adapters, Working Context and the DeliveryLedger; learning: Reflection and learning: continuous conversation compaction, her self-organized knowledge, feedback signals, lessons and daily reflection (modules `conversation`, `knowledge`, `reflect`); notes: Her documents, one per person, place, topic and herself, written line by line with provenance and evidence, and the segment pass that writes them; transcript: Session transcripts kept on disk in the model's message form, with compaction; world: What she perceives (module `world`): presence, voice states, channel activity, her own status and salient changes",
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "exports": {
-    ".": {
-      "@miyoria/source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+    "./memory": {
+      "@miyoria/source": "./memory/src/index.ts",
+      "types": "./dist/memory/src/index.d.ts",
+      "default": "./dist/memory/src/index.js"
+    },
+    "./facts": {
+      "@miyoria/source": "./facts/src/index.ts",
+      "types": "./dist/facts/src/index.d.ts",
+      "default": "./dist/facts/src/index.js"
+    },
+    "./learning": {
+      "@miyoria/source": "./learning/src/index.ts",
+      "types": "./dist/learning/src/index.d.ts",
+      "default": "./dist/learning/src/index.js"
+    },
+    "./notes": {
+      "@miyoria/source": "./notes/src/index.ts",
+      "types": "./dist/notes/src/index.d.ts",
+      "default": "./dist/notes/src/index.js"
+    },
+    "./transcript": {
+      "@miyoria/source": "./transcript/src/index.ts",
+      "types": "./dist/transcript/src/index.d.ts",
+      "default": "./dist/transcript/src/index.js"
+    },
+    "./world": {
+      "@miyoria/source": "./world/src/index.ts",
+      "types": "./dist/world/src/index.d.ts",
+      "default": "./dist/world/src/index.js"
     }
   },
   "files": [
@@ -19,21 +44,23 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "rescope-self-notes": "tsx --conditions=@miyoria/source scripts/rescope-self-notes.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@miyoria/commands": "workspace:*",
-    "@miyoria/kernel": "workspace:*",
+    "@miyoria/contracts": "workspace:*",
+    "@miyoria/gate": "workspace:*",
     "@miyoria/llm": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
     "@miyoria/store": "workspace:*",
-    "@miyoria/tools": "workspace:*",
     "@miyoria/types": "workspace:*",
     "@node-rs/jieba": "^2.0.4",
+    "drizzle-orm": "1.0.0-rc.5",
     "opencc-js": "^1.4.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@miyoria/heart": "workspace:*",
     "@types/node": "^24.19.2",
     "typescript": "~5.9.3",
     "vitest": "^4.1.12"

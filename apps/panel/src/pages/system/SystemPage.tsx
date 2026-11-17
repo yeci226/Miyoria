@@ -2,7 +2,8 @@ import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import type { ColumnDef } from "@tanstack/react-table";
 import { ChevronRight, Power, PowerOff, RotateCw } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { ExtensionInfo, McpServerInfo, McpState, ModuleAction, ModuleInfo } from "@/api/types";
+import type { ModuleAction } from "@/api/types";
+import type { ExtensionInfo, McpServerInfo, McpState, ModuleInfo } from "@miyoria/contracts/api";
 import { SYSTEM_TABS, type SystemTab } from "@/app/nav";
 import {
   useExtensionAction,

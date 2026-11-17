@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
-import type { CostReport, ModuleInfo, ModuleStateKind } from "@/api/types";
+import type { CostReport, ModuleInfo, ModuleStateKind } from "@miyoria/contracts/api";
 import { useCost, useExtensions, useMcpServers, useModules, useSelf } from "@/app/queries";
 import { ChartBlock, type Part, SegmentBar } from "@/components/charts/charts";
 import { ConsciousnessBlock } from "@/components/consciousness";

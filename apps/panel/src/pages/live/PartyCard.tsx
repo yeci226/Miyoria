@@ -1,5 +1,5 @@
-import type { PartyResultView, PartySessionView } from "@/api/v4-types";
-import { useParty } from "@/app/v4-queries";
+import type { PartyResultView, PartySessionView } from "@miyoria/contracts/api";
+import { useParty } from "@/app/queries";
 import { ModuleQuery } from "@/components/module-query";
 import { EmptyLine } from "@/components/query-state";
 import { Dot, StatusBadge } from "@/components/status";

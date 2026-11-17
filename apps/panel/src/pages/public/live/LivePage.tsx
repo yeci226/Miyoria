@@ -16,14 +16,10 @@ export function LivePage({ source }: { source?: SourceFactory | null }) {
   const api = useApi();
   const member = useQuery({
     queryKey: ["member", "session"],
-    queryFn: ({ signal }) => api.memberSession({ signal }),
+    queryFn: ({ signal }) => api.rpc.member.session(undefined, { signal }),
     retry: false,
   });
-  const methods = useQuery({
-    queryKey: ["auth", "methods"],
-    queryFn: ({ signal }) => api.authMethods({ signal }),
-    retry: false,
-  });
+  const methods = useQuery(api.q.auth.methods.queryOptions({ retry: false }));
   const who = member.data ?? null;
   const loginUrl = methods.data?.discord ? api.discordLoginUrl(LIVE_PAGE) : null;
   return (

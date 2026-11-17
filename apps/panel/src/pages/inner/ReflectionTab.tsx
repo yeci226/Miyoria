@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { FeedbackTally, ReflectionRun } from "@/api/types";
+import type { FeedbackTally, ReflectionRun } from "@miyoria/contracts/api";
 import { useReflection } from "@/app/queries";
 import { EmptyLine, QueryView, SkeletonRows } from "@/components/query-state";
 import { StatusBadge } from "@/components/status";

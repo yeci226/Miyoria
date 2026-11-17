@@ -24,7 +24,7 @@
 // the curtain's) run one at a time under one mutex, and the scene it expects is only written
 // inside it, so its own switch is never mistaken for a manual one.
 
-import { getLogger, SerialQueue, sleep } from "@miyoria/kernel";
+import { getLogger, SerialQueue, sleep } from "@miyoria/runtime/kernel";
 import {
   type ActivitySnapshot,
   type Clock,

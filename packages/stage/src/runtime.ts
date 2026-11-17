@@ -1,6 +1,6 @@
 // The Stage node: `miyoria stage` on the streaming PC.
 
-import { errorMessage, getLogger, sleep } from "@miyoria/kernel";
+import { errorMessage, getLogger, sleep } from "@miyoria/runtime/kernel";
 import { type Clock, systemClock } from "@miyoria/types";
 import WebSocket from "ws";
 import { z } from "zod";
@@ -76,6 +76,24 @@ export type StageConfigSection = z.output<typeof StageConfigSchema>;
 /** The Stage config plus the profile's `avatar.toml` (set by the caller). */
 export type StageConfig = StageConfigSection & { avatar: AvatarProfile };
 
+/**
+ * `config` with Core's link address and token from the environment when it sets them:
+ * `STAGE_LINK_URL` over `core_url`, `STAGE_LINK_TOKEN` over `token`. hostd sets both on a machine
+ * that joined the cluster (Core tells it where `stage.link` is); elsewhere the config's own stay.
+ */
+export function stageLinkFromEnv<T extends StageConfigSection>(
+  config: T,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): T {
+  const url = env.STAGE_LINK_URL?.trim();
+  const token = env.STAGE_LINK_TOKEN?.trim();
+  return {
+    ...config,
+    ...(url ? { core_url: url } : {}),
+    ...(token ? { token } : {}),
+  };
+}
+
 /** Parses a `[stage]` section (missing = defaults) and attaches `avatar`. */
 export function parseStageConfig(section: unknown = {}, avatar = new AvatarProfile()): StageConfig {
   return { ...StageConfigSchema.parse(section ?? {}), avatar };
@@ -91,6 +109,8 @@ export interface RunStageOptions {
   /** Stops the Stage. Default: Ctrl-C (SIGINT). */
   signal?: AbortSignal;
   clock?: Clock;
+  /** Where `STAGE_LINK_URL` and `STAGE_LINK_TOKEN` are read (`stageLinkFromEnv`). Default `process.env`. */
+  env?: Readonly<Record<string, string | undefined>>;
 }
 
 /**
@@ -112,7 +132,7 @@ export async function runStage(config: StageConfig, options: RunStageOptions = {
   }
   try {
     const obs = options.obs ?? ObsWebSocketConnector.fromConfig(config.obs);
-    await runStageWith(config, obs, signal, options.clock);
+    await runStageWith(stageLinkFromEnv(config, options.env), obs, signal, options.clock);
   } finally {
     cleanup();
   }

@@ -1,8 +1,7 @@
 // `/api/voice/*`, `/api/songs*`, `/api/game/*` (through the gate as the panel) and
 // `/api/telemetry` (the panel's chart samples).
 
-import { ActuatorRegistry, ActuatorRegistryKey, defineCapability } from "@miyoria/actions";
-import { Supervisor, SupervisorKey } from "@miyoria/kernel";
+import { ActuatorRegistry, ActuatorRegistryKey, defineCapability } from "@miyoria/gate/actions";
 import {
   LlmRouter,
   LlmRouterKey,
@@ -10,7 +9,8 @@ import {
   pricing,
   userMessage,
   withLlmTag,
-} from "@miyoria/llm";
+} from "@miyoria/llm/llm";
+import { Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
 import { SingerKey } from "@miyoria/sing";
 import { type Principal, SelfStateKey } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
@@ -68,7 +68,6 @@ async function harness() {
     "game.start",
     "game.stop",
     "game.goal",
-    "share.browse",
   ]) {
     capability(name, loose);
   }
@@ -157,14 +156,28 @@ describe("control routes", () => {
     expect((await h.post("/api/game/goal", { text: "挖鐵礦" })).status).toBe(200);
     expect((await h.post("/api/game/stop")).status).toBe(200);
   });
+});
 
-  it("sends her scrolling through the gate", async () => {
+describe("control routes: texts are trimmed after they are checked", () => {
+  it("passes the trimmed text to the capability", async () => {
     const h = await harness();
-    expect((await h.post("/api/share/browse")).status).toBe(200);
-    expect(h.calls[0]).toMatchObject({
-      capability: "share.browse",
-      principal: { kind: "panel" },
+    await h.post("/api/voice/join", { guild: " g1 ", channel: " v1 " });
+    expect(h.calls[0]?.args).toEqual({ guild: "g1", channel: "v1" });
+  });
+
+  it("refuses a text that is empty once trimmed like one that is empty", async () => {
+    const h = await harness();
+    const blank = await h.post("/api/songs", { query: "   " });
+    expect(blank.status).toBe(422);
+    expect(blank.body).toEqual({
+      error:
+        "Failed to deserialize the JSON body into the target type: query: Too small: expected string to have >=1 characters",
     });
+    const empty = await h.post("/api/songs", { query: "" });
+    expect(empty.body).toEqual(blank.body);
+    expect((await h.post("/api/game/goal", { text: " " })).status).toBe(422);
+    expect((await h.post("/api/voice/join", { guild: "  " })).status).toBe(422);
+    expect(h.calls).toEqual([]);
   });
 });
 
@@ -182,11 +195,12 @@ describe("telemetry", () => {
       }),
     } as never);
     const t = new Telemetry(3);
-    t.handle({ event: { type: "platform_message_created" } } as never);
-    t.handle({ event: { type: "custom", data: { topic: "voice.latency" } } } as never);
+    // What the counter reads: the envelope's type, and the text of a completed turn.
+    t.handle({ type: "platform.message.created", v: 1 } as never);
+    t.handle({ type: "voice.latency", v: 1 } as never);
     // Only turns where she said something count as replies.
     const turn = (text: string) =>
-      t.handle({ event: { type: "agent_turn_completed", data: { turn: "t", text } } } as never);
+      t.handle({ type: "agent.turn.completed", v: 1, data: { turn: "t", text } } as never);
     turn("好啊");
     turn("");
     turn("  ");

@@ -18,7 +18,7 @@ import {
   type ResolvedUser,
   replyEphemeral,
 } from "@miyoria/commands";
-import { errorMessage, getLogger, withTimeout } from "@miyoria/kernel";
+import { errorMessage, getLogger, withTimeout } from "@miyoria/runtime/kernel";
 import type { AccountRef, ContextKind } from "@miyoria/types";
 import {
   type APIMessageTopLevelComponent,

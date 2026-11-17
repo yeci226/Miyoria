@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 from conftest import ROOT
 from fastapi.testclient import TestClient
+from response_contract import ContractError
 from starlette.websockets import WebSocketDisconnect
 
 
@@ -237,3 +238,11 @@ def test_the_fake_worker_speaks_the_same_contract(fake_client, monkeypatch):
         assert float(ws.receive_text()) > 0.5
         ws.send_bytes(pcm(512 / 16000, 0))
         assert float(ws.receive_text()) < 0.5
+
+
+@pytest.mark.xfail(strict=True, raises=ContractError,
+                   reason="the end-of-turn worker has no handler for HTTP errors: an unknown route gets "
+                          "FastAPI's own 404 {'detail': 'Not Found'}, not {'error': ...} (WorkersError)")
+def test_an_unknown_route_is_answered_with_an_error_body(load):
+    with TestClient(load().app) as c:
+        c.get("/nothing-here")

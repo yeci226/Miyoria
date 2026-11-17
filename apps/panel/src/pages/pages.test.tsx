@@ -1,20 +1,11 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type {
-  ChannelLevelsView,
-  ChannelLevelView,
-  Envelope,
-  ModuleInfo,
-  PersonDetail,
-  SongsState,
-  SongView,
-  StageState,
-  VoiceState,
-  WorldView,
-} from "@/api/types";
+import type { VoiceState } from "@/api/types";
+import type { ChannelLevelsView, ChannelLevelView, ModuleInfo, PersonProfile, PersonRow, SongsState, SongView, StageState, WorldView } from "@miyoria/contracts/api";
 import { ConnectionProvider, STORAGE_TOKEN } from "@/app/connection";
 import { EventStore } from "@/app/events-store";
+import { envelope as busEnvelope } from "@/test/envelope";
 import { mockFetch, renderPage, renderRoute } from "@/test/render";
 import { EventsTab } from "./activity/EventsTab";
 import { MemoryTab } from "./character/MemoryTab";
@@ -169,29 +160,54 @@ describe("Persona", () => {
   });
 });
 
-const detail = (notes: string): PersonDetail => ({
+/** The list's row of someone she knows (the one people route). */
+const row = (notes: string): PersonRow => ({
   person: {
     id: "P1",
     display_name: "Owen",
     created_at: "2026-01-01T00:00:00Z",
     accounts: [{ account: { platform: "discord", id: "1" }, display_name: "Owen", first_seen: "2026-01-01T00:00:00Z", last_seen: "2026-11-01T00:00:00Z" }],
   },
-  relationship: {
-    profile: "p",
-    person: "P1",
-    affinity: 40,
-    trust: 50,
-    familiarity: 60,
-    tags: ["常客"],
-    notes,
-    call_name: null,
-    interactions: 3,
-    last_interaction: null,
-    updated_at: "2026-11-01T00:00:00Z",
-  },
-  label: "朋友",
+  has_row: true,
   blocked: false,
-  history: [],
+  owner: false,
+  tier: "朋友",
+  bond: 40,
+  ring: { lap: 0, fraction: 0.4, full: false, below: 0 },
+  trust: 50,
+  familiarity: 60,
+  warmth: 0,
+  respect: 0,
+  ease: 0,
+  grudge: 0,
+  longing: 0,
+  rapport: 0,
+  cares: 0.1,
+  stance: "",
+  impression: notes,
+  public_feeling: null,
+  call_name: null,
+  tags: ["常客"],
+  interactions: 3,
+  last_interaction: null,
+  last_seen: null,
+  last_together: null,
+  updated_at: "2026-11-01T00:00:00Z",
+});
+
+const detail = (notes: string): PersonProfile => ({
+  ...row(notes),
+  next_tier: "好朋友",
+  tier_progress: 0.8,
+  tier_floor: 15,
+  held: null,
+  anchors: [],
+  unfinished: "",
+  jokes: "",
+  dislikes: "",
+  history: { items: [], next_before: null },
+  ledger: [],
+  evidence: [],
   memory_count: 2,
 });
 
@@ -205,7 +221,7 @@ describe("PersonSheet", () => {
     });
     const user = userEvent.setup();
     const { queryClient } = renderPage(<PersonSheet personId="P1" onClose={() => {}} />);
-    const notes = await screen.findByLabelText("備註");
+    const notes = await screen.findByLabelText("印象");
     expect(notes).toHaveValue("喜歡拉麵");
     await user.clear(notes);
     await user.type(notes, "其實比較喜歡烏龍麵");
@@ -213,7 +229,7 @@ describe("PersonSheet", () => {
     // A refetch hands back a new object (new tag array) with the same values.
     await act(() => queryClient.invalidateQueries());
     await waitFor(() => expect(fetches).toBe(2));
-    expect(screen.getByLabelText("備註")).toHaveValue("其實比較喜歡烏龍麵");
+    expect(screen.getByLabelText("印象")).toHaveValue("其實比較喜歡烏龍麵");
     expect(screen.getByRole("button", { name: "儲存" })).toBeEnabled();
   });
 
@@ -539,10 +555,10 @@ describe("Live", () => {
   it("stops her autonomy with one click", async () => {
     let paused = false;
     mockFetch((method, url) => {
-      if (url.pathname === "/api/mind") return { body: { paused, running: true, accepting: !paused, stats: null, pending_approvals: 0 } };
+      if (url.pathname === "/api/mind") return { body: { paused, running: true, stats: null, pending_approvals: 0 } };
       if (method === "POST" && url.pathname === "/api/mind/pause") {
         paused = true;
-        return { body: { paused, running: true, accepting: false, stats: null, pending_approvals: 0 } };
+        return { body: { paused, running: true, stats: null, pending_approvals: 0 } };
       }
       return undefined;
     });
@@ -565,7 +581,6 @@ describe("Live", () => {
     const view = () => ({
       paused,
       running: true,
-      accepting: !paused,
       stats: null,
       pending_approvals: 0,
       emergency: paused ? emergency : null,
@@ -643,7 +658,7 @@ describe("Access", () => {
       if (url.pathname === "/api/people")
         return {
           body: {
-            items: [{ ...detail("x"), history: undefined, memory_count: undefined }],
+            items: [row("x")],
             next_cursor: null,
           },
         };
@@ -662,14 +677,11 @@ describe("Access", () => {
   });
 });
 
-const envelope = (i: number, event: Envelope["event"]): Envelope => ({
-  id: `E${String(i).padStart(3, "0")}`,
-  ts: new Date(Date.UTC(2026, 10, 1, 10, 0, i)).toISOString(),
-  source: "agent",
-  causation: null,
-  correlation: null,
-  event,
-});
+const envelope = (i: number, type: string, data: unknown) =>
+  busEnvelope(type, data, {
+    id: `E${String(i).padStart(3, "0")}`,
+    at: new Date(Date.UTC(2026, 10, 1, 10, 0, i)).toISOString(),
+  });
 const ctx = { platform: "discord", scope: "1", channel: "42", kind: "channel" as const };
 
 describe("Events", () => {
@@ -681,8 +693,8 @@ describe("Events", () => {
     expect(await screen.findByText("尚未連線")).toBeInTheDocument();
 
     act(() => {
-      store.push(envelope(1, { type: "agent_turn_completed", data: { turn: "T", context: ctx, text: "哼,拉麵啦" } }));
-      store.push(envelope(2, { type: "custom", data: { topic: "voice.latency", payload: { stage: "asr", asr_ms: 200 } } }));
+      store.push(envelope(1, "agent.turn.completed", { turn: "T", context: ctx, text: "哼,拉麵啦" }));
+      store.push(envelope(2, "voice.latency", { stage: "asr", asr_ms: 200 }));
       store.flush();
     });
     expect(screen.getByText("她說:哼,拉麵啦")).toBeInTheDocument();
@@ -694,7 +706,7 @@ describe("Events", () => {
 
     await user.click(screen.getByRole("button", { name: "暫停" }));
     act(() => {
-      store.push(envelope(3, { type: "agent_turn_completed", data: { turn: "T", context: ctx, text: "新的一句" } }));
+      store.push(envelope(3, "agent.turn.completed", { turn: "T", context: ctx, text: "新的一句" }));
       store.flush();
     });
     expect(screen.queryByText("她說:新的一句")).not.toBeInTheDocument();
@@ -705,7 +717,7 @@ describe("Events", () => {
     await user.click(screen.getByText("她說:新的一句"));
     const sheet = await screen.findByRole("dialog");
     expect(within(sheet).getByText("E003")).toBeInTheDocument();
-    expect(within(sheet).getByLabelText("Envelope").textContent).toContain('"agent_turn_completed"');
+    expect(within(sheet).getByLabelText("Envelope").textContent).toContain('"agent.turn.completed"');
   });
 });
 

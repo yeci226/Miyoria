@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DataCategoryView, DataInventory } from "@/api/types";
+import type { DataCategoryView, DataInventoryView } from "@miyoria/contracts/api";
 import type { SessionValue } from "@/app/session";
 import { mockFetch, renderRoute } from "@/test/render";
 
@@ -19,7 +19,7 @@ const cat = (id: DataCategoryView["id"], over: Partial<DataCategoryView> = {}): 
   ...over,
 });
 
-const INVENTORY: DataInventory = {
+const INVENTORY: DataInventoryView = {
   profile: "deepseek-chan",
   at: "2026-11-02T12:00:00.000Z",
   can_manage: true,

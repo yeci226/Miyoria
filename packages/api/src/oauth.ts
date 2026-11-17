@@ -7,10 +7,12 @@
 // `cancelled`, `state`, `exchange`, `discord`, `denied`, `unavailable`. Details go to the log.
 
 import { createHash } from "node:crypto";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import type { AuthMethods, SessionInfo } from "@miyoria/contracts/api";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
 import { type AccountRef, AuthorizerKey, accountRefString, type Clock } from "@miyoria/types";
 import { z } from "zod";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
 import {
   COOKIE,
@@ -21,7 +23,6 @@ import {
   randomToken,
 } from "./session.js";
 import type { ApiContext, ApiState, PanelAuth } from "./state.js";
-import type { AuthMethods, SessionInfo } from "./types.js";
 
 const log = getLogger("api.oauth");
 
@@ -443,6 +444,12 @@ export function session(c: ApiContext): SessionInfo {
     permissions: { write },
   };
 }
+
+/** `GET /api/auth/methods` (public), `GET /api/auth/session`. */
+export const authRpc = {
+  methods: os.auth.methods.handler(({ context }) => methods(context.state)),
+  session: os.auth.session.handler(({ context }) => session(context.c)),
+};
 
 export async function logout(state: ApiState, c: ApiContext): Promise<Response> {
   const token = cookieToken(requestCookies(c));

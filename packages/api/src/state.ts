@@ -2,7 +2,7 @@
 // is looked up per request, because the modules providing them may be stopped or restarted at
 // any time.
 
-import { errorMessage, getLogger, type ModuleContext } from "@miyoria/kernel";
+import { errorMessage, getLogger, type ModuleContext } from "@miyoria/runtime/kernel";
 import { type AuditEntry, AuditLogKey } from "@miyoria/store";
 import {
   type JsonValue,
@@ -127,7 +127,7 @@ export function actorOf(c: ApiContext): string {
   return principalActor(c.get("principal"));
 }
 
-/** Drops `undefined` fields, like serde's `skip_serializing_if = "Option::is_none"`. */
+/** Drops `undefined` fields. */
 export function toJson(value: object): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
 }

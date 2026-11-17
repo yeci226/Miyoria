@@ -4,7 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { type CoreLogLevel, loadProfile, logFilter, logLevel } from "@miyoria/core/light";
-import { Config, configureLogging } from "@miyoria/kernel";
+import { Config, configureLogging } from "@miyoria/runtime/kernel";
 import { isJsonObject } from "@miyoria/types";
 import { PACKAGE_ROOT } from "../assets.js";
 import { fail, ok, println, warn } from "../ui.js";
@@ -129,7 +129,7 @@ export async function extNew(name: string, dir: string): Promise<void> {
   // Inside the monorepo link the local SDK; elsewhere use the published one.
   const sdk = existsSync(join(process.cwd(), "packages/sdk/package.json"))
     ? "workspace:*"
-    : "^0.1.0";
+    : "^0.2.0";
   const path = await extensionsCli.newExtension(dir, name, { sdk, id: null });
   ok(`已建立 ${path}`);
 }

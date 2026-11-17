@@ -1,10 +1,20 @@
-// Ports of the Rust unit tests (`#[cfg(test)]` modules of protocol, avatar, emotion, motion,
-// lipsync and link::forward), plus TS-specific shape and config checks.
+// Unit tests of protocol, avatar, emotion, motion, lipsync and link forwarding, plus shape
+// and config checks.
 
 import { fileURLToPath } from "node:url";
-import type { ContextKey, ContextKind, Event, PlaybackState } from "@miyoria/types";
-import { customEvent, newId, SONG_TOPIC } from "@miyoria/types";
+import { defineEvent } from "@miyoria/contracts/events";
+import type {
+  AnyEventDefinition,
+  Envelope as BusEnvelope,
+  ContextKey,
+  ContextKind,
+  EventPayload,
+  PlaybackState,
+  PublishMetaArgs,
+} from "@miyoria/types";
+import { Events, eventEnvelope, newId } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   AvatarProfile,
   type CoreMessage,
@@ -12,7 +22,6 @@ import {
   DEFAULT_VOWEL_TEMPLATES,
   defaultLipSyncConfig,
   dominantVowel,
-  EMOTION_TOPIC,
   EmotionController,
   Envelope,
   encodeMessage,
@@ -39,6 +48,16 @@ import {
   type Vowel,
   type VtsCommand,
 } from "../src/index.js";
+
+/** An event as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  def: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+): BusEnvelope => eventEnvelope("test", def, data, ...meta);
+
+/** A topic that is none of the forwarder's. */
+const Other = defineEvent({ type: "other.event", v: 1, data: z.unknown() });
 
 describe("protocol", () => {
   it("core_messages_match_the_spec", () => {
@@ -733,14 +752,10 @@ describe("forward", () => {
     channel: "c",
     kind,
   });
-  const playback = (turn: string, state: PlaybackState, text: string): Event => ({
-    type: "voice_playback",
-    data: { context: ctx("voice"), turn, state, text },
-  });
-  const completed = (turn: string, kind: ContextKind, text: string): Event => ({
-    type: "agent_turn_completed",
-    data: { turn, context: ctx(kind), text },
-  });
+  const playback = (turn: string, state: PlaybackState, text: string) =>
+    ev(Events.VoicePlaybackEvent, { context: ctx("voice"), turn, state, text });
+  const completed = (turn: string, kind: ContextKind, text: string) =>
+    ev(Events.AgentTurnCompleted, { turn, context: ctx(kind), text });
   const subs = (msgs: CoreMessage[]): [string, boolean][] =>
     msgs.flatMap((m) => (m.type === "subtitle" ? [[m.text, m.final] as [string, boolean]] : []));
 
@@ -748,23 +763,21 @@ describe("forward", () => {
     const f = new Forwarder(false);
     const turn = newId();
     const marker = (emotion: string, intensity?: number) =>
-      customEvent(EMOTION_TOPIC, {
+      ev(Events.AgentEmotion, {
         turn,
         context: { ...ctx("voice") },
         emotion,
         ...(intensity === undefined ? {} : { intensity }),
       });
     const emotions = (msgs: CoreMessage[]) => msgs.filter((m) => m.type === "emotion");
-    const spoken = (state: PlaybackState, text: string, emotion?: string | null): Event => ({
-      type: "voice_playback",
-      data: {
+    const spoken = (state: PlaybackState, text: string, emotion?: string | null) =>
+      ev(Events.VoicePlaybackEvent, {
         context: ctx("voice"),
         turn,
         state,
         text,
         ...(emotion === undefined ? {} : { emotion }),
-      },
-    });
+      });
     // Parsed while the previous sentence is still playing: nothing yet.
     expect(f.onEvent(marker("happy", 0.5))).toStrictEqual([]);
     expect(f.onEvent(marker("smug"))).toStrictEqual([]);
@@ -785,31 +798,29 @@ describe("forward", () => {
     expect(emotions(f.onEvent(spoken("started", "唉。")))).toStrictEqual([]);
     // Text turns are not deferred.
     expect(
-      f.onEvent(
-        customEvent(EMOTION_TOPIC, { turn, context: { ...ctx("channel") }, emotion: "sad" }),
-      ),
+      f.onEvent(ev(Events.AgentEmotion, { turn, context: { ...ctx("channel") }, emotion: "sad" })),
     ).toStrictEqual([{ type: "emotion", name: "sad", intensity: 1 }]);
   });
 
   it("emotions", () => {
     const f = new Forwarder(false);
-    expect(f.onEvent(customEvent(EMOTION_TOPIC, { turn: "x", emotion: " Happy " }))).toStrictEqual([
-      { type: "emotion", name: "happy", intensity: 1 },
-    ]);
-    expect(f.onEvent(customEvent(EMOTION_TOPIC, { emotion: "sad", intensity: 0.4 }))).toStrictEqual(
-      [{ type: "emotion", name: "sad", intensity: 0.4 }],
-    );
-    expect(f.onEvent(customEvent(EMOTION_TOPIC, {}))).toStrictEqual([]);
-    expect(f.onEvent(customEvent(EMOTION_TOPIC, { name: "Smug", intensity: 7 }))).toStrictEqual([
-      { type: "emotion", name: "smug", intensity: 1 },
-    ]);
-    expect(f.onEvent(customEvent("other", { emotion: "sad" }))).toStrictEqual([]);
+    expect(
+      f.onEvent(ev(Events.AgentEmotion, { turn: "x", emotion: " Happy " } as never)),
+    ).toStrictEqual([{ type: "emotion", name: "happy", intensity: 1 }]);
+    expect(
+      f.onEvent(ev(Events.AgentEmotion, { emotion: "sad", intensity: 0.4 } as never)),
+    ).toStrictEqual([{ type: "emotion", name: "sad", intensity: 0.4 }]);
+    expect(f.onEvent(ev(Events.AgentEmotion, {} as never))).toStrictEqual([]);
+    expect(
+      f.onEvent(ev(Events.AgentEmotion, { name: "Smug", intensity: 7 } as never)),
+    ).toStrictEqual([{ type: "emotion", name: "smug", intensity: 1 }]);
+    expect(f.onEvent(ev(Other, { emotion: "sad" }))).toStrictEqual([]);
   });
 
   it("songs_show_their_lyrics_and_make_her_speak", () => {
     const f = new Forwarder(false);
     const cue = (payload: Record<string, string | number>) =>
-      f.onEvent(customEvent(SONG_TOPIC, { song: "yt-x", ...payload }));
+      f.onEvent(ev(Events.SingCue, { song: "yt-x", ...payload } as never));
     expect(cue({ state: "started", title: "On & On" })).toStrictEqual([
       { type: "speaking", state: "started" },
     ]);
@@ -820,7 +831,7 @@ describe("forward", () => {
       { type: "speaking", state: "stopped" },
       { type: "subtitle", turn: "song:yt-x:end", text: "", final: true },
     ]);
-    expect(f.onEvent(customEvent(SONG_TOPIC, { state: "line" }))).toStrictEqual([]);
+    expect(f.onEvent(ev(Events.SingCue, { state: "line" } as never))).toStrictEqual([]);
   });
 
   it("voice_turn_subtitles_follow_playback", () => {
@@ -867,10 +878,8 @@ describe("forward", () => {
 
   it("playback_without_turn", () => {
     const f = new Forwarder(false);
-    const event = (state: PlaybackState, text: string): Event => ({
-      type: "voice_playback",
-      data: { context: ctx("voice"), turn: null, state, text },
-    });
+    const event = (state: PlaybackState, text: string) =>
+      ev(Events.VoicePlaybackEvent, { context: ctx("voice"), turn: null, state, text });
     expect(f.onEvent(event("started", " hi "))).toStrictEqual([
       { type: "speaking", state: "started" },
       { type: "subtitle", turn: "", text: "hi", final: false },

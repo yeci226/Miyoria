@@ -1,14 +1,16 @@
 import { resolve } from "node:path";
-import { actuatorsFor } from "@miyoria/actions";
 import { CommandMount } from "@miyoria/commands";
+import { actuatorsFor } from "@miyoria/gate/actions";
 import {
   defineManifest,
   HEALTHY,
   type Health,
   type Module,
   type ModuleContext,
-} from "@miyoria/kernel";
+  type ServiceLookup,
+} from "@miyoria/runtime/kernel";
 import {
+  Events,
   type PromptContributors,
   PromptContributorsKey,
   SongClipsKey,
@@ -19,11 +21,12 @@ import {
   VoicePlayerKey,
 } from "@miyoria/types";
 import { singCapabilities } from "./actions.js";
-import { HttpSingWorker, type SingWorker } from "./client.js";
+import { type GpuContext, HttpSingWorker, type SingWorker } from "./client.js";
 import { SingClips } from "./clips.js";
 import { registerCommands } from "./commands.js";
 import { SingConfigSchema } from "./config.js";
-import { FailoverSingWorker } from "./failover.js";
+import type { Endpoint, EndpointSource, EndpointsOption } from "./endpoints.js";
+import { type FailoverEntry, FailoverSingWorker } from "./failover.js";
 import { PROMPT_KEY, SingPrompt } from "./prompt.js";
 import { ROOM_PROMPT_KEY, VoiceRoom, VoiceRoomPrompt } from "./room.js";
 import { Singer } from "./singer.js";
@@ -40,14 +43,35 @@ interface Running {
   capabilities: (() => void)[];
   /** Removes the steer route again. */
   unroute: (() => void) | null;
+  /** Stops following the registry's `sing` endpoints. */
+  unwatch: (() => void) | null;
+}
+
+/** Makes the client of one song worker (tests replace the HTTP client). */
+export type SingWorkerFactory = (
+  endpoint: Endpoint,
+  timeoutMs: number,
+  source: EndpointSource,
+) => SingWorker;
+
+/**
+ * Where else who listens and which songs are needed now go, each time the song worker is told
+ * (every poll while a song is prepared): Core's wiring sends them to the hosts' GPU arbiters
+ * (`cluster.context`), so this package needs no cluster package.
+ */
+export type GpuContextSink = (services: ServiceLookup, context: GpuContext) => void;
+
+/** What stays the same when a worker restarts elsewhere: its host and service. */
+function endpointId(endpoint: Endpoint): string {
+  return `${endpoint.host}/${endpoint.service}`;
 }
 
 /**
- * Module `sing`: song requests sung in her voice. The song worker (`workers/sing`, default
- * `http://127.0.0.1:8005`) prepares covers; this module keeps the set list, offers ready songs
- * to her mind, plays them through the voice node (`VoicePlayerKey`) with lyrics cues and the
- * vocal stem as the lip-sync track, and holds the voice channel while a song plays
- * (`VoiceFloorKey`).
+ * Module `sing`: song requests sung in her voice. The song workers (`workers/sing`, the `sing`
+ * endpoints of Core's registry, in its order) prepare covers; this module keeps the set list,
+ * offers ready songs to her mind, plays them through the voice node (`VoicePlayerKey`) with
+ * lyrics cues and the vocal stem as the lip-sync track, and holds the voice channel while a song
+ * plays (`VoiceFloorKey`).
  *
  * Also provides `SongClips` (`clips.ts`): short pieces of the songs she covered, played in voice
  * for the party game that guesses songs without being her singing.
@@ -62,42 +86,79 @@ export class SingModule implements Module {
   static readonly ID = "sing";
   readonly manifest = defineManifest(SingModule.ID, "Singing", {
     description: "Song requests: AI covers in her voice, sung in voice with lyrics",
-    optional: ["voice.link", "mind", "queue", "commands", "actions", "agent", "activity"],
+    optional: ["voice.link", "arbiter", "queue", "commands", "actions", "agent", "activity"],
     configSchema: SingConfigSchema,
   });
-  readonly #worker: ((url: string, timeoutMs: number) => SingWorker) | null;
+  readonly #worker: SingWorkerFactory | null;
   readonly #baseDir: string;
+  readonly #endpoints: EndpointsOption | null;
+  readonly #context: GpuContextSink | null;
   #running: Running | null = null;
 
   /**
    * `worker`: replaces the HTTP client (tests). `baseDir`: what a relative `video_dir` is
-   * relative to (the directory of `miyoria.toml`; default the working directory).
+   * relative to (the directory of `miyoria.toml`; default the working directory). `endpoints`:
+   * Core's endpoint registry, where the song workers are. `context`: where else the audience
+   * context goes (`GpuContextSink`).
    */
   constructor(
-    worker: ((url: string, timeoutMs: number) => SingWorker) | null = null,
-    options: { baseDir?: string } = {},
+    worker: SingWorkerFactory | null = null,
+    options: { baseDir?: string; endpoints?: EndpointsOption; context?: GpuContextSink } = {},
   ) {
     this.#worker = worker;
     this.#baseDir = options.baseDir ?? process.cwd();
+    this.#endpoints = options.endpoints ?? null;
+    this.#context = options.context ?? null;
   }
 
   async start(ctx: ModuleContext): Promise<void> {
     const cfg = ctx.config(SingConfigSchema);
     const timeoutMs = cfg.timeout_secs * 1000;
-    const make = (url: string) =>
-      this.#worker?.(url, timeoutMs) ?? new HttpSingWorker(url, timeoutMs);
-    const urls = workerUrls(cfg.url, cfg.fallback_urls);
-    const worker: SingWorker =
-      urls.length === 1
-        ? make(cfg.url)
-        : new FailoverSingWorker(
-            urls.map((url) => ({ name: url, worker: make(url) })),
-            { retryMs: cfg.fallback_retry_secs * 1000, now: () => ctx.clock.now() },
-          );
+    const source = this.#endpoints?.(ctx.services) ?? null;
+    // The workers are the registry's `sing` endpoints, followed as they come and go. A client is
+    // made again only when its endpoint changed (another address, another token).
+    const clients = new Map<string, { key: string; endpoint: Endpoint; worker: SingWorker }>();
+    const worker = new FailoverSingWorker([], {
+      retryMs: cfg.fallback_retry_secs * 1000,
+      now: () => ctx.clock.now(),
+      failed: (id, error) => {
+        const client = clients.get(id);
+        if (client !== undefined) source?.failed(client.endpoint, error);
+      },
+    });
+    const follow = () => {
+      if (source === null) return;
+      const entries: FailoverEntry[] = source
+        .candidates("sing", { ignoreResting: true })
+        .map((endpoint) => {
+          const id = endpointId(endpoint);
+          const key = JSON.stringify([endpoint.via, endpoint.url, endpoint.headers]);
+          let client = clients.get(id);
+          if (client === undefined || client.key !== key) {
+            const made =
+              this.#worker?.(endpoint, timeoutMs, source) ??
+              new HttpSingWorker(endpoint, timeoutMs, source);
+            client = { key, endpoint, worker: made };
+            clients.set(id, client);
+          } else client.endpoint = endpoint;
+          return { id, name: endpoint.url, url: endpoint.url, worker: client.worker };
+        });
+      worker.update(entries);
+    };
+    follow();
+    const unwatch = source?.watch("sing", follow) ?? null;
+    if (source === null) ctx.log.warn("no endpoint registry: there is no song worker");
     const videoDir = cfg.video ? resolve(this.#baseDir, cfg.video_dir) : null;
-    const singer = new Singer(cfg, ctx, worker, videoDir);
+    const sink = this.#context;
+    const singer = new Singer(
+      cfg,
+      ctx,
+      worker,
+      videoDir,
+      sink === null ? null : (context) => sink(ctx.services, context),
+    );
     const actuators = actuatorsFor(ctx);
-    const capabilities = singCapabilities(singer, cfg.permissions, cfg.only_on_request).map((c) =>
+    const capabilities = singCapabilities(singer, cfg.permissions).map((c) =>
       actuators.register(c),
     );
 
@@ -113,7 +174,7 @@ export class SingModule implements Module {
     );
     commands.attach(ctx);
     const prompts = ctx.services.get(PromptContributorsKey) ?? null;
-    prompts?.register(new SingPrompt(singer, cfg.only_on_request));
+    prompts?.register(new SingPrompt(singer));
     const room = new VoiceRoom(() => ctx.clock.now());
     prompts?.register(new VoiceRoomPrompt(room, singer.list));
     singer.setPresence((guild, who) => room.present(guild, who));
@@ -137,18 +198,18 @@ export class SingModule implements Module {
     }
 
     const events = ctx.subscribe([
-      "voice.joined",
-      "voice.left",
-      "voice.participants",
-      "voice.playback",
-      "agent.turn.completed",
-      "action.completed",
-      "queue.item_activated",
+      Events.VoiceJoined.type,
+      Events.VoiceLeft.type,
+      Events.VoiceParticipants.type,
+      Events.VoicePlaybackEvent.type,
+      Events.AgentTurnCompleted.type,
+      Events.ArbiterDecided.type,
+      Events.QueueItemActivated.type,
     ]);
     ctx.spawn("events", async () => {
       for await (const env of events) {
-        room.onEvent(env.event);
-        singer.onEvent(env.event);
+        room.onEvent(env);
+        singer.onEvent(env);
       }
     });
     await singer.restore();
@@ -168,7 +229,7 @@ export class SingModule implements Module {
           },
         }),
       }) ?? null;
-    this.#running = { singer, clips, worker, commands, prompts, capabilities, unroute };
+    this.#running = { singer, clips, worker, commands, prompts, capabilities, unroute, unwatch };
   }
 
   async health(): Promise<Health> {
@@ -182,6 +243,7 @@ export class SingModule implements Module {
     const running = this.#running;
     this.#running = null;
     if (!running) return;
+    running.unwatch?.();
     await running.singer.save();
     running.singer.close();
     running.commands.detach();
@@ -192,11 +254,14 @@ export class SingModule implements Module {
   }
 }
 
-/** `url`, then `fallback_urls`, each address once (a trailing slash does not make it another). */
-export function workerUrls(url: string, fallbacks: readonly string[]): string[] {
+/**
+ * `url`, then `fallback_urls`, each address once (a trailing slash does not make it another): the
+ * static registry entries Core's wiring makes of them, in this order.
+ */
+export function workerUrls(url: string | undefined, fallbacks: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const u of [url, ...fallbacks]) {
+  for (const u of url === undefined ? fallbacks : [url, ...fallbacks]) {
     const key = u.replace(/\/+$/, "").toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);

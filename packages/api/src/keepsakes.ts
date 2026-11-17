@@ -6,7 +6,7 @@
 // an exception.
 
 import { EconomyKey } from "@miyoria/economy";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
   accountRefString,

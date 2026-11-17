@@ -1,25 +1,15 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type {
-  ChannelLevelsView,
-  ConversationNote,
-  KnowledgeView,
-  MindView,
-  PendingApproval,
-  ReflectionView,
-  SelfView,
-  TelemetryPoint,
-  Thought,
-  WorldView,
-} from "@/api/types";
+import type { Thought } from "@/api/types";
+import type { ChannelLevelsView, ConversationNote, MindView, PendingApproval, ReflectionView, SelfView, TelemetryPoint, WorldView } from "@miyoria/contracts/api";
 import { mockFetch, renderRoute } from "@/test/render";
 
 const SELF: SelfView = {
   at: "2026-11-02T12:00:00.000Z",
   mood: { valence: 0.3, arousal: 0.4, energy: 0.8 },
   boredom: 0.62,
-  drives: { social: 0.8, play: 0.5, attention: 0.3, rest: 0.2, curiosity: 0.4 },
+  drives: { social: 0.8, play: 0.5, attention: 0.3, rest: 0.2, curiosity: 0.4, esteem: 0.4, hunger: 0.3, longing: 0 },
   policy: {
     talkativeness: {
       "discord:g1:voice:v1": { level: 0.7, until: null, why: "大家在玩遊戲很熱鬧", set_at: "2026-11-02T11:00:00.000Z" },
@@ -55,7 +45,7 @@ const SELF: SelfView = {
     },
   ],
   feelings: [
-    { person: "p1", display_name: "Owen", text: "最近常陪我聊天,有點在意他", updated_at: "2026-11-02T11:30:00.000Z", by: "self" },
+    { person: "p1", display_name: "Owen", text: "最近常陪我聊天,有點在意他", updated_at: "2026-11-02T11:30:00.000Z" },
   ],
 };
 
@@ -191,17 +181,12 @@ function mindView(paused: boolean, approvals: number): MindView {
   return {
     paused,
     running: true,
-    accepting: !paused,
     stats: {
-      calls_last_hour: 3,
-      max_calls_per_hour: 12,
-      calls_total: 40,
-      tokens_total: 52_000,
       last_at: "2026-11-02T11:59:00.000Z",
-      next_heartbeat_at: "2026-11-02T12:10:00.000Z",
       idle_reason: paused ? "paused" : null,
     },
     pending_approvals: approvals,
+    emergency: null,
   };
 }
 
@@ -272,20 +257,11 @@ describe("Inner", () => {
     expect(screen.getByText("星期一 晚上 20:00")).toBeInTheDocument();
   });
 
-  it("lists her feelings and the world on their tabs", async () => {
+  it("lists the world on its tab", async () => {
     serve();
     const user = userEvent.setup();
     renderRoute("/inner");
-    await user.click(await screen.findByRole("tab", { name: "感情" }));
-    const feelings = await screen.findByRole("table", { name: "感情" });
-    expect(within(feelings).getByRole("link", { name: "Owen" })).toHaveAttribute(
-      "href",
-      "/character?tab=people&person=p1",
-    );
-    expect(within(feelings).getByText("最近常陪我聊天,有點在意他")).toBeInTheDocument();
-    expect(within(feelings).getByText("她")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: "世界" }));
+    await user.click(await screen.findByRole("tab", { name: "世界" }));
     const people = await screen.findByRole("table", { name: "在線的人" });
     const owen = within(people).getByText("Owen").closest("tr") as HTMLElement;
     expect(within(owen).getByText("在線")).toBeInTheDocument();
@@ -311,10 +287,9 @@ describe("Inner", () => {
       at: new Date(now - minsAgo * 60_000).toISOString(),
       mood: { valence: 0.1, arousal: 0.4, energy: 0.6 },
       boredom: 0.3,
-      drives: { social, play: 0.5, attention: 0.3, rest: 0.2, curiosity: 0.4 },
+      drives: { social, play: 0.5, attention: 0.3, rest: 0.2, curiosity: 0.4, esteem: 0.4, hunger: 0.3, longing: 0 },
       initiative: 0.5,
       llm: { calls: 0, prompt_tokens: 0, completion_tokens: 0, cached_prompt_tokens: 0, cost_usd: 0, errors: 0, first_token: { count: 0, sum_s: 0, buckets: [] } },
-      mind: null,
       voice_sessions: 0,
       speaking: false,
       events: {},
@@ -380,7 +355,7 @@ describe("Inner", () => {
     expect(within(intents).getByText(/對方意願 · the person opted out of DMs/)).toBeInTheDocument();
 
     const status = await screen.findByLabelText("心智迴圈");
-    expect(within(status).getByText("3 / 12")).toBeInTheDocument();
+    expect(within(status).getByText("上次記下")).toBeInTheDocument();
     expect(within(screen.getByRole("main")).getByText("運作中")).toBeInTheDocument();
 
     const approvals = screen.getByRole("table", { name: "等待確認" });
@@ -404,47 +379,7 @@ describe("Inner", () => {
     expect(await screen.findByRole("table", { name: "在線的人" })).toBeInTheDocument();
   });
 
-  it("shows her documents of any shape, grouped by subject, with where fields came from", async () => {
-    const source = (kind: "self" | "said", name: string | null, confidence = 0.8) => ({
-      kind,
-      account: null,
-      name,
-      origin: null,
-      confidence,
-      at: "2026-11-02T11:00:00.000Z",
-    });
-    const KNOWLEDGE: KnowledgeView = {
-      documents: [
-        {
-          id: "01JC00000000000000000ABC12",
-          subject: { type: "person", person: "p1" },
-          kind: "人物卡",
-          title: "Owen",
-          content: { 喜歡: ["拉麵", "貓"], 最近在忙: "期末考\n**週三**考數學", 怎麼相處: { 稱呼: "歐文" } },
-          sources: { "": source("self", null), "/喜歡/1": source("said", "Owen") },
-          created_at: "2026-11-01T00:00:00.000Z",
-          updated_at: "2026-11-02T11:00:00.000Z",
-          version: 3,
-          history: [{ version: 3, at: "2026-11-02T11:00:00.000Z", by: "said", name: "Owen", why: "他說的", ops: ["add /喜歡/1"] }],
-          short_id: "#abc12",
-          subject_label: "Owen",
-        },
-        {
-          id: "01JC00000000000000000DEF34",
-          subject: { type: "topic", name: "Minecraft 建築計畫" },
-          kind: "計畫",
-          title: "城堡",
-          content: { 進度: [{ 階段: "地基", 完成: true }] },
-          sources: { "": source("self", null) },
-          created_at: "2026-11-01T00:00:00.000Z",
-          updated_at: "2026-11-02T10:00:00.000Z",
-          version: 1,
-          history: [],
-          short_id: "#def34",
-          subject_label: "Minecraft 建築計畫",
-        },
-      ],
-    };
+  it("shows her conversation notes next to her documents", async () => {
     const NOTES: ConversationNote[] = [
       {
         context: { platform: "discord", scope: "g1", channel: "c1", kind: "channel" },
@@ -458,22 +393,11 @@ describe("Inner", () => {
       },
     ];
     mockFetch((_m, url) => {
-      if (url.pathname === "/api/knowledge") return { body: KNOWLEDGE };
+      if (url.pathname === "/api/notes/documents") return { body: { documents: [], counts: [] } };
       if (url.pathname === "/api/knowledge/conversations") return { body: NOTES };
       return undefined;
     });
     renderRoute("/inner?tab=knowledge");
-    const owen = await screen.findByRole("region", { name: "Owen" });
-    const card = within(owen).getByRole("article", { name: "人物卡「Owen」" });
-    expect(within(card).getByText("拉麵")).toBeInTheDocument();
-    expect(within(card).getByText("(Owen 說)")).toBeInTheDocument();
-    expect(within(card).getByText("稱呼")).toBeInTheDocument();
-    expect(within(card).getByText(/週三/)).toBeInTheDocument();
-    expect(within(card).getByText("#abc12")).toBeInTheDocument();
-    expect(within(card).getByText("改過 1 次")).toBeInTheDocument();
-    const topic = screen.getByRole("region", { name: "Minecraft 建築計畫" });
-    expect(within(topic).getByText("地基")).toBeInTheDocument();
-    expect(within(topic).getByText("是")).toBeInTheDocument();
     const notes = await screen.findByRole("list", { name: "對話筆記" });
     expect(within(notes).getByText("Miyoria / 雜談")).toBeInTheDocument();
     expect(within(notes).getByText("大家在聊海豚,Owen 週三要考試。")).toBeInTheDocument();

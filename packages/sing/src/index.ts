@@ -5,9 +5,7 @@
 export { singCapabilities } from "./actions.js";
 export {
   type GpuContext,
-  type GpuStatus,
   HttpSingWorker,
-  type LyricLine,
   type SingWorker,
   SingWorkerError,
   type SongMeta,
@@ -20,22 +18,20 @@ export {
 export { type ClipDeps, clipStartOf, SingClips, sliceClip } from "./clips.js";
 export { backingOf, listCard, registerCommands } from "./commands.js";
 export {
-  defaultSingConfig,
   type SingConfig,
   SingConfigSchema,
   type SingPermissions,
   SingPermissionsSchema,
 } from "./config.js";
-export { type FailoverOptions, FailoverSingWorker } from "./failover.js";
+export type { Endpoint, EndpointQuery, EndpointSource, EndpointsOption } from "./endpoints.js";
+export { type FailoverEntry, type FailoverOptions, FailoverSingWorker } from "./failover.js";
 export {
-  type CardView,
-  LyricsCard,
-  type LyricsCardDeps,
-  MIN_EDIT_MS,
-  PROGRESS_MS,
-  renderCard,
-} from "./lyrics-card.js";
-export { SingerKey, SingModule } from "./module.js";
+  type GpuContextSink,
+  SingerKey,
+  SingModule,
+  type SingWorkerFactory,
+  workerUrls,
+} from "./module.js";
 export {
   dedicationProblem,
   MAX_DEDICATION_CHARS,
@@ -69,4 +65,4 @@ export {
   skipVotesNeeded,
   workerQuery,
 } from "./singer.js";
-export { KEY_RANGE, parseSongPatch, type SongPatch, songNo, songTask } from "./steer.js";
+export { KEY_RANGE, parseSongPatch, type SongPatch, songNo } from "./steer.js";

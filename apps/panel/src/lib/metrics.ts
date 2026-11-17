@@ -2,7 +2,8 @@
 // the delivery ledger and nothing else. A measure with no source yet is listed in `UNMEASURED`
 // with what is missing; none of them is ever filled in by a guess.
 
-import type { Delivery, LogEvent } from "@/api/types";
+import type { LogEvent } from "@/api/types";
+import type { Delivery } from "@miyoria/contracts/api";
 import { asE2eEvent } from "./e2e";
 import type { EvalData, Loaded } from "./eval-data";
 

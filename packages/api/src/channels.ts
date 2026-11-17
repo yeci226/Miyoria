@@ -10,41 +10,19 @@ import {
   modeDescription,
   modeLabel,
   parseChannelMode,
-} from "@miyoria/agent";
-import {
-  AuthorizerKey,
-  type ContextKey,
-  contextKeyString,
-  PlatformSinksKey,
-  WorldStateKey,
-} from "@miyoria/types";
-import { z } from "zod";
+} from "@miyoria/brain/agent";
+import type {
+  ChannelLevelsView,
+  ChannelLevelView,
+  SetChannelLevelRequest,
+} from "@miyoria/contracts/api";
+import { type ContextKey, contextKeyString, PlatformSinksKey, WorldStateKey } from "@miyoria/types";
+import { os } from "./contract.js";
 import { parseContextKeyString } from "./data.js";
 import { ApiError } from "./errors.js";
-import { readJson } from "./extract.js";
-import { json, type Route } from "./route.js";
-import { ContextKeySchema } from "./schemas.js";
 import type { ApiContext, ApiState } from "./state.js";
-import type { ChannelLevelsView, ChannelLevelView } from "./types.js";
-
-export const NODE_CHANNEL_MODE = "admin.channel.mode";
-
-const LevelSchema = z.object({
-  context: ContextKeySchema,
-  /** A level, or `null` to go back to the configured one. */
-  mode: z.string().nullable(),
-});
 
 const isText = (c: ContextKey) => c.kind === "channel" || c.kind === "thread";
-
-function requireNode(state: ApiState, c: ApiContext): void {
-  const principal = c.get("principal");
-  if (principal.kind === "token") return;
-  const authorizer = state.optional(AuthorizerKey);
-  if (!authorizer?.allows(principal.record.account, NODE_CHANNEL_MODE)) {
-    throw new ApiError(403, `this needs \`${NODE_CHANNEL_MODE}\``);
-  }
-}
 
 function handleOf(state: ApiState) {
   return state.service(AgentHandleKey, "agent module");
@@ -87,10 +65,13 @@ async function levels(state: ApiState): Promise<ChannelLevelsView> {
   };
 }
 
-async function setLevel(state: ApiState, c: ApiContext): Promise<Response> {
-  requireNode(state, c);
-  const request = await readJson(c, LevelSchema);
-  const context = request.context as ContextKey;
+/** Needs `admin.channel.mode` (the route's permission). */
+async function setLevel(
+  state: ApiState,
+  c: ApiContext,
+  request: SetChannelLevelRequest,
+): Promise<ChannelLevelView> {
+  const context = { ...request.context, scope: request.context.scope ?? null } as ContextKey;
   if (!isText(context)) throw ApiError.badRequest("levels are for text channels");
   let mode: ChannelMode | null = null;
   if (request.mode !== null) {
@@ -110,12 +91,13 @@ async function setLevel(state: ApiState, c: ApiContext): Promise<Response> {
   const target = contextKeyString(context);
   await state.audit(c, "channel.level", target, { mode }, failure === null);
   if (failure !== null) throw ApiError.badGateway(failure);
-  return json(await levelView(state, context));
+  return levelView(state, context);
 }
 
-export function channelRoutes(state: ApiState): Route[] {
-  return [
-    { method: "GET", path: "/api/channels/levels", handler: async () => json(await levels(state)) },
-    { method: "PUT", path: "/api/channels/level", handler: (c) => setLevel(state, c) },
-  ];
-}
+/** The channel routes on the route table (`@miyoria/contracts/api`). */
+export const channelRpc = {
+  levels: os.channels.levels.handler(({ context }) => levels(context.state)),
+  setLevel: os.channels.setLevel.handler(({ input, context }) =>
+    setLevel(context.state, context.c, input.body),
+  ),
+};

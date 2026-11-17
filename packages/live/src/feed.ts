@@ -5,12 +5,14 @@
 // `ActivityTracker` says when she is thinking or preparing a song. This file decides what they are
 // fed (privacy.ts, rule 1), screens what comes out (rule 2) and tells every watcher what changed.
 
-import { ActivityTracker, EMOTION_TOPIC, Forwarder, SUBTITLE_TOPIC } from "@miyoria/stage";
+import { ActivityTracker, EMOTION_TOPIC, Forwarder } from "@miyoria/stage";
 import {
   type ActivitySnapshot,
-  AFFECT_CHANGED_TOPIC,
+  type BusEvent,
   type ContextKey,
-  type Event,
+  Events,
+  is,
+  type JsonValue,
   type LiveActivity,
   type LiveEmotion,
   type LiveEvent,
@@ -22,25 +24,20 @@ import {
   type LiveSnapshot,
   type LiveSpot,
   type LiveVideo,
-  SONG_PREPARE_TOPIC,
-  SONG_TOPIC,
-  SPEECH_SYNTH_TOPIC,
-  VOICE_UPCOMING_TOPIC,
 } from "@miyoria/types";
 import { isPublicPlace, mayShow, payloadContext, payloadTurn, type Screen } from "./privacy.js";
 
 /** Topics the feed follows. */
 export const LIVE_TOPICS: readonly string[] = [
-  "agent.turn.started",
-  "agent.turn.completed",
-  "voice.playback",
+  Events.AgentTurnStarted.type,
+  Events.AgentTurnCompleted.type,
+  Events.VoicePlaybackEvent.type,
   EMOTION_TOPIC,
-  SUBTITLE_TOPIC,
-  VOICE_UPCOMING_TOPIC,
-  SPEECH_SYNTH_TOPIC,
-  AFFECT_CHANGED_TOPIC,
-  SONG_TOPIC,
-  SONG_PREPARE_TOPIC,
+  Events.VoiceUpcoming.type,
+  Events.VoiceSynthesis.type,
+  Events.AffectChanged.type,
+  Events.SingCue.type,
+  Events.SingPrepare.type,
 ];
 
 /** Longest line shown, in code points; a longer one shows its end. */
@@ -227,7 +224,7 @@ export class LiveState {
   // ---- the bus ---------------------------------------------------------------------------
 
   /** One bus event. `now` is the clock of the activity line. */
-  onEvent(event: Event, now: number): void {
+  onEvent(event: BusEvent, now: number): void {
     const verdict = this.#admit(event);
     if (verdict === "drop") return;
     this.#tracker.onEvent(event, now);
@@ -272,41 +269,35 @@ export class LiveState {
    * Rule 1: `pass` goes to the overlay machinery, `track` only to the activity line (songs),
    * `drop` nowhere.
    */
-  #admit(event: Event): "pass" | "track" | "drop" {
-    switch (event.type) {
-      case "agent_turn_started": {
-        const { turn, context } = event.data;
-        const open = isPublicPlace(context, this.#channels);
-        this.#remember(turn, { public: open, via: context.kind === "voice" ? "voice" : "text" });
-        return open ? "pass" : "drop";
+  #admit(event: BusEvent): "pass" | "track" | "drop" {
+    if (is(Events.AgentTurnStarted, event)) {
+      const { turn, context } = event.data;
+      const open = isPublicPlace(context, this.#channels);
+      this.#remember(turn, { public: open, via: context.kind === "voice" ? "voice" : "text" });
+      return open ? "pass" : "drop";
+    } else if (is(Events.AgentTurnCompleted, event)) {
+      return isPublicPlace(event.data.context, this.#channels) ? "pass" : "drop";
+    } else if (is(Events.VoicePlaybackEvent, event)) {
+      const { context, turn } = event.data;
+      if (!isPublicPlace(context, this.#channels)) return "drop";
+      if (turn !== null && !this.#turns.has(turn)) {
+        this.#remember(turn, { public: true, via: "voice" });
       }
-      case "agent_turn_completed":
-        return isPublicPlace(event.data.context, this.#channels) ? "pass" : "drop";
-      case "voice_playback": {
-        const { context, turn } = event.data;
-        if (!isPublicPlace(context, this.#channels)) return "drop";
-        if (turn !== null && !this.#turns.has(turn)) {
-          this.#remember(turn, { public: true, via: "voice" });
-        }
-        // Moderation replaced what she meant: those are not her words reaching anyone.
-        return event.data.blocked ? "drop" : "pass";
+      // Moderation replaced what she meant: those are not her words reaching anyone.
+      return event.data.blocked ? "drop" : "pass";
+    } else {
+      const topic = event.type;
+      const payload = event.data as JsonValue;
+      if (topic === Events.AffectChanged.type) return "pass";
+      if (topic === Events.SingCue.type || topic === Events.SingPrepare.type) return "track";
+      if (
+        topic === EMOTION_TOPIC ||
+        topic === Events.VoiceUpcoming.type ||
+        topic === Events.VoiceSynthesis.type
+      ) {
+        return this.#place(payloadContext(payload), payloadTurn(payload)) ? "pass" : "drop";
       }
-      case "custom": {
-        const { topic, payload } = event.data;
-        if (topic === AFFECT_CHANGED_TOPIC) return "pass";
-        if (topic === SONG_TOPIC || topic === SONG_PREPARE_TOPIC) return "track";
-        if (
-          topic === EMOTION_TOPIC ||
-          topic === SUBTITLE_TOPIC ||
-          topic === VOICE_UPCOMING_TOPIC ||
-          topic === SPEECH_SYNTH_TOPIC
-        ) {
-          return this.#place(payloadContext(payload), payloadTurn(payload)) ? "pass" : "drop";
-        }
-        return "drop";
-      }
-      default:
-        return "drop";
+      return "drop";
     }
   }
 

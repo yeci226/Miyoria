@@ -1,0 +1,28 @@
+# Voice node: joins Discord voice with the self account and dials Core's voice link.
+name = "voice-node"
+kind = "node"
+provides = ["voice-room"]
+summary = "語音節點(self 帳號進語音頻道,連 Core 的 voice link)"
+
+[install]
+runtime = "node"
+system = ["ffmpeg"]
+
+[[install.manual]]
+path = "apps/voice-node/.env"
+what = "Self 帳號的 token(SELF_TOKEN);沒加入叢集的機器另外要 VOICE_LINK_TOKEN(要和 Core 的相同)"
+
+[run]
+# It runs from source (tsx), as `up` starts it today; a built entry replaces this later.
+command = ["pnpm", "start"]
+cwd = "."
+# The whole environment, as before. Where Core's voice link is and its token come from Core
+# (cluster.links, to a host approved for voice-room). Until Core has sent them, or on a machine
+# that has not joined, the variables are not set and the node reads its own .env as before.
+pass_env = ["*"]
+env = { VOICE_LINK_URL = "{link:voice.url}", VOICE_LINK_TOKEN = "{link:voice.token}" }
+after = ["core"]
+guard = ["live", "singing"]
+
+[run.health]
+process = true

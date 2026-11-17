@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type { E2eRecord, LogEvent, TurnOutcomeRecord } from "@/api/types";
+import type { E2eRecord, LogEvent } from "@/api/types";
+import type { TurnOutcomeRecord } from "@miyoria/contracts/api";
 import { queryKeys } from "@/app/queries";
 import { mockFetch, renderRoute } from "@/test/render";
 

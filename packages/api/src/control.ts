@@ -10,20 +10,41 @@
 //   (`sing.stop`)
 // * `POST /api/game/start` `{ game?, goal?, stream? }`, `POST /api/game/stop`,
 //   `POST /api/game/goal` `{ text }` (`game.*`; played where she is in voice)
-// * `POST /api/share/browse` (`share.browse`; one round on Threads, within the usual limits)
 
+import type { ControlResult, SongsState, SongView } from "@miyoria/contracts/api";
 import { SingerKey, type SongEntry } from "@miyoria/sing";
 import { type ContextKey, contextKeyString, type JsonObject } from "@miyoria/types";
-import { z } from "zod";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { readJson } from "./extract.js";
 import { actAs } from "./ops.js";
-import { json, type Route } from "./route.js";
-import { ContextKeySchema } from "./schemas.js";
 import { type ApiContext, type ApiState, toJson } from "./state.js";
-import type { ControlResult, SongsState, SongView } from "./types.js";
 
-const Id = z.string().trim().min(1).max(64);
+const BODY_REJECTED = "Failed to deserialize the JSON body into the target type";
+
+/**
+ * A text of the body, trimmed. The contract checks the text as it came; one that is empty or too
+ * long once trimmed is refused with the answer a body that does not match its shape gets (422).
+ */
+function trimmed(field: string, value: string, max: number): string {
+  const text = value.trim();
+  if (text.length < 1) {
+    throw new ApiError(
+      422,
+      `${BODY_REJECTED}: ${field}: Too small: expected string to have >=1 characters`,
+    );
+  }
+  if (text.length > max) {
+    throw new ApiError(
+      422,
+      `${BODY_REJECTED}: ${field}: Too big: expected string to have <=${max} characters`,
+    );
+  }
+  return text;
+}
+
+const trimmedId = (field: string, value: string) => trimmed(field, value, 64);
+const optionalId = (field: string, value: string | null | undefined) =>
+  value == null ? null : trimmedId(field, value);
 
 /** Runs `capability`, audits it as `audit` on `target`, and answers with its text. */
 async function run(
@@ -55,38 +76,38 @@ function guildOf(state: ApiState, asked: string | null | undefined): string {
 
 // ---- voice ------------------------------------------------------------------------------
 
-const JoinSchema = z.object({ guild: Id, channel: Id.nullish() });
-const LeaveSchema = z.object({ guild: Id.nullish() });
-const GoLiveSchema = z.object({ action: z.enum(["start", "stop"]), guild: Id.nullish() });
-
-async function join(state: ApiState, c: ApiContext): Promise<Response> {
-  const body = await readJson(c, JoinSchema);
-  const args: JsonObject = { guild: body.guild, channel: body.channel ?? null };
-  return json(
-    await run(state, c, "voice.join", args, { action: "voice.join", target: body.guild }),
-  );
+async function join(
+  state: ApiState,
+  c: ApiContext,
+  body: { guild: string; channel?: string | null | undefined },
+): Promise<ControlResult> {
+  const guild = trimmedId("guild", body.guild);
+  const channel = optionalId("channel", body.channel);
+  return run(state, c, "voice.join", { guild, channel }, { action: "voice.join", target: guild });
 }
 
-async function leave(state: ApiState, c: ApiContext): Promise<Response> {
-  const body = await readJson(c, LeaveSchema);
-  const guild = guildOf(state, body.guild);
-  return json(
-    await run(state, c, "voice.leave", { guild }, { action: "voice.leave", target: guild }),
-  );
+async function leave(
+  state: ApiState,
+  c: ApiContext,
+  body: { guild?: string | null | undefined },
+): Promise<ControlResult> {
+  const guild = guildOf(state, optionalId("guild", body.guild));
+  return run(state, c, "voice.leave", { guild }, { action: "voice.leave", target: guild });
 }
 
-async function golive(state: ApiState, c: ApiContext): Promise<Response> {
-  const body = await readJson(c, GoLiveSchema);
-  const guild = guildOf(state, body.guild);
+async function golive(
+  state: ApiState,
+  c: ApiContext,
+  body: { action: "start" | "stop"; guild?: string | null | undefined },
+): Promise<ControlResult> {
+  const guild = guildOf(state, optionalId("guild", body.guild));
   const capability = body.action === "start" ? "stream.start" : "stream.stop";
-  return json(
-    await run(
-      state,
-      c,
-      capability,
-      { guild },
-      { action: `voice.golive.${body.action}`, target: guild },
-    ),
+  return run(
+    state,
+    c,
+    capability,
+    { guild },
+    { action: `voice.golive.${body.action}`, target: guild },
   );
 }
 
@@ -120,25 +141,25 @@ function songsState(state: ApiState): SongsState {
   };
 }
 
-const RequestSchema = z.object({
-  query: z.string().trim().min(1).max(300),
-  key: z.number().int().min(-6).max(6).nullish(),
-});
-const PlaySchema = z.object({ song: z.number().int().positive().nullish() });
-const StopSchema = z.object({ all: z.boolean().nullish() });
-
-async function requestSong(state: ApiState, c: ApiContext): Promise<Response> {
-  const body = await readJson(c, RequestSchema);
-  const args: JsonObject = { query: body.query, key: body.key ?? null };
+async function requestSong(
+  state: ApiState,
+  c: ApiContext,
+  body: { query: string; key?: number | null | undefined },
+): Promise<ControlResult & SongsState> {
+  const query = trimmed("query", body.query, 300);
+  const args: JsonObject = { query, key: body.key ?? null };
   const result = await run(state, c, "sing.request", args, {
     action: "sing.request",
-    target: body.query,
+    target: query,
   });
-  return json({ ...result, ...songsState(state) });
+  return { ...result, ...songsState(state) };
 }
 
-async function playSong(state: ApiState, c: ApiContext): Promise<Response> {
-  const body = await readJson(c, PlaySchema);
+async function playSong(
+  state: ApiState,
+  c: ApiContext,
+  body: { song?: number | null | undefined },
+): Promise<ControlResult & SongsState> {
   const target = body.song == null ? "next" : `#${body.song}`;
   // Sung in the voice channel she is in.
   const result = await run(
@@ -149,11 +170,14 @@ async function playSong(state: ApiState, c: ApiContext): Promise<Response> {
     { action: "sing.play", target },
     state.monitor.voiceContext(),
   );
-  return json({ ...result, ...songsState(state) });
+  return { ...result, ...songsState(state) };
 }
 
-async function stopSong(state: ApiState, c: ApiContext): Promise<Response> {
-  const body = await readJson(c, StopSchema);
+async function stopSong(
+  state: ApiState,
+  c: ApiContext,
+  body: { all?: boolean | null | undefined },
+): Promise<ControlResult & SongsState> {
   const all = body.all === true;
   const result = await run(
     state,
@@ -162,27 +186,10 @@ async function stopSong(state: ApiState, c: ApiContext): Promise<Response> {
     { all },
     { action: "sing.stop", target: all ? "all" : "current" },
   );
-  return json({ ...result, ...songsState(state) });
-}
-
-// ---- share ------------------------------------------------------------------------------
-
-async function shareBrowse(state: ApiState, c: ApiContext): Promise<Response> {
-  return json(
-    await run(state, c, "share.browse", {}, { action: "share.browse", target: "threads" }),
-  );
+  return { ...result, ...songsState(state) };
 }
 
 // ---- game -------------------------------------------------------------------------------
-
-const GameStartSchema = z.object({
-  game: Id.nullish(),
-  goal: z.string().trim().min(1).max(200).nullish(),
-  stream: z.boolean().nullish(),
-  /** Where to play; default the voice channel she is in. */
-  context: ContextKeySchema.nullish(),
-});
-const GoalSchema = z.object({ text: z.string().trim().min(1).max(200) });
 
 /** The game director plays where she is; it needs a place to report to. */
 function playContext(state: ApiState, asked: ContextKey | null | undefined): ContextKey {
@@ -192,65 +199,82 @@ function playContext(state: ApiState, asked: ContextKey | null | undefined): Con
   return context;
 }
 
-async function gameStart(state: ApiState, c: ApiContext): Promise<Response> {
-  const body = await readJson(c, GameStartSchema);
-  const context = playContext(state, body.context as ContextKey | null | undefined);
-  const args: JsonObject = {
-    game: body.game ?? null,
-    goal: body.goal ?? null,
-    stream: body.stream ?? null,
-  };
-  return json(
-    await run(
-      state,
-      c,
-      "game.start",
-      args,
-      { action: "game.start", target: body.game ?? contextKeyString(context) },
-      context,
-    ),
+async function gameStart(
+  state: ApiState,
+  c: ApiContext,
+  body: {
+    game?: string | null | undefined;
+    goal?: string | null | undefined;
+    stream?: boolean | null | undefined;
+    context?: ContextKey | null | undefined;
+  },
+): Promise<ControlResult> {
+  const game = optionalId("game", body.game);
+  const goal = body.goal == null ? null : trimmed("goal", body.goal, 200);
+  const context = playContext(state, body.context);
+  const args: JsonObject = { game, goal, stream: body.stream ?? null };
+  return run(
+    state,
+    c,
+    "game.start",
+    args,
+    { action: "game.start", target: game ?? contextKeyString(context) },
+    context,
   );
 }
 
-async function gameStop(state: ApiState, c: ApiContext): Promise<Response> {
-  return json(
-    await run(
-      state,
-      c,
-      "game.stop",
-      {},
-      { action: "game.stop", target: "game" },
-      state.monitor.voiceContext(),
-    ),
+async function gameStop(state: ApiState, c: ApiContext): Promise<ControlResult> {
+  return run(
+    state,
+    c,
+    "game.stop",
+    {},
+    { action: "game.stop", target: "game" },
+    state.monitor.voiceContext(),
   );
 }
 
-async function gameGoal(state: ApiState, c: ApiContext): Promise<Response> {
-  const body = await readJson(c, GoalSchema);
-  return json(
-    await run(
-      state,
-      c,
-      "game.goal",
-      { text: body.text },
-      { action: "game.goal", target: "game" },
-      state.monitor.voiceContext(),
-    ),
+async function gameGoal(state: ApiState, c: ApiContext, text: string): Promise<ControlResult> {
+  return run(
+    state,
+    c,
+    "game.goal",
+    { text: trimmed("text", text, 200) },
+    { action: "game.goal", target: "game" },
+    state.monitor.voiceContext(),
   );
 }
 
-export function controlRoutes(state: ApiState): Route[] {
-  return [
-    { method: "POST", path: "/api/voice/join", handler: (c) => join(state, c) },
-    { method: "POST", path: "/api/voice/leave", handler: (c) => leave(state, c) },
-    { method: "POST", path: "/api/voice/golive", handler: (c) => golive(state, c) },
-    { method: "GET", path: "/api/songs", handler: () => json(songsState(state)) },
-    { method: "POST", path: "/api/songs", handler: (c) => requestSong(state, c) },
-    { method: "POST", path: "/api/songs/play", handler: (c) => playSong(state, c) },
-    { method: "POST", path: "/api/songs/stop", handler: (c) => stopSong(state, c) },
-    { method: "POST", path: "/api/game/start", handler: (c) => gameStart(state, c) },
-    { method: "POST", path: "/api/game/stop", handler: (c) => gameStop(state, c) },
-    { method: "POST", path: "/api/game/goal", handler: (c) => gameGoal(state, c) },
-    { method: "POST", path: "/api/share/browse", handler: (c) => shareBrowse(state, c) },
-  ];
-}
+/** The control routes on the route table (`@miyoria/contracts/api`); `voice` joins the monitor's. */
+export const controlRpc = {
+  voice: {
+    join: os.voice.join.handler(({ input, context }) => join(context.state, context.c, input.body)),
+    leave: os.voice.leave.handler(({ input, context }) =>
+      leave(context.state, context.c, input.body),
+    ),
+    goLive: os.voice.goLive.handler(({ input, context }) =>
+      golive(context.state, context.c, input.body),
+    ),
+  },
+  songs: {
+    list: os.songs.list.handler(({ context }) => songsState(context.state)),
+    request: os.songs.request.handler(({ input, context }) =>
+      requestSong(context.state, context.c, input.body),
+    ),
+    play: os.songs.play.handler(({ input, context }) =>
+      playSong(context.state, context.c, input.body),
+    ),
+    stop: os.songs.stop.handler(({ input, context }) =>
+      stopSong(context.state, context.c, input.body),
+    ),
+  },
+  game: {
+    start: os.game.start.handler(({ input, context }) =>
+      gameStart(context.state, context.c, input.body),
+    ),
+    stop: os.game.stop.handler(({ context }) => gameStop(context.state, context.c)),
+    goal: os.game.goal.handler(({ input, context }) =>
+      gameGoal(context.state, context.c, input.body.text),
+    ),
+  },
+};

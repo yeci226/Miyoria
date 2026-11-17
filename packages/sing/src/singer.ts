@@ -5,9 +5,10 @@
 // * A request (her `sing_request` tool, `/queue song request`, a called `[modules.queue]` item
 //   of kind `song`) adds a set list entry and submits a worker job; she keeps talking meanwhile.
 // * Ready: songs asked for by command or the queue are sung as soon as she is in voice and free
-//   (forced). Others are offered to her mind (`MindKey.suggest`), which picks the moment with a
-//   `sing.play` intent and an opening line; she is reminded a couple of times, and her turns see
-//   the set list (prompt section `sing`). Without a mind, ready songs start on their own.
+//   (forced). For the others she is told (an impulse of source `song`, `song_ready`, which the
+//   Arbiter admits and her runner wakes her with): she picks the moment with `sing.play` and an
+//   opening line, or not; she is told again a couple of times, and her turns see the set list
+//   (prompt section `sing`). Without the Arbiter and her runner, ready songs start on their own.
 // * Before a song starts she finishes what she is saying (the turn that started it, then a quiet
 //   moment). While it plays the module holds her voice channel (`VoiceFloorKey`: her speech there
 //   is dropped instead of queueing behind the song), barge-in does not apply (it is not her
@@ -16,34 +17,32 @@
 // * When the worker takes the whole GPU to convert (its TTS / ASR go away for a minute or two),
 //   she first says she is off to prepare it, and only then does the worker go ahead
 //   (`exclusive: "waiting"` → `goExclusive`). Meanwhile speech is paused (`SpeechPauseKey`,
-//   `SPEECH_PAUSE_TOPIC`): the voice module neither speaks nor transcribes, the overlay says so.
+//   `Events.SpeechPause`): the voice module neither speaks nor transcribes, the overlay says so.
 // * The song being prepared, its worker stage and progress are published as
-//   `SONG_PREPARE_TOPIC` whenever they change (the overlay's activity line).
+//   `Events.SingPrepare` whenever they change (the overlay's activity line).
 
 import { randomUUID } from "node:crypto";
-import { CapabilityError } from "@miyoria/actions";
-import { errorMessage, getLogger, type ModuleContext } from "@miyoria/kernel";
-import { type RequestQueue, RequestQueueKey } from "@miyoria/queue";
+import { CapabilityError } from "@miyoria/gate/actions";
+import { type RequestQueue, RequestQueueKey } from "@miyoria/play/queue";
+import { errorMessage, getLogger, type ModuleContext } from "@miyoria/runtime/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
 import {
   type AccountRef,
-  ARBITER_IMPULSE_TOPIC,
+  type ArbiterDecision,
+  ArbiterKey,
+  type BusEvent,
   type ContextKey,
   contextKeyEquals,
-  customEvent,
-  type Event,
+  Events,
+  ImpulseHostKey,
+  is,
   isJsonObject,
   type JsonValue,
-  MindKey,
   newImpulse,
-  PlatformSinksKey,
   type PlaybackState,
   type SetlistLine,
-  SONG_PREPARE_TOPIC,
-  SONG_TOPIC,
   type SongCue,
   type SongPrepare,
-  SPEECH_PAUSE_TOPIC,
   type SpeechPause,
   type SteerableTask,
   type SteerOutcome,
@@ -56,26 +55,21 @@ import {
   toTimestamp,
   type VoiceFloor,
   VoicePlayerKey,
-  v2Event,
   WorldStateKey,
 } from "@miyoria/types";
 import {
   type GpuContext,
   type SingWorker,
   SingWorkerError,
-  type SongMeta,
   type SongQuery,
   type WorkerJob,
 } from "./client.js";
 import type { SingConfig } from "./config.js";
-import { LyricsCard } from "./lyrics-card.js";
 import { dedicationProblem, type SongPayments, SongPaymentsKey } from "./payments.js";
 import { singSong, sleep } from "./player.js";
 import {
-  askedName,
   type BackingMode,
   dedicationNote,
-  LINK,
   type NewSong,
   SetList,
   type SongEntry,
@@ -90,9 +84,9 @@ const TICK_MS = 100;
 /** Settings key (profile `_global`) of the stored set list. */
 export const SETLIST_KEY = "sing:setlist";
 const STORE_PROFILE = "_global";
-/** After a song is started without a turn, she gets this long to start an opening line. */
-const EXPECT_OPENING_MS = 6000;
 const TURNS_REMEMBERED = 64;
+/** Announcement impulses followed (their decisions are kept until the song has started). */
+const ANNOUNCEMENTS_REMEMBERED = 32;
 
 /** An announcement no longer makes sense after this. */
 const ANNOUNCE_TTL_MS = 2 * 60_000;
@@ -120,9 +114,7 @@ export interface SongRequest
   dedication?: string | null;
 }
 
-/** Topic of the stream overlay's screen line (the economy's `SCREEN_TOPIC`, kept as text here). */
-const SCREEN_TOPIC = "economy.screen";
-
+const LINK = /https?:\/\/[^\s<>"'「」]+/i;
 /** A link pasted without its scheme (`www.bilibili.com/video/BV…/`, `youtu.be/…`): one of the usual hosts. */
 const BARE_LINK =
   /(?<![\w./-])(?:www\.[\w-]+\.[a-z]{2,}|(?:music\.)?youtube\.com|m\.youtube\.com|youtu\.be|bilibili\.com|b23\.tv)\/[^\s<>"'「」]*/i;
@@ -148,8 +140,6 @@ interface Playing {
   stop: AbortController;
   /** The song itself started streaming (before that she is still saying her opening). */
   audible: boolean;
-  /** Its lyrics card, when there is one. */
-  card: LyricsCard | null;
 }
 
 /** She was told she is off to prepare a song; the worker waits for her to finish saying so. */
@@ -193,13 +183,13 @@ export class Singer implements VoiceFloor, SpeechPause {
   readonly #skipVotes = new Map<SongNo, Set<string>>();
   /** Voice channels she is in. */
   #voices: ContextKey[] = [];
-  /** Where she last sent a message, per `platform:guild` (the lyrics card goes there). */
-  readonly #lastTyped = new Map<string, ContextKey>();
   /** Her speech playbacks running per guild. */
   readonly #speaking = new Map<string, number>();
   /** Song clips of a party game playing per guild: not her singing, but nothing starts over them. */
   readonly #clips = new Map<string, number>();
   readonly #turnsDone: TurnId[] = [];
+  /** What the Arbiter decided on each announcement impulse of a song start (`null`: not yet). */
+  readonly #announced = new Map<string, ArbiterDecision | null>();
   #closed = false;
   /**
    * Whether someone is in her voice channel of `guild`: `true` / `false`, or `null` when that is
@@ -219,18 +209,20 @@ export class Singer implements VoiceFloor, SpeechPause {
   #paused = false;
   /** What the worker last said about preparing songs (not stored). */
   readonly #jobs = new Map<SongNo, { title: string; exclusive: string | null }>();
-  /** JSON of the `SONG_PREPARE_TOPIC` payload last published. */
+  /** JSON of the `Events.SingPrepare` payload last published. */
   #prepareSent = JSON.stringify(NOT_PREPARING);
 
   /**
    * `videoDir`: the worker's cache dir (absolute) when song videos are shown on stream
-   * (`[modules.sing] video`), else `null`.
+   * (`[modules.sing] video`), else `null`. `tellContext`: also gets who listens and which songs
+   * are needed now, each time the worker is told (Core sends it on to the hosts' GPU arbiters).
    */
   constructor(
     private readonly cfg: SingConfig,
     private readonly ctx: ModuleContext,
     private readonly worker: SingWorker,
     private readonly videoDir: string | null = null,
+    private readonly tellContext: ((context: GpuContext) => void) | null = null,
   ) {
     this.list = new SetList(cfg);
   }
@@ -567,9 +559,7 @@ export class Singer implements VoiceFloor, SpeechPause {
     if (paused === this.#paused) return;
     this.#paused = paused;
     log.info({ paused }, paused ? "speech paused: the song worker has the GPU" : "speech is back");
-    this.ctx.publish(
-      customEvent(SPEECH_PAUSE_TOPIC, { paused, reason: paused ? "song" : null } as JsonValue),
-    );
+    this.ctx.publish(Events.SpeechPause, { paused, reason: paused ? "song" : null });
   }
 
   #fail(entry: SongEntry, why: string, tell = true): void {
@@ -596,9 +586,15 @@ export class Singer implements VoiceFloor, SpeechPause {
     return this.ctx.services.get(WorldStateKey)?.snapshot().her.game ?? null;
   }
 
+  /** She can be told and decide: the Arbiter admits her impulses and her runner wakes her. */
+  #sheDecides(): boolean {
+    const s = this.ctx.services;
+    return s.get(ArbiterKey) !== undefined && s.get(ImpulseHostKey) !== undefined;
+  }
+
   #mindDecides(entry: SongEntry): boolean {
     // A song she prepared for herself is hers to sing or not: it never starts on its own.
-    if (entry.practice === true) return this.ctx.services.get(MindKey)?.accepting === true;
+    if (entry.practice === true) return this.#sheDecides();
     if (this.cfg.start === "auto") return false;
     const gaming = this.#game() !== null;
     // An owner's command overrides; a request from the queue waits while she plays.
@@ -611,7 +607,7 @@ export class Singer implements VoiceFloor, SpeechPause {
       // She let every reminder pass: someone is still waiting for it, so it starts on its own.
       return false;
     }
-    return this.ctx.services.get(MindKey)?.accepting === true;
+    return this.#sheDecides();
   }
 
   #onReady(entry: SongEntry): void {
@@ -631,9 +627,8 @@ export class Singer implements VoiceFloor, SpeechPause {
     return gaming || e.reminders <= this.cfg.max_reminders;
   }
 
-  /** Tells her mind the song is ready (again). */
+  /** Tells her the song is ready (again): an impulse she is woken with, and decides on. */
   #remind(entry: SongEntry): void {
-    const mind = this.ctx.services.get(MindKey);
     const where = this.voiceContext(entry.context?.scope ?? null) ?? entry.context;
     entry.reminders += 1;
     entry.last_reminder_ms = this.ctx.clock.now();
@@ -649,14 +644,11 @@ export class Singer implements VoiceFloor, SpeechPause {
           `有人在語音、你想唱的時候用 sing.play(song = ${entry.no}),opening 寫一句開場;不用急,之後也可以跟大家提一下新歌。${voice}${busy}`
         : `${entry.requester_name} 點的${songLabel(entry)}已經準備好了(#${entry.no}${dedicationNote(entry)})。` +
           `想唱就用 sing.play(song = ${entry.no}),opening 寫一句開場;現在不想唱也可以晚點再唱。${voice}${busy}`;
-    const ok = mind?.suggest({
-      source: "sing",
-      reason: REASONS.ready,
-      context: where,
-      hint,
-      about: entry.requester ? [entry.requester] : [],
-    });
-    if (!ok) this.#autoStart();
+    if (where === null || !this.#sheDecides()) {
+      this.#autoStart();
+      return;
+    }
+    this.#tell(where, REASONS.ready, hint, entry);
   }
 
   /**
@@ -671,13 +663,13 @@ export class Singer implements VoiceFloor, SpeechPause {
     if (!next) return;
     const where = this.voiceContext(next.context?.scope ?? null) ?? this.voiceContext();
     if (where === null || where.scope === null) return;
-    this.#tell(
+    const announcement = this.#tell(
       where,
       REASONS.start,
       `你要開始唱${songLabel(next)}了(${next.requester_name} 點的${dedicationNote(next)})。用一句話開場,說完就開始。`,
       next,
     );
-    this.#begin(next, where.scope, null, EXPECT_OPENING_MS);
+    this.#begin(next, where.scope, null, this.cfg.opening_window_ms, announcement);
   }
 
   /** Periodic work: reminders and songs that should start on their own. */
@@ -734,15 +726,31 @@ export class Singer implements VoiceFloor, SpeechPause {
     return any?.scope != null && voice.channel(any.scope) !== null ? any.scope : null;
   }
 
-  #begin(entry: SongEntry, guild: string, turn: TurnId | null, expectMs: number): void {
+  /**
+   * Starts `entry` once her announcement is over. `announcement` is the id of the impulse that asks
+   * her for it: the song waits for the Arbiter's word on it (the turn it opened, which it then
+   * waits for, or a refusal or expiry), at most `expectMs`; nothing said after that is waited for.
+   */
+  #begin(
+    entry: SongEntry,
+    guild: string,
+    turn: TurnId | null,
+    expectMs: number,
+    announcement: string | null = null,
+  ): void {
     const stop = new AbortController();
     entry.state = "playing";
-    this.#playing = { entry, guild, stop, audible: false, card: null };
+    this.#playing = { entry, guild, stop, audible: false };
     this.ctx.spawn(`song-${entry.no}`, async (signal) => {
       const both = AbortSignal.any([signal, stop.signal]);
       let outcome: PlaybackState | "error" = "interrupted";
       try {
-        await this.waitQuiet(guild, turn, expectMs, both);
+        if (announcement === null) {
+          await this.waitQuiet(guild, turn, expectMs, both);
+        } else {
+          const said = await this.#announcement(announcement, expectMs, both);
+          await this.waitQuiet(guild, said.turn, 0, both);
+        }
         if (!both.aborted) outcome = await this.#sing(entry, guild, both);
       } catch (error) {
         if (isGone(error) && !both.aborted && (await this.#prepareAgain(entry))) return;
@@ -797,21 +805,14 @@ export class Singer implements VoiceFloor, SpeechPause {
     const song = entry.song;
     if (!song) throw new SingError("the song has no audio");
     log.info({ no: entry.no, song: song.id, guild }, "singing");
-    const card = this.#lyricsCard(song, guild);
-    if (this.#playing?.entry === entry) {
-      this.#playing.audible = true;
-      this.#playing.card = card;
-    }
+    if (this.#playing?.entry === entry) this.#playing.audible = true;
     this.#showDedication(entry);
     return singSong(
       {
         worker: this.worker,
         voice,
         clock: this.ctx.clock,
-        cue: (cue) => {
-          this.#cue(cue);
-          card?.onCue(cue);
-        },
+        cue: (cue) => this.#cue(cue),
         leadMs: this.cfg.lead_ms,
         fadeMs: this.cfg.fade_ms,
         lyrics: this.cfg.lyrics,
@@ -828,25 +829,18 @@ export class Singer implements VoiceFloor, SpeechPause {
   #showDedication(entry: SongEntry): void {
     if (!entry.dedication || !entry.dedication_entry) return;
     const title = entry.song?.title?.trim() || entry.query;
-    this.ctx.publish(
-      customEvent(SCREEN_TOPIC, {
-        kind: "dedication",
-        name: safeName(entry.requester_name, 32),
-        text: entry.dedication,
-        song: safeName(title, 60),
-      } as JsonValue),
-    );
+    this.ctx.publish(Events.EconomyScreen, {
+      kind: "dedication",
+      name: safeName(entry.requester_name, 32),
+      text: entry.dedication,
+      song: safeName(title, 60),
+    });
   }
 
   #ended(entry: SongEntry, guild: string, outcome: PlaybackState | "error"): void {
-    const card = this.#playing?.entry === entry ? this.#playing.card : null;
     const wasAudible = this.#playing?.entry === entry && this.#playing.audible;
     if (this.#playing?.entry === entry) this.#playing = null;
-    if (entry.song) {
-      const cue: SongCue = { state: "ended", song: entry.song.id, outcome };
-      this.#cue(cue);
-      card?.onCue(cue);
-    }
+    if (entry.song) this.#cue({ state: "ended", song: entry.song.id, outcome });
     const finished = outcome === "finished";
     this.list.finish(entry, finished || outcome === "interrupted" ? "done" : "failed", entry.error);
     // A song that was sung (to the end, or skipped once it was audible) keeps its charges.
@@ -1022,6 +1016,30 @@ export class Singer implements VoiceFloor, SpeechPause {
   // ----- her speech, so a song starts after she finished talking -----
 
   /**
+   * Waits up to `windowMs` for the Arbiter's word on the announcement `id`: `turn` is the turn it
+   * opened (she is saying it), `null` when it was refused or expired, or when nothing was decided
+   * within the window (past it the impulse is expired and nothing is said).
+   */
+  async #announcement(
+    id: string,
+    windowMs: number,
+    signal: AbortSignal,
+  ): Promise<{ turn: TurnId | null }> {
+    const clock = this.ctx.clock;
+    const until = clock.now() + windowMs;
+    try {
+      for (;;) {
+        const decision = this.#announced.get(id) ?? null;
+        if (decision !== null) return { turn: decision.turn };
+        if (signal.aborted || clock.now() >= until) return { turn: null };
+        await sleep(TICK_MS, signal);
+      }
+    } finally {
+      this.#announced.delete(id);
+    }
+  }
+
+  /**
    * Resolves once the turn `turn` is over (when given) and her speech in `guild` had a quiet
    * moment: right after she spoke, or when she did not start within `expectMs`. `false` when
    * `signal` aborted or `announce_max_secs` ran out first.
@@ -1057,50 +1075,45 @@ export class Singer implements VoiceFloor, SpeechPause {
 
   // ----- events -----
 
-  onEvent(event: Event): void {
-    switch (event.type) {
-      case "voice_joined": {
-        const c = event.data.context;
-        this.#voices = [c, ...this.#voices.filter((v) => !contextKeyEquals(v, c))];
-        // Now she can sing: ready songs she decides about are brought up again.
-        for (const e of this.list.ready()) {
-          if (this.#mindDecides(e) && this.#remindsMore(e, false)) this.#remind(e);
-        }
-        this.#autoStart();
-        return;
+  onEvent(event: BusEvent): void {
+    if (is(Events.VoiceJoined, event)) {
+      const c = event.data.context;
+      this.#voices = [c, ...this.#voices.filter((v) => !contextKeyEquals(v, c))];
+      // Now she can sing: ready songs she decides about are brought up again.
+      for (const e of this.list.ready()) {
+        if (this.#mindDecides(e) && this.#remindsMore(e, false)) this.#remind(e);
       }
-      case "voice_left": {
-        const c = event.data.context;
-        this.#voices = this.#voices.filter((v) => !contextKeyEquals(v, c));
-        if (c.scope !== null) this.#speaking.delete(c.scope);
-        return;
-      }
-      case "voice_participants":
-        // Someone came back: a song that waited for them may start now.
-        this.#autoStart();
-        return;
-      case "voice_playback": {
-        const guild = event.data.context.scope;
-        if (guild === null) return;
-        const n = this.#speaking.get(guild) ?? 0;
-        if (event.data.state === "started") this.#speaking.set(guild, n + 1);
-        else this.#speaking.set(guild, Math.max(0, n - 1));
-        return;
-      }
-      case "action_completed": {
-        const c = event.data.message?.context;
-        if (event.data.ok && c?.scope != null) this.#lastTyped.set(`${c.platform}:${c.scope}`, c);
-        return;
-      }
-      case "agent_turn_completed":
-        this.#turnsDone.push(event.data.turn);
-        if (this.#turnsDone.length > TURNS_REMEMBERED) this.#turnsDone.shift();
-        return;
-      case "custom":
-        if (event.data.topic === "queue.item_activated") this.#onQueueItem(event.data.payload);
-        return;
-      default:
-        return;
+      this.#autoStart();
+      return;
+    } else if (is(Events.VoiceLeft, event)) {
+      const c = event.data.context;
+      this.#voices = this.#voices.filter((v) => !contextKeyEquals(v, c));
+      if (c.scope !== null) this.#speaking.delete(c.scope);
+      return;
+    } else if (is(Events.VoiceParticipants, event)) {
+      // Someone came back: a song that waited for them may start now.
+      this.#autoStart();
+      return;
+    } else if (is(Events.VoicePlaybackEvent, event)) {
+      const guild = event.data.context.scope;
+      if (guild === null) return;
+      const n = this.#speaking.get(guild) ?? 0;
+      if (event.data.state === "started") this.#speaking.set(guild, n + 1);
+      else this.#speaking.set(guild, Math.max(0, n - 1));
+      return;
+    } else if (is(Events.ArbiterDecided, event)) {
+      // A word on one of her song announcements: the turn it opened, or that nothing will be said.
+      const d = event.data;
+      if (d.verdict !== "deferred" && this.#announced.has(d.impulse))
+        this.#announced.set(d.impulse, d);
+      return;
+    } else if (is(Events.AgentTurnCompleted, event)) {
+      this.#turnsDone.push(event.data.turn);
+      if (this.#turnsDone.length > TURNS_REMEMBERED) this.#turnsDone.shift();
+      return;
+    } else {
+      if (is(Events.QueueItemActivated, event)) this.#onQueueItem(event.data as JsonValue);
+      return;
     }
   }
 
@@ -1152,8 +1165,16 @@ export class Singer implements VoiceFloor, SpeechPause {
   async poll(signal?: AbortSignal): Promise<void> {
     if (this.list.preparing().length > 0) {
       // Without this the worker assumes people are listening, which is the careful answer.
+      const context = this.#gpuContext();
+      // The hosts whose hostd shares the card hear it too; a worker that asks its hostd ignores
+      // the push, one that decides by itself (or runs where no hostd joined) still needs it.
+      try {
+        this.tellContext?.(context);
+      } catch (e) {
+        log.debug({ err: errorMessage(e) }, "could not tell the hosts who listens");
+      }
       await this.worker
-        .context(this.#gpuContext(), signal)
+        .context(context, signal)
         .catch((e: unknown) => log.debug({ err: errorMessage(e) }, "could not update the worker"));
     }
     for (const entry of this.list.preparing()) {
@@ -1198,7 +1219,7 @@ export class Singer implements VoiceFloor, SpeechPause {
     };
   }
 
-  /** Publishes the song being prepared (`SONG_PREPARE_TOPIC`) when it changed. */
+  /** Publishes the song being prepared (`Events.SingPrepare`) when it changed. */
   #publishPrepare(): void {
     const preparing = this.#closed ? [] : this.list.preparing();
     for (const no of this.#jobs.keys()) {
@@ -1211,10 +1232,12 @@ export class Singer implements VoiceFloor, SpeechPause {
     let payload: SongPrepare = NOT_PREPARING;
     if (best !== null) {
       const info = this.#jobs.get(best.no);
+      const query = best.query.trim();
       // A link or a library path is no title; the worker's comes once it found the song.
+      const asked = LINK.test(query) || query.toLowerCase().startsWith("library:") ? "" : query;
       payload = {
         no: best.no,
-        title: info?.title || askedName(best.query),
+        title: info?.title || asked,
         stage: best.stage,
         progress: Math.round(Math.min(Math.max(best.progress, 0), 1) * 1000) / 1000,
         exclusive: info?.exclusive ?? null,
@@ -1223,7 +1246,7 @@ export class Singer implements VoiceFloor, SpeechPause {
     const json = JSON.stringify(payload);
     if (json === this.#prepareSent) return;
     this.#prepareSent = json;
-    this.ctx.publish(customEvent(SONG_PREPARE_TOPIC, payload as unknown as JsonValue));
+    this.ctx.publish(Events.SingPrepare, payload);
   }
 
   async #resubmit(entry: SongEntry, signal?: AbortSignal): Promise<void> {
@@ -1257,7 +1280,7 @@ export class Singer implements VoiceFloor, SpeechPause {
    */
   async restore(): Promise<void> {
     const store = this.ctx.services.get(SettingsStoreKey);
-    if (!store || this.cfg.only_on_request) return;
+    if (!store) return;
     try {
       const raw = await store.get(STORE_PROFILE, SETLIST_KEY);
       if (raw === null) return;
@@ -1280,7 +1303,7 @@ export class Singer implements VoiceFloor, SpeechPause {
   /** Writes the set list when it changed since the last write. */
   async save(): Promise<void> {
     const store = this.ctx.services.get(SettingsStoreKey);
-    if (!store || this.cfg.only_on_request) return;
+    if (!store) return;
     const snapshot = this.list.snapshot();
     const json = JSON.stringify(snapshot);
     if (json === this.#saved) return;
@@ -1306,7 +1329,7 @@ export class Singer implements VoiceFloor, SpeechPause {
    * of source `song` for the Arbiter, never her own topic (it does not count toward what she
    * raised on her own, nor its backoff).
    */
-  #tell(where: ContextKey, reason: string, hint: string, entry: SongEntry): void {
+  #tell(where: ContextKey, reason: string, hint: string, entry: SongEntry): string {
     const about: AccountRef[] = entry.requester ? [entry.requester] : [];
     const impulse = newImpulse(
       {
@@ -1316,7 +1339,7 @@ export class Singer implements VoiceFloor, SpeechPause {
         // A song about to start, or her voice about to go away, needs her words now or never.
         ttlMs:
           reason === REASONS.start || reason === REASONS.prepare
-            ? EXPECT_OPENING_MS
+            ? this.cfg.opening_window_ms
             : ANNOUNCE_TTL_MS,
         why: `${songLabel(entry)}(${reason})`,
         hint,
@@ -1326,27 +1349,20 @@ export class Singer implements VoiceFloor, SpeechPause {
       },
       this.ctx.clock.now(),
     );
-    this.ctx.publish(v2Event(ARBITER_IMPULSE_TOPIC, impulse));
-  }
-
-  /**
-   * The lyrics card of a song about to play (`[modules.sing] lyrics_card`), or `null`: none for a
-   * song without synced lyrics; it goes where she last typed in that server, else her voice
-   * channel's text chat.
-   */
-  #lyricsCard(song: SongMeta, guild: string): LyricsCard | null {
-    if (!this.cfg.lyrics_card) return null;
-    if (!song.lyrics?.synced || song.lyrics.lines.length === 0) return null;
-    const voice = this.voiceContext(guild);
-    if (voice === null) return null;
-    const context = this.#lastTyped.get(`${voice.platform}:${guild}`) ?? voice;
-    const sink = this.ctx.services.get(PlatformSinksKey)?.get(context.platform);
-    if (!sink?.edit) return null;
-    return new LyricsCard({ sink, context, song, clock: this.ctx.clock, log });
+    if (reason === REASONS.start) {
+      this.#announced.set(impulse.id, null);
+      while (this.#announced.size > ANNOUNCEMENTS_REMEMBERED) {
+        const oldest = this.#announced.keys().next().value;
+        if (oldest === undefined) break;
+        this.#announced.delete(oldest);
+      }
+    }
+    this.ctx.publish(Events.ArbiterImpulse, impulse);
+    return impulse.id;
   }
 
   #cue(cue: SongCue): void {
-    this.ctx.publish(customEvent(SONG_TOPIC, cue as unknown as JsonValue));
+    this.ctx.publish(Events.SingCue, cue);
   }
 }
 

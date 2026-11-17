@@ -5,8 +5,11 @@
 // preview a link to the card unfurls with. Pictures come in as data URLs and colours as literals,
 // so the SVG stands on its own wherever it is turned into pixels.
 
+import { BOND_BAND_WORDS } from "@miyoria/types/bond";
 import { forwardRef } from "react";
 import { encode } from "uqr";
+
+export * from "./ring.js";
 
 /** What a card draws: the fields of an issued card (`IssuedCard` in the panel and the API). */
 export interface CardData {
@@ -27,8 +30,8 @@ export interface CardData {
   foil?: boolean;
 }
 
-/** The Core's bands (`packages/api/src/member.ts`), lowest first. */
-export const AFFINITY = ["很差", "不太好", "普通", "不錯", "很好", "非常好"] as const;
+/** Every word of the bond's bands (`bondBand`), lowest first: the meter has a step for each. */
+export const AFFINITY: readonly string[] = BOND_BAND_WORDS;
 export const TRUST = ["還不信任", "有點信任", "信任", "很信任"] as const;
 export const FAMILIARITY = ["陌生", "見過幾次", "有點熟", "熟", "很熟"] as const;
 
@@ -762,7 +765,7 @@ export const CardFace = forwardRef<SVGSVGElement, CardFaceProps>(function CardFa
         <g transform={`translate(0 ${-lift})`}>
           <BandColumn
             x={PAD}
-            label="好感"
+            label="羈絆"
             value={card.affinity}
             scale={AFFINITY}
             primary={colors.primary}

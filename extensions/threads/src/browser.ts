@@ -11,8 +11,6 @@ export interface BrowserOptions {
   profileDir: string;
   width: number;
   height: number;
-  /** No window: for a machine nobody watches (scrolling on her own, not on stream). */
-  headless: boolean;
 }
 
 /** The window title OBS captures it by (its window is a Chromium "app" window). */
@@ -29,10 +27,9 @@ export function defaultProfileDir(env: NodeJS.ProcessEnv = process.env): string 
  * ancestor that still holds only that one `<time>`. Independent of Threads' generated class
  * names. Marks each block with `data-miyoria-post` so it can be scrolled to.
  */
-export const READ_POSTS = `(() => {
+const READ_POSTS = `(() => {
   const out = [];
   let i = 0;
-  for (const old of document.querySelectorAll("[data-miyoria-post]")) old.removeAttribute("data-miyoria-post");
   for (const t of document.querySelectorAll("time")) {
     let el = t;
     while (el.parentElement && el.parentElement.querySelectorAll("time").length === 1) el = el.parentElement;
@@ -69,15 +66,13 @@ export class ThreadsBrowser {
 
   async launch(): Promise<void> {
     if (this.open) return;
-    const { startUrl, profileDir, width, height, headless } = this.#opts;
+    const { startUrl, profileDir, width, height } = this.#opts;
     const context = await chromium.launchPersistentContext(profileDir, {
       channel: "chromium",
-      headless,
-      viewport: headless ? { width, height } : null,
+      headless: false,
+      viewport: null,
       locale: "zh-TW",
-      args: headless
-        ? []
-        : [`--app=${startUrl}`, `--window-size=${width},${height}`, "--disable-infobars"],
+      args: [`--app=${startUrl}`, `--window-size=${width},${height}`, "--disable-infobars"],
     });
     context.on("close", () => {
       this.#context = null;
@@ -174,12 +169,6 @@ export class ThreadsBrowser {
   async home(): Promise<void> {
     await this.#need().goto(this.#opts.startUrl, { waitUntil: "domcontentloaded" });
     await this.#need().waitForTimeout(3000);
-  }
-
-  /** Resolves when the window was closed (`pnpm run login`). */
-  async closed(): Promise<void> {
-    const context = this.#context;
-    if (context) await new Promise((resolve) => context.once("close", resolve));
   }
 
   async close(): Promise<void> {

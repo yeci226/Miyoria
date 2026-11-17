@@ -11,8 +11,10 @@
 
 import {
   type AccountRef,
+  type BusEvent,
   type ContextKey,
-  type Event,
+  Events,
+  is,
   type PromptContributor,
   type PromptRequest,
   type PromptSection,
@@ -57,11 +59,22 @@ export class VoiceRoom {
   /** `now`: epoch milliseconds (the module's clock). */
   constructor(readonly now: () => number) {}
 
-  onEvent(event: Event): void {
-    switch (event.type) {
-      case "voice_joined": {
-        const { context, participants } = event.data;
-        if (context.scope === null) return;
+  onEvent(event: BusEvent): void {
+    if (is(Events.VoiceJoined, event)) {
+      const { context, participants } = event.data;
+      if (context.scope === null) return;
+      this.#rooms.set(context.scope, {
+        context,
+        members: others(participants).map((p) => member(p, null)),
+        left: [],
+      });
+      return;
+    } else if (is(Events.VoiceParticipants, event)) {
+      const { context, participants } = event.data;
+      if (context.scope === null) return;
+      const room = this.#rooms.get(context.scope);
+      if (!room) {
+        // Joined before this module saw it: everyone counts as already there.
         this.#rooms.set(context.scope, {
           context,
           members: others(participants).map((p) => member(p, null)),
@@ -69,29 +82,12 @@ export class VoiceRoom {
         });
         return;
       }
-      case "voice_participants": {
-        const { context, participants } = event.data;
-        if (context.scope === null) return;
-        const room = this.#rooms.get(context.scope);
-        if (!room) {
-          // Joined before this module saw it: everyone counts as already there.
-          this.#rooms.set(context.scope, {
-            context,
-            members: others(participants).map((p) => member(p, null)),
-            left: [],
-          });
-          return;
-        }
-        this.#update(room, context, others(participants));
-        return;
-      }
-      case "voice_left": {
-        const scope = event.data.context.scope;
-        if (scope !== null) this.#rooms.delete(scope);
-        return;
-      }
-      default:
-        return;
+      this.#update(room, context, others(participants));
+      return;
+    } else if (is(Events.VoiceLeft, event)) {
+      const scope = event.data.context.scope;
+      if (scope !== null) this.#rooms.delete(scope);
+      return;
     }
   }
 

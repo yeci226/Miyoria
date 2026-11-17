@@ -4,16 +4,13 @@ import {
   interval,
   type Module,
   type ModuleContext,
-} from "@miyoria/kernel";
+} from "@miyoria/runtime/kernel";
 import { knownNames, PeopleStoreKey } from "@miyoria/store";
 import {
-  ACTIVITY_CHANGED_TOPIC,
   ActivityManagerKey,
-  AffectStateKey,
-  customEvent,
   EventLogKey,
+  Events,
   HandleDirectoryKey,
-  LIVE_TOUCH_TOPIC,
   type LiveFeed,
   LiveFeedKey,
   type LivePatter,
@@ -44,24 +41,21 @@ export interface LiveModuleOptions {
 
 /**
  * Who `by` is to her: someone she knows, a stranger, or blocked. Blocked is also the answer when
- * nothing can tell (no social tag and no cards): a pat must not reach her because a module is
- * down. Read only; nothing is counted or assigned here, no handle for a stranger either.
+ * nothing can tell (no heart rows to read): a pat must not reach her because a module is down. Read only; nothing is counted or assigned here, no handle for a stranger either.
  */
 export async function whoPats(ctx: ModuleContext, by: LivePatter): Promise<PatWho> {
   const s = ctx.services;
   const social = s.get(SocialSignalsKey);
-  const affect = s.get(AffectStateKey);
-  if (!social && !affect) return { kind: "blocked" };
-  if (social?.attitude(by.account)?.blocked) return { kind: "blocked" };
+  if (!social) return { kind: "blocked" };
+  if (social.attitude(by.account)?.blocked) return { kind: "blocked" };
   const person = (await s.get(PeopleStoreKey)?.personByAccount(by.account)) ?? null;
   if (person === null) return { kind: "stranger" };
-  const card = affect?.card(person.id) ?? null;
-  if (card?.blocked) return { kind: "blocked" };
+  if (social.attitudeOf?.(person.id)?.blocked) return { kind: "blocked" };
   const own = person.accounts.find((a) => sameAccount(a.account, by.account));
   return {
     kind: "known",
     person: person.id,
-    handle: s.get(HandleDirectoryKey)?.ofPerson(person.id) ?? card?.handle ?? null,
+    handle: s.get(HandleDirectoryKey)?.ofPerson(person.id) ?? null,
     name: own?.display_name ?? person.display_name,
   };
 }
@@ -70,7 +64,7 @@ export async function whoPats(ctx: ModuleContext, by: LivePatter): Promise<PatWh
  * Module `live`: the feed of the live page (docs/design/v4-plan.md §9.2) and its head-pats.
  * Provides `LiveFeedKey`, which the api serves at `GET /api/public/live` and
  * `POST /api/member/live/pat`. Reads the bus and her body state; writes only pat Observations
- * (with `pats = true`). Its only publication is the custom event `live.touch` (`{ x, y, part }`,
+ * (with `pats = true`). Its only publication is `live.touch` (`{ x, y, part }`,
  * no names) for each accepted pat that came with a spot on the picture, for the stage to draw a
  * hand there; being watched changes nothing about her. With `[modules.live.video]` it also asks
  * MediaMTX whether OBS is publishing, so the page can show the picture.
@@ -79,7 +73,7 @@ export class LiveModule implements Module {
   static readonly ID = "live";
   readonly manifest = defineManifest(LiveModule.ID, "Live page", {
     description: "Her state, face and public lines for the live page; head-pats as Observations",
-    optional: ["facts", "moderation", "activity", "social", "self", "economy"],
+    optional: ["facts", "moderation", "activity", "heart", "self", "economy"],
     configSchema: LiveConfigSchema,
   });
   readonly #own: readonly string[];
@@ -146,7 +140,7 @@ export class LiveModule implements Module {
       },
       changed: (pats, patted, touch) => state.setPats(pats, patted, touch),
       touched: (touch) =>
-        ctx.publish(customEvent(LIVE_TOUCH_TOPIC, { x: touch.x, y: touch.y, part: touch.part })),
+        ctx.publish(Events.LiveTouch, { x: touch.x, y: touch.y, part: touch.part }),
     });
     const state = new LiveState(
       {
@@ -197,14 +191,14 @@ export class LiveModule implements Module {
 
     await refreshNames();
     body();
-    const events = ctx.subscribe([...LIVE_TOPICS, ACTIVITY_CHANGED_TOPIC]);
+    const events = ctx.subscribe([...LIVE_TOPICS, Events.ActivityChanged.type]);
     ctx.spawn("feed", async () => {
       for await (const env of events) {
-        if (env.event.type === "custom" && env.event.data.topic === ACTIVITY_CHANGED_TOPIC) {
+        if (env.type === Events.ActivityChanged.type) {
           body();
           continue;
         }
-        state.onEvent(env.event, now());
+        state.onEvent(env, now());
       }
     });
     if (videoOn) {

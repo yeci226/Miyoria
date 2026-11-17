@@ -1,4 +1,4 @@
-import { getLogger, type ServiceLookup } from "@miyoria/kernel";
+import { getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import { type AuditLog, AuditLogKey } from "@miyoria/store";
 import {
   AuthorizerKey,
@@ -133,7 +133,7 @@ export const TEXT = {
 } as const;
 
 /**
- * Observes `CommandRegistry.version()` changes, like a Rust `watch::Receiver`: several changes
+ * Observes `CommandRegistry.version()` changes: several changes
  * in a row are reported once. Iterate it with `for await`, or call `changed()`.
  */
 export class VersionSubscription implements AsyncIterable<number> {
@@ -295,17 +295,6 @@ export class CommandRegistry {
     }
     const key = spec.path.join(" ");
     this.#store(this.#panels, key, `${PANEL_OWNER}${key}`, spec, handler, options);
-  }
-
-  /** Removes a panel command (and its component routes). */
-  unregisterPanel(path: string): boolean {
-    const key = splitPath(path).join(" ");
-    const removed = this.#panels.delete(key);
-    if (removed) {
-      this.#dropRoutes(`${PANEL_OWNER}${key}`);
-      this.#bump();
-    }
-    return removed;
   }
 
   /**
@@ -825,7 +814,7 @@ function truncateChars(s: string, max: number): string {
   return chars.length <= max ? s : `${chars.slice(0, max - 1).join("")}…`;
 }
 
-/** Args as a JSON object with ascending keys (Rust serialized a `BTreeMap`). */
+/** Args as a JSON object with ascending keys (a stable order for serialization). */
 function sortedArgs(args: Record<string, ArgValue>): JsonObject {
   const out: JsonObject = {};
   for (const key of Object.keys(args).sort()) out[key] = args[key] as ArgValue;

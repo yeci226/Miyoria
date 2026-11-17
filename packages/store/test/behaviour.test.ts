@@ -1,8 +1,5 @@
-// One behaviour suite (port of legacy `tests/behaviour.rs`), run against every backend.
-//
-// SQLite (in memory and on a file) always runs. PostgreSQL runs only when
-// `MIYORIA_TEST_DATABASE_URL` is set; otherwise its tests are skipped. Every case uses fresh
-// ids, so it can share a database with other runs.
+// One behaviour suite, run against SQLite in memory and on a file. Every case uses fresh ids, so
+// the file runs share one database.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,28 +16,23 @@ import {
   toTimestamp,
 } from "@miyoria/types";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+// The auth plugin's tables are its own package's (v5-data §8 step 9a); their cases stay here.
+import { authTables } from "../../auth/src/tables.js";
+// The memory plugin's (step 9b): its cases are its package's, the data categories' stay here.
+import { memoryTables } from "../../memory/memory/src/tables.js";
 import {
   type AuditEntry,
   type AuthScope,
-  type Bounty,
-  type Deal,
   type DecisionRecord,
   dataCategory,
-  type EconomyDoc,
-  embeddingValues,
-  type Goal,
-  type GoalPledge,
   type LogEntry,
   type MemberCardRecord,
   type MemoryFilter,
-  type MemoryHit,
   type MemoryKind,
-  type MemoryQuery,
   type MemoryRecord,
   type MemoryScope,
   type NodeOverride,
   openStore,
-  type PrunePolicy,
   type Relationship,
   type RelationshipDelta,
   type RoleAssignment,
@@ -49,12 +41,8 @@ import {
   type Store,
 } from "../src/index.js";
 
-const DB_ENV = "MIYORIA_TEST_DATABASE_URL";
-
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
 
 function unique(prefix: string): string {
   return `${prefix}-${newId()}`;
@@ -102,8 +90,6 @@ function decision(
     trace: { turn: newId(), context, respond: false, score: 0.25, reasons: [reason] },
   };
 }
-
-const reasons = (records: DecisionRecord[]) => records.map((r) => r.trace.reasons[0]);
 
 function outcome(
   context: ContextKey,
@@ -165,20 +151,6 @@ function memory(
 function guildScope(guild: string): MemoryScope {
   return { type: "guild", platform: "discord", guild };
 }
-
-function textQuery(
-  profile: ProfileId,
-  scopes: MemoryScope[],
-  tokens: string[],
-  limit: number,
-): MemoryQuery {
-  return { profile, scopes, kinds: null, tokens, embedding: null, limit };
-}
-
-const hitIds = (hits: MemoryHit[]) => new Set(hits.map((h) => h.record.id));
-const idSet = (records: MemoryRecord[]) => new Set(records.map((r) => r.id));
-const recordIds = (records: MemoryRecord[]) => records.map((r) => r.id);
-const near = (a: number, b: number) => Math.abs(a - b) < 1e-4;
 
 const baseFilter: MemoryFilter = {
   subject: null,
@@ -264,20 +236,23 @@ function behaviour(open: () => Promise<Store>): void {
     const log = store.messages;
     const profile = unique("profile");
     const ctx = channel(null, unique("dm"), "dm");
+    // A DM is placed by the person she talks with there: their line first (a line of hers in a
+    // DM nobody has written in yet is stored, without a place, and not read back here).
+    const theirs = entry(profile, ctx, "在嗎", at(Date.now() - 1000));
     const e = entry(profile, ctx, "她說的話", at(Date.now()));
     e.author = account("999");
     e.author_name = "Miyori";
     e.is_self = true;
     e.turn = newId();
+    await log.append(theirs);
     await log.append(e);
-    expect(await log.recent(profile, ctx, 10)).toEqual([e]);
+    expect(await log.recent(profile, ctx, 10)).toEqual([theirs, e]);
     await expect(log.append(e), "duplicate id must fail").rejects.toThrow(/already exists/);
   });
 
   it("message_log_isolation", async () => {
     const log = store.messages;
     const profile = unique("profile");
-    const otherProfile = unique("profile");
     const id = unique("chan");
     const textCtx = channel("guild", id, "channel");
     const voiceCtx = channel("guild", id, "voice");
@@ -286,10 +261,10 @@ function behaviour(open: () => Promise<Store>): void {
     await log.append(entry(profile, textCtx, "text", now));
     await log.append(entry(profile, voiceCtx, "voice", now));
     await log.append(entry(profile, otherGuild, "other", now));
-    await log.append(entry(otherProfile, textCtx, "other profile", now));
 
+    // Places apart; profiles are not: one database belongs to one character.
     expect(texts(await log.recent(profile, textCtx, 10))).toEqual(["text"]);
-    expect(texts(await log.recent(otherProfile, textCtx, 10))).toEqual(["other profile"]);
+    expect(texts(await log.recent(profile, voiceCtx, 10))).toEqual(["voice"]);
     const empty = channel("guild", unique("chan"), "channel");
     expect(await log.recent(profile, empty, 10)).toEqual([]);
   });
@@ -311,30 +286,40 @@ function behaviour(open: () => Promise<Store>): void {
     expect(keys).toEqual([...keys].sort());
   });
 
+  // Persona edits are one set per database, whatever profile a caller names (one database is one
+  // character), and the file runs share one database: these cases use sections of their own.
   it("persona_overrides", async () => {
     const overrides = store.personaOverrides;
     const profile = unique("profile");
     const other = unique("profile");
-    expect((await overrides.current(profile)).size).toBe(0);
-    expect(await overrides.history(profile, "style")).toEqual([]);
+    const style = unique("style");
+    const identity = unique("identity");
+    const mine = async (p: string) =>
+      [...(await overrides.current(p))].filter(([k]) => k === style || k === identity);
+    expect(await mine(profile)).toEqual([]);
+    expect(await overrides.history(profile, style)).toEqual([]);
 
-    expect(await overrides.set(profile, "style", "v1", "panel:owen")).toBe(1);
-    expect(await overrides.set(profile, "style", "v2", "discord:1")).toBe(2);
-    expect(await overrides.set(profile, "identity", "id", "panel:owen")).toBe(1);
-    expect(await overrides.set(other, "style", "else", "panel:owen")).toBe(1);
+    expect(await overrides.set(profile, style, "v1", "panel:owen")).toBe(1);
+    expect(await overrides.set(profile, style, "v2", "discord:1")).toBe(2);
+    expect(await overrides.set(profile, identity, "id", "panel:owen")).toBe(1);
 
-    const current = await overrides.current(profile);
-    expect([...current]).toEqual([
-      ["identity", "id"],
-      ["style", "v2"],
+    expect(await mine(profile)).toEqual([
+      [identity, "id"],
+      [style, "v2"],
+    ]);
+    // Another profile edits the same sections.
+    expect(await overrides.set(other, style, "v3", "panel:owen")).toBe(3);
+    expect(await mine(profile)).toEqual([
+      [identity, "id"],
+      [style, "v3"],
     ]);
 
-    const history = await overrides.history(profile, "style");
+    const history = (await overrides.history(profile, style)).slice(0, 2);
     expect(history.map((o) => [o.version, o.body, o.edited_by])).toEqual([
       [1, "v1", "panel:owen"],
       [2, "v2", "discord:1"],
     ]);
-    expect(history.every((o) => o.profile === profile && o.key === "style")).toBe(true);
+    expect(history.every((o) => o.profile === profile && o.key === style)).toBe(true);
     const [first, second] = history;
     expect(Date.parse(first?.edited_at ?? "")).toBeLessThanOrEqual(
       Date.parse(second?.edited_at ?? ""),
@@ -343,9 +328,10 @@ function behaviour(open: () => Promise<Store>): void {
 
   it("persona_overrides_concurrent", async () => {
     const profile = unique("profile");
+    const style = unique("style");
     const versions = await Promise.all(
       Array.from({ length: 8 }, (_, i) =>
-        store.personaOverrides.set(profile, "style", `edit ${i}`, "test"),
+        store.personaOverrides.set(profile, style, `edit ${i}`, "test"),
       ),
     );
     expect(versions.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -402,35 +388,6 @@ function behaviour(open: () => Promise<Store>): void {
     }
   });
 
-  it("decision_log_recent", async () => {
-    const log = store.decisions;
-    const profile = unique("profile");
-    const otherProfile = unique("profile");
-    const id = unique("chan");
-    const a = channel("guild", id, "channel");
-    const b = channel("guild", id, "voice");
-    const t0 = Date.now();
-    // Appended out of order.
-    for (const [reason, ctx, secs] of [
-      ["a2", a, 2],
-      ["a1", a, 1],
-      ["b3", b, 3],
-      ["a4", a, 4],
-    ] as const) {
-      await log.append(decision(profile, ctx, reason, at(t0 + secs * SECOND)));
-    }
-    await log.append(decision(otherProfile, a, "other", at(t0)));
-
-    expect(reasons(await log.recent(profile, null, 100))).toEqual(["a4", "b3", "a2", "a1"]);
-    expect(reasons(await log.recent(profile, null, 2))).toEqual(["a4", "b3"]);
-    expect(reasons(await log.recent(profile, a, 100))).toEqual(["a4", "a2", "a1"]);
-    expect(reasons(await log.recent(profile, b, 100))).toEqual(["b3"]);
-    expect(await log.recent(profile, null, 0)).toEqual([]);
-    expect(reasons(await log.recent(otherProfile, null, 100))).toEqual(["other"]);
-    const empty = channel("guild", unique("chan"), "channel");
-    expect(await log.recent(profile, empty, 10)).toEqual([]);
-  });
-
   it("decision_log_round_trip", async () => {
     const log = store.decisions;
     const profile = unique("profile");
@@ -446,230 +403,66 @@ function behaviour(open: () => Promise<Store>): void {
     await expect(log.append(d), "duplicate id must fail").rejects.toThrow(/already exists/);
   });
 
-  it("turn_outcomes_round_trip", async () => {
-    const log = store.decisions;
-    expect(log.appendOutcome).toBeTypeOf("function");
-    expect(log.recentOutcomes).toBeTypeOf("function");
-    const profile = unique("profile");
-    const other = unique("profile");
-    const a = channel("guild", unique("chan"), "channel");
-    const b = channel("guild", unique("chan"), "voice");
-    const t0 = Date.now();
-    const sent = outcome(a, "sent", at(t0 + SECOND));
-    const silent = outcome(a, "silence", at(t0 + 2 * SECOND));
-    const cancelled = outcome(b, "cancelled", at(t0 + 3 * SECOND));
-    for (const o of [silent, sent, cancelled]) await log.appendOutcome?.(profile, o);
-    await log.appendOutcome?.(other, outcome(a, "sent", at(t0)));
+  // Reading decisions and turn outcomes back per place and since a time is pinned in
+  // decision-log.test.ts on fresh databases: they are the whole database's (one character).
 
-    // Newest first, per context or for the whole profile, and the record comes back as written.
-    expect(await log.recentOutcomes?.(profile, null, 10)).toEqual([cancelled, silent, sent]);
-    expect(await log.recentOutcomes?.(profile, a, 10)).toEqual([silent, sent]);
-    expect(await log.recentOutcomes?.(profile, b, 1)).toEqual([cancelled]);
-    expect(await log.recentOutcomes?.(profile, null, 0)).toEqual([]);
+  // The coin ledger, the wallets, the deals, fortune slips, goals, bounties and economy 2.0's
+  // documents are the economy plugin's tables (v5-data §8 step 9a):
+  // `packages/economy/test/tables.test.ts` pins them.
 
-    // One row per turn: writing a turn again replaces it ("decided to reply" → "nothing sent").
-    const revised: TurnOutcomeRecord = {
-      ...sent,
-      outcome: { type: "error", error: "provider timeout" },
-    };
-    await log.appendOutcome?.(profile, revised);
-    expect(await log.recentOutcomes?.(profile, a, 10)).toEqual([silent, revised]);
-  });
-
-  it("decisions and outcomes since a time: no row cap, newest first, this profile only", async () => {
-    const log = store.decisions;
-    expect(log.decisionsSince).toBeTypeOf("function");
-    expect(log.outcomesSince).toBeTypeOf("function");
-    const profile = unique("profile");
-    const other = unique("profile");
-    const ctx = channel("guild", unique("chan"), "channel");
-    const t0 = Date.now();
-    const old = decision(profile, ctx, "old", at(t0));
-    const edge = decision(profile, ctx, "edge", at(t0 + SECOND));
-    const late = decision(profile, ctx, "late", at(t0 + 2 * SECOND));
-    for (const d of [late, old, edge]) await log.append(d);
-    await log.append(decision(other, ctx, "else", at(t0 + 2 * SECOND)));
-    expect(reasons((await log.decisionsSince?.(profile, at(t0 + SECOND))) ?? [])).toEqual([
-      "late",
-      "edge",
-    ]);
-    expect(await log.decisionsSince?.(profile, at(t0 + 3 * SECOND))).toEqual([]);
-
-    const first = outcome(ctx, "sent", at(t0));
-    const second = outcome(ctx, "silence", at(t0 + SECOND));
-    const third = outcome(ctx, "sent", at(t0 + 2 * SECOND));
-    for (const o of [third, first, second]) await log.appendOutcome?.(profile, o);
-    await log.appendOutcome?.(other, outcome(ctx, "sent", at(t0 + 2 * SECOND)));
-    expect(await log.outcomesSince?.(profile, at(t0 + SECOND))).toEqual([third, second]);
-    expect(await log.outcomesSince?.(profile, at(t0 + 3 * SECOND))).toEqual([]);
-  });
-
-  it("economy documents: create once, compare-and-set update, list by kind, owner and status", async () => {
-    const docs = store.economyDocs;
-    const profile = unique("profile");
-    const mine = account(unique("acct"));
-    const theirs = account(unique("acct"));
-    const doc = (kind: string, id: string, owner: typeof mine | null, ms: number): EconomyDoc => ({
-      id,
-      profile,
-      kind,
-      owner,
-      status: "open",
-      version: 1,
-      data: { title: id, nested: { n: [1, 2] } },
-      created_at: at(ms),
-      updated_at: at(ms),
-    });
-    const a = doc("item", "a", mine, 1_000);
-    const b = doc("item", "b", theirs, 2_000);
-    const c = doc("item", "c", null, 3_000);
-    const p = doc("prediction", "a", null, 1_000);
-    for (const d of [a, b, c, p]) expect(await docs.create(d)).toBe(true);
-
-    // The same id twice changes nothing; the same id of another kind is another document.
-    expect(await docs.create({ ...a, status: "gone", data: {} })).toBe(false);
-    expect(await docs.get(profile, "item", "a")).toEqual(a);
-    expect(await docs.get(profile, "prediction", "a")).toEqual(p);
-    expect(await docs.get(profile, "item", "zzz")).toBeNull();
-    expect(await docs.get(unique("profile"), "item", "a")).toBeNull();
-
-    // Compare and set on the version.
-    const next = { status: "held", data: { title: "a", held: true }, at: at(5_000) };
-    expect(await docs.update(profile, "item", "a", 2, next)).toBe(false);
-    expect(await docs.update(profile, "item", "a", 1, next)).toBe(true);
-    expect(await docs.update(profile, "item", "a", 1, next)).toBe(false);
-    expect(await docs.get(profile, "item", "a")).toEqual({
-      ...a,
-      status: "held",
-      data: { title: "a", held: true },
-      version: 2,
-      updated_at: at(5_000),
-    });
-    expect(await docs.update(profile, "item", "nope", 1, next)).toBe(false);
-
-    // The owner changes only when given, `null` included.
-    expect(await docs.update(profile, "item", "c", 1, { ...next, owner: theirs })).toBe(true);
-    expect((await docs.get(profile, "item", "c"))?.owner).toEqual(theirs);
-    expect(await docs.update(profile, "item", "c", 2, { ...next, owner: null })).toBe(true);
-    expect((await docs.get(profile, "item", "c"))?.owner).toBeNull();
-    expect(await docs.update(profile, "item", "b", 1, next)).toBe(true);
-    expect((await docs.get(profile, "item", "b"))?.owner).toEqual(theirs);
-
-    // Newest first by creation, narrowed by owner and status, limited.
-    const ids = async (kind: string, filter: Parameters<typeof docs.list>[2]) =>
-      (await docs.list(profile, kind, filter)).map((d) => d.id);
-    expect(await ids("item", { limit: 9 })).toEqual(["c", "b", "a"]);
-    expect(await ids("item", { limit: 2 })).toEqual(["c", "b"]);
-    expect(await ids("item", { limit: 0 })).toEqual([]);
-    expect(await ids("item", { owners: [mine], limit: 9 })).toEqual(["a"]);
-    expect(await ids("item", { owners: [mine, theirs], limit: 9 })).toEqual(["b", "a"]);
-    expect(await ids("item", { owners: [], limit: 9 })).toEqual([]);
-    expect(await ids("item", { statuses: ["held"], limit: 9 })).toEqual(["c", "b", "a"]);
-    expect(await ids("item", { statuses: ["open"], limit: 9 })).toEqual([]);
-    expect(await ids("item", { statuses: [], limit: 9 })).toEqual([]);
-    expect(await ids("prediction", { limit: 9 })).toEqual(["a"]);
-    expect(await docs.list(unique("profile"), "item", { limit: 9 })).toEqual([]);
-  });
-
-  it("ledger daily totals: per local day and reason, issued and recovered, all accounts", async () => {
-    const profile = unique("profile");
-    const x = unique("acct");
-    const y = unique("acct");
-    const base = Date.UTC(2026, 10, 3); // a UTC midnight
-    const post = (who: string, delta: number, reason: string, ms: number) =>
-      store.coins.post(
-        {
-          id: newId(),
-          profile,
-          account: account(who),
-          delta,
-          reason,
-          ref: null,
-          idem_key: null,
-          ts: at(ms),
-        },
-        { wallet: [] },
-      );
-    await post(x, 10, "checkin", base + HOUR);
-    await post(y, 5, "checkin", base + 2 * HOUR);
-    await post(x, 3, "talked", base + 22 * HOUR);
-    await post(x, -4, "feed", base + 23 * HOUR);
-    await post(y, -6, "feed", base + DAY + HOUR);
-    await post(y, 8, "checkin", base + 2 * DAY);
-    await post(y, 7, "checkin", base - DAY); // before `since`
-    const since = at(base);
-    const d0 = Math.floor(base / DAY);
-
-    // UTC: rows of one reason are added across accounts.
-    expect(await store.coins.dailyTotals(profile, since, 0)).toEqual([
-      { day: d0, reason: "checkin", positive: 15, negative: 0 },
-      { day: d0, reason: "feed", positive: 0, negative: 4 },
-      { day: d0, reason: "talked", positive: 3, negative: 0 },
-      { day: d0 + 1, reason: "feed", positive: 0, negative: 6 },
-      { day: d0 + 2, reason: "checkin", positive: 8, negative: 0 },
-    ]);
-
-    // Two hours east: the 22:00 and 23:00 rows fall on the next local day.
-    const east = await store.coins.dailyTotals(profile, since, 120);
-    expect(east.filter((r) => r.day === d0)).toEqual([
-      { day: d0, reason: "checkin", positive: 15, negative: 0 },
-    ]);
-    expect(
-      east.filter((r) => r.day === d0 + 1).map((r) => [r.reason, r.positive, r.negative]),
-    ).toEqual([
-      ["feed", 0, 10],
-      ["talked", 3, 0],
-    ]);
-    expect(await store.coins.dailyTotals(unique("profile"), since, 0)).toEqual([]);
-  });
-
+  // Settings are one key space per database, whatever profile a caller names (one database is
+  // one character), so these cases keep their keys under a prefix of their own.
   it("settings", async () => {
     const settings = store.settings;
     const profile = unique("profile");
     const other = unique("profile");
-    expect(await settings.get(profile, "mode:general")).toBeNull();
-    expect((await settings.list(profile, "")).size).toBe(0);
+    const ns = `${unique("settings")}/`;
+    expect(await settings.get(profile, `${ns}mode:general`)).toBeNull();
+    expect((await settings.list(profile, ns)).size).toBe(0);
 
     const chatty = { mode: "chatty", n: 2 };
-    await settings.set(profile, "mode:general", "quiet");
-    await settings.set(profile, "mode:general", chatty);
-    await settings.set(profile, "mode:dm", [null]);
-    await settings.set(other, "mode:general", "other");
-    expect(await settings.get(profile, "mode:general")).toEqual(chatty);
-    expect(await settings.get(profile, "mode:dm")).toEqual([null]);
+    await settings.set(profile, `${ns}mode:general`, "quiet");
+    await settings.set(profile, `${ns}mode:general`, chatty);
+    await settings.set(profile, `${ns}mode:dm`, [null]);
+    expect(await settings.get(profile, `${ns}mode:general`)).toEqual(chatty);
+    expect(await settings.get(profile, `${ns}mode:dm`)).toEqual([null]);
+    // Another profile reads the same key.
+    expect(await settings.get(other, `${ns}mode:general`)).toEqual(chatty);
 
-    // Deleting (`null`; the TS interface has no stored JSON `null`), also of a missing key,
-    // leaves other profiles alone.
-    await settings.set(profile, "mode:dm", null);
-    await settings.set(profile, "mode:missing", null);
-    expect(await settings.get(profile, "mode:dm")).toBeNull();
-    expect(await settings.get(other, "mode:general")).toBe("other");
+    // Deleting (`null`; the TS interface has no stored JSON `null`), also of a missing key.
+    await settings.set(profile, `${ns}mode:dm`, null);
+    await settings.set(profile, `${ns}mode:missing`, null);
+    expect(await settings.get(profile, `${ns}mode:dm`)).toBeNull();
+    expect(await settings.get(other, `${ns}mode:general`)).toEqual(chatty);
   });
 
   it("settings_list_prefix", async () => {
     const settings = store.settings;
     const profile = unique("profile");
+    const ns = `${unique("settings")}/`;
     const keys = ["mode:b", "mode:a", "mode_x", "modeX:y", "mo%de:1", "other", "MODE:c"];
-    for (const [i, key] of keys.entries()) await settings.set(profile, key, i);
-    await settings.set(unique("profile"), "mode:z", 0);
+    for (const [i, key] of keys.entries()) await settings.set(profile, `${ns}${key}`, i);
+    // Written under another profile, listed with the rest.
+    await settings.set(unique("profile"), `${ns}mode:z`, 0);
 
     const listed: string[][] = [];
     for (const prefix of ["mode:", "mode_", "mo%", "mo", "mode:a", "nothing", ""]) {
-      listed.push([...(await settings.list(profile, prefix)).keys()]);
+      const found = [...(await settings.list(profile, `${ns}${prefix}`)).keys()];
+      listed.push(found.map((k) => k.slice(ns.length)));
     }
     // `_` and `%` are literal, and matching is case-sensitive.
     expect(listed).toEqual([
-      ["mode:a", "mode:b"],
+      ["mode:a", "mode:b", "mode:z"],
       ["mode_x"],
       ["mo%de:1"],
-      ["mo%de:1", "mode:a", "mode:b", "modeX:y", "mode_x"],
+      ["mo%de:1", "mode:a", "mode:b", "mode:z", "modeX:y", "mode_x"],
       ["mode:a"],
       [],
-      ["MODE:c", "mo%de:1", "mode:a", "mode:b", "modeX:y", "mode_x", "other"],
+      ["MODE:c", "mo%de:1", "mode:a", "mode:b", "mode:z", "modeX:y", "mode_x", "other"],
     ]);
-    const list = await settings.list(profile, "mode:");
-    expect(list.get("mode:a")).toBe(1);
-    expect(list.get("mode:b")).toBe(0);
+    const list = await settings.list(profile, `${ns}mode:`);
+    expect(list.get(`${ns}mode:a`)).toBe(1);
+    expect(list.get(`${ns}mode:b`)).toBe(0);
   });
 
   it("from_url_memory", async () => {
@@ -679,546 +472,6 @@ function behaviour(open: () => Promise<Store>): void {
     } finally {
       await memoryStore.close();
     }
-  });
-
-  // ---- memory records ---------------------------------------------------------------------
-
-  it("memory_round_trip", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const t0 = Date.now();
-    const r = memory(profile, "fact", { type: "person", person: newId() }, "owen ramen", at(t0));
-    r.content = "Owen 喜歡拉麵";
-    r.subjects = [newId(), newId()];
-    r.embedding = [0.25, -0.5, 1.5];
-    r.importance = 0.875;
-    r.last_accessed = at(t0 + 5 * SECOND);
-    r.access_count = 3;
-    r.source_context = channel("guild", unique("chan"), "voice");
-    r.source = { account: { platform: "discord", id: "1234" }, name: "Owen" };
-    r.origin = "told";
-    r.source_events = [newId(), `msg:${newId()}`];
-    r.due = at(t0 + HOUR);
-    await memories.upsert(r);
-    expect(await memories.get(r.id)).toEqual(r);
-
-    // Upsert replaces the whole record.
-    r.content = "changed";
-    r.embedding = null;
-    r.done = true;
-    r.superseded_by = newId();
-    r.scope = { type: "global" };
-    await memories.upsert(r);
-    expect(await memories.get(r.id)).toEqual(r);
-
-    expect(await memories.delete(r.id)).toBe(true);
-    expect(await memories.delete(r.id)).toBe(false);
-    expect(await memories.get(r.id)).toBeNull();
-    expect(await memories.get(newId())).toBeNull();
-
-    // Sub-microsecond precision is dropped, and an empty embedding means "none".
-    const precise = memory(profile, "episode", { type: "global" }, "x", at(t0));
-    precise.created_at = `${at(t0).slice(0, -1)}000789Z`;
-    precise.embedding = [];
-    await memories.upsert(precise);
-    const got = await memories.get(precise.id);
-    expect(got?.created_at).toBe(at(t0));
-    expect(got?.embedding).toBeNull();
-
-    const bad = memory(profile, "episode", { type: "global" }, "x", at(t0));
-    bad.embedding = [1, Number.NaN];
-    await expect(memories.upsert(bad)).rejects.toThrow(/non-finite/);
-  });
-
-  it("memory_search_scopes", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const otherProfile = unique("profile");
-    const t0 = Date.now();
-    const chanId = unique("chan");
-    const scopes: [string, MemoryScope][] = [
-      ["global", { type: "global" }],
-      ["guild", guildScope(unique("g"))],
-      ["other_guild", guildScope(unique("g"))],
-      ["channel", { type: "channel", context: channel("g", chanId, "channel") }],
-      ["voice", { type: "channel", context: channel("g", chanId, "voice") }],
-      ["dm", { type: "dm", account: account(unique("a")) }],
-      ["person", { type: "person", person: newId() }],
-    ];
-    const byName = new Map<string, MemoryRecord>();
-    for (const [i, [name, scope]] of scopes.entries()) {
-      const kind: MemoryKind = i % 2 === 0 ? "fact" : "episode";
-      const r = memory(profile, kind, scope, "ramen shop", at(t0 + i * SECOND));
-      await memories.upsert(r);
-      byName.set(name, r);
-    }
-    const foreign = memory(otherProfile, "fact", { type: "global" }, "ramen shop", at(t0));
-    await memories.upsert(foreign);
-    const rec = (name: string) => byName.get(name) as MemoryRecord;
-    const scopeOf = (name: string) => rec(name).scope;
-
-    let hits = await memories.search(
-      textQuery(profile, [scopeOf("global"), scopeOf("guild")], ["ramen"], 10),
-    );
-    expect(hitIds(hits)).toEqual(idSet([rec("global"), rec("guild")]));
-    expect(hits.every((h) => h.text_score > 0)).toBe(true);
-    expect(hits.every((h) => h.vector_score === null)).toBe(true);
-
-    // A channel scope is not its voice counterpart, a guild is not another guild.
-    hits = await memories.search(textQuery(profile, [scopeOf("channel")], ["ramen"], 10));
-    expect(hitIds(hits)).toEqual(idSet([rec("channel")]));
-    hits = await memories.search(textQuery(profile, [scopeOf("voice")], ["ramen"], 10));
-    expect(hitIds(hits)).toEqual(idSet([rec("voice")]));
-
-    // Every scope listed: all of this profile's records, none of the other profile's.
-    const allScopes = scopes.map(([, s]) => s);
-    hits = await memories.search(textQuery(profile, allScopes, ["ramen"], 100));
-    expect(hits).toHaveLength(scopes.length);
-    expect(hitIds(hits).has(foreign.id)).toBe(false);
-
-    // Nothing listed, nothing found; limit caps text hits.
-    expect(await memories.search(textQuery(profile, [], ["ramen"], 10))).toEqual([]);
-    expect(await memories.search(textQuery(profile, allScopes, ["ramen"], 3))).toHaveLength(3);
-    expect(await memories.search(textQuery(profile, allScopes, ["ramen"], 0))).toEqual([]);
-
-    // Kinds restrict; matching ignores case; no tokens and no embedding find nothing; unknown
-    // tokens find nothing.
-    const q = textQuery(profile, allScopes, ["RAMEN"], 100);
-    q.kinds = ["episode"];
-    hits = await memories.search(q);
-    expect(hits).toHaveLength(3);
-    expect(hits.every((h) => h.record.kind === "episode")).toBe(true);
-    q.kinds = [];
-    expect(await memories.search(q)).toEqual([]);
-    expect(await memories.search(textQuery(profile, allScopes, [], 10))).toEqual([]);
-    expect(await memories.search(textQuery(profile, allScopes, ["sushi"], 10))).toEqual([]);
-  });
-
-  it("memory_search_superseded", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const t0 = at(Date.now());
-    const old = memory(profile, "fact", { type: "global" }, "ramen", t0);
-    old.embedding = [1, 0];
-    const fresh = memory(profile, "fact", { type: "global" }, "ramen", t0);
-    fresh.embedding = [1, 0];
-    await memories.upsert(old);
-    await memories.upsert(fresh);
-
-    const q = textQuery(profile, [{ type: "global" }], ["ramen"], 10);
-    q.embedding = [1, 0];
-    expect(hitIds(await memories.search(q)).size).toBe(2);
-
-    old.superseded_by = fresh.id;
-    await memories.upsert(old);
-    expect(hitIds(await memories.search(q))).toEqual(new Set([fresh.id]));
-
-    // Still stored, and listed on request.
-    expect(await memories.get(old.id)).toEqual(old);
-    const filter = { ...baseFilter, limit: 10 };
-    expect(recordIds(await memories.list(profile, filter))).toEqual([fresh.id]);
-    expect(await memories.list(profile, { ...filter, include_superseded: true })).toHaveLength(2);
-  });
-
-  it("memory_search_vector_and_text", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const otherProfile = unique("profile");
-    const t0 = Date.now();
-    const scope = guildScope(unique("g"));
-    const mk = (tokens: string, embedding: number[] | null, secs: number) => {
-      const r = memory(profile, "fact", scope, tokens, at(t0 + secs * SECOND));
-      r.embedding = embedding;
-      return r;
-    };
-    const both = mk("ramen noodles", [1, 0, 0], 1);
-    const textOnly = mk("ramen", [0, 1, 0], 2);
-    const vectorOnly = mk("sushi", [0.9, 0.1, 0], 3);
-    const otherDims = mk("sushi", [1, 0], 4);
-    const noEmbedding = mk("cat", null, 5);
-    const otherScope = mk("ramen", [1, 0, 0], 6);
-    otherScope.scope = guildScope(unique("g"));
-    const foreign = mk("ramen", [1, 0, 0], 7);
-    foreign.profile = otherProfile;
-    for (const r of [both, textOnly, vectorOnly, otherDims, noEmbedding, otherScope, foreign]) {
-      await memories.upsert(r);
-    }
-
-    let q = textQuery(profile, [scope], ["ramen"], 2);
-    q.embedding = [1, 0, 0];
-    let hits = await memories.search(q);
-    // Two text hits and two vector hits, merged by id.
-    expect(hitIds(hits)).toEqual(idSet([both, textOnly, vectorOnly]));
-    const find = (r: MemoryRecord) => hits.find((h) => h.record.id === r.id) as MemoryHit;
-    const merged = find(both);
-    expect(merged.text_score).toBeGreaterThan(0);
-    expect(near(merged.vector_score ?? Number.NaN, 1)).toBe(true);
-    const onlyText = find(textOnly);
-    expect(onlyText.text_score).toBeGreaterThan(0);
-    expect(onlyText.vector_score).toBeNull();
-    const onlyVector = find(vectorOnly);
-    expect(onlyVector.text_score).toBe(0);
-    const cosine = 0.9 / Math.sqrt(0.9 * 0.9 + 0.1 * 0.1);
-    expect(near(onlyVector.vector_score ?? Number.NaN, cosine)).toBe(true);
-
-    // Vector only: nearest first, same dimension only, limit applies.
-    q = textQuery(profile, [scope], [], 2);
-    q.embedding = [1, 0, 0];
-    hits = await memories.search(q);
-    hits.sort((a, b) => (b.vector_score ?? 0) - (a.vector_score ?? 0));
-    expect(hits.map((h) => h.record.id)).toEqual([both.id, vectorOnly.id]);
-    expect(hits.every((h) => h.text_score === 0)).toBe(true);
-
-    q.embedding = [1, 0];
-    expect(hitIds(await memories.search(q))).toEqual(new Set([otherDims.id]));
-    q.embedding = [1, 0, 0, 0];
-    expect(await memories.search(q)).toEqual([]);
-    q.embedding = [1, Number.POSITIVE_INFINITY];
-    await expect(memories.search(q)).rejects.toThrow(/non-finite/);
-  });
-
-  it("memory_list_filters", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const otherProfile = unique("profile");
-    const t0 = Date.now();
-    const alice = newId();
-    const bob = newId();
-    const guild = guildScope(unique("g"));
-    const mk = (kind: MemoryKind, scope: MemoryScope, subjects: PersonId[], secs: number) => {
-      const r = memory(profile, kind, scope, "x", at(t0 + secs * SECOND));
-      r.subjects = subjects;
-      return r;
-    };
-    const a = mk("episode", guild, [alice], 1);
-    const b = mk("fact", { type: "global" }, [alice, bob], 2);
-    const c = mk("fact", guild, [bob], 3);
-    const d = mk("self_note", { type: "global" }, [], 4);
-    for (const r of [a, b, c, d]) await memories.upsert(r);
-    await memories.upsert(memory(otherProfile, "fact", { type: "global" }, "x", at(t0)));
-
-    const list = async (filter: Partial<MemoryFilter>) =>
-      recordIds(await memories.list(profile, { ...baseFilter, limit: 100, ...filter }));
-    expect(await list({})).toEqual([d.id, c.id, b.id, a.id]);
-    expect(await list({ limit: 2 })).toEqual([d.id, c.id]);
-    expect(await list({ limit: 0 })).toEqual([]);
-    expect(await list({ subject: alice })).toEqual([b.id, a.id]);
-    expect(await list({ scope: guild })).toEqual([c.id, a.id]);
-    expect(await list({ kind: "fact" })).toEqual([c.id, b.id]);
-    expect(await list({ before: c.created_at })).toEqual([b.id, a.id]);
-    expect(await list({ subject: bob, kind: "fact", scope: guild })).toEqual([c.id]);
-
-    // `count` selects what `list` selects and ignores the limit.
-    const count = (filter: Partial<MemoryFilter>) =>
-      memories.count?.(profile, { ...baseFilter, limit: 1, ...filter });
-    expect(await count({})).toBe(4);
-    expect(await count({ subject: alice })).toBe(2);
-    expect(await count({ scope: guild })).toBe(2);
-    expect(await count({ kind: "fact" })).toBe(2);
-    expect(await count({ before: c.created_at })).toBe(2);
-    expect(await count({ subject: bob, kind: "fact", scope: guild })).toBe(1);
-    expect(await count({ subject: newId() })).toBe(0);
-  });
-
-  it("memory_embedding_read_late_is_the_same", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const t0 = Date.now();
-    const r = memory(profile, "fact", { type: "global" }, "late", at(t0));
-    r.embedding = [0.1, -0.2, 0.3];
-    await memories.upsert(r);
-    const stored = (await memories.get(r.id))?.embedding;
-    expect(stored).toHaveLength(3);
-
-    // A listed record keeps its vector when written back without anyone reading it.
-    const [listed] = await memories.list(profile, { ...baseFilter, limit: 10 });
-    expect(listed?.id).toBe(r.id);
-    if (!listed) return;
-    listed.importance = 0.9;
-    await memories.upsert(listed);
-    expect((await memories.get(r.id))?.embedding).toEqual(stored);
-
-    // Copies carry it, and setting it replaces it.
-    const [again] = await memories.list(profile, { ...baseFilter, limit: 10 });
-    if (!again) return;
-    expect({ ...again }.embedding).toEqual(stored);
-    expect(JSON.parse(JSON.stringify(again)).embedding).toEqual(stored);
-    const [replaced] = await memories.list(profile, { ...baseFilter, limit: 10 });
-    if (!replaced) return;
-    replaced.embedding = null;
-    expect(replaced.embedding).toBeNull();
-    expect(Object.keys(replaced)).toEqual(Object.keys(r));
-  });
-
-  it("memory_embedding_values_skip_decoding", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const r = memory(profile, "fact", { type: "global" }, "values", at(Date.now()));
-    r.embedding = [0.1, -0.2, 0.3];
-    await memories.upsert(r);
-
-    // The stored float32 values come out without decoding `embedding` into decimals.
-    const [listed] = await memories.list(profile, { ...baseFilter, limit: 10 });
-    if (!listed) throw new Error("not listed");
-    const values = embeddingValues(listed);
-    expect(Array.from(values ?? [])).toEqual([0.1, -0.2, 0.3].map(Math.fround));
-    expect(Object.getOwnPropertyDescriptor(listed, "embedding")?.get).toBeDefined();
-    // Reading it afterwards still gives the shortest decimals.
-    expect(listed.embedding).toEqual([0.1, -0.2, 0.3]);
-
-    // Once replaced, the values follow the property.
-    const [replaced] = await memories.list(profile, { ...baseFilter, limit: 10 });
-    if (!replaced) throw new Error("not listed");
-    replaced.embedding = [1, 2];
-    expect(embeddingValues(replaced)).toEqual([1, 2]);
-    replaced.embedding = null;
-    expect(embeddingValues(replaced)).toBeNull();
-    expect(embeddingValues({ embedding: [0.5] })).toEqual([0.5]);
-  });
-
-  it("memory_touch", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const t0 = Date.now();
-    const a = memory(profile, "fact", { type: "global" }, "a", at(t0));
-    const b = memory(profile, "fact", { type: "global" }, "b", at(t0));
-    await memories.upsert(a);
-    await memories.upsert(b);
-
-    const t1 = at(t0 + MINUTE);
-    const t2 = at(t0 + 2 * MINUTE);
-    await memories.touch([a.id, a.id, newId()], t1);
-    await memories.touch([a.id], t2);
-    await memories.touch([], t2);
-    const a2 = await memories.get(a.id);
-    expect(a2?.access_count).toBe(2);
-    expect(a2?.last_accessed).toBe(t2);
-    const b2 = await memories.get(b.id);
-    expect(b2?.access_count).toBe(0);
-    expect(b2?.last_accessed).toBeNull();
-  });
-
-  it("memory_due_followups", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const otherProfile = unique("profile");
-    const now = Date.now();
-    const followup = (p: ProfileId, due: number | null) => {
-      const r = memory(p, "followup", { type: "global" }, "ask", at(now - DAY));
-      r.due = due === null ? null : at(due);
-      return r;
-    };
-    const later = followup(profile, now - HOUR);
-    const earlier = followup(profile, now - 5 * HOUR);
-    const exactlyNow = followup(profile, now);
-    const future = followup(profile, now + HOUR);
-    const noDue = followup(profile, null);
-    const done = followup(profile, now - 2 * HOUR);
-    done.done = true;
-    const superseded = followup(profile, now - 3 * HOUR);
-    superseded.superseded_by = newId();
-    const notFollowup = followup(profile, now - 4 * HOUR);
-    notFollowup.kind = "fact";
-    const foreign = followup(otherProfile, now - HOUR);
-    for (const r of [
-      later,
-      earlier,
-      exactlyNow,
-      future,
-      noDue,
-      done,
-      superseded,
-      notFollowup,
-      foreign,
-    ]) {
-      await memories.upsert(r);
-    }
-
-    // Newest due first: the oldest are the ones nobody brought up in time.
-    expect(recordIds(await memories.dueFollowups(profile, at(now)))).toEqual([
-      exactlyNow.id,
-      later.id,
-      earlier.id,
-    ]);
-    expect(recordIds(await memories.dueFollowups(profile, at(now + 2 * HOUR)))).toEqual([
-      future.id,
-      exactlyNow.id,
-      later.id,
-      earlier.id,
-    ]);
-    expect(await memories.dueFollowups(profile, at(now - 2 * DAY))).toEqual([]);
-  });
-
-  it("memory_followups_age_cap_and_expiry", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const otherProfile = unique("profile");
-    const now = Date.now();
-    const followup = (p: ProfileId, due: number) => {
-      const r = memory(p, "followup", { type: "global" }, "ask", at(now - DAY));
-      r.due = at(due);
-      return r;
-    };
-    const fresh = followup(profile, now - 30 * MINUTE);
-    const stale = followup(profile, now - 5 * HOUR);
-    const ancient = followup(profile, now - 3 * DAY);
-    const foreign = followup(otherProfile, now - 5 * HOUR);
-    for (const r of [fresh, stale, ancient, foreign]) await memories.upsert(r);
-
-    // The age cap leaves the old ones out, without closing them.
-    expect(recordIds(await memories.dueFollowups(profile, at(now), 2 * HOUR))).toEqual([fresh.id]);
-    expect(recordIds(await memories.dueFollowups(profile, at(now), 6 * HOUR))).toEqual([
-      fresh.id,
-      stale.id,
-    ]);
-    expect(recordIds(await memories.dueFollowups(profile, at(now), null))).toEqual([
-      fresh.id,
-      stale.id,
-      ancient.id,
-    ]);
-
-    // Closing: everything that became due before the cut-off, in this profile only.
-    expect(await memories.expireFollowups(profile, at(now - 4 * HOUR))).toBe(2);
-    expect((await memories.get(ancient.id))?.done).toBe(true);
-    expect((await memories.get(stale.id))?.done).toBe(true);
-    expect((await memories.get(fresh.id))?.done).toBe(false);
-    expect(await memories.expireFollowups(profile, at(now - 4 * HOUR))).toBe(0);
-    expect(recordIds(await memories.dueFollowups(profile, at(now)))).toEqual([fresh.id]);
-    expect(await memories.expireFollowups(profile, at(now - 10 * MINUTE))).toBe(1);
-    expect(await memories.dueFollowups(profile, at(now))).toEqual([]);
-    expect((await memories.get(foreign.id))?.done).toBe(false);
-  });
-
-  it("memory_prune", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const otherProfile = unique("profile");
-    const now = Date.now();
-    const old = now - 90 * DAY;
-    const policy: PrunePolicy = {
-      created_before: at(now - 30 * DAY),
-      max_importance: 0.25,
-      not_accessed_since: at(now - 14 * DAY),
-    };
-    const mk = (p: ProfileId, kind: MemoryKind, created: number, importance: number) => {
-      const r = memory(p, kind, { type: "global" }, "x", at(created));
-      r.importance = importance;
-      return r;
-    };
-    const forgettable = mk(profile, "episode", old, 0.125);
-    const atLimit = mk(profile, "episode", old, 0.25);
-    const staleAccess = mk(profile, "episode", old, 0);
-    staleAccess.last_accessed = at(now - 60 * DAY);
-    const important = mk(profile, "episode", old, 0.5);
-    const recentlyUsed = mk(profile, "episode", old, 0);
-    recentlyUsed.last_accessed = at(now - DAY);
-    const recent = mk(profile, "episode", now - DAY, 0);
-    const fact = mk(profile, "fact", old, 0);
-    const note = mk(profile, "self_note", old, 0);
-    const followup = mk(profile, "followup", old, 0);
-    const foreign = mk(otherProfile, "episode", old, 0);
-    const kept = [important, recentlyUsed, recent, fact, note, followup, foreign];
-    const gone = [forgettable, atLimit, staleAccess];
-    for (const r of [...gone, ...kept]) await memories.upsert(r);
-
-    expect(await memories.prune(profile, policy)).toBe(3);
-    expect(await memories.prune(profile, policy)).toBe(0);
-    for (const r of gone) expect(await memories.get(r.id)).toBeNull();
-    for (const r of kept) expect(await memories.get(r.id)).not.toBeNull();
-  });
-
-  it("memory_delete_by_subject", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const otherProfile = unique("profile");
-    const t0 = at(Date.now());
-    const alice = newId();
-    const bob = newId();
-    const mk = (p: ProfileId, scope: MemoryScope, subjects: PersonId[]) => {
-      const r = memory(p, "fact", scope, "x", t0);
-      r.subjects = subjects;
-      return r;
-    };
-    const aboutAlice = mk(profile, { type: "global" }, [alice]);
-    const aboutBoth = mk(profile, guildScope(unique("g")), [bob, alice]);
-    const aliceScope = mk(profile, { type: "person", person: alice }, []);
-    const aboutBob = mk(profile, { type: "global" }, [bob]);
-    const bobScope = mk(profile, { type: "person", person: bob }, [bob]);
-    const unrelated = mk(profile, { type: "global" }, []);
-    const foreign = mk(otherProfile, { type: "global" }, [alice]);
-    const gone = [aboutAlice, aboutBoth, aliceScope];
-    const kept = [aboutBob, bobScope, unrelated, foreign];
-    for (const r of [...gone, ...kept]) await memories.upsert(r);
-
-    expect(await memories.deleteBySubject(profile, alice)).toBe(3);
-    expect(await memories.deleteBySubject(profile, alice)).toBe(0);
-    for (const r of gone) expect(await memories.get(r.id)).toBeNull();
-    for (const r of kept) expect(await memories.get(r.id)).not.toBeNull();
-    expect(await memories.deleteBySubject(otherProfile, alice)).toBe(1);
-  });
-
-  it("memory_merge_person", async () => {
-    const memories = store.memories;
-    const profile = unique("profile");
-    const otherProfile = unique("profile");
-    const t0 = at(Date.now());
-    const keep = newId();
-    const absorb = newId();
-    const bob = newId();
-    const mk = (p: ProfileId, scope: MemoryScope, subjects: PersonId[], kind: MemoryKind) => {
-      const r = memory(p, kind, scope, "ramen shop", t0);
-      r.subjects = subjects;
-      r.embedding = [1, 0, 0];
-      return r;
-    };
-    const fact = mk(profile, { type: "global" }, [bob, absorb], "fact");
-    const both = mk(profile, guildScope(unique("g")), [absorb, bob, keep], "episode");
-    const scoped = mk(profile, { type: "person", person: absorb }, [], "self_note");
-    const followup = mk(profile, { type: "person", person: absorb }, [absorb], "followup");
-    const foreign = mk(otherProfile, { type: "dm", account: account("x") }, [absorb], "fact");
-    const untouched = mk(profile, { type: "person", person: bob }, [bob], "fact");
-    for (const r of [fact, both, scoped, followup, foreign, untouched]) await memories.upsert(r);
-
-    expect(await memories.mergePerson(keep, absorb)).toBe(5);
-    expect(await memories.mergePerson(keep, absorb)).toBe(0);
-    expect(await memories.mergePerson(keep, keep)).toBe(0);
-
-    const read = async (r: MemoryRecord) => (await memories.get(r.id)) as MemoryRecord;
-    expect((await read(fact)).subjects).toEqual([bob, keep]);
-    expect((await read(both)).subjects, "no duplicates, first occurrence kept").toEqual([
-      keep,
-      bob,
-    ]);
-    expect((await read(scoped)).scope).toEqual({ type: "person", person: keep });
-    expect((await read(followup)).scope).toEqual({ type: "person", person: keep });
-    expect((await read(followup)).subjects).toEqual([keep]);
-    expect((await read(foreign)).subjects, "every profile").toEqual([keep]);
-    expect((await read(foreign)).scope).toEqual({ type: "dm", account: account("x") });
-    expect((await read(untouched)).subjects).toEqual([bob]);
-    expect((await read(untouched)).scope).toEqual(untouched.scope);
-    const after = await read(fact);
-    expect(after.tokens).toBe(fact.tokens);
-    expect(after.embedding).toEqual([1, 0, 0]);
-    expect(Date.parse(after.updated_at)).toBe(Date.parse(fact.updated_at));
-
-    // Indexes still agree: filters, scope lookups, full text and vectors see the new person.
-    const listed = await memories.list(profile, { ...baseFilter, subject: keep, limit: 10 });
-    expect(idSet(listed)).toEqual(new Set([fact.id, both.id, followup.id]));
-    expect(await memories.list(profile, { ...baseFilter, subject: absorb, limit: 10 })).toEqual([]);
-    const keepScope: MemoryScope = { type: "person", person: keep };
-    const absorbScope: MemoryScope = { type: "person", person: absorb };
-    const scopedList = await memories.list(profile, { ...baseFilter, scope: keepScope, limit: 10 });
-    expect(idSet(scopedList)).toEqual(new Set([scoped.id, followup.id]));
-    const text = await memories.search(textQuery(profile, [keepScope], ["ramen"], 10));
-    expect(hitIds(text)).toEqual(new Set([scoped.id, followup.id]));
-    expect(await memories.search(textQuery(profile, [absorbScope], ["ramen"], 10))).toEqual([]);
-    const vector = await memories.search({
-      ...textQuery(profile, [keepScope], [], 10),
-      embedding: [1, 0, 0],
-    });
-    expect(hitIds(vector)).toEqual(new Set([scoped.id, followup.id]));
-    expect(vector.every((h) => near(h.vector_score ?? 0, 1))).toBe(true);
-    expect(await memories.deleteBySubject(profile, keep)).toBe(4);
   });
 
   // ---- relationships and identity ---------------------------------------------------------
@@ -1385,7 +638,7 @@ function behaviour(open: () => Promise<Store>): void {
   // ---- authorization and audit ------------------------------------------------------------
 
   it("auth_roles", async () => {
-    const auth = store.auth;
+    const auth = store.plugin(authTables).store;
     const name = unique("role");
     const r = role(name, 50, false);
     const find = (roles: RoleDefinition[], n: string) => roles.filter((x) => x.name === n);
@@ -1433,7 +686,7 @@ function behaviour(open: () => Promise<Store>): void {
   });
 
   it("auth_assignments", async () => {
-    const auth = store.auth;
+    const auth = store.plugin(authTables).store;
     const a = account(unique("a"));
     const b = account(unique("b"));
     const roleName = unique("role");
@@ -1466,7 +719,7 @@ function behaviour(open: () => Promise<Store>): void {
   });
 
   it("auth_mappings_and_overrides", async () => {
-    const auth = store.auth;
+    const auth = store.plugin(authTables).store;
     const g1 = unique("g");
     const g2 = unique("g");
     const mapping = (guild: string, platformRole: string, r: string): RoleMapping => ({
@@ -1574,26 +827,29 @@ function behaviour(open: () => Promise<Store>): void {
     const profile = unique("profile");
     const ctx = channel("guild", unique("chan"), "channel");
     const voice = channel("guild", unique("chan"), "voice");
-    const theirs = (text: string, context: ContextKey, ms: number, id = "100"): LogEntry => ({
+    // Accounts of this case only: the count is of the whole database (the file runs share one).
+    const owen = unique("100");
+    const amy = unique("200");
+    const theirs = (text: string, context: ContextKey, ms: number, id = owen): LogEntry => ({
       ...entry(profile, context, text, at(ms)),
       author: account(id),
     });
     await store.messages.append(theirs("old", ctx, 0));
     await store.messages.append(theirs("a", ctx, 10_000));
     await store.messages.append(theirs("b", voice, 20_000));
-    await store.messages.append(theirs("other", ctx, 30_000, "200"));
+    await store.messages.append(theirs("other", ctx, 30_000, amy));
     await store.messages.append({ ...theirs("her", ctx, 40_000), is_self: true });
     await store.messages.append(theirs("c", ctx, 50_000));
-    const got = await store.messages.authoredSince(profile, [account("100")], at(5_000), 10);
+    const got = await store.messages.authoredSince(profile, [account(owen)], at(5_000), 10);
     expect(got.map((e) => e.kind)).toEqual(["channel", "voice", "channel"]);
     expect(Date.parse(got[0]?.ts ?? "")).toBe(Date.parse(at(10_000)));
-    expect(
-      await store.messages.authoredSince(profile, [account("100")], at(5_000), 2),
-    ).toHaveLength(2);
+    expect(await store.messages.authoredSince(profile, [account(owen)], at(5_000), 2)).toHaveLength(
+      2,
+    );
     expect(await store.messages.authoredSince(profile, [], at(0), 10)).toEqual([]);
     const both = await store.messages.authoredSince(
       profile,
-      [account("100"), account("200")],
+      [account(owen), account(amy)],
       at(0),
       10,
     );
@@ -1647,337 +903,6 @@ function behaviour(open: () => Promise<Store>): void {
     expect(await store.cards.bySerial(profile, other.serial)).not.toBeNull();
   });
 
-  it("coins: a wallet's sum, keys once per wallet, caps and the balance in one transaction", async () => {
-    const profile = unique("profile");
-    const id = unique("acct");
-    const linked = unique("acct");
-    const other = unique("acct");
-    const wallet = [account(id), account(linked)];
-    const coin = (who: string, delta: number, reason: string, key: string | null, ms: number) => ({
-      id: newId(),
-      profile,
-      account: account(who),
-      delta,
-      reason,
-      ref: null,
-      idem_key: key,
-      ts: at(ms),
-    });
-
-    const first = await store.coins.post(coin(id, 10, "checkin", "checkin:1", 1_000), { wallet });
-    expect(first).toMatchObject({ status: "posted", balance: 10 });
-    // The same key from the linked account is the same click.
-    const again = await store.coins.post(coin(linked, 10, "checkin", "checkin:1", 2_000), {
-      wallet,
-    });
-    expect(again.status).toBe("duplicate");
-    expect(again.status === "duplicate" && again.entry.id).toBe(
-      first.status === "posted" && first.entry.id,
-    );
-    expect(again).toMatchObject({ balance: 10 });
-    // Someone else's key is theirs.
-    expect(
-      (await store.coins.post(coin(other, 5, "checkin", "checkin:1", 2_000), { wallet: [] }))
-        .status,
-    ).toBe("posted");
-
-    // Caps: the voice cap is 4, the second earning gets what fits, the third nothing.
-    const cap = { accounts: wallet, reasons: ["voice"], since: at(0), limit: 4 };
-    const capped = { wallet, caps: [cap], partial: true };
-    expect(await store.coins.post(coin(id, 3, "voice", "v:1", 3_000), capped)).toMatchObject({
-      status: "posted",
-      balance: 13,
-    });
-    const part = await store.coins.post(coin(linked, 3, "voice", "v:2", 4_000), capped);
-    expect(part).toMatchObject({ status: "posted", balance: 14 });
-    expect(part.status === "posted" && part.entry.delta).toBe(1);
-    expect(await store.coins.post(coin(id, 3, "voice", "v:3", 5_000), capped)).toMatchObject({
-      status: "capped",
-      balance: 14,
-    });
-    // A cap over everyone (`accounts: null`), not partial.
-    const total = { accounts: null, reasons: ["checkin"], since: at(0), limit: 16 };
-    expect(
-      (await store.coins.post(coin(id, 2, "checkin", null, 5_000), { wallet, caps: [total] }))
-        .status,
-    ).toBe("capped");
-
-    // Spending needs the coins.
-    expect(
-      await store.coins.post(coin(id, -20, "feed", "f:1", 6_000), { wallet, covered: true }),
-    ).toMatchObject({ status: "short", balance: 14 });
-    expect(
-      await store.coins.post(coin(linked, -14, "feed", "f:2", 7_000), { wallet, covered: true }),
-    ).toMatchObject({ status: "posted", balance: 0 });
-    await expect(
-      store.coins.post({ ...coin(id, 1.5, "feed", null, 7_000) }, { wallet }),
-    ).rejects.toThrow(/whole/);
-
-    expect(await store.coins.balance(profile, wallet)).toBe(0);
-    expect(await store.coins.balance(profile, [account(other)])).toBe(5);
-    expect(await store.coins.balance(profile, [])).toBe(0);
-    expect(await store.coins.balance(unique("profile"), wallet)).toBe(0);
-
-    const all = await store.coins.entries(profile, wallet, { limit: 10 });
-    expect(all.map((e) => e.idem_key)).toEqual(["f:2", "v:2", "v:1", "checkin:1"]);
-    expect(all[0]).toMatchObject({ delta: -14, reason: "feed", account: account(linked) });
-    expect(Date.parse(all[0]?.ts ?? "")).toBe(7_000);
-    expect(
-      (await store.coins.entries(profile, wallet, { reasons: ["voice"], limit: 10 })).length,
-    ).toBe(2);
-    expect(
-      (await store.coins.entries(profile, wallet, { since: at(3_500), limit: 10 })).length,
-    ).toBe(2);
-    expect(await store.coins.entries(profile, wallet, { limit: 1 })).toHaveLength(1);
-    expect(await store.coins.entries(profile, wallet, { reasons: [], limit: 9 })).toEqual([]);
-    expect((await store.coins.byKey(profile, wallet, "v:2"))?.delta).toBe(1);
-    expect(await store.coins.byKey(profile, [account(id)], "v:2")).toBeNull();
-
-    // Frames: the latest choice of any account.
-    expect(await store.coins.selectedFrame(profile, wallet)).toBeNull();
-    await store.coins.selectFrame(profile, account(id), "sakura", at(1_000));
-    await store.coins.selectFrame(profile, account(linked), "gold", at(2_000));
-    expect(await store.coins.selectedFrame(profile, wallet)).toBe("gold");
-    await store.coins.selectFrame(profile, account(linked), null, at(3_000));
-    expect(await store.coins.selectedFrame(profile, wallet)).toBeNull();
-    expect(await store.coins.selectedFrame(profile, [account(id)])).toBe("sakura");
-
-    // The board is on unless someone left; leaving writes the whole wallet and keeps the frame.
-    expect(await store.coins.onBoard(profile, wallet)).toBe(true);
-    expect(await store.coins.offBoardAccounts(profile, 10)).toEqual([]);
-    await store.coins.setOnBoard(profile, wallet, false);
-    expect(await store.coins.onBoard(profile, wallet)).toBe(false);
-    expect(await store.coins.onBoard(profile, [account(linked)])).toBe(false);
-    expect(await store.coins.onBoard(profile, [account(other)])).toBe(true);
-    expect(await store.coins.offBoardAccounts(profile, 10)).toHaveLength(2);
-    expect(await store.coins.selectedFrame(profile, [account(id)])).toBe("sakura");
-    await store.coins.setOnBoard(profile, wallet, true);
-    expect(await store.coins.onBoard(profile, wallet)).toBe(true);
-    expect(await store.coins.offBoardAccounts(profile, 10)).toEqual([]);
-  });
-
-  it("coins: concurrent spends never take the balance below zero", async () => {
-    const profile = unique("profile");
-    const id = unique("acct");
-    const wallet = [account(id)];
-    await store.coins.post(
-      {
-        id: newId(),
-        profile,
-        account: account(id),
-        delta: 30,
-        reason: "checkin",
-        ref: null,
-        idem_key: null,
-        ts: at(1_000),
-      },
-      { wallet },
-    );
-    const spends = await Promise.all(
-      Array.from({ length: 6 }, (_, i) =>
-        store.coins.post(
-          {
-            id: newId(),
-            profile,
-            account: account(id),
-            delta: -10,
-            reason: "feed",
-            ref: null,
-            idem_key: `f:${i}`,
-            ts: at(2_000 + i),
-          },
-          { wallet, covered: true },
-        ),
-      ),
-    );
-    expect(spends.filter((s) => s.status === "posted")).toHaveLength(3);
-    expect(await store.coins.balance(profile, wallet)).toBe(0);
-  });
-
-  it("deals: kept per wallet, statuses move once and only from where they were", async () => {
-    const profile = unique("profile");
-    const id = unique("acct");
-    const linked = unique("acct");
-    const other = unique("acct");
-    const wallet = [account(id), account(linked)];
-    const deal = (who: string, ms: number, task: string): Deal => ({
-      id: newId(),
-      profile,
-      account: account(who),
-      item: "rice",
-      count: 2,
-      value: 20,
-      task,
-      prepaid: false,
-      escrow: null,
-      status: "open",
-      created_at: at(ms),
-      done_at: null,
-      due_at: null,
-      closed_at: null,
-    });
-    const first = deal(id, 1_000, "meow");
-    const second = deal(linked, 2_000, "sing");
-    const third = deal(other, 3_000, "dance");
-    for (const d of [first, second, third]) await store.deals.create(d);
-    expect(await store.deals.get(first.id)).toEqual(first);
-    expect(await store.deals.get(newId())).toBeNull();
-
-    // A wallet is every account of the person; newest first.
-    const mine = await store.deals.forAccounts(profile, wallet, { limit: 10 });
-    expect(mine.map((d) => d.task)).toEqual(["sing", "meow"]);
-    expect(await store.deals.forAccounts(profile, wallet, { limit: 1 })).toHaveLength(1);
-    expect(await store.deals.forAccounts(profile, wallet, { since: at(1_500), limit: 9 })).toEqual([
-      second,
-    ]);
-    expect(await store.deals.forAccounts(profile, [], { limit: 9 })).toEqual([]);
-    expect(await store.deals.forAccounts(profile, wallet, { statuses: [], limit: 9 })).toEqual([]);
-    expect(await store.deals.forAccounts(unique("profile"), wallet, { limit: 9 })).toEqual([]);
-
-    // A status moves once, from where it was, with the times it sets.
-    const done = { status: "owed" as const, done_at: at(5_000), due_at: at(9_000) };
-    expect(await store.deals.transition(first.id, ["open"], done)).toBe(true);
-    expect(await store.deals.transition(first.id, ["open"], done)).toBe(false);
-    expect(await store.deals.transition(first.id, [], done)).toBe(false);
-    expect(await store.deals.transition(newId(), ["open"], done)).toBe(false);
-    expect(await store.deals.get(first.id)).toMatchObject({
-      status: "owed",
-      done_at: at(5_000),
-      due_at: at(9_000),
-      closed_at: null,
-    });
-    // Fields left out stay, `null` clears.
-    expect(
-      await store.deals.transition(first.id, ["owed"], {
-        status: "broken",
-        closed_at: at(9_500),
-        due_at: null,
-      }),
-    ).toBe(true);
-    expect(await store.deals.get(first.id)).toMatchObject({
-      status: "broken",
-      done_at: at(5_000),
-      due_at: null,
-      closed_at: at(9_500),
-    });
-
-    const open = await store.deals.byStatus(profile, ["open", "owed"], { limit: 10 });
-    expect(open.map((d) => d.task)).toEqual(["sing", "dance"]);
-    expect(await store.deals.byStatus(profile, ["broken"], { limit: 10 })).toHaveLength(1);
-    expect(await store.deals.byStatus(profile, [], { limit: 10 })).toEqual([]);
-    expect(await store.deals.byStatus(profile, ["open"], { since: at(2_500), limit: 10 })).toEqual([
-      third,
-    ]);
-    const broken = await store.deals.forAccounts(profile, wallet, {
-      statuses: ["broken"],
-      limit: 10,
-    });
-    expect(broken.map((d) => d.id)).toEqual([first.id]);
-
-    // A prepaid deal keeps its escrow row.
-    const paid = { ...deal(id, 4_000, "escrowed"), prepaid: true, escrow: newId() };
-    await store.deals.create(paid);
-    expect(await store.deals.get(paid.id)).toMatchObject({ prepaid: true, escrow: paid.escrow });
-  });
-
-  it("goals and bounties: pledges kept per goal, statuses move once and only from where they were", async () => {
-    const profile = unique("profile");
-    const goal = (ms: number, title: string): Goal => ({
-      id: newId(),
-      profile,
-      title,
-      promise: "meow",
-      target: 50,
-      status: "open",
-      created_at: at(ms),
-      deadline: at(ms + 5_000),
-      closed_at: null,
-    });
-    const first = goal(1_000, "mic");
-    const second = goal(2_000, "lamp");
-    for (const g of [first, second]) await store.goals.create(g);
-    expect(await store.goals.get(first.id)).toEqual(first);
-    expect(await store.goals.get(newId())).toBeNull();
-    expect((await store.goals.list(profile, { limit: 9 })).map((g) => g.title)).toEqual([
-      "lamp",
-      "mic",
-    ]);
-    expect(await store.goals.list(profile, { statuses: [], limit: 9 })).toEqual([]);
-    expect(await store.goals.list(unique("profile"), { limit: 9 })).toEqual([]);
-
-    const pledge = (g: Goal, who: string, amount: number, ms: number): GoalPledge => ({
-      id: newId(),
-      goal: g.id,
-      profile,
-      account: account(who),
-      amount,
-      created_at: at(ms),
-    });
-    const a = pledge(first, unique("acct"), 20, 1_100);
-    const b = pledge(first, unique("acct"), 5, 1_200);
-    for (const p of [b, a]) await store.goals.addPledge(p);
-    await store.goals.addPledge(pledge(second, unique("acct"), 1, 2_100));
-    expect(await store.goals.pledges(first.id)).toEqual([a, b]);
-    await expect(store.goals.addPledge(a)).rejects.toThrow();
-
-    const closed = at(3_000);
-    expect(
-      await store.goals.transition(first.id, ["open"], { status: "reached", closed_at: closed }),
-    ).toBe(true);
-    expect(await store.goals.transition(first.id, ["open"], { status: "expired" })).toBe(false);
-    expect(await store.goals.transition(first.id, [], { status: "open" })).toBe(false);
-    expect(await store.goals.get(first.id)).toMatchObject({ status: "reached", closed_at: closed });
-    expect(
-      (await store.goals.list(profile, { statuses: ["open"], limit: 9 })).map((g) => g.title),
-    ).toEqual(["lamp"]);
-    // A kept promise: only a reached goal, and the first mark stands.
-    expect(await store.goals.get(first.id)).not.toHaveProperty("fulfilled_at");
-    expect(await store.goals.fulfill(second.id, "owner", at(3_500))).toBe(false);
-    expect(await store.goals.fulfill(first.id, "self", at(4_000))).toBe(true);
-    expect(await store.goals.fulfill(first.id, "owner", at(5_000))).toBe(false);
-    expect(await store.goals.get(first.id)).toMatchObject({
-      fulfilled_at: at(4_000),
-      fulfilled_by: "self",
-    });
-    expect(await store.goals.get(second.id)).not.toHaveProperty("fulfilled_at");
-
-    const bounty = (ms: number, task: string): Bounty => ({
-      id: newId(),
-      profile,
-      task,
-      reward: 30,
-      hold: newId(),
-      status: "open",
-      created_at: at(ms),
-      expires_at: at(ms + 5_000),
-      closed_at: null,
-      winner: null,
-    });
-    const one = bounty(1_000, "guess");
-    const two = bounty(2_000, "draw");
-    for (const x of [one, two]) await store.bounties.create(x);
-    expect(await store.bounties.get(one.id)).toEqual(one);
-    expect((await store.bounties.list(profile, { limit: 9 })).map((x) => x.task)).toEqual([
-      "draw",
-      "guess",
-    ]);
-    const winner = account(unique("acct"));
-    expect(
-      await store.bounties.transition(one.id, ["open"], {
-        status: "awarded",
-        closed_at: closed,
-        winner,
-      }),
-    ).toBe(true);
-    expect(await store.bounties.transition(one.id, ["open"], { status: "cancelled" })).toBe(false);
-    expect(await store.bounties.get(one.id)).toMatchObject({ status: "awarded", winner });
-    expect(
-      (await store.bounties.list(profile, { statuses: ["open"], limit: 9 })).map((x) => x.task),
-    ).toEqual(["draw"]);
-    expect(await store.bounties.transition(two.id, ["open"], { status: "expired" })).toBe(true);
-    expect(await store.bounties.get(two.id)).toMatchObject({ status: "expired", winner: null });
-  });
-
   // ---- TS-specific ------------------------------------------------------------------------
 
   it("timestamps keep microseconds and are normalized to UTC", async () => {
@@ -1997,38 +922,17 @@ function behaviour(open: () => Promise<Store>): void {
     );
   });
 
-  it("embeddings read back as the shortest float32 decimals", async () => {
-    const r = memory(unique("profile"), "fact", { type: "global" }, "x", at(Date.now()));
-    r.embedding = [0.1, 0.9, -1e-7, 3];
-    await store.memories.upsert(r);
-    expect((await store.memories.get(r.id))?.embedding).toEqual([0.1, 0.9, -1e-7, 3]);
-  });
-
-  it("full-text tokens are literal (quotes, operators, CJK)", async () => {
-    const profile = unique("profile");
-    const scopes: MemoryScope[] = [{ type: "global" }];
-    const r = memory(profile, "fact", { type: "global" }, "owen 喜歡 拉麵 or", at(Date.now()));
-    await store.memories.upsert(r);
-    const search = (tokens: string[]) =>
-      store.memories.search(textQuery(profile, scopes, tokens, 10));
-    expect(hitIds(await search(["拉麵"]))).toEqual(new Set([r.id]));
-    expect(hitIds(await search(["OR"]))).toEqual(new Set([r.id]));
-    expect(hitIds(await search(["  Owen  ", "owen"]))).toEqual(new Set([r.id]));
-    for (const weird of ['"', 'a"b', "!!", "NEAR(", "*", "-", "x:y", "AND", "NOT"]) {
-      expect(await search([weird])).toEqual([]);
-    }
-    expect(hitIds(await search(['"', "拉麵"]))).toEqual(new Set([r.id]));
-  });
-
   it("counts, exports and wipes one profile's data by category", async () => {
     const profile = unique("profile");
     const other = unique("profile");
     const person = unique("person") as PersonId;
     const ctx = channel(unique("g"), "chan", "channel");
     const t0 = Date.UTC(2026, 0, 1);
+    // The memories are the character's (one database, no profile column): written once.
+    const memories = store.plugin(memoryTables);
+    await memories.upsert(memory(profile, "fact", guildScope("g"), "喜歡貓", at(t0)));
+    await memories.upsert(memory(profile, "episode", guildScope("g"), "一起玩", at(t0)));
     for (const p of [profile, other]) {
-      await store.memories.upsert(memory(p, "fact", guildScope("g"), "喜歡貓", at(t0)));
-      await store.memories.upsert(memory(p, "episode", guildScope("g"), "一起玩", at(t0)));
       await store.relationships.upsert(relationship(p, person, t0));
       await store.relationships.recordDelta(p, person, delta(at(t0), 1, "nice"));
       await store.cards.issue({
@@ -2039,22 +943,9 @@ function behaviour(open: () => Promise<Store>): void {
         issued_at: at(t0),
         snapshot: { affinity: "很好" },
       });
-      await store.coins.post(
-        {
-          id: newId(),
-          profile: p,
-          account: account("100"),
-          delta: 10,
-          reason: "checkin",
-          ref: null,
-          idem_key: null,
-          ts: at(t0),
-        },
-        { wallet: [] },
-      );
-      await store.messages.append(entry(p, ctx, "嗨", at(t0)));
-      await store.decisions.append(decision(p, ctx, "replied", at(t0)));
-      await store.decisions.appendOutcome?.(p, outcome(ctx, "sent", at(t0)));
+      // No chat line, decision or turn outcome: the event log is the whole database's (one
+      // character), and the file runs share one database. data.test.ts, chat.test.ts and
+      // decision-log.test.ts cover them on fresh ones.
       await store.personaOverrides.set(p, "style", "新的口吻", "test");
       for (const [key, value] of [
         ["memory_maintenance_last", "2026-01-01T00:00:00Z"],
@@ -2079,21 +970,26 @@ function behaviour(open: () => Promise<Store>): void {
       fact: 1,
       episode: 1,
     });
-    expect(count("relationships")).toBe(4); // relationship, delta, card, coins
+    expect(count("relationships")).toBe(3); // relationship, delta, card
     expect(count("call_names")).toBe(1);
     expect(count("inner")).toBe(2);
     expect(count("mood")).toBe(1);
-    expect(count("messages")).toBe(3); // one line + two watermarks
-    expect(count("decisions")).toBe(2); // decision log + turn outcome
+    expect(count("messages")).toBeGreaterThanOrEqual(2); // two watermarks, any chat lines
+    await store.decisions.append(decision(profile, ctx, "replied", at(t0)));
+    await store.decisions.appendOutcome?.(profile, outcome(ctx, "sent", at(t0)));
+    // The whole database's: other cases may have written some on the file.
+    expect(
+      (await store.profileData.inventory(profile)).categories.find((c) => c.id === "decisions")
+        ?.count,
+    ).toBeGreaterThanOrEqual(2);
     expect(count("channels")).toBe(2);
-    expect(count("persona")).toBe(1);
+    // The whole database's: other cases edit persona sections on the file.
+    expect(count("persona")).toBeGreaterThanOrEqual(1);
     expect(count("proposed_tools")).toBe(1);
     expect(count("extensions")).toBe(1);
     const messages = inventory.categories.find((c) => c.id === "messages");
-    expect(messages?.parts.map((p) => [p.id, p.count])).toEqual([
-      ["message_log", 1],
-      ["memory_watermarks", 2],
-    ]);
+    expect(messages?.parts.map((p) => p.id)).toEqual(["message_log", "memory_watermarks"]);
+    expect(messages?.parts.find((p) => p.id === "memory_watermarks")?.count).toBe(2);
     expect(messages?.updated_at).not.toBeNull();
 
     const backup = await store.profileData.export(profile, ["memories", "messages", "call_names"]);
@@ -2102,7 +998,6 @@ function behaviour(open: () => Promise<Store>): void {
     expect(backup.parts.memory_records).toHaveLength(2);
     expect(backup.parts.memory_records?.[0]).toMatchObject({ kind: "fact", done: false });
     expect(backup.parts.memory_records?.[0]).not.toHaveProperty("embedding");
-    expect(backup.parts.message_log?.[0]).toMatchObject({ text: "嗨", is_self: false, ts: at(t0) });
     expect(backup.parts.memory_watermarks?.map((r) => [r.key, r.value])).toEqual([
       ["memory_watermark:a", { at: 1 }],
       ["memory_watermark:b", { at: 2 }],
@@ -2115,16 +1010,14 @@ function behaviour(open: () => Promise<Store>): void {
 
     // Each category alone, then nothing of it is left and the rest is untouched.
     const counts = await store.profileData.wipe(profile, ["messages"]);
-    expect(counts).toEqual({
-      message_log: 1,
+    expect(counts).toMatchObject({
       memory_watermarks: 2,
       conversation_states: 0,
-      log_events: 0,
-      log_event_rollups: 0,
+      events: 0,
+      event_rollups: 0,
     });
-    expect(await store.messages.recent(profile, ctx, 9)).toEqual([]);
     expect((await store.settings.list(profile, "memory_watermark:")).size).toBe(0);
-    expect(await store.memories.list(profile, { ...baseFilter, limit: 9 })).toHaveLength(2);
+    expect(await memories.list(profile, { ...baseFilter, limit: 9 })).toHaveLength(2);
 
     expect(
       await store.profileData.wipe(profile, [
@@ -2144,14 +1037,8 @@ function behaviour(open: () => Promise<Store>): void {
       relationships: 1,
       relationship_deltas: 1,
       member_cards: 1,
-      coin_ledger: 1,
-      coin_wallets: 0,
-      fortunes: 0,
-      deals: 0,
-      goals: 0,
-      goal_pledges: 0,
-      bounties: 0,
-      economy_docs: 0,
+      // The coins, deals, slips, goals, bounties and documents are the economy plugin's, which
+      // this store was not opened with: no tables, nothing to count.
       self_state: 1,
       self_feelings: 1,
       self_cards_migration: 0,
@@ -2159,28 +1046,41 @@ function behaviour(open: () => Promise<Store>): void {
       mind_digests: 0,
       mind_goals: 0,
       mood: 1,
-      decision_log: 1,
-      turn_outcomes: 1,
+      decision_log: expect.any(Number),
+      turn_outcomes: expect.any(Number),
       channel_modes: 1,
       channel_activeness: 1,
-      persona_overrides: 1,
+      persona_overrides: expect.any(Number),
       proposed_tools: 1,
       extension_storage: 1,
     });
-    expect(await store.memories.list(profile, { ...baseFilter, limit: 9 })).toEqual([]);
+    expect(await memories.list(profile, { ...baseFilter, limit: 9 })).toEqual([]);
     expect(await store.relationships.get(profile, person)).toBeNull();
     expect(await store.decisions.recent(profile, null, 9)).toEqual([]);
     expect((await store.personaOverrides.current(profile)).size).toBe(0);
-    expect([...(await store.settings.list(profile, "")).keys()]).toEqual([]);
+    // The file runs share one database: only this case's keys are looked at.
+    const seeded = [
+      "memory_maintenance_last",
+      "memory_watermark:",
+      "mood:last",
+      "self:",
+      "channel_mode:discord:g:c",
+      "activeness:discord:g:c",
+      "sandbox:tool:t",
+      "ext:hello:k",
+    ];
+    for (const prefix of seeded) {
+      expect([...(await store.settings.list(profile, prefix)).keys()], prefix).toEqual([]);
+    }
     const after = await store.profileData.inventory(profile);
     for (const c of after.categories) {
       if (!dataCategory(c.id).shared && c.id !== "other_settings") expect(c.count, c.id).toBe(0);
     }
 
-    // Other profiles are untouched.
-    expect(await store.memories.list(other, { ...baseFilter, limit: 9 })).toHaveLength(2);
-    expect(await store.messages.recent(other, ctx, 9)).toHaveLength(1);
-    expect((await store.settings.list(other, "")).size).toBe(10);
+    // Other profiles are untouched, but for the settings (one key space per database) and the
+    // memories (one table without a profile column): both are the character's.
+    expect(await memories.list(other, { ...baseFilter, limit: 9 })).toEqual([]);
+    expect((await store.settings.list(other, "self:")).size).toBe(0);
     expect((await store.relationships.get(other, person))?.call_name).toBe("歐文");
 
     // Kept categories cannot be wiped; unknown ones are refused.
@@ -2188,32 +1088,15 @@ function behaviour(open: () => Promise<Store>): void {
     await expect(store.profileData.wipe(profile, ["nope" as never])).rejects.toThrow(/unknown/);
   });
 
-  it("purges messages and deletes settings by prefix", async () => {
+  it("deletes settings by prefix", async () => {
+    // Purging the message log (the whole database's) is in message-log.test.ts.
     const profile = unique("profile");
-    const ctx = channel(unique("g"), "chan", "channel");
-    await store.messages.append(entry(profile, ctx, "a", at(0)));
-    await store.messages.append(entry(profile, channel(null, "dm", "dm"), "b", at(0)));
-    expect(await store.messages.purge(profile)).toBe(2);
-    expect(await store.messages.recent(profile, ctx, 9)).toEqual([]);
-    await store.settings.set(profile, "a%:1", 1);
-    await store.settings.set(profile, "a%:2", 2);
-    await store.settings.set(profile, "ab:3", 3);
-    expect(await store.settings.deletePrefix(profile, "a%:")).toBe(2);
-    expect([...(await store.settings.list(profile, "")).keys()]).toEqual(["ab:3"]);
-  });
-
-  it("scopes match whatever their key order", async () => {
-    const profile = unique("profile");
-    const guild = unique("g");
-    const r = memory(profile, "fact", { type: "guild", platform: "discord", guild }, "x", at(0));
-    await store.memories.upsert(r);
-    const reordered = JSON.parse(`{"guild":"${guild}","platform":"discord","type":"guild"}`);
-    const listed = await store.memories.list(profile, {
-      ...baseFilter,
-      scope: reordered,
-      limit: 9,
-    });
-    expect(recordIds(listed)).toEqual([r.id]);
+    const ns = `${unique("settings")}/`;
+    await store.settings.set(profile, `${ns}a%:1`, 1);
+    await store.settings.set(profile, `${ns}a%:2`, 2);
+    await store.settings.set(profile, `${ns}ab:3`, 3);
+    expect(await store.settings.deletePrefix(profile, `${ns}a%:`)).toBe(2);
+    expect([...(await store.settings.list(profile, ns)).keys()]).toEqual([`${ns}ab:3`]);
   });
 }
 
@@ -2228,29 +1111,4 @@ describe("sqlite (file)", () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   // One file for every case (each case uses fresh ids), reopened per case.
   behaviour(() => openStore(`sqlite:${join(dir, "nested", "behaviour.db")}`));
-});
-
-const pgUrl = process.env[DB_ENV];
-describe.skipIf(!pgUrl)("postgres", () => {
-  behaviour(() => openStore(pgUrl as string));
-});
-
-/** The in-memory backend keeps only the newest decisions of each profile. */
-it("memory_decision_log_cap", async () => {
-  const CAP = 10_000;
-  const store = await openStore("memory://");
-  try {
-    const profile = unique("profile");
-    const ctx = channel("guild", "chan", "channel");
-    const t0 = Date.now();
-    for (let i = 0; i <= CAP; i++) {
-      await store.decisions.append(decision(profile, ctx, String(i), at(t0 + i * SECOND)));
-    }
-    const all = await store.decisions.recent(profile, null, Number.POSITIVE_INFINITY);
-    expect(all).toHaveLength(CAP);
-    expect(all[0]?.trace.reasons[0]).toBe(String(CAP));
-    expect(all[CAP - 1]?.trace.reasons[0]).toBe("1");
-  } finally {
-    await store.close();
-  }
 });

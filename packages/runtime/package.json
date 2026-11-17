@@ -1,0 +1,50 @@
+{
+  "name": "@miyoria/runtime",
+  "version": "0.1.0",
+  "description": "kernel: Module lifecycle, supervisor, event bus, service registry, config and logging; profile: Profile loading: persona, LLM purposes, voice and avatar settings; scheduler: Action scheduler: per-lane output queues with priority, TTL and coalescing; replay-log: the opt-in recorder of what she perceives and its log format",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    "./kernel": {
+      "@miyoria/source": "./kernel/src/index.ts",
+      "types": "./dist/kernel/src/index.d.ts",
+      "default": "./dist/kernel/src/index.js"
+    },
+    "./profile": {
+      "@miyoria/source": "./profile/src/index.ts",
+      "types": "./dist/profile/src/index.d.ts",
+      "default": "./dist/profile/src/index.js"
+    },
+    "./scheduler": {
+      "@miyoria/source": "./scheduler/src/index.ts",
+      "types": "./dist/scheduler/src/index.d.ts",
+      "default": "./dist/scheduler/src/index.js"
+    },
+    "./replay-log": {
+      "@miyoria/source": "./replay-log/src/index.ts",
+      "types": "./dist/replay-log/src/index.d.ts",
+      "default": "./dist/replay-log/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miyoria/types": "workspace:*",
+    "pino": "^10.4.0",
+    "smol-toml": "^1.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

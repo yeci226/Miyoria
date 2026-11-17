@@ -13,8 +13,8 @@
 // Scene names come from the owner's OBS, but they are still treated as data in the prompt, and
 // the model's answer only counts when it names a listed scene exactly.
 
-import { errorMessage, getLogger } from "@miyoria/kernel";
-import { type LlmRouter, withLlmTag } from "@miyoria/llm";
+import { type LlmRouter, withLlmTag } from "@miyoria/llm/llm";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import type { SettingsStore } from "@miyoria/store";
 import { dataBlock, isJsonObject, type JsonValue, serviceKey } from "@miyoria/types";
 import { z } from "zod";

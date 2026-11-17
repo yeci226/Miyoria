@@ -8,12 +8,10 @@
 // it fills in. Jobs and their pictures are written with a sidecar that records everything needed
 // to make the same picture again (graph, seed, model files).
 
+import type { ImageJobData } from "@miyoria/contracts/events";
 import type { JsonValue } from "./json.js";
 import { serviceKey } from "./service-key.js";
 import type { Timestamp } from "./time.js";
-
-/** Topic of `ImageJobEvent` custom events: one per state change of a job. */
-export const IMAGEGEN_TOPIC = "imagegen.job";
 
 export type ImageJobState = "queued" | "running" | "done" | "failed" | "cancelled";
 
@@ -109,15 +107,8 @@ export interface ImageJob {
   finished_at: Timestamp | null;
 }
 
-/** Payload of `IMAGEGEN_TOPIC`. */
-export interface ImageJobEvent {
-  id: string;
-  purpose: string;
-  state: ImageJobState;
-  progress: number;
-  error: string | null;
-  outputs: string[];
-}
+/** Payload of `Events.ImagegenJob` (contract: `ImageJobSchema` in @miyoria/contracts/events). */
+export type ImageJobEvent = ImageJobData;
 
 export interface ImageJobFilter {
   states?: readonly ImageJobState[];

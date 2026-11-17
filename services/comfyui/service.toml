@@ -1,0 +1,15 @@
+# ComfyUI: the image generator Core's imagegen module drives; run by hand, not owned by hostd.
+name = "comfyui"
+kind = "external"
+provides = ["imagegen"]
+summary = "ComfyUI(生圖)"
+
+[probe]
+http = "/system_stats"
+port = 8188
+
+# Memory is held while it works and given back by `POST /free` with
+# {"unload_models": true, "free_memory": true}. The amount is not measured yet.
+[gpu]
+policy = "on_demand"
+offload = "/free"

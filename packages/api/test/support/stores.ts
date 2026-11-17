@@ -1,4 +1,4 @@
-// In-memory store areas for the API tests (the Rust tests use `Store::memory()`).
+// In-memory store areas for the API tests.
 
 import {
   type Account,
@@ -227,9 +227,10 @@ export class MemoryPeople implements PeopleStore, IdentityStore {
     const found = this.#accounts.find((a) => sameAccount(a.account, account));
     if (found) found.person = person;
   }
-  async mergePeople(keep: PersonId, absorb: PersonId): Promise<void> {
+  async mergePeople(keep: PersonId, absorb: PersonId): Promise<null> {
     for (const a of this.#accounts) if (a.person === absorb) a.person = keep;
     this.#names.delete(absorb);
+    return null;
   }
   async accountsOf(person: PersonId): Promise<Account[]> {
     return this.#accounts.filter((a) => a.person === person).map(({ person: _, ...a }) => clone(a));
@@ -392,7 +393,7 @@ export class MemoryMemberCards implements MemberCardStore {
   }
 }
 
-/** Every area the tests use, like Rust's `Store::memory()`. */
+/** Every area the tests use, all in memory. */
 export class TestStore {
   readonly decisions = new MemoryDecisionLog();
   readonly personaOverrides = new MemoryPersonaOverrides();

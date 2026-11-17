@@ -7,8 +7,8 @@
 // * `WorkingContext`: what she knows right now, one bucket per writer (§5).
 // * `DeliveryLedger`: what really reached someone (§8). Only an ack counts as said.
 //
-// In this phase the log runs beside V2: the `facts` module writes it from the bus and nothing
-// reads it to make a decision yet (§21). The interfaces are the ones later phases switch to.
+// The `facts` module writes it from the bus, the main line writes her lines to it, and the Floor
+// reads it (§21).
 
 import type { Handle } from "./handle.js";
 import type { ModuleId, TurnId } from "./ids.js";
@@ -167,7 +167,7 @@ export interface ObservationOrigin {
   /** The module that published it. */
   module: ModuleId;
   topic: string;
-  /** The bus `Event`, as published (JSON). */
+  /** The bus event's `type`, `v` and `data` (the payload as it was published). */
   event: JsonValue;
   turn: TurnId | null;
 }
@@ -363,9 +363,3 @@ export interface DeliveryLedger {
 export const DeliveryLedgerKey = serviceKey<DeliveryLedger>("DeliveryLedger");
 
 // ---- lifecycle ------------------------------------------------------------------------------
-
-/**
- * Published by the core right before it stops its modules. What modules say while going down
- * (a game session "ending" with its extension) is not something that happened out there.
- */
-export const SYSTEM_SHUTDOWN_TOPIC = "system.shutdown";

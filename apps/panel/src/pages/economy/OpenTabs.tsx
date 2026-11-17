@@ -1,4 +1,4 @@
-import { useCommissions, usePredictions, useRoom } from "@/app/v4-queries";
+import { useCommissions, usePredictions, useRoom } from "@/app/queries";
 import { BarList } from "@/components/charts/charts";
 import { ModuleQuery } from "@/components/module-query";
 import { Meter, StatusBadge, type Tone } from "@/components/status";

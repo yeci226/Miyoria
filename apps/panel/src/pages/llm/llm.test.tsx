@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type { LlmCallRecord, LlmCallStats, Thought } from "@/api/types";
+import type { Thought } from "@/api/types";
+import type { LlmCallRecord, LlmCallStats } from "@miyoria/contracts/api";
 import { mockFetch, renderRoute } from "@/test/render";
 
 const CALL: LlmCallRecord = {
@@ -16,6 +17,7 @@ const CALL: LlmCallRecord = {
   fallbacks: [{ model: "local:qwen3-4b", error: "HTTP 503", kind: "http_5xx" }],
   retries: ["HTTP 429"],
   thinking: true,
+  reasoning: "off",
   json_mode: true,
   tools: [],
   max_tokens: 2400,

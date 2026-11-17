@@ -2,22 +2,16 @@
 // inputs are structural subsets of the discord.js classes so tests use plain objects.
 //
 // The bridge publishes the results as `platform.presence` / `platform.voice_state` /
-// `platform.member` custom events for the `world` module. Presence of someone who opted out
+// `platform.member` events for the `world` module. Presence of someone who opted out
 // (`/me privacy presence:off`) is dropped before it reaches the bus (`PresencePrivacy`).
 
 import {
   type ActivityKind,
-  customEvent,
-  type EventOf,
-  type JsonValue,
-  MEMBER_TOPIC,
   type MemberUpdate,
-  PRESENCE_TOPIC,
   type PresenceActivity,
   type PresenceStatus,
   type PresenceUpdate,
   toTimestamp,
-  VOICE_STATE_TOPIC,
   type VoiceStateUpdate,
 } from "@miyoria/types";
 import { ActivityType } from "discord.js";
@@ -195,20 +189,4 @@ export function memberUpdate(m: GuildMemberLike, left: boolean): MemberUpdate {
     is_bot: m.user?.bot ?? false,
     left,
   };
-}
-
-function custom(topic: string, payload: object): EventOf<"custom"> {
-  return customEvent(topic, payload as unknown as JsonValue);
-}
-
-export function presenceEvent(update: PresenceUpdate): EventOf<"custom"> {
-  return custom(PRESENCE_TOPIC, update);
-}
-
-export function voiceStateEvent(update: VoiceStateUpdate): EventOf<"custom"> {
-  return custom(VOICE_STATE_TOPIC, update);
-}
-
-export function memberEvent(update: MemberUpdate): EventOf<"custom"> {
-  return custom(MEMBER_TOPIC, update);
 }

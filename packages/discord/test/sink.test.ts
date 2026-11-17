@@ -1,12 +1,9 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { ContextKey, ModerationService } from "@miyoria/types";
 import { describe, expect, test } from "vitest";
-import { DiscordSendError, DiscordSink, type RestLike, type RestRequest } from "../src/sink.js";
+import { DiscordSink, type RestLike, type RestRequest } from "../src/sink.js";
 
 interface Call {
-  method: "post" | "put" | "patch" | "delete";
+  method: "post" | "put";
   route: string;
   options: RestRequest | undefined;
 }
@@ -25,28 +22,6 @@ class FakeRest implements RestLike {
   async put(route: `/${string}`, options?: RestRequest): Promise<unknown> {
     this.calls.push({ method: "put", route, options });
     if (this.failWith) throw this.failWith;
-    return undefined;
-  }
-
-  async patch(route: `/${string}`, options?: RestRequest): Promise<unknown> {
-    this.calls.push({ method: "patch", route, options });
-    if (this.failWith) throw this.failWith;
-    return { id: "edited" };
-  }
-
-  async delete(route: `/${string}`, options?: RestRequest): Promise<unknown> {
-    this.calls.push({ method: "delete", route, options });
-    if (this.failWith) throw this.failWith;
-    return undefined;
-  }
-}
-
-/** A REST client without `patch` (older fakes, other adapters). */
-class PostOnlyRest implements RestLike {
-  async post(): Promise<unknown> {
-    return { id: "1" };
-  }
-  async put(): Promise<unknown> {
     return undefined;
   }
 }
@@ -190,17 +165,6 @@ describe("DiscordSink", () => {
   });
 });
 
-test("deletes one of her messages", async () => {
-  const rest = new FakeRest();
-  await new DiscordSink(rest).delete({ context: channel, id: "42" });
-  expect(rest.calls.map((c) => [c.method, c.route])).toEqual([
-    ["delete", "/channels/200/messages/42"],
-  ]);
-  await expect(
-    new DiscordSink(new PostOnlyRest()).delete({ context: channel, id: "42" }),
-  ).rejects.toThrow(/cannot delete/);
-});
-
 describe("DiscordSink.setVoiceStatus", () => {
   const voice: ContextKey = { platform: "discord", scope: "1", channel: "200", kind: "voice" };
 
@@ -253,96 +217,6 @@ describe("DiscordSink.describe", () => {
     expect(await new DiscordSink(new FakeRest()).describe(voice)).toBeNull();
     expect(await new DiscordSink(rest(names)).describe({ ...voice, platform: "cli" })).toBeNull();
     expect(await new DiscordSink(rest(names)).describe({ ...voice, channel: "x" })).toBeNull();
-  });
-
-  test("edits_a_message_without_pings", async () => {
-    const rest = new FakeRest();
-    const sink = new DiscordSink(rest);
-    await sink.edit(
-      { context: channel, id: "222" },
-      "## @everyone 唱歌 <@&9> sk-abcdefghijklmnopqrstuvwx",
-    );
-    expect(rest.calls).toHaveLength(1);
-    expect(rest.calls[0]?.method).toBe("patch");
-    expect(rest.calls[0]?.route).toBe("/channels/200/messages/222");
-    expect(rest.calls[0]?.options?.body).toEqual({
-      content: "## everyone 唱歌  [已遮蔽]",
-      allowed_mentions: { parse: [] },
-    });
-  });
-
-  test("edit_cuts_long_text_to_one_message", async () => {
-    const rest = new FakeRest();
-    await new DiscordSink(rest).edit({ context: channel, id: "222" }, "x".repeat(2500));
-    const body = rest.calls[0]?.options?.body as { content: string };
-    expect(body.content.length).toBe(2000);
-  });
-
-  test("edit_without_rest_patch_throws", async () => {
-    const sink = new DiscordSink(new PostOnlyRest());
-    await expect(sink.edit({ context: channel, id: "222" }, "x")).rejects.toThrow(DiscordSendError);
-  });
-});
-
-describe("sending files", () => {
-  const dir = mkdtempSync(join(tmpdir(), "miyoria-sink-"));
-  const path = join(dir, "post.jpg");
-  writeFileSync(path, Buffer.from([1, 2, 3]));
-  const image = { name: "post.jpg", path, contentType: "image/jpeg" };
-  const here: ContextKey = { platform: "discord", scope: "1", channel: "2", kind: "channel" };
-
-  test("says it can send files", () => {
-    expect(new DiscordSink(new FakeRest()).sendsFiles).toBe(true);
-  });
-
-  test("attaches files to the first chunk only", async () => {
-    const rest = new FakeRest();
-    await new DiscordSink(rest).send(here, {
-      text: "x".repeat(3000),
-      reply_to: null,
-      files: [image],
-    });
-    expect(rest.calls.length).toBe(2);
-    expect(rest.calls[0]?.options?.files?.map((f) => f.name)).toEqual(["post.jpg"]);
-    expect(rest.calls[1]?.options?.files).toBeUndefined();
-  });
-
-  test("reads the file from its path", async () => {
-    const rest = new FakeRest();
-    await new DiscordSink(rest).send(here, { text: "看", reply_to: null, files: [image] });
-    const file = rest.calls[0]?.options?.files?.[0];
-    expect([...(file?.data ?? [])]).toEqual([1, 2, 3]);
-    expect(file?.contentType).toBe("image/jpeg");
-  });
-
-  test("sends no pings when mentions is false", async () => {
-    const rest = new FakeRest();
-    await new DiscordSink(rest).send(here, {
-      text: "<@123> @everyone",
-      reply_to: null,
-      mentions: false,
-    });
-    const body = rest.calls[0]?.options?.body as Record<string, unknown>;
-    expect(body.allowed_mentions).toEqual({ parse: [] });
-    expect(body.content).not.toContain("@everyone");
-  });
-
-  test("still pings users by default", async () => {
-    const rest = new FakeRest();
-    await new DiscordSink(rest).send(here, { text: "<@123>", reply_to: null });
-    const body = rest.calls[0]?.options?.body as Record<string, unknown>;
-    expect(body.allowed_mentions).toEqual({ parse: ["users"], roles: [], replied_user: false });
-  });
-
-  test("fails when a file cannot be read", async () => {
-    const rest = new FakeRest();
-    const send = new DiscordSink(rest).send(here, {
-      text: "看",
-      reply_to: null,
-      files: [{ ...image, path: join(dir, "gone.jpg") }],
-    });
-    await expect(send).rejects.toBeInstanceOf(DiscordSendError);
-    expect(rest.calls).toEqual([]);
   });
 });
 

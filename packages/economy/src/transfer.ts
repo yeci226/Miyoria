@@ -13,10 +13,10 @@
 //   id is the out row's plus `~in`, which is how a retry finds it.
 // * Spends take turns inside this process (`serial`), so the sender's day limit holds.
 
-import type { CoinEntry, CoinLedgerStore } from "@miyoria/store";
 import { type AccountRef, accountRefString, newId, safeName, toTimestamp } from "@miyoria/types";
 import type { EconomyService, Member } from "./economy.js";
 import { STRANGER } from "./economy.js";
+import type { CoinEntry, CoinLedgerStore } from "./records.js";
 import { EconomyError, type TransferResult } from "./types.js";
 
 /** Whatever keeps the other side from receiving, said the same way every time. */
@@ -48,8 +48,7 @@ function row(
 ): CoinEntry {
   return {
     id,
-    profile: e.profile,
-    account: who.account,
+    person: who.wallet,
     delta,
     reason,
     ref,
@@ -113,7 +112,7 @@ export async function sendCoins(
       const id = newId();
       const post = await ledger.post(
         row(e, sender, id, -amount, "transfer_out", `${inIdOf(id)}:${receiverName}`, outKey),
-        { wallet: sender.wallet, covered: true },
+        { covered: true },
       );
       if (post.status === "short") throw new EconomyError(402, `${c.currency}不夠`);
       if (post.status === "capped") throw new EconomyError(429, "今天到上限了");
@@ -134,10 +133,9 @@ export async function sendCoins(
         `transfer_in:${out.id}`,
       ),
       {
-        wallet: receiver.wallet,
         caps: [
           {
-            accounts: receiver.wallet,
+            wallet: receiver.wallet,
             reasons: ["transfer_in"],
             since,
             limit: c.transfer_in_per_day,

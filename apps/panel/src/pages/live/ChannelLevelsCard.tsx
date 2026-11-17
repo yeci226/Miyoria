@@ -1,6 +1,6 @@
 import { Volume2, VolumeX } from "lucide-react";
 import { useId } from "react";
-import type { ChannelLevelInfo, ChannelLevelsView, ChannelLevelView } from "@/api/types";
+import type { ChannelLevelInfo, ChannelLevelsView, ChannelLevelView } from "@miyoria/contracts/api";
 import { useChannelLevels, useSetChannelLevel } from "@/app/queries";
 import { READ_ONLY_HINT, useCanWrite } from "@/app/session";
 import { EmptyLine, QueryView, SkeletonRows } from "@/components/query-state";

@@ -1,7 +1,7 @@
 // Human names of contexts (`"Miyoria / 雜談"`) for the panel, asked of the platform's sink and
 // cached: the panel polls `GET /api/voice` every few seconds.
 
-import { getLogger } from "@miyoria/kernel";
+import { getLogger } from "@miyoria/runtime/kernel";
 import { type ContextKey, contextKeyString, type PlatformSinks } from "@miyoria/types";
 
 const log = getLogger("api.labels");

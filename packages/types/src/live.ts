@@ -8,6 +8,7 @@
 // Everything in a `LiveEvent` may be seen by anyone, logged in or not: the module decides what
 // gets in (see `packages/live/src/privacy.ts`), nothing downstream filters again.
 
+import type { LiveTouchData } from "@miyoria/contracts/events";
 import type { AccountRef } from "./platform.js";
 import { serviceKey } from "./service-key.js";
 
@@ -78,13 +79,11 @@ export interface LiveSpot {
   y: number;
 }
 
-/** Custom bus topic of one accepted touch from the picture; the stage draws a hand there. */
-export const LIVE_TOUCH_TOPIC = "live.touch";
-
-/** Payload of `LIVE_TOUCH_TOPIC`: where and on what, never who. */
-export interface LiveTouch extends LiveSpot {
-  part: LivePart;
-}
+/**
+ * Payload of `Events.LiveTouch`: where and on what, never who (contract: `LiveTouchSchema` in
+ * @miyoria/contracts/events).
+ */
+export type LiveTouch = LiveTouchData;
 
 export interface LiveSnapshot {
   presence: LivePresence;

@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { DirectiveEffect } from "@/api/types";
+import type { DirectiveEffect } from "@miyoria/contracts/api";
 import { useDirectiveMutations } from "@/app/queries";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";

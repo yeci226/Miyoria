@@ -11,7 +11,6 @@
     GET    /songs               -> {"songs": [meta...]}    cached covers, newest first
     GET    /songs/{id}          -> {"song": meta}
     POST   /songs/{id}/lyrics   {title?, artist?, fresh?} -> look the lyrics up again (no new audio)
-    POST   /songs/{id}/lyrics   {title?, artist?, fresh?} -> look the lyrics up again (no new audio)
     GET    /songs/{id}/files/{name}   mix.wav · vocals.wav · instrumental.wav · lyrics.lrc ·
                                       play_mix.pcm · play_vocals.pcm (s16le mono 48 kHz) · meta.json ·
                                       video.mp4 (library: video.<ext>) when ``has_video``
@@ -52,7 +51,9 @@ Pipeline per job (one job at a time; models load per stage and are freed after i
               lead (one more conversion), at their own level; ``acapella``: her lead alone, no
               instrumental. Without a lead split the backing stays in the converted vocal and only
               ``acapella`` changes anything (moved by the key with Rubber Band when ffmpeg has it), loudness-normalised to SING_TARGET_LUFS, peak ≤ -1 dBFS
-    lyrics    synced LRC from lrclib.net / NetEase: title readings, the video metadata, a language model when those fail; checked against the audio (lyrics.py)
+    lyrics    (in parallel, from the lead on) synced LRC from lrclib.net / NetEase: title readings, the video
+              metadata, a language model when those fail; checked against the audio (lyrics.py), the ASR
+              spot check once the conversion is done and the speech workers are back
     video     (in parallel, from the download on) the link's video, video only, H.264 <= 1080p
               preferred, into video.mp4 for the stream to show while she sings; library entries
               use a video next to the audio. The song is ready once both are done; a video that
@@ -103,6 +104,8 @@ Environment
                            out; cached songs made with another chain or lead split are made again)
     SING_YING_DIR          YingMusic-SVC checkout + ckpt/YingMusic-SVC-full.pt (default ../models/yingmusic-svc)
     SING_APPLIO_DIR / SING_RVC_MODEL / SING_RVC_INDEX / SING_RVC_PROTECT   the RVC pass (rvcpass.py)
+    SING_RVC_SERVER        0 = a fresh Applio process for every RVC conversion (default 1: one process, rvcpass.py)
+    SING_INFO_REUSE_S      the download and the video reuse the lookup's yt-dlp answer this long (default 3600)
     SING_DIFFUSION_STEPS   Seed-VC / YingMusic steps              (default 30)
     SING_CFG_RATE          Seed-VC inference cfg rate             (default 0.7)
     SING_TARGET_OFFSET     her singing median vs her speaking median, semitones (default 2)
@@ -123,6 +126,9 @@ Environment
     SING_VIDEO_WAIT_S      wait for the video after the audio     (default 120)
     SING_GPU_POLICY        auto | share | offload | wait           (default auto, see gpu.py)
     SING_GPU_SHARE         the older switch, used when SING_GPU_POLICY is not set: 1 = auto, 0 = offload
+    SING_GPU_ARBITER       self | hostd: who takes the GPU decisions (default self; hostd: lease.py, the
+                           worker asks hostd and never calls the speech workers; it does not start
+                           without MIYORIA_HOSTD_URL and MIYORIA_SERVICE_TOKEN)
     SING_OFFLOAD_URLS      who can be asked to give up the GPU, comma separated (default none),
                            e.g. http://127.0.0.1:8002,http://127.0.0.1:8003
     SING_EXCLUSIVE_WAIT_S  wait this long for Core's go (exclusive_ack) (default 30)
@@ -133,7 +139,7 @@ Environment
     SING_SHARE_WAIT_S      wait this long for room before taking speech offline, also with nobody
                            listening                                (default 0)
     SING_DEFER_S           people listening: wait this long before a short silence (default 120)
-    SING_WAIT_MAX_S        longest wait for room in all; then windows, or the job fails (default 600)
+    SING_WAIT_MAX_S        longest wait for room in all; then windows (auto), or the job fails (default 600)
     SING_SILENCE_MAX_S     longest she is offline at a time while people listen, reload included (default 90)
     SING_SILENCE_GAP_S     back this long before the next window    (default 60)
     SING_OFFLOAD_LEASE_S   a window renews its offload; a worker that died leaves her voice
@@ -149,6 +155,7 @@ Environment
     SING_YIELD_MAX_S       give way at most this much per song that is needed now (default 120)
     SING_YIELD_PATIENT_S   the same for a song nobody is waiting for (default 900)
     SING_RESOLVE_TIMEOUT_S give up finding a song after this long (default 60)
+    SING_PREFETCH          0 = the next queued song is not looked up and downloaded while one is made (default 1)
     SING_YTDLP_CACHE       yt-dlp's cache folder                  (default <data dir>/_ytdlp-cache)
     SING_RELOAD_TIMEOUT_S  longest wait for a worker to reload    (default 300)
     SING_MOCK_SECONDS      mock: song length                      (default 3)
@@ -175,20 +182,26 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(1, str(Path(__file__).resolve().parent.parent))  # contracts.py, shared by the workers
 
 from cache import Cache, Janitor, Protected  # noqa: E402
+# The JSON bodies, generated from the JSON Schema of packages/contracts (gen_contracts.py).
+from contracts import WorkersSingGpuContext as GpuContext  # noqa: E402
+from contracts import WorkersSingJobRequest as JobRequest  # noqa: E402
+from contracts import WorkersSingLyricsRequest as LyricsRequest  # noqa: E402
+from contracts import WorkersSingPruneRequest as PruneRequest  # noqa: E402
 from engine import Cancelled, ConvertWork, JobError, Suspended, allowed_url, env_float, env_int, is_oom  # noqa: E402
 from exclusive import Exclusive, http_post, parse_urls  # noqa: E402
 from gpu import CPU_FALLBACK, CPU_STAGES, Action, Audience, GpuJob, Limits, Machine, Profile  # noqa: E402
+from lease import HostdArbitration, arbiter_from_env, hostd_available  # noqa: E402
 from yielding import SpeechYield, http_get  # noqa: E402
 from songs import (  # noqa: E402
     PLAY_RATE,
@@ -201,6 +214,14 @@ from songs import (  # noqa: E402
     short_hash,
     song_id,
 )
+
+try:
+    import service_auth
+except ImportError:  # never run open: with a token set, no check means no service
+    if os.environ.get("MIYORIA_SERVICE_TOKEN") or os.environ.get("MIYORIA_HOST_TOKEN"):
+        raise SystemExit("MIYORIA_SERVICE_TOKEN or MIYORIA_HOST_TOKEN is set but service_auth.py cannot be "
+                         "imported: refusing to start without the token check")
+    service_auth = None
 
 log = logging.getLogger("miyoria.sing")
 
@@ -255,6 +276,11 @@ class MockBackend:
         self.mix_backing: list[str] = []
         self.lead_sources: list[str | None] = []
         self.trims = 0
+        self.lyrics_calls: list[float | None] = []  # the duration each lookup was given
+        self.lyrics_gate: Callable[[], None] | None = None  # tests: holds the lookup
+        self.lyrics_after_asr_wait: list[bool] = []  # whether the conversion was over by then
+        self.idles: list[bool] = []  # each ``idle(more)``
+        self.idle_hook: Callable[[bool], None] | None = None  # tests: runs in ``idle``
 
     def _wait(self) -> None:
         if self.delay:
@@ -313,8 +339,10 @@ class MockBackend:
     def trim(self) -> None:
         self.trims += 1
 
-    def idle(self) -> None:
-        return None
+    def idle(self, more: bool = False) -> None:
+        self.idles.append(more)
+        if self.idle_hook is not None:
+            self.idle_hook(more)
 
     def fetch_library(self, src: Source, sdir: Path) -> None:
         self.fetch(src, sdir / "source.wav", lambda _: None)
@@ -406,9 +434,16 @@ class MockBackend:
         return {"vocal_gain": 1.0, "lufs": -16.0, "samples": len(mix), "duration_s": round(len(mix) / PLAY_RATE, 2)}
 
     def lyrics(self, src: Source, duration: float | None, audio: Path | None = None,
-               fresh: bool = False) -> dict[str, Any] | None:
+               fresh: bool = False, asr_wait: Callable[[], None] | None = None) -> dict[str, Any] | None:
         if os.environ.get("SING_LYRICS", "1") == "0":
             return None
+        self.lyrics_calls.append(duration)
+        if self.lyrics_gate is not None:
+            self.lyrics_gate()
+        if asr_wait is not None and os.environ.get("SING_MOCK_LYRICS_ASR") == "1":
+            asr_wait()
+            job = state.jobs.get(state.running or "")
+            self.lyrics_after_asr_wait.append(bool(job is not None and job.converted.is_set()))
         lines = [f"[00:{i:02d}.00]mock line {i + 1}" for i in range(max(1, int(self.seconds)))]
         return {"provider": "mock", "synced": True, "lrc": "\n".join(lines), "plain": None,
                 "track": src.title, "artist": src.artist, "how": "mock", "confidence": 1.0}
@@ -467,26 +502,63 @@ class _RealAdapter:
         x, sr = read_audio(path)
         return self.b.f0_stats(x.mean(axis=1), sr)
 
+    @staticmethod
+    def _under(sdir: Path, split: bool, backing: str) -> tuple[Path, Path | None, bool]:
+        """(instrumental file, kept backing voices to add to it, whether there is an instrumental)."""
+        # Kept backing (or none at all): everything but the lead in one, when the split left it.
+        rest = sdir / "rest.wav"
+        use_rest = split and backing in ("keep", "acapella") and rest.exists()
+        return (rest if use_rest else sdir / "instrumental.wav",
+                sdir / "backing.wav" if split and backing == "keep" and not use_rest else None,
+                backing != "acapella")
+
+    def prepare_mix(self, sdir: Path, key: int, split: bool, backing: str) -> None:
+        """Starts what the mix puts under her voice (engine.instrumental_for_mix: with a key change,
+        Rubber Band's seconds) on its own thread, while the lead is converted."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from engine import instrumental_for_mix
+
+        inst, backing_wav, instrumental = self._under(sdir, split, backing)
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sing-mixprep")
+        self._prepared = ((str(sdir), key, split, backing),
+                          pool.submit(instrumental_for_mix, inst, key, self.b, backing_wav, instrumental))
+        pool.shutdown(wait=False)
+
+    def _take_prepared(self, sdir: Path, key: int, split: bool, backing: str) -> tuple[Any, int] | None:
+        prepared, self._prepared = getattr(self, "_prepared", None), None
+        if prepared is None or prepared[0] != (str(sdir), key, split, backing):
+            return None
+        try:
+            return prepared[1].result()
+        except Exception as e:  # noqa: BLE001 - the mix does it again and says what is wrong
+            log.warning("preparing the instrumental failed: %s", e)
+            return None
+
+    def idle(self, more: bool = False) -> None:
+        self._prepared = None
+        self.b.idle(more)
+
     def mix(self, sdir: Path, converted: Path, key: int, out: Path, split: bool = False,
             backing: str = "keep", backing_conv: Path | None = None) -> dict[str, Any]:
         """``split``: the lead was converted, the backing voices are beside it; ``backing`` says
         what becomes of them (songs.BACKING_MODES; ``backing_conv`` is the converted backing)."""
         from engine import mix_song
 
-        # Kept backing (or none at all): everything but the lead in one, when the split left it.
-        rest = sdir / "rest.wav"
-        use_rest = split and backing in ("keep", "acapella") and rest.exists()
-        return mix_song(sdir / ("lead.wav" if split else "vocals.wav"), converted,
-                        rest if use_rest else sdir / "instrumental.wav", key, out,
+        inst, backing_wav, instrumental = self._under(sdir, split, backing)
+        return mix_song(sdir / ("lead.wav" if split else "vocals.wav"), converted, inst, key, out,
                         self.b, env_float("SING_TARGET_LUFS", -16.0),
-                        backing_wav=sdir / "backing.wav" if split and backing == "keep" and not use_rest else None,
+                        backing_wav=backing_wav,
                         backing_conv=backing_conv if split and backing == "convert" else None,
                         backing_src=sdir / "backing.wav" if split and backing == "convert" else None,
-                        instrumental=backing != "acapella")
+                        instrumental=instrumental,
+                        prepared=self._take_prepared(sdir, key, split, backing))
 
     def lyrics(self, src: Source, duration: float | None, audio: Path | None = None,
-               fresh: bool = False) -> dict[str, Any] | None:
-        """Lyrics for the song (lyrics.py: title readings, lrclib / NetEase, the language model, the checks)."""
+               fresh: bool = False, asr_wait: Callable[[], None] | None = None) -> dict[str, Any] | None:
+        """Lyrics for the song (lyrics.py: title readings, lrclib / NetEase, the language model, the checks).
+        ``asr_wait``: the lookup runs next to the conversion; the ASR spot check waits for it (a lyrics
+        service on another machine has its own ASR and does not wait)."""
         if os.environ.get("SING_LYRICS", "1") == "0":
             return None
         from lyrics import hints_of, search
@@ -495,28 +567,14 @@ class _RealAdapter:
         url = remote_url()  # the lyrics service next to Core's language model and ASR (workers/lyrics)
         if url:
             return search_remote(url, hints_of(src), duration, audio, fresh)
-        return search(hints_of(src), duration, cache_dir=self.b.store.root / "_lyrics", audio=audio, fresh=fresh)
+        return search(hints_of(src), duration, cache_dir=self.b.store.root / "_lyrics", audio=audio, fresh=fresh,
+                      asr_wait=asr_wait)
 
     def lyrics_hints(self, url: str) -> dict[str, Any]:
         return self.b.fetch_hints(url)
 
 
 # ── jobs ─────────────────────────────────────────────────────────────────────
-
-
-class JobRequest(BaseModel):
-    query: str | None = Field(None, max_length=200)
-    url: str | None = Field(None, max_length=500)
-    path: str | None = Field(None, max_length=300)
-    title: str | None = Field(None, max_length=120)
-    artist: str | None = Field(None, max_length=120)
-    pitch: int | None = Field(None, ge=-24, le=24)
-    key: int = Field(0, ge=-12, le=12)
-    # The song's own backing voices (harmonies, chorus): songs.BACKING_MODES.
-    backing: Literal["keep", "drop", "convert", "acapella"] = "keep"
-    force: bool = False
-    # Wait for POST /jobs/{id}/exclusive before taking the GPU (Core lets her speak first).
-    exclusive_ack: bool = False
 
 
 @dataclass
@@ -539,6 +597,12 @@ class Job:
     go: threading.Event = field(default_factory=threading.Event)
     yielding: SpeechYield | None = None  # gives way to her voice
     gpu: GpuJob | None = None  # where the job runs and why (gpu.py)
+    converted: threading.Event = field(default_factory=threading.Event)  # no more GPU work: ASR may be asked
+    # Looked up (and downloaded) while the job before it ran: None | running | done | failed (prefetch_loop).
+    prefetch: str | None = None
+    prefetched: Source | None = None
+    prefetch_done: threading.Event = field(default_factory=threading.Event)
+    aborted: bool = False  # failed or cancelled: its lyrics lookup asks the ASR worker nothing more
 
     def public(self, store: Store, position: int | None) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -580,6 +644,7 @@ class State:
     machine: Machine
     cache: Cache
     janitor: Janitor | None = None
+    arbitration: Any = None  # SelfArbitration or lease.HostdArbitration (SING_GPU_ARBITER)
     offload_post = staticmethod(http_post)  # replaced in tests
     busy_get = staticmethod(http_get)  # replaced in tests
 
@@ -670,11 +735,15 @@ def _auto_shift(vocals: Path, auto_key: bool) -> tuple[int, int, dict[str, Any]]
     """(octave −12 / 0 / +12 for her voice, whole-song key, info): the octave whose median lands
     closest to her singing median without the song's top going over her ceiling, and with
     ``auto_key`` a transposition down (or a little up) when the top is still out of her range."""
+    b = state.backend
+    return _shift_from(b.f0_stats(vocals), b.ref_f0(), auto_key)
+
+
+def _shift_from(stats: tuple[float, float] | None, ref_hz: float | None,
+                auto_key: bool) -> tuple[int, int, dict[str, Any]]:
+    """``_auto_shift`` from the vocal's (median, top) F0 and her reference's median."""
     from pitch import choose_key, parse_note
 
-    b = state.backend
-    stats = b.f0_stats(vocals)
-    ref_hz = b.ref_f0()
     info: dict[str, Any] = {"ref_median_hz": ref_hz}
     if stats is None or not ref_hz:
         return 0, 0, info
@@ -861,6 +930,58 @@ class VideoFetch:
         return {"state": self.state, "progress": round(self.progress, 3), "error": self.error}
 
 
+class LyricsLookup:
+    """The song's lyrics, looked up on their own thread while it is converted and mixed: the lookup
+    needs only the source and the lead vocal (the original singer), and waits on the network or the
+    language model for up to SING_LYRICS_BUDGET_S. Its ASR spot check waits until the conversion is
+    done and the speech workers are back (``asr_wait``), so it never competes with it for the card."""
+
+    def __init__(self, job: Job, src: Source, heard: Path | None, out: Path, duration: float | None) -> None:
+        self.job, self.src, self.heard, self.out, self.duration = job, src, heard, out, duration
+        self.meta: dict[str, Any] | None = None
+        self.seconds: float | None = None
+        self._thread = threading.Thread(target=self._run, name="sing-lyrics", daemon=True)
+
+    def start(self) -> "LyricsLookup":
+        self._thread.start()
+        return self
+
+    def asr_wait(self) -> None:
+        """Raises ``Cancelled`` when the job ended without finishing: its lyrics are not kept, and the
+        spot check would only run next to the next job's GPU work."""
+        job = self.job
+        while not job.converted.wait(0.2):
+            if job.cancel.is_set():
+                raise Cancelled()
+        ex = job.exclusive
+        if ex is not None:
+            ex.join()  # her voice (and the ASR worker) loading back after a window
+        if job.aborted or job.cancel.is_set():
+            raise Cancelled()
+
+    def _run(self) -> None:
+        t0 = time.perf_counter()
+        try:
+            found = state.backend.lyrics(self.src, self.duration, self.heard, asr_wait=self.asr_wait)
+            if not self.job.cancel.is_set():
+                self.meta = _lyrics_meta(found, self.out, self.heard)
+        except Cancelled:
+            log.info("lyrics lookup for %s stopped: the job ended", self.src.key)
+        except Exception:  # noqa: BLE001 - lyrics are best effort
+            log.exception("lyrics lookup for %s crashed", self.src.key)
+        finally:
+            self.seconds = round(time.perf_counter() - t0, 2)
+
+    def running(self) -> bool:
+        return self._thread.is_alive()
+
+    def wait(self, cancel: threading.Event) -> None:
+        while self._thread.is_alive():
+            if cancel.is_set():
+                raise Cancelled()
+            self._thread.join(0.1)
+
+
 def _start_video(job: Job, src: Source, sdir: Path) -> None:
     """Gets the source's video under way: a library entry's own file at once, a link's on a thread
     (unless an earlier job already fetched it)."""
@@ -962,7 +1083,7 @@ def _open_window(job: Job) -> None:
         job.exclusive.begin(job.cancel.is_set, job.go if job.request.exclusive_ack else None)
     finally:
         job.stage = stage
-    g.window_opened()
+    g.window_opened(job.exclusive.offline_at)
 
 
 def _close_window(job: Job) -> None:
@@ -972,7 +1093,7 @@ def _close_window(job: Job) -> None:
         return
     ex.end()
     ex.join()
-    g.window_closed(ex.timings.get("reload_s"))
+    g.window_closed(ex.timings.get("reload_s"), ex.asked_back_at)
 
 
 def _place(job: Job, stage: str) -> str:
@@ -1040,21 +1161,100 @@ def _arm(job: Job, stage: str, work: ConvertWork | None) -> None:
     b.gate = gate
 
 
+class SelfArbitration:
+    """``SING_GPU_ARBITER=self`` (the default): the worker decides by itself, as it always has
+    (gpu.py, exclusive.py, yielding.py and the functions above). Deleted, with ``_start_gpu``,
+    ``_place``, ``_open_window``, ``_close_window``, ``_act``, ``_arm``, ``_urgent`` and
+    ``_recover_speech``, once the song worker has run on hostd's arbiter live (lease.py)."""
+
+    name = "self"
+
+    def start(self, job: Job, audio_s: float | None) -> None:
+        _start_gpu(job, audio_s)
+
+    def place(self, job: Job, stage: str, resumed: bool) -> str:
+        return _place(job, stage)
+
+    def arm(self, job: Job, stage: str, work: ConvertWork | None) -> None:
+        _arm(job, stage, work)
+
+    def run_begins(self, job: Job, stage: str, device: str, resumed: bool) -> Callable[[], None] | None:
+        g = job.gpu
+        assert g is not None
+        g.started(stage, device, resumed)
+        # torch here cannot see a subprocess's VRAM, and it never calls the gate: read the card.
+        return g.watch() if device == "gpu" and not _stage_pauses(stage) else None
+
+    def run_ended(self, job: Job, stage: str, how: str) -> None:
+        g = job.gpu
+        assert g is not None
+        if how == "finished":
+            g.finished(stage)
+        else:
+            g.stopped(oom=how == "oom")
+
+    def close_window(self, job: Job) -> None:
+        _close_window(job)
+
+    def give_back(self, job: Job) -> None:
+        """Starts bringing her voice back; ``run_job`` waits for it. The song mixes meanwhile."""
+        if job.yielding is not None:
+            job.yielding.stop()
+        state.backend.gate = None
+        ex, g = job.exclusive, job.gpu
+        if ex is not None:
+            # The window ends when her voice is back, not when the job does: the gap before the next
+            # window, and the silence counted, start then (until 2026-11-16: at the job's end).
+            ex.end(after=None if g is None else lambda: g.window_closed(ex.timings.get("reload_s"),
+                                                                        ex.asked_back_at))
+
+    def finish(self, job: Job) -> dict[str, Any] | None:
+        if job.exclusive is not None:
+            job.exclusive.join()
+        if job.gpu is not None:
+            ex = job.exclusive
+            job.gpu.window_closed(ex.timings.get("reload_s") if ex else None, ex.asked_back_at if ex else None)
+        return None
+
+    def startup(self) -> None:
+        threading.Thread(target=_recover_speech, name="sing-recover", daemon=True).start()
+
+    def context(self, req: GpuContext) -> dict[str, Any]:
+        state.machine.audience.update(req.in_voice, req.listeners, req.live, req.urgent)
+        return {"ok": True}
+
+    def health(self, job: Job | None) -> dict[str, Any]:
+        info = state.machine.public(Limits.from_env())
+        info["arbiter"] = self.name
+        info["job"] = job.gpu.public() if job is not None and job.gpu is not None else None
+        return info
+
+
+_SELF = SelfArbitration()
+
+
+def _arbitration() -> Any:
+    """Who takes the GPU decisions (``SING_GPU_ARBITER``, chosen at start): ``SelfArbitration`` or
+    lease.py's ``HostdArbitration``, the same calls in the same places of the job loop."""
+    return getattr(state, "arbitration", None) or _SELF
+
+
 def _gpu_stage(job: Job, stage: str, wav: Path, duration_s: float | None, run: Callable[[str], Any],
                work: ConvertWork | None = None) -> Any:
     """Runs a stage where the machine has room for it, again from where it was when it had to let
     go: ``run`` gets the device. The first one to run starts the job's GPU bookkeeping."""
+    arb = _arbitration()
     if job.gpu is None:
-        _start_gpu(job, duration_s or _wav_seconds(wav))
-    g = job.gpu
-    assert g is not None
+        arb.start(job, duration_s or _wav_seconds(wav))
+    assert job.gpu is not None
     resumed = False
     while True:
-        device = _place(job, stage)
-        _arm(job, stage, work)
-        g.started(stage, device, resumed)
-        # torch here cannot see a subprocess's VRAM, and it never calls the gate: read the card.
-        unwatch = g.watch() if device == "gpu" and not _stage_pauses(stage) else None
+        wait_warm = getattr(state.backend, "wait_warm", None)
+        if wait_warm is not None and _stage_uses_gpu(stage):
+            wait_warm()  # the RVC warm-up is not this stage's VRAM
+        device = arb.place(job, stage, resumed)
+        arb.arm(job, stage, work)
+        unwatch = arb.run_begins(job, stage, device, resumed)
         try:
             try:
                 out = run(device)
@@ -1063,43 +1263,158 @@ def _gpu_stage(job: Job, stage: str, wav: Path, duration_s: float | None, run: C
                     unwatch()  # before ``finished`` / ``stopped`` look at what it read
         except Suspended as e:
             log.info("job %s lets go of the GPU in %s: %s", job.id, stage, e.code)
-            g.stopped()
+            arb.run_ended(job, stage, "suspended")
         except Exception as e:
             if device == "cpu" or not is_oom(e):
                 raise
             log.warning("job %s ran out of VRAM in %s", job.id, stage)
-            g.stopped(oom=True)
+            arb.run_ended(job, stage, "oom")
         else:
-            g.finished(stage)
+            arb.run_ended(job, stage, "finished")
             return out
         finally:
             state.backend.gate = None
         state.backend.unload()
-        _close_window(job)
+        arb.close_window(job)
         resumed = True
 
 
 def _give_gpu_back(job: Job) -> None:
     """Starts bringing her voice back; ``run_job`` waits for it. The song mixes meanwhile."""
-    if job.yielding is not None:
-        job.yielding.stop()
-    state.backend.gate = None
-    if job.exclusive is not None:
-        job.exclusive.end()
+    _arbitration().give_back(job)
+
+
+def _convert_passes(job: Job, passes: list[Callable[[], Any]]) -> list[Any]:
+    """The conversion's passes on the card, one after the other: the lead (or the whole vocal stem)
+    and, with ``backing: "convert"``, the backing voices. Each is a GPU stage of its own, placed when
+    it starts; her voice is given back once, after the last. A window the first pass opened is still
+    open for the second, with the same silence limit (its clock runs on from the window's start) and
+    the same yielding, so she goes quiet once, not twice with a gap between. Until 2026-11-16 her
+    voice was given back after the first pass and the second ran on the card while it reloaded."""
+    out = []
+    try:
+        for run in passes:
+            out.append(run())
+    finally:
+        _give_gpu_back(job)
+    return out
+
+
+def _gpu_summary_to_meta(job: Job, summary: dict[str, Any]) -> None:
+    """hostd's summary of the job, known only once its lease ends, replaces what ``meta.json`` got."""
+    sid = job.song_id
+    meta = state.store.meta(sid) if sid else None
+    if meta is None or not isinstance(meta.get("gpu"), dict):
+        return
+    meta["gpu"] = summary
+    if summary.get("waited_s"):
+        meta.setdefault("timings", {})["gpu_wait_s"] = summary["waited_s"]
+    state.store.write_meta(sid, meta)
 
 
 def run_job(job: Job) -> None:
     try:
         _run_job(job)
+    except BaseException:
+        job.aborted = True
+        raise
     finally:
+        job.prefetched = None  # the lookup's whole yt-dlp answer: not kept in the job records
+        job.converted.set()  # a lyrics lookup still waiting for the ASR check goes on (or ends)
         if job.video is not None:
             job.video.stop()
         # Also after a failure or a cancel; the job is only over once they are back.
-        _give_gpu_back(job)
-        if job.exclusive is not None:
-            job.exclusive.join()
-        if job.gpu is not None:
-            job.gpu.window_closed(job.exclusive.timings.get("reload_s") if job.exclusive else None)
+        arb = _arbitration()
+        arb.give_back(job)
+        summary = arb.finish(job)
+        if summary is not None and job.state != "cancelled" and not job.aborted:
+            _gpu_summary_to_meta(job, summary)
+
+
+_fetch_locks: dict[str, threading.Lock] = {}
+_fetch_locks_lock = threading.Lock()
+
+
+def _fetch(src: Source, dest: Path, progress: Callable[[float], None], again: bool = False) -> None:
+    """Downloads ``src`` into ``dest`` through a temporary file: a download cut short (a crash, a stop)
+    never leaves a partial ``source.wav`` that a later job would take for the whole song. One download
+    of a source at a time (a job and the prefetch of the next one may want the same song): the second
+    one waits, and takes the first one's file unless ``again`` (a forced job)."""
+    with _fetch_locks_lock:
+        lock = _fetch_locks.setdefault(src.key, threading.Lock())
+    with lock:
+        if dest.exists() and not again:
+            return
+        part = dest.with_name(dest.stem + ".part" + dest.suffix)
+        try:
+            state.backend.fetch(src, part, progress)
+            os.replace(part, dest)
+        finally:
+            part.unlink(missing_ok=True)
+
+
+def _prefetch_on() -> bool:
+    return os.environ.get("SING_PREFETCH", "1") != "0"
+
+
+def _prefetch(job: Job, running: Job) -> None:
+    """Finds the queued ``job``'s song and downloads it while ``running`` is made: the network and the
+    CPU are idle while a job converts, and the next song then starts at its first GPU stage. Nothing
+    here fails the job: what did not get done is done when it runs, as before."""
+    store = state.store
+    job.prefetch = "running"  # prefetch_loop marked it already, under the lock
+    try:
+        gone = lambda: job.state == "cancelled" or job.cancel.is_set()  # noqa: E731
+
+        def progress(_f: float) -> None:
+            if gone():
+                raise Cancelled()  # the job was cancelled: its download stops too
+        src = _bounded(lambda: _source_from_request(job), gone, env_float("SING_RESOLVE_TIMEOUT_S", 60.0))
+        job.prefetched = src
+        job.source = src.public()  # also keeps its download out of the cache cleanup
+        req = job.request
+        sid = song_id(src.key, req.pitch, req.key, req.backing)
+        state.cache.touch(song=sid, source=src.key)
+        meta = store.meta(sid)
+        sdir = store.source_dir(src.key)
+        busy = (running.source or {}).get("key") == src.key  # the running job has that download
+        if (src.kind != "library" and not busy and not gone() and not (sdir / "source.wav").exists()
+                and (meta is None or _other_voice(meta, state.backend))):
+            sdir.mkdir(parents=True, exist_ok=True)
+            store.write_source_info(src)
+            t0 = time.perf_counter()
+            _fetch(src, sdir / "source.wav", progress)
+            log.info("prefetched %s for job %s in %.1f s", src.key, job.id, time.perf_counter() - t0)
+        if gone():
+            job.prefetched = None
+        job.prefetch = "done"
+    except Exception as e:  # noqa: BLE001 - Cancelled, JobError, anything: the job tries again itself
+        log.info("prefetch for job %s: %s", job.id, e)
+        job.prefetch = "failed"
+    finally:
+        job.prefetch_done.set()
+
+
+def prefetch_loop() -> None:
+    """While a job runs, the next queued one is looked up and downloaded (one at a time)."""
+    while not state.stopping.wait(0.5):
+        if not _prefetch_on():
+            continue
+        running = state.jobs.get(state.running or "")
+        if running is None:
+            continue
+        with state.lock:
+            nxt = next((state.jobs[j] for j in state.order if j in state.jobs and state.jobs[j].state == "queued"),
+                       None)
+            if nxt is None or nxt.prefetch is not None or nxt.request.force:
+                continue
+            # Marked while it is still queued (worker_loop starts jobs under the same lock): a job that
+            # starts from here on waits for this prefetch instead of downloading next to it.
+            nxt.prefetch = "running"
+        try:
+            _prefetch(nxt, running)
+        except Exception:  # noqa: BLE001
+            log.exception("prefetch crashed")
 
 
 def _lead_stage(job: Job, sdir: Path, src: Source, timed: Callable[[str, Callable[[], Any]], Any]) -> dict[str, Any]:
@@ -1188,7 +1503,18 @@ def _run_job(job: Job) -> None:
         return out
 
     limit = env_float("SING_RESOLVE_TIMEOUT_S", 60.0)
-    src: Source = timed("resolve", lambda: _bounded(lambda: _source_from_request(job), check, limit))
+    if job.prefetch == "running":  # looked up and downloaded right now: wait for that, not twice
+        _set(job, "resolve")
+        t_pre = time.perf_counter()
+        while not job.prefetch_done.wait(0.1):
+            if check():
+                raise Cancelled()
+        timings["prefetch_wait_s"] = round(time.perf_counter() - t_pre, 2)
+    if job.prefetched is not None and not req.force:
+        src = job.prefetched
+        timings["prefetched"] = 1
+    else:
+        src = timed("resolve", lambda: _bounded(lambda: _source_from_request(job), check, limit))
     if req.title:
         src.title = req.title.strip()
     if req.artist:
@@ -1237,7 +1563,14 @@ def _run_job(job: Job) -> None:
             timed("download", lambda: b.fetch_library(src, sdir))
             have_stems = have_stems or given_stems
     elif req.force or not (sdir / "source.wav").exists():
-        timed("download", lambda: b.fetch(src, sdir / "source.wav", lambda f: _set(job, "download", f)))
+        # Her RVC model and the lead model load while the song downloads (engine.prewarm); the lead
+        # model only when the split is the next GPU stage and has something to do.
+        prewarm = getattr(b, "prewarm", None)
+        if prewarm is not None:
+            tag = _lead_tag_of(b)
+            lead_cached = (sdir / "lead.wav").exists() and (tag is None or _stems_lead(sdir) == tag)
+            prewarm(lead=not _needs_stems(req, b) and not lead_cached and not given_stems)
+        timed("download", lambda: _fetch(src, sdir / "source.wav", lambda f: _set(job, "download", f), again=req.force))
 
     def separate_stage() -> None:
         # New vocals: what was taken from the old ones goes (a lead read from the vocals, too).
@@ -1265,6 +1598,13 @@ def _run_job(job: Job) -> None:
 
     out = store.song_dir(sid)
     out.mkdir(parents=True, exist_ok=True)
+    from lyrics import hints_of
+
+    lyrics_input = hints_of(src)
+    # the lead vocal (the original singer, before conversion) is what the ASR spot check listens to
+    heard = next((p for p in (sdir / "lead.wav", sdir / "vocals.wav") if p.exists()), None)
+    # The audio's own length (the mix's), as when the lookup ran after the mix; the source's when unread.
+    lookup = LyricsLookup(job, src, heard, out, (_wav_seconds(heard) if heard else None) or src.duration_s).start()
     converted = out / "_converted.wav"
 
     work = ConvertWork()
@@ -1276,61 +1616,77 @@ def _run_job(job: Job) -> None:
             job.gpu.converted = f
 
     def convert() -> dict[str, Any]:
-        try:
-            return _gpu_stage(job, "convert", vocal, src.duration_s, convert_on_gpu, work)
-        finally:
-            _give_gpu_back(job)
+        return _gpu_stage(job, "convert", vocal, src.duration_s, convert_on_gpu, work)
+
+    def settle_pitch(shift: int, auto_key: int, info: dict[str, Any]) -> int:
+        """Records the pitch settings and starts the mix's instrumental; the vocal's shift."""
+        song_key = req.key + auto_key
+        shift += song_key
+        info.update({"vocal_shift": shift, "key": req.key, "auto_key": auto_key, "song_key": song_key,
+                     "f0_clean": os.environ.get("SING_F0_CLEAN", "1") != "0",
+                     "transposer": getattr(b, "transposer", None) if song_key else None})
+        pitch.clear()  # (asked again after a failed first try: the latest answer counts)
+        pitch.update(info)
+        # What goes under her voice needs nothing of the conversion: it is made meanwhile.
+        prepare = getattr(b, "prepare_mix", None)
+        if prepare is not None:
+            prepare(sdir, song_key, lead["used"], req.backing)
+        return int(pitch["vocal_shift"])
 
     def convert_on_gpu(_device: str) -> dict[str, Any]:
+        convert_auto = getattr(b, "convert_auto", None)
+        if not pitch and req.pitch is None and convert_auto is not None and getattr(b, "voice", None) == "rvc":
+            # Her RVC model reads the pitch for the conversion anyway: the key is picked from that.
+            def choose(stats: tuple[float, float] | None, ref_hz: float | None) -> int:
+                octave, auto_key, info = _shift_from(stats, ref_hz, auto_key=req.key == 0)
+                info["auto"] = True
+                return settle_pitch(octave, auto_key, info)
+
+            convert_auto(vocal, converted, choose, converted_share, check)
+            return pitch
         if not pitch:  # a conversion that was suspended keeps its key
             if req.pitch is not None:
-                shift, auto_key, info = req.pitch, 0, {"auto": False, "octave_shift": None}
+                settle_pitch(req.pitch, 0, {"auto": False, "octave_shift": None})
             else:
                 # An explicit key is the requester's choice: only the octave stays automatic.
-                shift, auto_key, info = _auto_shift(vocal, auto_key=req.key == 0)
+                octave, auto_key, info = _auto_shift(vocal, auto_key=req.key == 0)
                 info["auto"] = True
-            song_key = req.key + auto_key
-            shift += song_key
-            info.update({"vocal_shift": shift, "key": req.key, "auto_key": auto_key, "song_key": song_key,
-                         "f0_clean": os.environ.get("SING_F0_CLEAN", "1") != "0",
-                         "transposer": getattr(b, "transposer", None) if song_key else None})
-            pitch.update(info)
+                settle_pitch(octave, auto_key, info)
         b.convert(vocal, converted, pitch["vocal_shift"], converted_share, check, work)
         return pitch
 
-    pitch_info = timed("convert", convert)
+    passes: list[Callable[[], Any]] = [lambda: timed("convert", convert)]
     backing_conv: Path | None = None
     if req.backing == "convert" and lead["used"]:
         backing_conv = out / "_converted_backing.wav"
         backing_wav = sdir / "backing.wav"
+        backing_work = ConvertWork()  # its own: a suspended pass goes on from its last chunk
 
         def convert_backing_on_gpu(_device: str) -> None:
-            b.convert(backing_wav, backing_conv, pitch_info["vocal_shift"], converted_share, check, ConvertWork())
+            b.convert(backing_wav, backing_conv, pitch["vocal_shift"], converted_share, check, backing_work)
 
-        def convert_backing() -> None:
-            try:
-                _gpu_stage(job, "convert", backing_wav, src.duration_s, convert_backing_on_gpu)
-            finally:
-                _give_gpu_back(job)
-
-        timed("convert_backing", convert_backing)
+        passes.append(lambda: timed("convert_backing", lambda: _gpu_stage(
+            job, "convert", backing_wav, src.duration_s, convert_backing_on_gpu, backing_work)))
+    pitch_info = _convert_passes(job, passes)[0]
+    job.converted.set()  # the card is the speech workers' again: the lyrics' ASR check may go on
     mixed = timed("mix", lambda: b.mix(sdir, converted, pitch_info["song_key"], out, lead["used"],
                                           req.backing, backing_conv))
     converted.unlink(missing_ok=True)
     if backing_conv is not None:
         backing_conv.unlink(missing_ok=True)
     duration = mixed.get("duration_s") or src.duration_s
-    from lyrics import hints_of
-
-    lyrics_input = hints_of(src)
-    # the lead vocal (the original singer, before conversion) is what the ASR spot check listens to
-    heard = next((p for p in (sdir / "lead.wav", sdir / "vocals.wav") if p.exists()), None)
-    found = timed("lyrics", lambda: b.lyrics(src, duration, heard))
-    lyrics_meta = _lyrics_meta(found, out, heard)
     from beats import beat_meta
 
     # her sway and nods follow the beat of what is actually played
     beats = timed("beats", lambda: beat_meta(out / "play_mix.pcm", PLAY_RATE))
+    if lookup.running():
+        _set(job, "lyrics")
+        t_wait = time.perf_counter()
+        lookup.wait(job.cancel)
+        timings["lyrics_wait_s"] = round(time.perf_counter() - t_wait, 2)
+    if lookup.seconds is not None:
+        timings["lyrics_s"] = lookup.seconds
+    lyrics_meta = lookup.meta
     video = _attach_video(job, src, sdir, out, timings)
     timings["total_s"] = round(time.perf_counter() - t_job, 2)
     g = job.gpu
@@ -1366,17 +1722,32 @@ def _run_job(job: Job) -> None:
     log.info("song %s ready: %s (%s)", sid, src.title, timings)
 
 
+def _queued() -> bool:
+    with state.lock:
+        return any(state.jobs[j].state == "queued" for j in state.order if j in state.jobs)
+
+
 def worker_loop() -> None:
+    kept = False  # the models were kept for a queued job
     while not state.stopping.is_set():
         try:
             job_id = state.pending.get(timeout=0.5)
         except queue.Empty:
+            if kept and not _queued():  # the jobs they were kept for were cancelled
+                kept = False
+                try:
+                    state.backend.idle(False)
+                except Exception:  # noqa: BLE001
+                    log.exception("could not let go of the models")
             continue
         job = state.jobs.get(job_id)
-        if job is None or job.state != "queued":
+        if job is None:
             continue
-        job.state, job.started_at = "running", now_iso()
-        state.running = job.id
+        with state.lock:  # prefetch_loop marks a queued job's prefetch under it
+            if job.state != "queued":
+                continue
+            job.state, job.started_at = "running", now_iso()
+            state.running = job.id
         try:
             run_job(job)
             job.state, job.progress, job.stage = "done", 1.0, "done"
@@ -1391,8 +1762,9 @@ def worker_loop() -> None:
         finally:
             job.finished_at = now_iso()
             state.running = None
+            more = kept = _queued()
             try:
-                state.backend.idle()  # here: a job that failed no longer holds the models through its traceback
+                state.backend.idle(more)  # here: a job that failed no longer holds the models through its traceback
             except Exception:  # noqa: BLE001
                 log.exception("could not let go of the models")
             if state.janitor is not None:
@@ -1443,6 +1815,26 @@ def _recover_speech() -> None:
             log.info("cannot ask %s whether it is back: %s", url, e)
 
 
+def _queued_behind(job: Job) -> list[str]:
+    """The jobs queued behind ``job`` (hostd counts it urgent when one of them is)."""
+    with state.lock:
+        return [j for j in state.order if j != job.id and j in state.jobs and state.jobs[j].state == "queued"]
+
+
+def _choose_arbitration(profile: Profile) -> Any:
+    """``SING_GPU_ARBITER``: ``self`` (the default) or ``hostd``. Anything else, or ``hostd`` without
+    a hostd to ask, stops the start: a wrong switch must not quietly become self-arbitration."""
+    which = arbiter_from_env()
+    if which == "self":
+        return _SELF
+    if not hostd_available():
+        raise SystemExit("SING_GPU_ARBITER=hostd, but no hostd is configured for this worker "
+                         "(MIYORIA_HOSTD_URL and MIYORIA_SERVICE_TOKEN): start it under hostd, or unset "
+                         "SING_GPU_ARBITER to let the worker decide by itself")
+    return HostdArbitration(lambda: state.backend, profile, stage_pauses=_stage_pauses,
+                            stage_uses_gpu=_stage_uses_gpu, queued=_queued_behind)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     root = Path(os.environ.get("SING_DATA_DIR", REPO / "data" / "songs"))
@@ -1457,14 +1849,19 @@ async def lifespan(app: FastAPI):
     state.backend = make_backend(state.store)
     log.info("backend %s ready in %.1fs (%s on %s), songs in %s", state.backend.name, time.perf_counter() - t0,
              state.backend.model_name, state.backend.device, root)
+    preimport = getattr(state.backend, "preimport", None)
+    if preimport is not None:  # what the first song would otherwise load (engine.preimport)
+        threading.Thread(target=preimport, name="sing-preimport", daemon=True).start()
     state.machine = Machine(lambda: state.backend, Profile(root), Audience(),
                             lambda url, timeout: state.busy_get(url, timeout))
-    threading.Thread(target=_recover_speech, name="sing-recover", daemon=True).start()
+    state.arbitration = _choose_arbitration(state.machine.profile)
+    state.arbitration.startup()
     state.cache = Cache(root, state.store.library, _protected, state.store.forget_sources)
     # The cache cleans up after itself on its own thread: now, after every job and every hour.
     state.janitor = Janitor(state.cache, env_float("SING_CACHE_EVERY_S", 3600.0)).start()
     state.thread = threading.Thread(target=worker_loop, name="sing-worker", daemon=True)
     state.thread.start()
+    threading.Thread(target=prefetch_loop, name="sing-prefetch", daemon=True).start()
     yield
     state.janitor.stop()
     state.stopping.set()
@@ -1473,6 +1870,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Miyoria song worker", lifespan=lifespan)
+if service_auth is not None:
+    service_auth.install(app)  # every route needs the bearer token when hostd set one
 
 
 def _error(status: int, message: str) -> JSONResponse:
@@ -1553,6 +1952,7 @@ async def cancel_job(job_id: str) -> JSONResponse:
         return _error(404, f"no job {job_id}")
     if job.state == "queued":
         job.state, job.error, job.finished_at = "cancelled", "cancelled", now_iso()
+        job.prefetched = None
     elif job.state == "running":
         job.cancel.set()
     return JSONResponse({"job": _public(job)})
@@ -1569,12 +1969,6 @@ async def get_song(sid: str) -> JSONResponse:
     if meta is None:
         return _error(404, f"no song {sid}")
     return JSONResponse({"song": meta})
-
-
-class LyricsRequest(BaseModel):
-    title: str | None = Field(None, max_length=200)  # the owner's own reading of the song, tried first
-    artist: str | None = Field(None, max_length=200)
-    fresh: bool = False  # ask the language model again instead of using its cached answer
 
 
 @app.post("/songs/{sid}/lyrics")
@@ -1613,8 +2007,9 @@ def refetch_lyrics(sid: str, req: LyricsRequest | None = None) -> JSONResponse:
                         if k in hints})
     state.cache.touch(song=sid)
     sdir = state.store.song_dir(sid)
-    heard = next((p for p in (sdir / "lead.wav", sdir / "vocals.wav", state.store.source_dir(hints["key"]) / "lead.wav")
-                  if p.exists()), None)
+    # The original singer, as in a job: the song's own vocals.wav is her converted voice.
+    src_dir = state.store.source_dir(hints["key"])
+    heard = next((p for p in (src_dir / "lead.wav", src_dir / "vocals.wav") if p.exists()), None)
     found = b.lyrics(src, meta.get("duration_s"), heard, req.fresh)
     old = meta.get("lyrics")
     if not found:
@@ -1642,27 +2037,15 @@ async def get_file(sid: str, name: str):
     return FileResponse(p, media_type=media, headers=headers)
 
 
-class GpuContext(BaseModel):
-    in_voice: bool = False
-    listeners: int = Field(0, ge=0)
-    live: bool = False
-    urgent: list[str] = Field(default_factory=list, max_length=200)
-
-
 @app.post("/gpu/context")
 async def gpu_context(req: GpuContext) -> dict[str, Any]:
-    state.machine.audience.update(req.in_voice, req.listeners, req.live, req.urgent)
-    return {"ok": True}
+    return _arbitration().context(req)
 
 
 @app.get("/cache")
 def cache_status() -> dict[str, Any]:
     """The song cache: its size, songs and downloads, the limits, and what the last cleanup did."""
     return state.cache.status()
-
-
-class PruneRequest(BaseModel):
-    dry_run: bool = False  # only say what would go
 
 
 @app.post("/cache/prune")
@@ -1685,9 +2068,8 @@ async def health() -> dict[str, Any]:
     torch = sys.modules.get("torch")
     if torch is not None and torch.cuda.is_available():
         info["vram_allocated_mb"] = round(torch.cuda.memory_allocated() / 2**20)
-    info["gpu"] = state.machine.public(Limits.from_env())
     job = state.jobs.get(state.running or "")
-    info["gpu"]["job"] = job.gpu.public() if job is not None and job.gpu is not None else None
+    info["gpu"] = _arbitration().health(job)
     return info
 
 

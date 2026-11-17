@@ -1,14 +1,20 @@
 // Data categories (`data.ts`): the registry's invariants and the node-wide parts of a wipe /
 // factory reset. Node-wide categories (people, roles, `_global` settings) delete every row, so
-// these cases run only on fresh in-memory SQLite databases, never on a shared Postgres; the
-// per-profile categories run on every backend in `behaviour.test.ts`.
+// these cases run only on fresh in-memory databases; the per-profile categories run in
+// `behaviour.test.ts`.
 
+import { LlmCallSchema } from "@miyoria/contracts/events";
 import { newId, toTimestamp } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
+// The roles and panel sessions are the auth plugin's tables (v5-data §8 step 9a), the memories the
+// memory plugin's (step 9b).
+import { authTables } from "../../auth/src/tables.js";
+import { memoryTables } from "../../memory/memory/src/tables.js";
 import {
   categoryModules,
   DATA_CATEGORIES,
   GLOBAL_SETTINGS_PROFILE,
+  LlmCall,
   RESET_CATEGORIES,
   type RoleDefinition,
   resolveCategories,
@@ -26,7 +32,7 @@ afterEach(async () => {
 });
 
 async function open(): Promise<Store> {
-  const store = await SqliteStore.open(":memory:");
+  const store = await SqliteStore.open(":memory:", { plugins: [authTables, memoryTables] });
   stores.push(store);
   return store;
 }
@@ -41,28 +47,29 @@ async function seed(store: Store) {
   const owen = await store.people.upsertAccount({ platform: "discord", id: "2" }, "Owen");
   await store.identity.createLinkCode("ABC123", { platform: "discord", id: "2" }, toTimestamp(T0));
   const ctx = { platform: "discord", scope: "g", channel: "c", kind: "channel" as const };
+  // The memories are the character's (one database, no profile column): one record.
+  await store.plugin(memoryTables).upsert({
+    id: newId(),
+    profile: P,
+    kind: "fact",
+    scope: { type: "global" },
+    subjects: [owen],
+    content: "Owen 喜歡拉麵",
+    tokens: "owen 喜歡 拉麵",
+    embedding: null,
+    importance: 0.5,
+    confidence: 0.8,
+    created_at: toTimestamp(T0),
+    updated_at: toTimestamp(T0),
+    last_accessed: null,
+    access_count: 0,
+    source_context: null,
+    source: null,
+    due: null,
+    done: false,
+    superseded_by: null,
+  });
   for (const p of [P, OTHER]) {
-    await store.memories.upsert({
-      id: newId(),
-      profile: p,
-      kind: "fact",
-      scope: { type: "global" },
-      subjects: [owen],
-      content: "Owen 喜歡拉麵",
-      tokens: "owen 喜歡 拉麵",
-      embedding: null,
-      importance: 0.5,
-      confidence: 0.8,
-      created_at: toTimestamp(T0),
-      updated_at: toTimestamp(T0),
-      last_accessed: null,
-      access_count: 0,
-      source_context: null,
-      source: null,
-      due: null,
-      done: false,
-      superseded_by: null,
-    });
     await store.relationships.upsert({
       profile: p,
       person: owen,
@@ -75,17 +82,6 @@ async function seed(store: Store) {
       interactions: 1,
       last_interaction: null,
       updated_at: toTimestamp(T0),
-    });
-    await store.messages.append({
-      id: newId(),
-      profile: p,
-      context: ctx,
-      author: { platform: "discord", id: "2" },
-      author_name: "Owen",
-      text: "嗨",
-      is_self: false,
-      ts: toTimestamp(T0),
-      turn: null,
     });
     await store.personaOverrides.set(p, "style", "新的", "test");
     for (const key of [
@@ -102,35 +98,55 @@ async function seed(store: Store) {
       await store.settings.set(p, key, 1);
     }
   }
+  // The conversation log is the character's (one database each): one line, not one per profile.
+  await store.messages.append({
+    id: newId(),
+    profile: P,
+    context: ctx,
+    author: { platform: "discord", id: "2" },
+    author_name: "Owen",
+    text: "嗨",
+    is_self: false,
+    ts: toTimestamp(T0),
+    turn: null,
+  });
   for (const key of [
     "initiative:state",
     "queue:state",
     "voice_consent:discord:2",
     "privacy:discord:2",
-    "llm_usage:2026-01",
-    "panel_session:abc",
     "future:thing",
   ]) {
     await store.settings.set(GLOBAL_SETTINGS_PROFILE, key, 1);
   }
-  await store.auth.upsertRole({
+  // A login as the API writes it: a row of `auth_sessions`.
+  await store.settings.set(GLOBAL_SETTINGS_PROFILE, "panel_session:abc", {
+    account: { platform: "discord", id: "2" },
+    name: "Owen",
+    avatar_url: null,
+    tier: "admin",
+    created_at: toTimestamp(T0),
+    expires_at: toTimestamp(T0 + 86_400_000),
+  });
+  const auth = store.plugin(authTables).store;
+  await auth.upsertRole({
     name: "owner",
     rank: 100,
     grants: ["x"],
     denies: [],
     builtin: true,
   });
-  await store.auth.upsertRole({ name: "vip", rank: 50, grants: ["a"], denies: [], builtin: false });
+  await auth.upsertRole({ name: "vip", rank: 50, grants: ["a"], denies: [], builtin: false });
   const scope = { type: "global" as const };
-  await store.auth.assign({
+  await auth.assign({
     account: { platform: "discord", id: "2" },
     role: "vip",
     scope,
     granted_by: "test",
     at: toTimestamp(T0),
   });
-  await store.auth.setMapping({ platform: "discord", guild: "g", platform_role: "r", role: "vip" });
-  await store.auth.setOverride({ scope, role: "vip", node: "b", allow: true });
+  await auth.setMapping({ platform: "discord", guild: "g", platform_role: "r", role: "vip" });
+  await auth.setOverride({ scope, role: "vip", node: "b", allow: true });
   await store.moduleState.set("agent", false);
   await store.audit.append({
     id: newId(),
@@ -141,6 +157,40 @@ async function seed(store: Store) {
     detail: {},
     ok: true,
   });
+  // One LLM call (`llm_usage`).
+  await store.events?.append([
+    {
+      draft: {
+        id: newId(),
+        at: toTimestamp(T0),
+        type: LlmCall.type,
+        data: LlmCallSchema.parse({
+          call_id: "c1",
+          log_day: null,
+          requested_at: toTimestamp(T0),
+          purpose: "chat",
+          chain: "chat",
+          kind: "chat",
+          module: null,
+          label: null,
+          model: "m:x",
+          provider: "m",
+          status: "ok",
+          error_kind: null,
+          finish_reason: "stop",
+          reasoning: "off",
+          usage: null,
+          cost_usd: null,
+          duration_ms: 10,
+          first_token_ms: null,
+          fallbacks: [],
+          retries: 0,
+          tools: [],
+        }),
+      },
+      source: "llm",
+    },
+  ]);
   return { owen, ctx };
 }
 
@@ -150,9 +200,12 @@ describe("data categories", () => {
       c.parts.some((p) => p.kind === "settings" && p.prefixes.includes("memory_watermark:")),
     );
     expect(watermarks.map((c) => c.id)).toEqual(["messages"]);
-    expect(watermarks[0]?.parts.some((p) => p.kind === "table" && p.table === "message_log")).toBe(
-      true,
-    );
+    // The log is the chat lines of the event log.
+    expect(
+      watermarks[0]?.parts.some(
+        (p) => p.kind === "table" && p.id === "message_log" && p.table === "events",
+      ),
+    ).toBe(true);
     expect(RESET_CATEGORIES).not.toContain("audit");
     expect(RESET_CATEGORIES).not.toContain("llm_usage");
     expect(RESET_CATEGORIES).not.toContain("panel_sessions");
@@ -169,10 +222,11 @@ describe("data categories", () => {
       "inner",
       "knowledge",
       "learning",
+      "artifacts",
       "people",
     ]);
     expect(categoryModules(resolveCategories(["people"]))).toEqual([
-      "social",
+      "heart",
       "agent",
       "self",
       "mind",
@@ -190,7 +244,15 @@ describe("data categories", () => {
     const { owen, ctx } = await seed(store);
     const before = await store.profileData.inventory(P);
     for (const c of before.categories) {
-      const unseeded = ["decisions", "event_log", "directives", "proposed_tools", "extensions"];
+      // Artifacts need a blob root (`artifact-data.test.ts` covers their wipe).
+      const unseeded = [
+        "decisions",
+        "event_log",
+        "directives",
+        "proposed_tools",
+        "extensions",
+        "artifacts",
+      ];
       if (unseeded.includes(c.id)) continue;
       expect(c.count, c.id).toBeGreaterThan(0);
     }
@@ -214,7 +276,8 @@ describe("data categories", () => {
       queue: 1,
       voice_consent: 1,
       privacy: 1,
-      persona_overrides: 1,
+      // One edit from each profile: two versions of the database's one `style` section.
+      persona_overrides: 2,
       // `zzz:unknown` of the profile and `future:thing` of `_global`.
       other_settings: 2,
     });
@@ -222,30 +285,40 @@ describe("data categories", () => {
     const after = await store.profileData.inventory(P);
     for (const c of after.categories) {
       const expected =
-        c.id === "audit" || c.id === "llm_usage" || c.id === "panel_sessions"
+        c.id === "llm_usage" || c.id === "panel_sessions"
           ? 1
-          : c.id === "roles"
-            ? BUILTINS.length
-            : 0;
+          : c.id === "audit"
+            ? 3 // the entry, and two config revisions: the seeded module flag and its wipe
+            : c.id === "roles"
+              ? BUILTINS.length
+              : 0;
       expect(c.count, c.id).toBe(expected);
     }
+    expect(
+      after.categories.find((c) => c.id === "audit")?.parts.map((p) => [p.id, p.count]),
+    ).toEqual([
+      ["audit_log", 1],
+      ["config_changes", 2],
+    ]);
     // Built-in roles as given, nothing else.
-    expect(await store.auth.roles()).toEqual(BUILTINS);
-    expect(await store.auth.allAssignments()).toEqual([]);
+    expect(await store.plugin(authTables).store.roles()).toEqual(BUILTINS);
+    expect(await store.plugin(authTables).store.allAssignments()).toEqual([]);
     expect(await store.people.all()).toEqual([]);
     expect(await store.moduleState.list()).toEqual(new Map());
     expect((await store.audit.recent(9, null)).map((e) => e.action)).toEqual(["seed"]);
-    expect([...(await store.settings.list(GLOBAL_SETTINGS_PROFILE, "")).keys()]).toEqual([
-      "llm_usage:2026-01",
-      "panel_session:abc",
-    ]);
-    expect((await store.settings.list(P, "")).size).toBe(0);
+    // One key space, whatever profile is named: one database is one character.
+    for (const profile of [GLOBAL_SETTINGS_PROFILE, P, OTHER]) {
+      expect([...(await store.settings.list(profile, "")).keys()], profile).toEqual([
+        "panel_session:abc",
+      ]);
+    }
 
-    // The other profile keeps its own data (people are shared and gone).
-    expect(await store.messages.recent(OTHER, ctx, 9)).toHaveLength(1);
+    // The other profile keeps its own data (people are shared and gone, and so are the
+    // conversation log, the settings and the persona edits: one database belongs to one
+    // character).
+    expect(await store.messages.recent(OTHER, ctx, 9)).toEqual([]);
     expect((await store.relationships.get(OTHER, owen))?.call_name).toBe("歐文");
-    expect((await store.settings.list(OTHER, "")).size).toBe(9);
-    expect((await store.personaOverrides.current(OTHER)).size).toBe(1);
+    expect((await store.personaOverrides.current(OTHER)).size).toBe(0);
   });
 
   it("is all or nothing", async () => {
@@ -258,7 +331,8 @@ describe("data categories", () => {
     );
     expect(await store.messages.recent(P, ctx, 9)).toHaveLength(1);
     expect(await store.people.all()).toHaveLength(1);
-    expect((await store.auth.roles()).map((r) => r.name).sort()).toEqual(["owner", "vip"]);
+    const roles = await store.plugin(authTables).store.roles();
+    expect(roles.map((r) => r.name).sort()).toEqual(["owner", "vip"]);
   });
 
   it("exports node-wide categories and never the panel sessions", async () => {
@@ -283,8 +357,9 @@ describe("data categories", () => {
     expect(backup.parts.module_state).toEqual([
       { module_id: "agent", enabled: false, updated_at: expect.any(String) },
     ]);
+    // Settings rows are the profile's the backup was made for.
     expect(backup.parts.other_settings?.map((r) => [r.profile_id, r.key])).toEqual([
-      [GLOBAL_SETTINGS_PROFILE, "future:thing"],
+      [P, "future:thing"],
       [P, "zzz:unknown"],
     ]);
     expect(backup.parts.audit_log?.[0]).toMatchObject({ action: "seed", ok: true, detail: {} });

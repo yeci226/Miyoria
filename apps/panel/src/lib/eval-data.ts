@@ -3,7 +3,9 @@
 // that could not be read back to the start of the window says from where it can be trusted.
 
 import type { Api } from "@/api/endpoints";
-import type { Delivery, LogEvent, LogEventKind } from "@/api/types";
+import type { LogEvent } from "@/api/types";
+import type { Delivery, LogEventKind } from "@miyoria/contracts/api";
+import { factEventsInput } from "@/lib/fact-events";
 import { ulidTime } from "@/lib/turn-events";
 
 /** One page, the most the Core returns. */
@@ -40,7 +42,7 @@ export interface EvalData {
 
 /** An EventLog source, newest first, paged back to `since`. */
 async function pages(
-  api: Pick<Api, "factEvents">,
+  api: Pick<Api, "rpc">,
   q: { kind: LogEventKind[]; source?: string[] },
   since: number,
   signal?: AbortSignal,
@@ -49,8 +51,8 @@ async function pages(
   let before: string | undefined;
   let cut = false;
   for (let page = 0; page < MAX_PAGES; page++) {
-    const got = await api.factEvents(
-      { ...q, since: new Date(since).toISOString(), order: "desc", limit: PAGE, ...(before ? { before } : {}) },
+    const got = await api.rpc.facts.events(
+      factEventsInput({ ...q, since: new Date(since).toISOString(), order: "desc", limit: PAGE, ...(before ? { before } : {}) }),
       { signal },
     );
     items.push(...got);
@@ -70,7 +72,7 @@ async function pages(
 
 /** The sources of §18.1 over `[now - windowMs, now]`. */
 export async function loadEvalData(
-  api: Pick<Api, "factEvents" | "factDeliveries">,
+  api: Pick<Api, "rpc">,
   now: number,
   windowMs: number,
   signal?: AbortSignal,
@@ -83,7 +85,7 @@ export async function loadEvalData(
     pages(api, { kind: ["result"], source: ["voice.latency"] }, since, signal),
     pages(api, { kind: ["decision"], source: ["mainline.commitment"] }, since, signal),
     pages(api, { kind: ["observation"], source: ["core.lifecycle"] }, since, signal),
-    api.factDeliveries(PAGE, { signal }),
+    api.rpc.facts.deliveries({ query: { limit: PAGE } }, { signal }),
   ]);
   // The ledger answers newest first and only the newest `PAGE`.
   const ledger = [...deliveries].reverse();

@@ -7,7 +7,7 @@ import { open, readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { brotliCompress, gzip, constants as zlib } from "node:zlib";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 
 const log = getLogger("api.panel");
 

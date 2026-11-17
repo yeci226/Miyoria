@@ -1,6 +1,7 @@
 import { LogIn, LogOut, MicOff, MonitorUp, VolumeX } from "lucide-react";
 import { useState } from "react";
-import type { VoiceChannelState, VoiceSession } from "@/api/types";
+import type { VoiceSession } from "@/api/types";
+import type { VoiceChannelState } from "@miyoria/contracts/api";
 import { useLiveControls, useVoice, useWorld } from "@/app/queries";
 import { useCanWrite } from "@/app/session";
 import { ConfirmDialog } from "@/components/confirm";

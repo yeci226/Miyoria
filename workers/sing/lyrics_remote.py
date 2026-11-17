@@ -1,9 +1,12 @@
-"""Lyrics from the lyrics service (workers/lyrics) instead of from this machine.
+"""Lyrics from the lyrics service (workers/lyrics) instead of from this machine: for a setup that has not moved.
 
-When the song worker runs on another machine than Core, it has neither Core's language model nor the
-ASR worker. ``SING_LYRICS_URL`` points it at the lyrics service on Core's machine, which does the lookup
-(lyrics.py) and the ASR spot check; the lead vocal goes along as a small mono 16 kHz wav. Aligning the
-lyrics to the singing stays here (server.py), because it reads the audio.
+A song worker run by hostd on a machine that joined the cluster does its lyrics itself (lyrics.py): what it
+lacks, the language model and the ASR spot check, it gets from Core through its hostd (hostd_client.py).
+Nothing here is needed for that; leave ``SING_LYRICS_URL`` unset and the local lookup is used.
+
+``SING_LYRICS_URL``, when set explicitly, still wins: it points the worker at the lyrics service on Core's
+machine, which does the lookup and the ASR spot check; the lead vocal goes along as a small mono 16 kHz wav.
+Aligning the lyrics to the singing stays here (server.py), because it reads the audio.
 
 Environment: ``SING_LYRICS_URL`` (empty = look up here), ``SING_LYRICS_REMOTE_TIMEOUT_S`` (default 90).
 """
@@ -16,6 +19,12 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+
+try:  # workers/service_auth.py; a worker run by hand sends nothing
+    from service_auth import peer_headers
+except ImportError:
+    def peer_headers() -> dict[str, str]:  # type: ignore[misc]
+        return {}
 
 log = logging.getLogger("miyoria.sing.lyrics")
 
@@ -61,7 +70,7 @@ def search_remote(url: str, hints: dict[str, Any], duration: float | None, audio
     if duration:
         data["duration"] = str(duration)
     try:
-        r = httpx.post(url + "/lyrics", data=data, files=files or None, timeout=wait)
+        r = httpx.post(url + "/lyrics", data=data, files=files or None, timeout=wait, headers=peer_headers())
         if r.status_code != 200:
             log.warning("lyrics service answered HTTP %s", r.status_code)
             return None

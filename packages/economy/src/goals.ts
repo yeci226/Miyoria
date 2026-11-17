@@ -13,14 +13,14 @@
 // * A reached goal's promise is owed until it is marked kept (`fulfill`): by the owner on the panel,
 //   or by her when she says she did it. Until then her purse block reminds her; after, it does not.
 
-import { errorMessage } from "@miyoria/kernel";
-import { type Goal, type GoalFulfiller, GoalStoreKey } from "@miyoria/store";
+import { errorMessage } from "@miyoria/runtime/kernel";
 import { type AccountRef, type ContextKey, newId, toTimestamp } from "@miyoria/types";
 import { cleanText, guardTask } from "./deals.js";
 import type { EconomyService } from "./economy.js";
 import { STRANGER } from "./economy.js";
 import { postCard } from "./notices.js";
 import { receipt } from "./receipt.js";
+import { type Goal, type GoalFulfiller, GoalStoreKey } from "./records.js";
 import { EconomyError, type GoalView, type PledgeResult } from "./types.js";
 
 export const MAX_TITLE_CHARS = 30;
@@ -84,7 +84,6 @@ export class GoalDesk {
       const now = this.e.now();
       const made: Goal = {
         id: newId(),
-        profile: this.e.profile,
         title,
         promise,
         target: req.target,
@@ -160,7 +159,7 @@ export class GoalDesk {
     const store = this.#store();
     const out = await this.e.serial(async () => {
       const goal = await store.get(goalId);
-      if (!goal || goal.profile !== this.e.profile) throw new EconomyError(400, "沒有這個目標");
+      if (!goal) throw new EconomyError(400, "沒有這個目標");
       const idem = `pledge:${key}`;
       const first = await this.e.ledger().byKey(this.e.profile, who.wallet, idem);
       if (first) {
@@ -185,7 +184,7 @@ export class GoalDesk {
       const raised = pledges.reduce((n, p) => n + p.amount, 0);
       const mine = pledges
         .filter((p) =>
-          who.wallet.some((a) => a.platform === p.account.platform && a.id === p.account.id),
+          who.accounts.some((a) => a.platform === p.account.platform && a.id === p.account.id),
         )
         .reduce((n, p) => n + p.amount, 0);
       const room = Math.min(c.goal_pledge_max - mine, goal.target - raised);
@@ -196,7 +195,6 @@ export class GoalDesk {
         await store.addPledge({
           id: spent.entry.id,
           goal: goal.id,
-          profile: this.e.profile,
           account: who.account,
           amount: pledged,
           created_at: toTimestamp(this.e.now()),
@@ -284,7 +282,7 @@ export class GoalDesk {
         goalId === null
           ? ((await this.reached()).find((g) => g.fulfilled_at === undefined) ?? null)
           : await store.get(goalId);
-      if (!goal || goal.profile !== this.e.profile || goal.status !== "reached") {
+      if (goal?.status !== "reached") {
         throw new EconomyError(409, NOT_OWED);
       }
       if (goal.fulfilled_at !== undefined) throw new EconomyError(409, ALREADY_KEPT);
@@ -344,7 +342,7 @@ export class GoalDesk {
     const store = this.e.services.get(GoalStoreKey);
     if (!store) return [];
     const who = await this.e.member(account);
-    const mine = who ? who.wallet : [account];
+    const mine = who ? who.accounts : [account];
     const keep = this.e.now() - this.e.config.goal_keep_days * DAY_MS;
     const rows = (await store.list(this.e.profile, { limit: VIEW_LIMIT * 2 }))
       .filter(

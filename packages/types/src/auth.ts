@@ -27,7 +27,7 @@ export interface Authorizer {
   allowsSubject(subject: Subject, node: string): boolean;
 }
 
-/** Implements `allows` in terms of `allowsSubject`, like the Rust default method. */
+/** Implements `allows` in terms of `allowsSubject`. */
 export abstract class BaseAuthorizer implements Authorizer {
   allows(account: AccountRef, node: string): boolean {
     return this.allowsSubject(accountSubject(account), node);

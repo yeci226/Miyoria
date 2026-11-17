@@ -1,0 +1,11 @@
+# The build context of asr/Dockerfile and tts/Dockerfile is this folder (they need contracts.py):
+# send only what they copy, not the models, voices and virtual environments.
+*
+!contracts.py
+!asr/server.py
+!asr/tags.py
+!asr/requirements*.txt
+!tts/server.py
+!tts/text_split.py
+!tts/design_voice.py
+!tts/requirements*.txt

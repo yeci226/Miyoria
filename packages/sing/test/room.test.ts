@@ -1,11 +1,27 @@
 // 「語音頻道現場」 and the queue line: what she asked for on 2026-11-11 (who is listening, who came
 // in or left, who asked for which song and in what order), read from voice events and the set list.
 
-import type { ContextKey, PromptRequest, VoiceParticipant } from "@miyoria/types";
+import {
+  type AnyEventDefinition,
+  type ContextKey,
+  type EventPayload,
+  Events,
+  eventEnvelope,
+  type PromptRequest,
+  type PublishMetaArgs,
+  type VoiceParticipant,
+} from "@miyoria/types";
 import { describe, expect, test } from "vitest";
 import { queueLine } from "../src/prompt.js";
 import { ROOM_RECENT_MS, roomLines, VoiceRoom, VoiceRoomPrompt } from "../src/room.js";
 import type { SongEntry } from "../src/setlist.js";
+
+/** An event of `definition` as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  definition: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+) => eventEnvelope("test", definition, data, ...meta);
 
 const VOICE: ContextKey = { platform: "discord", scope: "g1", channel: "v1", kind: "voice" };
 const TEXT: ContextKey = { platform: "discord", scope: "g1", channel: "t1", kind: "channel" };
@@ -43,8 +59,8 @@ function setup() {
     now += ms;
   };
   const members = (list: VoiceParticipant[]) =>
-    room.onEvent({ type: "voice_participants", data: { context: VOICE, participants: list } });
-  room.onEvent({ type: "voice_joined", data: { context: VOICE, participants: [ME, OWEN, AMY] } });
+    room.onEvent(ev(Events.VoiceParticipants, { context: VOICE, participants: list }));
+  room.onEvent(ev(Events.VoiceJoined, { context: VOICE, participants: [ME, OWEN, AMY] }));
   const lines = (songs: SongEntry[], voice = false) => {
     const r = room.room("g1");
     if (r === null) throw new Error("not in voice");
@@ -110,7 +126,7 @@ describe("VoiceRoom", () => {
       prompt.contribute({ context, voice: context.kind === "voice" } as PromptRequest);
     expect((await ask(TEXT))[0]).toMatchObject({ title: "語音頻道現場", key: "voice_room" });
     expect(await ask({ ...TEXT, scope: "other" })).toEqual([]);
-    room.onEvent({ type: "voice_left", data: { context: VOICE, reason: null } });
+    room.onEvent(ev(Events.VoiceLeft, { context: VOICE, reason: null }));
     expect(await ask(TEXT)).toEqual([]);
   });
 });

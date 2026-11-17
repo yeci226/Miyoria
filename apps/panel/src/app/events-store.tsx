@@ -2,7 +2,7 @@ import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import { type StreamStatus, streamEvents } from "../api/sse";
 import { asE2eRecord } from "../lib/e2e";
-import type { Envelope } from "../api/types";
+import type { BusEnvelope } from "../lib/events";
 import { useConnection } from "./connection";
 import { queryKeys } from "./queries";
 
@@ -13,9 +13,8 @@ export const EVENT_BUFFER = 500;
  * carry the whole new state (`activity.changed`, `affect.changed`) are written straight into the
  * cache; the others only mark their lists stale.
  */
-export function applyCustomEvent(queryClient: QueryClient, env: Envelope): void {
-  if (env.event.type !== "custom") return;
-  const { topic, payload } = env.event.data;
+export function applyCustomEvent(queryClient: QueryClient, env: BusEnvelope): void {
+  const { type: topic, data: payload } = env;
   const stale = (queryKey: readonly unknown[]) => void queryClient.invalidateQueries({ queryKey });
   switch (topic) {
     case "activity.changed":
@@ -34,11 +33,9 @@ export function applyCustomEvent(queryClient: QueryClient, env: Envelope): void 
       break;
     case "affect.changed":
       queryClient.setQueryData(queryKeys.affect, payload);
-      stale(queryKeys.affectPeople);
       break;
     case "plan.goal":
       stale(queryKeys.goals);
-      stale(queryKeys.dayPlan);
       break;
     case "agent.turn.outcome":
       stale(queryKeys.turnsAll);
@@ -57,7 +54,7 @@ export function applyCustomEvent(queryClient: QueryClient, env: Envelope): void 
 
 export interface EventSnapshot {
   /** Newest first, at most `EVENT_BUFFER`. */
-  events: Envelope[];
+  events: BusEnvelope[];
   status: StreamStatus;
   /** Events received since the panel opened (not capped). */
   received: number;
@@ -68,7 +65,7 @@ type Listener = () => void;
 /** Ring buffer of bus envelopes; notifies at most every `flushMs`. */
 export class EventStore {
   private snapshot: EventSnapshot = { events: [], status: { state: "closed" }, received: 0 };
-  private pending: Envelope[] = [];
+  private pending: BusEnvelope[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private listeners = new Set<Listener>();
 
@@ -81,7 +78,7 @@ export class EventStore {
 
   getSnapshot = (): EventSnapshot => this.snapshot;
 
-  push(env: Envelope): void {
+  push(env: BusEnvelope): void {
     this.pending.push(env);
     if (this.timer === undefined) this.timer = setTimeout(() => this.flush(), this.flushMs);
   }
@@ -118,27 +115,28 @@ export const EventStoreContext = createContext<EventStore | null>(null);
 
 /** Keeps one `/api/events` stream open while signed in (token or session) and shares it. */
 export function EventStreamProvider({ children }: { children: ReactNode }) {
-  const { client } = useConnection();
+  const { api } = useConnection();
   const queryClient = useQueryClient();
   const store = useMemo(() => new EventStore(), []);
 
   useEffect(() => {
     const ctl = new AbortController();
-    void streamEvents(client, {
+    void streamEvents(api.rpc, {
       signal: ctl.signal,
       onStatus: (s) => store.setStatus(s),
       onEnvelope: (env) => {
         store.push(env);
         // Keep cached lists fresh without polling.
-        const t = env.event.type;
-        if (t === "module_state_changed") void queryClient.invalidateQueries({ queryKey: queryKeys.modules });
-        else if (t === "agent_decision") void queryClient.invalidateQueries({ queryKey: queryKeys.decisionsAll });
-        else if (t === "agent_turn_completed") void queryClient.invalidateQueries({ queryKey: queryKeys.usage });
-        else if (t === "custom") applyCustomEvent(queryClient, env);
+        const t = env.type;
+        if (t === "system.module.state") void queryClient.invalidateQueries({ queryKey: queryKeys.modules });
+        else if (t.startsWith("cluster.")) void queryClient.invalidateQueries({ queryKey: queryKeys.cluster });
+        else if (t === "agent.decision") void queryClient.invalidateQueries({ queryKey: queryKeys.decisionsAll });
+        else if (t === "agent.turn.completed") void queryClient.invalidateQueries({ queryKey: queryKeys.usage });
+        else applyCustomEvent(queryClient, env);
       },
     });
     return () => ctl.abort();
-  }, [client, queryClient, store]);
+  }, [api, queryClient, store]);
 
   return <EventStoreContext.Provider value={store}>{children}</EventStoreContext.Provider>;
 }

@@ -30,7 +30,7 @@
 | `turn.ts` | `TurnFocus{addressed_by, addressed_accounts, focus, background, phase, restarts}`、`TurnFocusView` + `TurnFocusViewKey`、`inputDisposition()`(§3.9 取消規則表)、`isShortReply()`、`TurnOutcome`(sent / silence / cancelled{cause, by} / error)、`TurnOutcomeRecord`;topic `agent.turn.focus`、`agent.turn.outcome` | W1(agent) | W2、W6、面板 |
 | `prompt-block.ts` | `PromptAuthority`(`self` 可信 / `data` 不可信)、`PromptBlock extends PromptSection`(authority、source、`budget_chars`、overflow)、`asPromptBlock()`、`SELF_BLOCK_KEYS`、`CompiledBlock`、`SavedPrompt` | W1 | 所有 prompt contributor |
 | `reasoning.ts` | `ReasoningLevel`(off/low/medium/high)、`REASONING_PURPOSES`(§3.10 的十個)、`DEFAULT_REASONING`、`reasoningFor()`、`reasoningEnabled()` | W1(llm) | 所有呼叫 LLM 的模組 |
-| `activity.ts` | `HerPresence` / `HerBroadcast` / `HerActivity`(三台狀態機)、`ActivitySnapshot`(帶 `version`、`scene`、`override`)、`ActivityRequest`(ensure_voice / leave_voice / ensure_live / stop_live / start / stop / scene_override / clear_override)、`ActivityTransition`(principal、turn、context)、`TransitionResult`(started / already / queued / refused,帶 task id)、`ActivityTask`、`ActivityTaskEvent`、`Notice`、`ActivityManager` + `ActivityManagerKey`;topic `activity.changed|started|done|failed`、`agent.notice` | W3(新 `packages/activity`) | W1、W4、W6、W7、stage |
+| `activity.ts` | `HerPresence` / `HerBroadcast` / `HerActivity`(三台狀態機)、`ActivitySnapshot`(帶 `version`、`scene`、`override`)、`ActivityRequest`(ensure_voice / leave_voice / ensure_live / stop_live / start / stop / scene_override / clear_override)、`ActivityTransition`(principal、turn、context)、`TransitionResult`(started / already / queued / refused,帶 task id)、`ActivityTask`、`ActivityTaskEvent`、`Notice`、`ActivityManager` + `ActivityManagerKey`;topic `activity.changed|started|done|failed`、`agent.notice` | W3(新 `packages/brain/activity`) | W1、W4、W6、W7、stage |
 | `task.ts` | `TaskId`、`TaskSpec{id, goal, args, budget_s}`、`TaskEvent`(started / progress / done / failed{code, detail})、`TASK_FAILURE_CODES`、`StructuredState`、`TaskExecutor`(observe / start / cancel / events)、`taskTopic()` / `parseTaskTopic()`(`<owner>.task.<type>`) | W3(ActivityManager)、W8(extension) | W3、W7、W8 |
 | `arbiter.ts` | `Impulse{source, kind, target, priority, expires_at, why, hint, coalesce_key, goal}`、`IMPULSE_SOURCES`、`isSelfInitiated()`(只有 plan / agenda 算她主動)、`ArbiterDecision{verdict, reason, detail, retry_at}`、`LedgerEntry` / `LedgerLimits` / `LedgerView` / `LedgerRecord`、`Arbiter` + `ArbiterKey`;topic `arbiter.impulse|decision|ledger` | W6(新 package) | W1、W3、W7、所有發 initiative 的地方 |
 | `affect.ts` | `AppraisalEvent{emotion, strength: weak|medium|strong, toward, cause}`、`APPRAISAL_STRENGTH`(0.1/0.2/0.35)、`AffectEvent` + `AFFECT_EVENT_KINDS`(規則事件)、`AffectInput`、`AppliedAppraisal`、`PersonCard`(一人一卡,含 `attachment`、`feeling`、`label`)、`BondChange`、`RelationshipLabel` + `relationshipLabel()`(唯一刻度,門檻同現在 `social/src/rel.ts:308`)、`AffectBiases`、`AffectSnapshot`(`top` 2–3 種、`mood` 推導、`mood_line`)、`AffectState` + `AffectStateKey`;topic `affect.event`、`affect.changed`。沿用 `self.ts` 的 `Drives`、`EmotionName`、`PersonEmotionName`、`EmotionReading`、`ShownEmotion` 與 `social.ts` 的 `Mood` | W4(self module) | W1、W6、W7 |
@@ -43,7 +43,7 @@
 
 ### W1 Converse(對話管線、prompt 編譯器、推理分級、人設)
 
-**擁有**:`packages/agent/**`、`packages/llm/**`、`profiles/**`;`packages/core/src/recorder.ts` 追加 outcome 紀錄的 hunk;兩份 example toml 的 `[llm.reasoning]`、`[modules.agent]` 段。
+**擁有**:`packages/brain/agent/**`、`packages/llm/**`、`profiles/**`;`packages/core/src/recorder.ts` 追加 outcome 紀錄的 hunk;兩份 example toml 的 `[llm.reasoning]`、`[modules.agent]` 段。
 
 **提供**:`TurnFocusViewKey`(agent module `ctx.provide`)、topic `agent.turn.focus` / `agent.turn.outcome`、prompt 編譯器(`PromptBlock` 的唯一消費者)、`[llm.reasoning]`(router 依 `ReasoningPurpose` 決定推理等級)、notice 的呈現。
 
@@ -84,9 +84,9 @@
 
 ### W2 Voice(barge-in、ducking、回音排除、TTS 預取、唱歌 / GPU)
 
-**擁有**:`packages/voice/**`(**除了** `packages/voice/src/actions.ts`,那是 W3 的)、`apps/voice-node/**`、`docs/protocols/voice-link.md`;需要時可改 `packages/sing` 裡 `VoiceFloor` / `SpeechPause` 的提供端(只限那部分)。
+**擁有**:`packages/voice/**`(**除了** `packages/voice/voice/src/actions.ts`,那是 W3 的)、`apps/voice-node/**`、`docs/protocols/voice-link.md`;需要時可改 `packages/sing` 裡 `VoiceFloor` / `SpeechPause` 的提供端(只限那部分)。
 
-**提供**:選擇性 barge-in;topic `voice.barge_in`(新增在 `packages/voice/src/topics.ts`,payload `{context, turn, account, action: "duck"|"pause"|"resume"|"stop", reason}`;W1 用它把 `TurnOutcome` 記成 `cancelled{cause: "barge_in", by}`;如果要跨套件共用型別,在 `packages/types/src` 新增檔案);voice link 的 duck / resume 訊息。
+**提供**:選擇性 barge-in;topic `voice.barge_in`(新增在 `packages/voice/voice/src/topics.ts`,payload `{context, turn, account, action: "duck"|"pause"|"resume"|"stop", reason}`;W1 用它把 `TurnOutcome` 記成 `cancelled{cause: "barge_in", by}`;如果要跨套件共用型別,在 `packages/types/src` 新增檔案);voice link 的 duck / resume 訊息。
 
 **消費**:`TurnFocusViewKey.current(voiceContext)`(`addressed_accounts` = 該停的人;拿不到就維持現在的行為,但先改成 duck);`isShortReply()`(ASR 回來是短回應就不停)。
 
@@ -104,7 +104,7 @@
 
 ### W3 Activity(ActivityManager、任務契約、閘門缺口)
 
-**擁有**:新 `packages/activity/**`、`packages/stage/**`、`packages/game/**`、`packages/actions/**`、`packages/sdk/**`、`packages/ext-host/**`、`packages/voice/src/actions.ts`;`packages/world/src/engine.ts` 的 `her()`(`:475`)改成讀 `ActivitySnapshot` 的 hunk;`core/src/modules.ts` 加 `ActivityModule` 一行。
+**擁有**:新 `packages/brain/activity/**`、`packages/stage/**`、`packages/play/game/**`、`packages/gate/actions/**`、`packages/sdk/**`、`packages/plugin-host/ext-host/**`、`packages/voice/voice/src/actions.ts`;`packages/memory/world/src/engine.ts` 的 `her()`(`:475`)改成讀 `ActivitySnapshot` 的 hunk;`core/src/modules.ts` 加 `ActivityModule` 一行。
 
 **提供**:`ActivityManagerKey`、topic `activity.*`、`agent.notice`(`Notice`)、場景 = `f(snapshot, override)`。
 
@@ -140,12 +140,12 @@
 - **說完再離開**:`leave_voice` 有 turn 時先等那個回合結束(`speech_wait_ms`),再把 `voice.leave` 排進她的語音 lane(`voice:<platform>:<guild>`,priority `idle`),排在那個回合所有句子後面。
 - **遊戲**:`disconnected`(`[modules.game] end_events`)或 extension 掛掉(`system.module.state` 之後 adapter 工具不見了 / observe 時不見了)→ 導演結束 session(`code: disconnected | crashed`,不送 stop / quit)→ manager `failed(code)` 留 `failed_hold_ms`、notice 給開遊戲的人、場景切回。遊戲還在開時她設的 `game_goal` 等 session 開始才套用。導演的 `voiceContext`、`game.chat` 的投遞、`LiveState` 有 manager 時讀 snapshot。
 - **場景**:`stage/src/link/scene-rule.ts` 的純函式 `sceneWants(factsOf(snapshot), memory, …)`;導演有 manager 時只吃 `activity.changed`(`onSnapshot`),並提供 `SceneRuleKey` 讓 `snapshot.scene` 是同一個答案。導演與結尾幕共用一把 mutex(`#expect` 只在鎖內寫);`stage.scene` capability 與節點的 `ObsController.setScene` 也各自序列化;轉場改用目標場景的轉場覆寫(`SetSceneSceneTransitionOverride`),不再改 OBS 全域轉場。「開台中但還沒真的 live」不算 live,失敗的開台不會「開場 → 結尾」亂切。
-- **閘門缺口**:ext-host 把 `game_*` 工具登記在 `GatedToolsKey`(`@miyoria/actions`,由 `extensions` module 提供),不進 `ToolRegistry`;保留前綴加上 `activity`、`arbiter`、`affect`、`plan`、`gate`、`actions`;`Peer.request` 逾時 / 中止時送 `$/cancelRequest`,SDK 中止處理函式的 signal(`ToolCallContext.signal`、`GameAdapter.act(action, signal)`)。排程器的 ticket 在等待的工具逾時 / 回合取消時取消(排隊的不會跑,跑到一半的 signal 被中止)。中 / 高風險的結果(含被擋下的)寫成 `LedgerRecord`(有 `ArbiterKey` 就 `record`,沒有就發 `actions.outcome`);高風險 `REVIEW_PENDING` 的結果另外發 `agent.notice`。
+- **閘門缺口**:ext-host 把 `game_*` 工具登記在 `GatedToolsKey`(`@miyoria/gate/actions`,由 `extensions` module 提供),不進 `ToolRegistry`;保留前綴加上 `activity`、`arbiter`、`affect`、`plan`、`gate`、`actions`;`Peer.request` 逾時 / 中止時送 `$/cancelRequest`,SDK 中止處理函式的 signal(`ToolCallContext.signal`、`GameAdapter.act(action, signal)`)。排程器的 ticket 在等待的工具逾時 / 回合取消時取消(排隊的不會跑,跑到一半的 signal 被中止)。中 / 高風險的結果(含被擋下的)寫成 `LedgerRecord`(有 `ArbiterKey` 就 `record`,沒有就發 `actions.outcome`);高風險 `REVIEW_PENDING` 的結果另外發 `agent.notice`。
 - **對 types 的增補**:新檔 `scene-rule.ts`(`SceneRule`、`SceneRuleKey`);`HerStatus.singing?: string | null`(選填,舊的 producer 不用改)。world 的 `her()` 有 snapshot 時從它讀(`world/src/module.ts` 多傳一個 snapshot getter)。
 
 ### W4 Affect(驅力、情緒動態、一人一卡)
 
-**擁有**:`packages/self/**`、`packages/social/**`;例外:可改 `mind/src/mind.ts:963-969`(mind 直接 `self.feel`)與 `mind/src/prompt.ts:145-149`(`OUTPUT_FORMAT` 的情緒 / 驅力範例值)這兩個 hunk,做 item 14 的「mind 不再寫情緒」部分。
+**擁有**:`packages/heart/self/**`、`packages/heart/social/**`;例外:可改 `mind/src/mind.ts:963-969`(mind 直接 `self.feel`)與 `mind/src/prompt.ts:145-149`(`OUTPUT_FORMAT` 的情緒 / 驅力範例值)這兩個 hunk,做 item 14 的「mind 不再寫情緒」部分。
 
 **提供**:`AffectStateKey`(由 `self` module 提供,跟 `SelfStateKey` 並存;`SelfState` 先保留給舊消費者)、`PersonCard`、`relationshipLabel()` 的實際使用(`social/src/rel.ts:308` `label()` 改成呼叫它)、topic `affect.changed`。
 
@@ -179,7 +179,7 @@
 
 ### W5 Memory / Learning(新鮮度、followup 到期、穩定 handle + migration)
 
-**擁有**:`packages/memory/**`、`packages/store/**`(含 `packages/store/migrations/**`)、`packages/learning/**`;`core/src/boot.ts:187-203` 追加 `HandleDirectoryKey` 的 provide;例外:`mind/src/snapshot.ts:285`(people 的 `u${n}` ref)與 `mind/src/mind.ts` 對應的 ref 解析(`:923`、`:1051`、`:1161`)這幾個 hunk。
+**擁有**:`packages/memory/**`、`packages/store/**`(含 `packages/store/migrations/**`)、`packages/memory/learning/**`;`core/src/boot.ts:187-203` 追加 `HandleDirectoryKey` 的 provide;例外:`mind/src/snapshot.ts:285`(people 的 `u${n}` ref)與 `mind/src/mind.ts` 對應的 ref 解析(`:923`、`:1051`、`:1161`)這幾個 hunk。
 
 **提供**:`HandleDirectory` 實作(store 一張表或 `ProfileDataStore` key,開機時 provide);`DecisionLog` 上 W1 需要的 outcome 寫入方法(新增 optional 方法,W1 用 `?.` 呼叫);migration。
 
@@ -215,7 +215,7 @@
 
 ### W6 Arbiter(第二波;§3.3)
 
-**擁有**:新 `packages/arbiter/**`;刪除 `packages/initiative/**`;下面列的發 initiative 的 hunk;`core/src/modules.ts` 換掉 `InitiativeModule`(`:126`)。
+**擁有**:新 `packages/brain/arbiter/**`;刪除 `packages/initiative/**`;下面列的發 initiative 的 hunk;`core/src/modules.ts` 換掉 `InitiativeModule`(`:126`)。
 
 **提供**:`ArbiterKey`、topic `arbiter.*`、`affect.event` 的 `topic_ignored`。
 
@@ -232,7 +232,7 @@ Arbiter 接受 `speak` impulse 後,開回合仍走既有的 `agent_initiative` �
 
 **W6 實作紀錄**:
 
-- `packages/arbiter`(module `arbiter`,`ArbiterKey`):`ArbiterCore`(`arbiter.ts`)只做三件事。底線依序是暫停、預算(exhausted 全擋;degraded 只擋 `plan` / `agenda` / `world`)、同意(`target.account` 被 social 封鎖)、`disabled_contexts`、頻道等級(`off` / `mention-only`)、語音不在場;`plan` / `agenda` 再加安靜時段,而她自己的 `speak`(`isSelfTalk`,即 `chat.start` / `chat.dm`)另有每日 / 每地 / 每人上限、任兩次間隔、同一地方的間隔(沒人接就加倍,`max_backoff`)、等級的間隔(`ConversationFacts.start_gap_ms`)與「剛講完話」。**她看得到的規則一律 `rejected` + `retry_at`**(她帶著帳本重新計畫);只有當下的事實(地方忙、`world` 打招呼時她剛講完)才 `deferred`,每 `retry_ms` 依優先度重試到過期。同 `coalesce_key` 合併(新的贏);某個 impulse 拿到地方後,排在那裡的她自己的願望 `preempted`;有人叫她(`agent.turn.focus` reason `addressed` / `reply_to_her`)也一樣。
+- `packages/brain/arbiter`(module `arbiter`,`ArbiterKey`):`ArbiterCore`(`arbiter.ts`)只做三件事。底線依序是暫停、預算(exhausted 全擋;degraded 只擋 `plan` / `agenda` / `world`)、同意(`target.account` 被 social 封鎖)、`disabled_contexts`、頻道等級(`off` / `mention-only`)、語音不在場;`plan` / `agenda` 再加安靜時段,而她自己的 `speak`(`isSelfTalk`,即 `chat.start` / `chat.dm`)另有每日 / 每地 / 每人上限、任兩次間隔、同一地方的間隔(沒人接就加倍,`max_backoff`)、等級的間隔(`ConversationFacts.start_gap_ms`)與「剛講完話」。**她看得到的規則一律 `rejected` + `retry_at`**(她帶著帳本重新計畫);只有當下的事實(地方忙、`world` 打招呼時她剛講完)才 `deferred`,每 `retry_ms` 依優先度重試到過期。同 `coalesce_key` 合併(新的贏);某個 impulse 拿到地方後,排在那裡的她自己的願望 `preempted`;有人叫她(`agent.turn.focus` reason `addressed` / `reply_to_her`)也一樣。
 - 帳本(`ledger.ts`):每個不是「go」的決定都寫一筆 `denied`(`detail` = `<reason>: <她看得懂的說明>`)並發 `arbiter.decision` / `arbiter.ledger`;`LedgerView.limits.next_initiative_at` 用同一套時間規則反覆推算(`ledger(context)` 含那個地方的間隔與等級間隔)。她開的話題:`agent.turn.completed` 記下她說的話,之後在 `reply_window_*` 內有人叫她 / 回她(別人的 `agent.turn.outcome` reason `addressed` / `reply_to_her`,或提及 / 回覆 / 私訊)就 `ok`,否則 `ignored` → streak +1、該地方間隔加倍、發 `affect.event` `topic_ignored`。沒開口(silence / cancelled / error)不算話題。狀態存在 `_global` 的 `arbiter:state`(資料分類沿用 `initiative`)。
 - 給 agent 的接縫是新的 `types/src/impulse.ts`:`newImpulse()`(speak 的舊 initiative reason 放 `args.reason`,`impulseReason()` 讀回)、`isSelfTalk()`、`ImpulseHost` + `ImpulseHostKey`(agent 提供:`facts(context)` 給底線用,`open(impulse)` 開回合)。Arbiter 接受後,她自己的(`plan` / `agenda`,含 act)與 `chat.*` 走 `AgentIntents` 原本的路徑(閘門 → coordinator 等地方空出來);其他 speak 是 coordinator 的 initiative 回合,coordinator 只回答「現在忙不忙」(`ImpulseRun` busy → Arbiter 稍後再試)。不是她的 `act` impulse 由 Arbiter 經 `ActuatorRegistry` 執行(`game` 用 `director` principal)。
 - agent:`agent.initiative` 與 notice 在有 Arbiter 時都轉成 impulse(`initiativeSource()`);`arbiter.impulse` 在沒有 Arbiter 時由 agent 當舊的 initiative 處理(fallback)。`startBlocked` 有 Arbiter 時讀 `ledger(context).limits.next_initiative_at`,`noteStart` 不再記(Arbiter 自己記),Arbiter 放行的意圖帶 `IntentTurn.gated`,不會被自己剛記的那次擋住。`chat.start` 的閘門次數(每日 24、每人 4、1 分鐘)搬進 Arbiter 的 `max_per_day` / `max_per_person_per_day` / `min_gap_secs`,閘門只留防迴圈的上限(200 / 50 / 0);`chat.dm` 的閘門限制沒動(私訊的安全線)。
@@ -244,7 +244,7 @@ Arbiter 接受 `speak` impulse 後,開回合仍走既有的 `agent_initiative` �
 
 ### W7 Mind → Appraise / Plan / Reflect + Goal agenda(第二波;§3.4、§3.7)
 
-**擁有**:`packages/mind/**`(W4、W5 的例外 hunk 合併之後)。
+**擁有**:`packages/heart/mind/**`(W4、W5 的例外 hunk 合併之後)。
 
 **提供**:`GoalAgendaKey`、topic `plan.goal`、Appraise 的 `AffectInput`(呼叫 `AffectState.appraise`)、Plan 的 `Impulse`(source `plan` / `agenda`)。
 
@@ -270,7 +270,7 @@ Arbiter 接受 `speak` impulse 後,開回合仍走既有的 `agent_initiative` �
 
 ### W8 遊戲 / extension 任務契約(第二波;§3.8)
 
-**擁有**:`packages/sdk/**`、`packages/ext-host/**`、`packages/game/**`、`extensions/**`(W3 合併之後)。SDK 不依賴 `@miyoria/types`,`task.ts` 的形狀要在 `sdk/src` 帶一份相同的副本(JSON 形狀一致,有測試對照)。Extension 的 task 事件發在 `game.<id>.task.<type>`(`taskTopic("game.<id>", …)`,在 game adapter 自己的命名空間內);ext-host 的 proxy 實作 `TaskExecutor`,`cancel` 與 `AbortSignal` 要一路傳到 RPC。
+**擁有**:`packages/sdk/**`、`packages/plugin-host/ext-host/**`、`packages/play/game/**`、`extensions/**`(W3 合併之後)。SDK 不依賴 `@miyoria/types`,`task.ts` 的形狀要在 `sdk/src` 帶一份相同的副本(JSON 形狀一致,有測試對照)。Extension 的 task 事件發在 `game.<id>.task.<type>`(`taskTopic("game.<id>", …)`,在 game adapter 自己的命名空間內);ext-host 的 proxy 實作 `TaskExecutor`,`cancel` 與 `AbortSignal` 要一路傳到 RPC。
 
 **實作紀錄(W8)**:
 
@@ -290,11 +290,11 @@ Arbiter 接受 `speak` impulse 後,開回合仍走既有的 `agent_initiative` �
 
 - **工具依活動限定**(§3.4,`agent/src/tool-scope.ts`):聊天回合的工具每一步依 `ActivityManagerKey.snapshot()`(沒有就 world 的 `her`;都沒有 = 全給,舊行為)決定:`game_goal` / `game_stop` 只在遊戲 starting / running 時有,`sing_stop`、`stream_stop`、`voice_leave` 只在唱歌 / 直播 / 在語音時有;開始類工具一直都有。extension 的原始遊戲工具(`game_<id>_*` 且不是 `CapabilityTool`)不論狀態都不給(W3 在 ext-host 已擋,這裡是第二道)。沒提供的工具被呼叫就當成不存在。
 - **`CLAIMS` 正則**(§1.8 #5,`agent/src/claims.ts`):「她說的事有沒有發生」改看結構化訊號:這個回合要求、被接受的 ActivityManager task(她的工具拿到的 `TransitionResult`,`tasks()` 依 `turn` 找)、這個回合告訴她的 `agent.notice`(依 task id)、這個回合成功的工具呼叫、snapshot(本來就在語音 / 在直播)。有任何一個撐住的說法不再被提醒或扣住。**保留的安全網**:只用短語清單判斷「她說了做了某事」——這是唯一沒有結構化訊號的部分;拿掉的話她可以跟人說「我游過去了」但什麼都沒發生(模型真的會這樣),所以留著,但它只負責發現說法,不決定事實。
-- **刪掉的死碼**:`mood`(`social/src/mood.ts` 的 `MoodPrompt` 與 `describe`)、`social`(`SocialPrompt`、`Social.describePeople`)、`self` / `emotion`(`self/src/prompt.ts` 整個檔)四個 contributor;agent 的 `moodHint` 換成唯一的 `moodLine`。編譯器的 `SUPERSEDED` 留著擋 extension。只剩被解析的舊 key 一律刪掉並在啟動時警告(新的 `presentKeys`,`@miyoria/kernel`):`[modules.self] prompt`、`[modules.social] prompt_max_people`、`[modules.mind] quiet_start_hour` / `quiet_end_hour` / `voice_quiet_secs`。
+- **刪掉的死碼**:`mood`(`social/src/mood.ts` 的 `MoodPrompt` 與 `describe`)、`social`(`SocialPrompt`、`Social.describePeople`)、`self` / `emotion`(`self/src/prompt.ts` 整個檔)四個 contributor;agent 的 `moodHint` 換成唯一的 `moodLine`。編譯器的 `SUPERSEDED` 留著擋 extension。只剩被解析的舊 key 一律刪掉並在啟動時警告(新的 `presentKeys`,`@miyoria/runtime/kernel`):`[modules.self] prompt`、`[modules.social] prompt_max_people`、`[modules.mind] quiet_start_hour` / `quiet_end_hour` / `voice_quiet_secs`。
 - **一個冷場偵測器**:mind 收到 world 的 `channel_quiet` 時,她所在語音頻道的那種不看分數直接喚醒 Plan(沒有 Arbiter 時照 mind 自己的自我發起間隔);文字頻道的照舊低於門檻。mind 的語音 room、5 秒輪詢與 `voice_quiet_secs` 刪掉。
 - **開遊戲**:`game.start` 的結果帶 `data.session {game, game_name, context}`(launch 任務 `done`、session 已開始才回);ActivityManager 直接拿它當事實,不再等 `game.director.session` 確認(事件之後到也只是再確認一次)。停止仍等 session 結束的事件(這次沒動)。
 - **一份議程**:mind 啟動把 `SelfState.agenda()` 遷移成目標後,把遷移過的舊議程項目(含之前啟動就遷移過、還開著的)`dropAgenda`。agent 的 self 區塊與 reflect 本來就先讀 `GoalAgendaKey`,沒有 mind 時才退回舊議程。
-- **回放測試**(`packages/replay`,§4):`ReplayRecorderModule`(`[modules.replay] record = false`,`<dir>/<日期>.jsonl`,core 在 recorder 後面多一行);`replay(log, {clock})` 用同一個 supervisor 跑真正的 agent、actions(閘門)、activity、world、self、arbiter、mind,假的只有 LLM(`ScriptedLlm`:回話照腳本、Plan 讀帳本限制「現在不行」就回 `{}`)、排程器 / 平台(`ReplaySink`,依序播放她的句子並發 `voice.playback`)與時間(呼叫端的 fake timers)。只重播她感知到的事件(`isReplayInput`;`arbiter.impulse` 只重播沒在跑的 module 發的,例如 sing)。報告:每回合結果、被叫有沒有回、focus 對不對(叫她的那則在 focus、focus 只有叫她的人、引用的是叫她的那則)、語音直接叫的開口率、Arbiter 的結果與擋下原因、她自己的衝動被擋率、沒人接的話題數、ActivityManager 殘留狀態。`pnpm replay <file> [--json] [--seed N]`(在 Vitest 裡跑,用它的 fake timers)。三個 fixture(`packages/replay/test/fixtures`):語音四個人一直「對 / 嗯」時被叫 8 次 → 開口 8/8、focus 8/8、沒有被輸入取消;「@Miyoria 你可以打osu嗎」等三個提問各被 5 句插話淹沒 → 3/3 回覆、3/3 引用提問的人;8 次報幕沒人接、她自己的 4 個話題 → 被擋 0/4、沒人接的話題 0。
+- **回放測試**(`tools/replay`,§4):`ReplayRecorderModule`(`[modules.replay] record = false`,`<dir>/<日期>.jsonl`,core 在 recorder 後面多一行);`replay(log, {clock})` 用同一個 supervisor 跑真正的 agent、actions(閘門)、activity、world、self、arbiter、mind,假的只有 LLM(`ScriptedLlm`:回話照腳本、Plan 讀帳本限制「現在不行」就回 `{}`)、排程器 / 平台(`ReplaySink`,依序播放她的句子並發 `voice.playback`)與時間(呼叫端的 fake timers)。只重播她感知到的事件(`isReplayInput`;`arbiter.impulse` 只重播沒在跑的 module 發的,例如 sing)。報告:每回合結果、被叫有沒有回、focus 對不對(叫她的那則在 focus、focus 只有叫她的人、引用的是叫她的那則)、語音直接叫的開口率、Arbiter 的結果與擋下原因、她自己的衝動被擋率、沒人接的話題數、ActivityManager 殘留狀態。`pnpm replay <file> [--json] [--seed N]`(在 Vitest 裡跑,用它的 fake timers)。三個 fixture(`tools/replay/test/fixtures`):語音四個人一直「對 / 嗯」時被叫 8 次 → 開口 8/8、focus 8/8、沒有被輸入取消;「@Miyoria 你可以打osu嗎」等三個提問各被 5 句插話淹沒 → 3/3 回覆、3/3 引用提問的人;8 次報幕沒人接、她自己的 4 個話題 → 被擋 0/4、沒人接的話題 0。
 - **需要 W10**:面板 / API 沒有任何 W9 的路由需求;注意 `self:state` 的舊議程遷移後會變成 dropped,面板的「議程」若還讀 `SelfState`,要改讀 `GoalAgendaKey`(目標)。回放報告目前只有 CLI,沒有 API。
 
 ## 3. 跨工作流整合

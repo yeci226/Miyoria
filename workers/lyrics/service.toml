@@ -1,0 +1,25 @@
+# Lyrics worker: finds synced lyrics for a song worker on another machine that has not joined the
+# cluster, workers/lyrics/server.py. It imports workers/sing/lyrics.py; the language model and the
+# ASR spot check come from Core through hostd (cluster.llm, cluster.fetch).
+name = "lyrics"
+kind = "worker"
+provides = ["lyrics"]
+summary = "歌詞服務(給在別台電腦的翻唱 worker 用)"
+
+[install]
+runtime = "python"
+python = ">=3.11,<3.14"
+# Its own small project with what server.py and sing/lyrics.py import (no torch), not the sing
+# environment.
+project = "."
+check_imports = ["fastapi", "uvicorn", "soundfile"]
+
+[run]
+command = ["{python}", "server.py"]
+cwd = "."
+port = 8007
+host_env = "HOST"
+port_env = "PORT"
+
+[run.health]
+http = "/health"

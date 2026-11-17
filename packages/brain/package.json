@@ -1,0 +1,67 @@
+{
+  "name": "@miyoria/brain",
+  "version": "0.1.0",
+  "description": "agent: Cognition core: sessions, attention, prompt assembly, generation and expression parsing; arbiter: Arbiter: the one place that decides whether she speaks or acts now, and her ledger; activity: ActivityManager: the one owner of what she is doing (voice presence, broadcast, activity); directive: the owner's standing rules for what she may do; self: the phase-3 turn runner: one run, its profiles, prompt layout, guard, loop and triage; selfhost: the text conversations on that runner, wired to today's services",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    "./agent": {
+      "@miyoria/source": "./agent/src/index.ts",
+      "types": "./dist/agent/src/index.d.ts",
+      "default": "./dist/agent/src/index.js"
+    },
+    "./arbiter": {
+      "@miyoria/source": "./arbiter/src/index.ts",
+      "types": "./dist/arbiter/src/index.d.ts",
+      "default": "./dist/arbiter/src/index.js"
+    },
+    "./activity": {
+      "@miyoria/source": "./activity/src/index.ts",
+      "types": "./dist/activity/src/index.d.ts",
+      "default": "./dist/activity/src/index.js"
+    },
+    "./directive": {
+      "@miyoria/source": "./directive/src/index.ts",
+      "types": "./dist/directive/src/index.d.ts",
+      "default": "./dist/directive/src/index.js"
+    },
+    "./self": {
+      "@miyoria/source": "./self/src/index.ts",
+      "types": "./dist/self/src/index.d.ts",
+      "default": "./dist/self/src/index.js"
+    },
+    "./selfhost": {
+      "@miyoria/source": "./selfhost/src/index.ts",
+      "types": "./dist/selfhost/src/index.d.ts",
+      "default": "./dist/selfhost/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miyoria/commands": "workspace:*",
+    "@miyoria/gate": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@miyoria/memory": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
+    "@miyoria/store": "workspace:*",
+    "@miyoria/types": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.5",
+    "opencc-js": "^1.4.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@miyoria/stage": "workspace:*",
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

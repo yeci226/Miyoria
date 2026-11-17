@@ -1,7 +1,7 @@
 // The shapes shared with the panel, the stage overlay and the Discord commands. Changing one
 // changes the contract (docs/design/economy.md).
 
-import { type AccountRef, type ContextKey, serviceKey } from "@miyoria/types";
+import { type AccountRef, type ContextKey, Events, serviceKey } from "@miyoria/types";
 import type { AchievementUnlocked } from "./v2-types.js";
 
 export type FeedItem = "rice" | "big_bowl" | "dessert";
@@ -156,7 +156,7 @@ export interface WalletExport {
 }
 
 /** Bus topic of every accepted gift (the overlay merges them). */
-export const GIFT_TOPIC = "economy.gift";
+export const GIFT_TOPIC = Events.EconomyGift.type;
 
 /** Payload of `economy.gift`. */
 export interface GiftEvent {
@@ -339,7 +339,7 @@ export interface BountyView {
 }
 
 /** Bus topic of what goes on the stream overlay's screen line (a paid message, a dedication). */
-export const SCREEN_TOPIC = "economy.screen";
+export const SCREEN_TOPIC = Events.EconomyScreen.type;
 
 /** Payload of `economy.screen`; texts were already screened. */
 export interface ScreenEvent {

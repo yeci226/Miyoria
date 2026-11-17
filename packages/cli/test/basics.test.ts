@@ -99,7 +99,7 @@ describe("validation", () => {
     expect(v.databaseUrl("memory://")).toBeNull();
     expect(v.databaseUrl("sqlite:data/miyoria.db")).toBeNull();
     expect(v.databaseUrl("sqlite:")).not.toBeNull();
-    expect(v.databaseUrl("postgres://u:p@127.0.0.1:5432/db")).toBeNull();
+    expect(v.databaseUrl("postgres://u:p@127.0.0.1:5432/db")).toMatch(/不支援 PostgreSQL/);
     expect(v.databaseUrl("mysql://x")).not.toBeNull();
   });
 

@@ -60,7 +60,7 @@
 
 ## 3. 感知 Perception
 
-新服務 `WorldStateKey`(新套件 `@miyoria/world`),整合各來源成一份可查詢的世界快照,並把「值得注意的變化」發成 `world.salient` 事件。
+新服務 `WorldStateKey`(新套件 `@miyoria/memory/world`),整合各來源成一份可查詢的世界快照,並把「值得注意的變化」發成 `world.salient` 事件。
 
 | 來源 | 內容 | 需要的改動 |
 |---|---|---|
@@ -202,7 +202,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
 - 預設不能連外,只開白名單;CPU、記憶體、執行時間上限。
 - 她寫的工具要你核准才註冊成工具;核准後仍在沙箱裡跑。
 
-**實作狀態(2026-11-02):F 已完成**(核心見下,接上閘門與工具見第 15 節),在 `@miyoria/sandbox`(模組 `sandbox`,opt-in,預設關閉)。完整的旗標、威脅模型與剩餘風險見 [`packages/sandbox/README.md`](../../packages/sandbox/README.md)。
+**實作狀態(2026-11-02):F 已完成**(核心見下,接上閘門與工具見第 15 節),在 `@miyoria/workspace/sandbox`(模組 `sandbox`,opt-in,預設關閉)。完整的旗標、威脅模型與剩餘風險見 [`packages/workspace/sandbox/README.md`](../../packages/workspace/sandbox/README.md)。
 
 - `SandboxKey`:`run({ language: "python" | "node", code, files, stdin, timeout_ms, network })`,每次一個新容器(`--rm`、`--network none`、`--read-only` + tmpfs `/tmp`、只有 `/work` 可寫、非 root、`--cap-drop ALL`、`no-new-privileges`、`--pids-limit` / `--memory` / `--cpus` / `ulimit`、牆鐘逾時以容器名稱 `docker kill`、輸出上限、並行上限、啟動時依 label 清掉殘留容器);Docker 沒開時模組 degraded,不會 crash。
 - 工具工作區:每個 profile 一個持久資料夾放她的腳本,執行時可唯讀掛到 `/tools`。
@@ -261,7 +261,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
 
 完成的內容(細節見 [ARCHITECTURE.md](../ARCHITECTURE.md) §4.4、§8.1、§11.3、§14.1、§17):
 
-- 新套件 `@miyoria/actions`(基礎套件):`ActuatorRegistry`(app 開機時建立,`ActuatorRegistryKey` / `ActuatorExecutorKey`)、閘門、自我審核與擁有者確認、`/admin autonomy pause|resume|status`、`/me privacy`,module `actions` 套用 `[modules.actions]`。
+- 新套件 `@miyoria/gate/actions`(基礎套件):`ActuatorRegistry`(app 開機時建立,`ActuatorRegistryKey` / `ActuatorExecutorKey`)、閘門、自我審核與擁有者確認、`/admin autonomy pause|resume|status`、`/me privacy`,module `actions` 套用 `[modules.actions]`。
 - `@miyoria/types`:`Principal`(`self` / `user` / `command` / `panel` / `director`,帶 requester、context、override、actor)、`ActionPayload` 的 `actuate`、`untrusted.ts`(`neutralize`、`dataBlock`、`safeName`、`filterOutgoing`、`maskSecrets`)、`PlatformSink.openDm`;`ToolContext` 多了 `principal`。
 - 能力與工具:`voice.join/leave`、`stream.start/stop`、`stage.scene`、`game.start/stop/goal`、`message.dm`、`channel.activeness`,反應回合可用;指令、面板(場景 / 直播 / 說話)、遊戲導演都改走閘門。
 - 防 injection 第一步:外部衍生內容移到 user role 的資料訊息、跳脫分隔符與控制字元、顯示名稱處理;`remember` 記錄來源(新欄位 `memory_records.source`,migration 0004)並讀成「「X」說過:…」;遊戲導演的 prompt 把遊戲聊天標成不可信資料;輸出過濾(agent + Discord sink)。
@@ -282,7 +282,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
 
 ## 14. 階段 B 實作紀錄(2026-11-02)
 
-已完成:`@miyoria/world`(模組 `world`,`WorldStateKey` + `PresencePrivacyKey`)、`@miyoria/self`(模組 `self`,`SelfStateKey`)、Bot 的 presence / members / voice states、`/me privacy`、prompt 段落 `world` 與 `self`、`GET /api/self`、`GET /api/world`、面板「內心」頁(狀態 · 感情 · 世界;之後的內心獨白時間軸可以再加一個分頁)。服務介面在 `@miyoria/types` 的 `world.ts`、`self.ts`、`privacy.ts`,階段 A 的工具與階段 C 的心智迴圈直接用。
+已完成:`@miyoria/memory/world`(模組 `world`,`WorldStateKey` + `PresencePrivacyKey`)、`@miyoria/heart/self`(模組 `self`,`SelfStateKey`)、Bot 的 presence / members / voice states、`/me privacy`、prompt 段落 `world` 與 `self`、`GET /api/self`、`GET /api/world`、面板「內心」頁(狀態 · 感情 · 世界;之後的內心獨白時間軸可以再加一個分頁)。服務介面在 `@miyoria/types` 的 `world.ts`、`self.ts`、`privacy.ts`,階段 A 的工具與階段 C 的心智迴圈直接用。
 
 與設計的差異 / 補充:
 
@@ -297,7 +297,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
 
 ## 15. 階段 F 實作紀錄(2026-11-02)
 
-核心(沙箱、工具工作區、自寫工具的儲存)見 8.3;這次把它接上閘門。細節見 [`packages/sandbox/README.md`](../../packages/sandbox/README.md)「閘門與工具」與 [ARCHITECTURE.md](../ARCHITECTURE.md) §9.2、§14.1、§17。
+核心(沙箱、工具工作區、自寫工具的儲存)見 8.3;這次把它接上閘門。細節見 [`packages/workspace/sandbox/README.md`](../../packages/workspace/sandbox/README.md)「閘門與工具」與 [ARCHITECTURE.md](../ARCHITECTURE.md) §9.2、§14.1、§17。
 
 完成的內容:
 
@@ -355,7 +355,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
 
 - **OBS 智慧場景**(`@miyoria/stage`,`stage.link` 模組):場景用途 `chat` / `game` / `brb` / `starting` / `ending`(擁有者可在設定加自己的),`SceneRolesKey`;第一次看到場景清單時用 `fast` 模型分類並存起來(`_global` / `stage:scene_roles`),沒有模型或失敗時用關鍵字;設定檔 `[modules."stage.link".scenes] roles` 最優先,面板「直播」頁的「場景用途」卡可以改(`GET|PUT /api/stage/scenes`、`POST /api/stage/scenes/classify`)。場景導演依狀態切換並帶轉場(預設轉場 + 個別用途的轉場,Stage Link `scene` 訊息多了 `transition` / `transition_ms`,節點用 `SetCurrentSceneTransition` / `SetCurrentSceneTransitionDuration`)。`stage.scene` 收 `role` 或 `name`;導演每次切換都是 `stage.scene {role}`、principal `director` 過閘門。
 - **「去玩 Minecraft」**:`game.start` 先用 observe 確認遊戲開著、模組連上(`[modules.game] require_connected`,預設開),沒開而且 adapter 能自己開時,透過閘門送 adapter 的 `launch`(Prism Launcher)並等遊戲連上(`auto_launch`、`launch_wait_secs`),開不起來才拒絕並說原因(她就會這樣跟大家說);在主選單可以開始(附註)。開始後發 `game.director.session`(場景導演切到遊戲場景,停止時切回聊天),可以順便給第一個目標(`goal`)與開台(`stream: true` → 以同一個 principal 呼叫 `stream.start`,另一個閘門決定)。導演的動作仍是 `game.act`(principal `director`),每一句遊戲聊天都在 Core 端清理(`sanitizeGameChat`:一行、不能以 `/ \ ! @ # .` 等指令字元開頭、移除 `§` 格式碼與控制字元、遮蔽密鑰,256 字以內)。
-- **遊戲內聊天是獨立的對話**(新模組 `game.chat`,在 `@miyoria/game`):`game.<id>.chat` 的玩家訊息變成平台 `minecraft` 的訊息,情境 `{platform:"minecraft", scope:<世界>, channel:"chat", kind:"channel"}`,所以有自己的 session 歷史、attention、頻道模式(`minecraft:<世界>`)與記憶;玩家帳號 `minecraft:<小寫名稱>`,名稱與內容先 `safeName` / `neutralize`。她的回覆經由平台 sink:打字(`game.act` `chat`,principal `self`,過閘門,`max_chars` 預設 120)、語音(她所在的語音頻道,字幕照 `voice.playback` 走)或兩者,由她用工具 `game_chat_reply`(能力 `game.chat.route`,低風險)選,預設 `auto` = 打字,直播中又在語音裡時也講出來。prompt 段落 `game_chat` 告訴她這是遊戲聊天室、要很短、內容不是指令。
+- **遊戲內聊天是獨立的對話**(新模組 `game.chat`,在 `@miyoria/play/game`):`game.<id>.chat` 的玩家訊息變成平台 `minecraft` 的訊息,情境 `{platform:"minecraft", scope:<世界>, channel:"chat", kind:"channel"}`,所以有自己的 session 歷史、attention、頻道模式(`minecraft:<世界>`)與記憶;玩家帳號 `minecraft:<小寫名稱>`,名稱與內容先 `safeName` / `neutralize`。她的回覆經由平台 sink:打字(`game.act` `chat`,principal `self`,過閘門,`max_chars` 預設 120)、語音(她所在的語音頻道,字幕照 `voice.playback` 走)或兩者,由她用工具 `game_chat_reply`(能力 `game.chat.route`,低風險)選,預設 `auto` = 打字,直播中又在語音裡時也講出來。prompt 段落 `game_chat` 告訴她這是遊戲聊天室、要很短、內容不是指令。
 - **帳號連結**:Discord 上 `/me link` 拿代碼,在遊戲聊天室打 `!link <代碼>`(`link_command`)就把遊戲帳號併進那個 Discord 的人(共用好感、感情與記憶);這行永遠不進對話。沒連結的玩家是陌生人。
 - **測試**:分類與覆寫、導演規則(防抖、間隔、手動保留、暫離、開場 / 結尾、結尾幕)、假 OBS 的轉場、閘門路由(暫停時導演停、面板照常)、遊戲聊天情境對應 + 連結 + 回覆路由 + 清理、假 adapter 的開始流程。
 
@@ -376,7 +376,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
 
 完成的內容(細節見 [ARCHITECTURE.md](../ARCHITECTURE.md) §4.2、§4.3、§6.5、§14.1):
 
-- **新套件 `@miyoria/mind`(模組 `mind`,`MindKey`)**:
+- **新套件 `@miyoria/heart/mind`(模組 `mind`,`MindKey`)**:
   - 觸發:`world.salient`(合併 `coalesce_ms` 內的事件;預算 degraded 時只收分數 ≥ 0.6 的)、自適應心跳(閒時約 12 分鐘,熱鬧或在有人的語音裡 4 分鐘,議程到期 3 分鐘;每次心跳什麼都沒發生就慢 1.5 倍(最多 3 次)、安靜時段與預算 degraded 各慢 3 倍、很無聊時快一點;夾在 `min_interval_secs` 與 `max_heartbeat_mins` 之間,exhausted 時沒有心跳)、她的回合結束(距上次想法 5 分鐘以上)、她所在的語音頻道聊完後安靜 `voice_quiet_secs`(5 分鐘內至少 3 句,同一頻道 3 分鐘最多一次),以及其他模組的建議(`MindKey.suggest`)。
   - 輸入是精簡快照:該伺服器的 `WorldState.summary`、地點與人(短代號 `p1` / `u1`,她只能指快照裡有的)、SelfState(數字)、議程(`g1`)、最近 5 則想法、在場的人的感情描述與關係標籤、記憶(呼叫 prompt contributor `memory`,沿用它的隱私範圍;私訊情境不叫)、她能用的能力清單與底線。**system 只放人格、規則、輸出格式、能力清單和她自己的數字**;名字、世界、觸發細節、建議、記憶,連她自己之前寫的想法 / 議程 / 理由 / 感情描述(都是從別人影響得到的材料寫的)都放在 user role 的資料區塊(`dataBlock`)。
   - 用途 `mind`(thinking 開、`json_mode`;沒設就用 `chat` 並記一行警告)。回覆用 zod 逐欄、逐項驗證,壞掉的部分丟掉、其他照用,而且全部有上限:想法 600 字、感情 3 則(描述 300 字)、慾望每項 ±0.2、多話程度 3 則(0~1,5 分鐘~1 天)、議程新增 3 則(最多一週)、意圖 `max_intents` 則(15 秒~15 分鐘到期)。
@@ -385,7 +385,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
   - 成本:每小時呼叫數(滑動一小時,`max_calls_per_hour`)、兩次最小間隔、累計 token;暫停或預算 exhausted 時不想,也不留待處理的觸發。
 - **意圖 → 她自己發起的回合**:agent 提供 `IntentSinkKey`。
   - 新能力 `chat.start`(在請求的情境開口:文字頻道,或她所在的語音頻道)與 `chat.dm`(私訊某人並聊天,`consent: dm`),中風險、有自己的預設次數(`chat.start` 每天 24 次、每人 4 次、冷卻 1 分鐘;`chat.dm` 6 / 2 / 10 分鐘),都可以用 `[modules.actions.limits."chat.start"]` 改。執行函式把意圖交給該情境的 coordinator。
-  - 其他能力(`voice.join`、`stream.start`、`stage.scene`……)先以 `self` 名義過閘門執行,成功而且她有想說的開場才開回合:`voice.join` 等她真的進了語音頻道(`voice.joined`)才在那裡開口,其他在意圖的情境開口。沒有 agent 時 mind 直接呼叫閘門(只做不說)。
+  - 其他能力(`voice.join`、`stream.start`、`stage.scene`……)先以 `self` 名義過閘門執行,成功而且她有想說的開場才開回合:`voice.join` 等她真的進了語音頻道(`voice.joined`)才在那裡開口,其他在意圖的情境開口。agent 是必要的模組;沒有看板(agent 沒在跑)時 mind 把想做的事丟掉並記一行 debug,不會自己過閘門去做。
   - Coordinator 的新輸入 `intent`:不打斷進行中的回合、等待中的訊息、還在排隊的語音,語音裡也不壓過正在講話的人;空下來才開,過期就丟(發 `agent.decision` 說明),新的意圖取代還在等的。回合 ID 事先決定,閘門決定、`agent.decision`、`agent.turn.completed` 都對得回日誌。
   - 回合本身:不跑 attention、**有工具**,工具以 `Principals.self` 呼叫(能力工具過閘門;需要某個人權限節點的其他工具一律拒絕),她的打算(做了什麼、為什麼、開場想法)放在資料訊息「你的打算」。頻道模式 `off` / `mention-only` 仍是底線,預算不是 ok 時不開。
 - **把數字交給她(§6)**:attention 讀 SelfState 對這個情境的 talkativeness(沒設時照舊用 activeness 與語音的 `ambient_factor` / `interrupt_scale`):插話機率 ×4^(2L−1)(0.5 = 平常,1 = 四倍)、冷卻 ×4^(1−2L)(但不低於新的 `min_cooldown_ms`,文字 2 秒、語音 5 秒)、灰色地帶門檻 ×2^(1−2L)、語音裡別人還在講話時的倍率 0.2 + 0.6L(`interrupt_scale = 0` 仍代表「永遠不壓過別人」)、L ≤ 0.05 = 不插話。底線照舊是設定:近期佔比上限 `max_share_of_recent` 與最小冷卻。`channel_activeness` 工具(「活躍點」)在 self 模組存在時改成設定該情境的 talkativeness(low 0.2 / medium 0.5 / high 0.85),所以在語音裡也真的會更常接話;語音回覆仍不思考。
@@ -407,7 +407,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
 
 完成的內容(細節見 [ARCHITECTURE.md](../ARCHITECTURE.md) §4.1、§4.4、§5.2、§6.6、§13、§16):
 
-- **新套件 `@miyoria/learning`**,三個模組:`conversation`(持續的對話整理)、`knowledge`(她自己整理的資料庫)、`reflect`(回饋訊號、學到的事、反思)。服務介面在 `@miyoria/types` 的 `learning.ts`:`ConversationStatesKey`、`KnowledgeKey`、`LessonsKey`、`ReflectionKey`、`MemoryCuratorKey`(由 `memory` 提供)。
+- **新套件 `@miyoria/memory/learning`**,三個模組:`conversation`(持續的對話整理)、`knowledge`(她自己整理的資料庫)、`reflect`(回饋訊號、學到的事、反思)。服務介面在 `@miyoria/types` 的 `learning.ts`:`ConversationStatesKey`、`KnowledgeKey`、`LessonsKey`、`ReflectionKey`、`MemoryCuratorKey`(由 `memory` 提供)。
 - **持續的對話整理**(`conversation`):每個情境(文字頻道、私訊、語音、遊戲聊天)有一份「她的筆記」。新進 `fold_every_messages`(16)句,或停頓 `fold_idle_secs`(90 秒)且至少 `min_lines` 句時,把**還沒整理的最舊那段**(最多 `max_lines_per_fold`)跟之前的筆記一起送 `summarizer`,更新而不是重寫(增量)。讀的是 `message_log`(recorder 寫的,包括語音轉錄與她說的話),在模組自己的背景工作裡跑,所以**不在語音的熱路徑上**:回合只從記憶體讀筆記。存在設定 `conversation:state:<情境>`,重開會載回並接著整理。整理完發 `conversation.folded`:`memory` 立刻整理那個情境(不會再因為一次超過 `max_lines_per_batch` 句而漏掉舊的),`reflect` 記下長對話。
   - **prompt 版面**:agent 只放筆記沒涵蓋的原文(`history_after_fold`,至少保留最新 10 句),筆記由 prompt contributor `conversation`(「這段對話的前情提要」)放在資料訊息裡;所以舊的對話被丟掉也不會忘記。
 - **她自己整理的資料庫**(`knowledge`):固定的只有「信封」——主題(某個人、某個伺服器、她自己、她自己取名的主題)、她自己定的種類與標題、**每個欄位的來源**(她自己 / 她推測 / 某人說的 / 面板,含信心、時間與隱私來源)、版本紀錄(最多 `history_keep` 筆)、大小上限(每份、每個欄位、每個主題合計、總份數)。**內容沒有 schema**:任意 JSON(文字值可以是 Markdown),種類、欄位、巢狀都由她決定,也能改名、合併、拆開。修改是 JSON-patch 式的操作(`add` / `replace` / `remove` / `move`),整批成功或整批不改。只驗證信封、JSON 格式、深度與大小、key 是純資料(擋 `__proto__` 之類,控制字元與資料區塊分隔符會被換掉)。存在 `knowledge:doc:<id>`。
@@ -423,7 +423,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
   - 紀錄 `reflect:run:<id>`(保留 `runs_keep`),面板看得到。
 - **想法日誌整理**(`mind`):原文最多 `journal_keep + digest_batch - 1` 則;累積到 `journal_keep + digest_batch` 時,把超過 `journal_keep` 的最舊那些用 `digest_purpose` 整理成一則摘要(`mind:digest:<id>`,保留 `digests_keep`),預算不是 ok、沒有模型或失敗時改成不用模型的簡單摘要,所以設定永遠有上限。最新一則摘要放進她想法的資料區塊「更早的想法(整理)」。
 - **心智迴圈**也看得到她的文件、適用的學到的事與焦點情境的前情提要,並能在回覆裡修改文件。
-- **結構化輸出不依賴 JSON mode**(`@miyoria/llm` 的 `completeJson`、`extractJsonObject`):`json_mode` 只是提示(provider 以 400 / 415 / 422 拒絕時同一個請求不帶它再送一次);prompt 一律寫明 JSON 格式;回覆從整段文字、code fence 或前後有文字的平衡 `{…}` 裡找第一個物件;用 zod 驗證;不能用時把具體的錯誤回饋給模型**最多重試一次**,還是不行就放棄、什麼都不套用。對話整理、反思、日誌摘要都用它;心智迴圈也改用同一個擷取方式並加上一次修正重試。
+- **結構化輸出不依賴 JSON mode**(`@miyoria/llm/llm` 的 `completeJson`、`extractJsonObject`):`json_mode` 只是提示(provider 以 400 / 415 / 422 拒絕時同一個請求不帶它再送一次);prompt 一律寫明 JSON 格式;回覆從整段文字、code fence 或前後有文字的平衡 `{…}` 裡找第一個物件;用 zod 驗證;不能用時把具體的錯誤回饋給模型**最多重試一次**,還是不行就放棄、什麼都不套用。對話整理、反思、日誌摘要都用它;心智迴圈也改用同一個擷取方式並加上一次修正重試。
 - **成本與上限**:都只在設定:對話整理每小時 / 每天次數、同一情境最小間隔;反思每天次數與最小間隔;日誌摘要每 `digest_batch` 則一次。預算 degraded:整理門檻與間隔加倍、次數減半,只做每日反思(不做長對話後的);exhausted:都停。自主暫停時不反思。
 - **資料類別**:新增 `knowledge`(她整理的資料)、`learning`(學到的事、反思紀錄與狀態、回饋)、`conversation`(對話筆記);`inner` 多了 `mind:digest:`;刪聊天紀錄會一起刪對話筆記(它們是從紀錄整理出來的),刪人物會一起刪資料與學到的事。`/admin memory wipe`:「記憶」含 `knowledge`,「記憶與關係」含 `learning`,「聊天紀錄」含 `conversation`。
 - **API 與面板**:`GET /api/knowledge`、`GET /api/knowledge/conversations`、`GET /api/reflection?days=7`、`GET /api/mind/digests`(唯讀)。面板「內心」多了「知識」(依主題分組、再依種類,任意 JSON 以可讀的方式顯示:物件是欄位列、清單是條列、文字保留換行;欄位來源只在跟上層不同時標示;版本紀錄可展開;下面是各頻道的對話筆記)與「反思」(狀態、學到的事、7 天的反應、反思紀錄);「想法」底下多了「更早的想法(整理)」。

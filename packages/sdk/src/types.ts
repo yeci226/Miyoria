@@ -1,341 +1,198 @@
-// Wire types of the Miyoria extension protocol, mirroring the Rust types in
-// `miyoria-types`, `miyoria-commands` and `miyoria-ext-host` (serde JSON
-// form). Hand-written: keep in sync with `docs/protocols/extension-rpc.md`.
+// Wire types of the Miyoria extension protocol (JSON form), derived from the schemas in
+// `@miyoria/contracts/ext` and `@miyoria/contracts/wire`: there is one description of the
+// protocol, and these are its names for extension authors. Where the inferred type would differ
+// in a way an author notices from the shape this package always had (a field optional or
+// required, `unknown` or JSON), the old shape is kept here and the difference is listed beside it.
+
+import type {
+  AnyEventDefinition,
+  BusEnvelopeJson,
+  DecisionTraceData,
+  EventPayload,
+  ModuleStateData,
+} from "@miyoria/contracts/events";
+import type {
+  ExtArgKind,
+  ExtArgSpec,
+  ExtArgValue,
+  ExtCommandReply,
+  ExtCommandSpec,
+  ExtEventNotification,
+  ExtGoalDecl,
+  ExtInitializeParamsIn,
+  ExtInvocation,
+  ExtParticipant,
+  ExtPermissions,
+  ExtPriority,
+  ExtPromptRequest,
+  ExtPromptSection,
+  ExtResolvedUser,
+  ExtRpcErrorObject,
+  ExtRpcMessage,
+  ExtToolCallContext,
+  ExtToolDeclIn,
+} from "@miyoria/contracts/ext";
+import { EXT_ERROR_CODE, EXT_PROTOCOL_VERSION } from "@miyoria/contracts/ext";
+import type {
+  AccountRef,
+  Attachment,
+  Author,
+  ContextKey,
+  ContextKind,
+  IncomingMessage,
+  MessageRef,
+  PlaybackState,
+  Timestamp,
+  VoiceParticipant,
+  VoiceUtterance,
+} from "@miyoria/contracts/wire";
 
 // ---- ids and platform -------------------------------------------------------
 
 /** ULID string. */
 export type Ulid = string;
-/** RFC 3339 timestamp. */
-export type Timestamp = string;
 
-export interface AccountRef {
-  platform: string;
-  id: string;
-}
+export type {
+  AccountRef,
+  Attachment,
+  Author,
+  ContextKey,
+  ContextKind,
+  IncomingMessage,
+  MessageRef,
+  PlaybackState,
+  Timestamp,
+  VoiceParticipant,
+  VoiceUtterance,
+};
 
-export type ContextKind = "channel" | "thread" | "dm" | "voice";
-
-export interface ContextKey {
-  platform: string;
-  /** Guild / server id; `null` for DMs. */
-  scope: string | null;
-  channel: string;
-  kind: ContextKind;
-}
-
-export interface MessageRef {
-  context: ContextKey;
-  id: string;
-}
-
-export interface Author {
-  account: AccountRef;
-  display_name: string;
-  is_bot: boolean;
-}
-
-export interface Attachment {
-  url: string;
-  filename: string;
-  content_type: string | null;
-}
-
-export interface IncomingMessage {
-  id: MessageRef;
-  author: Author;
-  text: string;
-  mentions_self: boolean;
-  reply_to_self: boolean;
-  attachments: Attachment[];
-  ts: Timestamp;
-}
-
-export type Priority = "system" | "direct" | "request" | "initiative" | "idle";
+export type Priority = ExtPriority;
 
 // ---- events -----------------------------------------------------------------
 
-export type ModuleStateKind =
-  | "disabled"
-  | "starting"
-  | "running"
-  | "degraded"
-  | "stopping"
-  | "stopped"
-  | "failed";
+export type ModuleStateKind = ModuleStateData["state"];
+export type DecisionTrace = DecisionTraceData;
 
-export interface DecisionTrace {
-  turn: Ulid;
-  context: ContextKey;
-  respond: boolean;
-  score: number;
-  reasons: string[];
-}
+/** One version of one event type, as `Events` holds them (from `@miyoria/contracts/events`). */
+export type { AnyEventDefinition, EventPayload };
 
-export interface VoiceParticipant {
-  account: AccountRef;
-  display_name: string;
-  is_self: boolean;
-  muted: boolean;
-  deafened: boolean;
-}
+/**
+ * A bus event as the `event` notification delivers it (protocol 2): `type` is the dotted topic
+ * (`voice.playback`), `data` the payload of that type at `v`, every other key present and `null`
+ * when unset. `source` is the module that published it (`agent`, `ext.<id>`, ...).
+ */
+export type Envelope = BusEnvelopeJson;
 
-export interface VoiceUtterance {
-  id: string;
-  context: ContextKey;
-  speaker: Author;
-  text: string;
-  language: string | null;
-  emotion: string | null;
-  audio_events: string[];
-  started_at: Timestamp;
-  ended_at: Timestamp;
-  asr_ms: number;
-}
+/** An envelope of one definition's events: `data` is its payload (`is` narrows to it). */
+export type EnvelopeOf<D extends AnyEventDefinition> = Omit<Envelope, "data"> & {
+  data: EventPayload<D>;
+};
 
-export type PlaybackState = "started" | "finished" | "interrupted" | "failed";
+/** Params of the `event` notification. */
+export type EventNotification = ExtEventNotification;
 
-/** `miyoria_types::Event` (`{ type, data }`). */
-export type Event =
-  | { type: "platform_ready"; data: { platform: string; self_account: AccountRef } }
-  | { type: "platform_message_created"; data: IncomingMessage }
-  | { type: "platform_typing"; data: { context: ContextKey; account: AccountRef } }
-  | { type: "agent_turn_started"; data: { turn: Ulid; context: ContextKey } }
-  | { type: "agent_decision"; data: DecisionTrace }
-  | { type: "agent_turn_completed"; data: { turn: Ulid; context: ContextKey; text: string } }
-  | {
-      type: "action_completed";
-      data: {
-        action: Ulid;
-        turn: Ulid | null;
-        ok: boolean;
-        error: string | null;
-        message: MessageRef | null;
-      };
-    }
-  | { type: "voice_joined"; data: { context: ContextKey; participants: VoiceParticipant[] } }
-  | { type: "voice_left"; data: { context: ContextKey; reason: string | null } }
-  | { type: "voice_participants"; data: { context: ContextKey; participants: VoiceParticipant[] } }
-  | { type: "voice_speaking"; data: { context: ContextKey; account: AccountRef; speaking: boolean } }
-  | { type: "voice_utterance"; data: VoiceUtterance }
-  | {
-      type: "voice_playback";
-      data: {
-        context: ContextKey;
-        turn: Ulid | null;
-        state: PlaybackState;
-        text: string;
-        emotion?: string | null;
-        heard_ms?: number | null;
-        total_ms?: number | null;
-        blocked?: string | null;
-      };
-    }
-  | {
-      type: "agent_initiative";
-      data: { context: ContextKey; reason: string; hint: string; about: AccountRef[] };
-    }
-  | {
-      type: "module_state_changed";
-      data: { module: string; state: ModuleStateKind; reason: string | null };
-    }
-  | { type: "custom"; data: { topic: string; payload: unknown } };
-
-/** Params of the `event` notification: the bus envelope plus its topic. */
-export interface Envelope {
-  /** Dotted topic, e.g. `platform.message.created` or a custom topic. */
-  topic: string;
-  id: Ulid;
-  ts: Timestamp;
-  /** Module that published it, e.g. `agent` or `ext.<id>`. */
-  source: string;
-  causation: Ulid | null;
-  correlation: Ulid | null;
-  event: Event;
+/** What `ctx.events.publish` may say about an event besides its type and payload. */
+export interface PublishOptions {
+  /** The agent turn the event belongs to. */
+  turn?: string | null;
+  /** The event that caused this one: the `id` of an envelope the extension received. */
+  parent?: string | null;
+  /** Attention and dedupe key. */
+  key?: string | null;
 }
 
 // ---- prompts ----------------------------------------------------------------
 
-export interface Participant {
-  account: AccountRef;
-  display_name: string;
-  person: Ulid | null;
-}
-
-export interface PromptRequest {
-  profile: string;
-  turn: Ulid;
-  context: ContextKey;
-  participants: Participant[];
-  speakers: AccountRef[];
-  query: string;
-  recent: string[];
-  voice: boolean;
-  now: Timestamp;
-}
-
-export interface PromptSection {
-  key: string;
-  /** Heading shown to the model (Traditional Chinese). */
-  title: string;
-  body: string;
-  /** Lower comes first. */
-  order: number;
-}
+export type Participant = ExtParticipant;
+export type PromptRequest = ExtPromptRequest;
+export type PromptSection = ExtPromptSection;
 
 // ---- tools ------------------------------------------------------------------
 
 /** JSON Schema object (loosely typed). */
 export type JsonSchema = Record<string, unknown>;
 
-/** `tools.register` params / `contributions.tools` entry. */
-export interface ToolDecl {
-  /** May contain dots; the host registers it with `_` instead. */
-  name: string;
-  description: string;
-  parameters: JsonSchema;
-  permission?: string | null;
-}
+/**
+ * `tools.register` params / `contributions.tools` entry. Kept from the old shape: `parameters`
+ * is required and loosely typed (the contract gives it a default and types it as JSON).
+ */
+export type ToolDecl = Omit<ExtToolDeclIn, "parameters"> & { parameters: JsonSchema };
 
 /** `context` of `tools.call`. */
-export interface ToolCallContext {
-  turn: Ulid;
-  context: ContextKey;
-  /** Author of the message that triggered the turn. */
-  account: AccountRef;
-  message: MessageRef;
-  priority: Priority;
+export type ToolCallContext = ExtToolCallContext & {
   /**
    * Aborted when the host stops waiting for this call (`$/cancelRequest`: it timed out or the
    * turn was cancelled). Not on the wire; set by the SDK.
    */
   signal?: AbortSignal;
-}
+};
 
 // ---- commands ---------------------------------------------------------------
 
-export type ArgKind =
-  | { type: "string" }
-  | { type: "integer" }
-  | { type: "boolean" }
-  | { type: "choice"; choices: string[] }
-  | { type: "user" }
-  | { type: "role" };
-
-export interface ArgSpec {
-  name: string;
-  description: string;
-  kind: ArgKind;
-  required: boolean;
-}
-
-export interface CommandSpec {
-  /** One to three lowercase words. */
-  path: string[];
-  description: string;
-  args: ArgSpec[];
-  /** Permission node; `""` = everyone. */
-  permission: string;
-  ephemeral: boolean;
-}
-
-export type ArgValue = string | number | boolean;
-
-export interface ResolvedUser {
-  display_name: string;
-  platform_roles: string[];
-  is_guild_admin: boolean;
-}
+export type ArgKind = ExtArgKind;
+export type ArgSpec = ExtArgSpec;
+export type CommandSpec = ExtCommandSpec;
+export type ArgValue = ExtArgValue;
+export type ResolvedUser = ExtResolvedUser;
 
 /** `commands.invoke` params. */
-export interface Invocation {
-  path: string[];
-  args: Record<string, ArgValue>;
-  invoker: AccountRef;
-  invoker_display_name: string;
-  context: ContextKey;
-  invoker_is_guild_admin: boolean;
-  platform_roles?: string[];
-  resolved_users?: Record<string, ResolvedUser>;
-}
+export type Invocation = ExtInvocation;
 
-export interface CommandReply {
-  text: string;
+/**
+ * What a command returns. Kept from the old shape: `ephemeral` is a boolean when given
+ * (the host also reads `null` as missing).
+ */
+export type CommandReply = Omit<ExtCommandReply, "ephemeral"> & {
   /** Defaults to the spec's `ephemeral`. */
   ephemeral?: boolean;
-}
+};
 
 // ---- lifecycle --------------------------------------------------------------
 
-export interface Permissions {
-  events: string[];
-  tools: boolean;
-  commands: boolean;
-  network: string[];
-  input: string[];
-}
+export type Permissions = ExtPermissions;
 
-/** `initialize` params (host → extension). */
-export interface InitializeParams {
-  protocol: number;
-  host: { name: string; version: string };
-  /** `game`: the game id a declared game adapter owns (manifest `game`), else null / absent. */
-  extension: { id: string; version: string; dir: string; game?: string | null };
+/**
+ * `initialize` params (host to extension). Kept from the old shape: `config` is a record of
+ * `unknown`, and `extension.game` may be missing (an older host).
+ */
+export type InitializeParams = Omit<ExtInitializeParamsIn, "config"> & {
   config: Record<string, unknown>;
-  /** What the host grants (declared ∩ config override). */
-  permissions: Permissions;
-}
+};
 
-export interface Contributions {
+/**
+ * `tasks.register` params / `contributions.executor`: what the extension's executor offers.
+ * Kept from the old shape: every part is present when the SDK writes it, and a goal's
+ * `parameters` is loosely typed.
+ */
+export type ExecutorDecl = {
+  name: string;
+  goals: Array<Omit<ExtGoalDecl, "parameters"> & { parameters: JsonSchema | null }>;
+  guide: string | null;
+  /** The executor implements `steer` (the host answers a steer without it as unsupported). */
+  steer?: boolean;
+};
+
+export type Contributions = {
   tools: ToolDecl[];
   commands: CommandSpec[];
   prompts: string[];
   subscriptions: string[];
   /** The extension's task executor (`tasks.register`), if it has one. */
   executor?: ExecutorDecl | null;
-}
+};
 
-/** `tasks.register` params / `contributions.executor`: what the extension's executor offers. */
-export interface ExecutorDecl {
-  name: string;
-  goals: { name: string; description: string; parameters: JsonSchema | null; budget_s: number | null }[];
-  guide: string | null;
-  /** The executor implements `steer` (the host answers a steer without it as unsupported). */
-  steer?: boolean;
-}
-
-/** `initialize` result (extension → host). */
+/** `initialize` result (extension to host). */
 export interface InitializeResult {
+  /** The protocol version the extension speaks (`PROTOCOL_VERSION`). */
+  protocol: number;
   contributions: Contributions;
 }
 
 // ---- JSON-RPC ---------------------------------------------------------------
 
-export const ErrorCode = {
-  ParseError: -32700,
-  InvalidRequest: -32600,
-  MethodNotFound: -32601,
-  InvalidParams: -32602,
-  InternalError: -32603,
-  PermissionDenied: -32001,
-  Timeout: -32002,
-  Conflict: -32003,
-  Unavailable: -32004,
-  Closed: -32005,
-  /** The caller cancelled the request (`$/cancelRequest`, LSP's code). */
-  Cancelled: -32800,
-} as const;
+export const ErrorCode = EXT_ERROR_CODE;
 
-export interface RpcErrorObject {
-  code: number;
-  message: string;
-  data?: unknown;
-}
+export type RpcErrorObject = ExtRpcErrorObject;
+export type RpcMessage = ExtRpcMessage;
 
-export type RpcMessage =
-  | { jsonrpc: "2.0"; id: number | string; method: string; params?: unknown }
-  | { jsonrpc: "2.0"; method: string; params?: unknown }
-  | { jsonrpc: "2.0"; id: number | string | null; result: unknown }
-  | { jsonrpc: "2.0"; id: number | string | null; error: RpcErrorObject };
-
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = EXT_PROTOCOL_VERSION;

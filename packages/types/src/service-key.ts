@@ -1,13 +1,13 @@
 /**
- * Typed token for the kernel's service registry; the TypeScript stand-in for Rust's
- * `services().get::<dyn Trait>()`. Declare one constant next to the interface it names:
+ * Typed token for the kernel's service registry; looked up with
+ * `services().get(key)`. Declare one constant next to the interface it names:
  *
  * ```ts
  * export interface ActionSink { ... }
  * export const ActionSinkKey = serviceKey<ActionSink>("ActionSink");
  * ```
  *
- * The id is the Rust type name (without `dyn`), so logs and errors read the same as legacy.
+ * The id is the service's type name, which logs and errors show.
  * Lookups go by key object identity; two keys with the same id are different services.
  */
 export class ServiceKey<T> {

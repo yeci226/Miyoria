@@ -1,0 +1,24 @@
+# The lyrics service's environment (workers/lyrics/server.py and the workers/sing/lyrics.py,
+# lyricsllm.py it imports): light, no GPU and no PyTorch. Its own small project rather than the
+# sing environment, which would bring torch, demucs and Seed-VC's dependencies for nothing.
+# Not a package: `uv sync --frozen` installs the locked dependencies only.
+# Keep in step with requirements.txt (workers/tests/test_projects.py checks it) while the old
+# install command still reads that file.
+[project]
+name = "miyoria-worker-lyrics"
+version = "0.1.0"
+# lyricsllm.py imports tomllib (3.11).
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",   # multipart upload of the lead vocal for the ASR spot check
+    "httpx>=0.27",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+]
+
+[tool.uv]
+package = false
+# Workers run on Windows and Linux; nothing is locked for macOS.
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]

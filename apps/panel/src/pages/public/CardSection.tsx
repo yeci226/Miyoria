@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dices, Download, ExternalLink, Share2, Sparkles } from "lucide-react";
 import { useRef, useState } from "react";
-import type { IssuedCard, WalletView } from "@/api/types";
+import type { IssuedCard, WalletView } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { ConfirmDialog } from "@/components/confirm";
 import { EmptyLine, QueryView, SkeletonRows } from "@/components/query-state";
@@ -71,7 +71,7 @@ export function CardSection() {
   const api = useApi();
   const client = useQueryClient();
   const svg = useRef<SVGSVGElement>(null);
-  const cards = useQuery({ queryKey: CARDS, queryFn: ({ signal }) => api.memberCards({ signal }) });
+  const cards = useQuery({ queryKey: CARDS, queryFn: ({ signal }) => api.rpc.member.cards(undefined, { signal }) });
   // What they pay for on the next card: a picture of their own choosing, a foil finish.
   const [pose, setPose] = useState<string | null>(null);
   const [foil, setFoil] = useState(false);
@@ -86,7 +86,7 @@ export function CardSection() {
     mutationFn: () => {
       const paid = pose !== null || foil;
       const req = { ...(pose !== null ? { pose } : {}), ...(foil ? { foil: true } : {}) };
-      return api.memberIssueCard(req, paid ? newKey() : undefined);
+      return api.rpc.member.issueCard({ body: req, headers: paid ? { "idempotency-key": newKey() } : undefined });
     },
     onSuccess: (card) => {
       setPose(null);
@@ -96,7 +96,7 @@ export function CardSection() {
     onError: (e) => notify.error(e),
   });
   const reroll = useMutation({
-    mutationFn: () => api.memberRerollCard(newKey()),
+    mutationFn: () => api.rpc.member.rerollCard({ headers: { "idempotency-key": newKey() }, body: {} }),
     onSuccess: (card) => {
       setAskingReroll(false);
       done(card, false);

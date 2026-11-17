@@ -7,9 +7,8 @@
 // store answers `dailyTotals` with one `GROUP BY` (`LedgerStatsStore`, provided by the app); with
 // none, the table says it is not available rather than inventing numbers.
 
-import type { LedgerDayTotal } from "@miyoria/store";
-import { LedgerStatsKey, type LedgerStatsStore } from "@miyoria/store";
 import type { EconomyService } from "./economy.js";
+import { type LedgerDayTotal, LedgerStatsKey, type LedgerStatsStore } from "./records.js";
 import type { HealthView } from "./v2-types.js";
 
 export { type LedgerDayTotal, LedgerStatsKey, type LedgerStatsStore };

@@ -7,6 +7,8 @@ export default defineConfig({
   test: {
     projects: [
       "packages/*",
+      "tools/eval",
+      "tools/replay",
       "apps/overlay",
       "apps/voice-node",
       "extensions/minecraft/adapter",

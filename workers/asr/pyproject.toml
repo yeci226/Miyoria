@@ -1,0 +1,46 @@
+# The ASR worker's environment (workers/asr/server.py). Not a package: `uv sync --frozen` installs
+# the locked dependencies only. Each backend is an extra; sync exactly one of them:
+#   qwen3       Qwen3-ASR via qwen-asr on CUDA torch (the default, ASR_BACKEND=qwen3)
+#   sensevoice  SenseVoice-Small via sherpa-onnx on the CPU, no PyTorch (ASR_BACKEND=sensevoice)
+# Keep in step with requirements.txt, requirements-qwen3.txt and requirements-sensevoice.txt
+# (workers/tests/test_projects.py checks it) while the old install command and the Docker image
+# still read those files.
+[project]
+name = "miyoria-worker-asr"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",   # multipart/form-data parsing for POST /asr
+    "numpy>=1.26",
+    "soundfile>=0.12",           # WAV decode (any sample rate / channels / bit depth)
+    "scipy>=1.11",               # resample_poly -> 16 kHz
+]
+
+[project.optional-dependencies]
+qwen3 = [
+    "torch",                     # the CUDA build, see [tool.uv.sources]
+    "qwen-asr",
+]
+sensevoice = [
+    "sherpa-onnx>=1.12",
+]
+
+[tool.uv]
+package = false
+# Workers run on Windows and Linux; nothing is locked for macOS.
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
+
+# The CUDA 12.8 build of torch, replacing the old first pip step
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# `explicit` keeps every other package on PyPI.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]

@@ -191,10 +191,6 @@ export interface ResolveResult {
 
 export const COMMISSION_KINDS = ["poem", "name", "tool", "song", "voice"] as const;
 export type CommissionKind = (typeof COMMISSION_KINDS)[number];
-/** On the bus when someone commissions her: whatever does the work listens. */
-export const COMMISSION_TOPIC = "economy.commission";
-/** On the bus when she delivered or declined: whatever sends messages hands it to the person. */
-export const COMMISSION_DONE_TOPIC = "economy.commission.done";
 
 export interface CommissionView {
   id: string;
@@ -220,9 +216,6 @@ export interface CommissionResult {
 }
 
 // ---- her room --------------------------------------------------------------------------------
-
-/** On the bus when an item of her room is fully funded: whatever draws the room puts it in. */
-export const ROOM_TOPIC = "economy.room.placed";
 
 export interface RoomView {
   id: string;

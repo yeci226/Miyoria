@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useSkill, useSkills } from "@/app/v4-queries";
+import { useSkill, useSkills } from "@/app/queries";
 import { ModuleQuery } from "@/components/module-query";
 import { EmptyLine, ErrorLine, SkeletonRows } from "@/components/query-state";
 import { StatusBadge } from "@/components/status";

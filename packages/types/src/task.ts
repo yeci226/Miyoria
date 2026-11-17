@@ -7,12 +7,22 @@
 // out) must be harmless: its late events are ignored by id.
 //
 // On the bus a task owner `<owner>` (e.g. `game.minecraft`, `activity`) publishes
-// `<owner>.task.started|progress|done|failed|steered` custom events (`taskTopic`) whose payload is
+// `<owner>.task.started|progress|done|failed|steered` events (`taskTopic`) whose payload is
 // the `TaskEvent` (internally tagged by `type`). `steered` is not a lifecycle end: it reports how
 // a change of direction (`TaskSteer`, docs/design/v3-architecture.md §10.6) went. `@miyoria/sdk` carries its own copy of these shapes
 // for extensions (it does not depend on this package).
 
-import type { JsonObject, JsonValue } from "./json.js";
+import {
+  type AnyEventDefinition,
+  TaskDone,
+  type TaskEventData,
+  TaskFailed,
+  TaskProgress,
+  TaskStarted,
+  TaskSteered,
+} from "@miyoria/contracts/events";
+import type { Publish } from "./event.js";
+import type { JsonObject } from "./json.js";
 import type { Timestamp } from "./time.js";
 
 /** A task's id: a ULID chosen by whoever starts it (`newId()`). */
@@ -69,37 +79,7 @@ export function isTaskFailureCode(value: unknown): value is TaskFailureCode {
 }
 
 /** Lifecycle events of one task. Exactly one of `done` / `failed` ends it. */
-export type TaskEvent =
-  | { type: "started"; task: TaskId; goal: string; at: Timestamp }
-  | {
-      type: "progress";
-      task: TaskId;
-      /** 0..1 when the executor can tell, else `null`. */
-      progress: number | null;
-      /** Short neutral description of the step (`"走到 (12, 64, -3)"`). */
-      detail: string;
-      at: Timestamp;
-    }
-  | {
-      type: "done";
-      task: TaskId;
-      /** Short neutral description of the result. */
-      detail: string;
-      /** Structured result, executor-defined (`null`: none). */
-      data: JsonValue;
-      at: Timestamp;
-    }
-  | { type: "failed"; task: TaskId; code: TaskFailureCode; detail: string; at: Timestamp }
-  | {
-      type: "steered";
-      task: TaskId;
-      /** `TaskSteer.id`. */
-      steer: string;
-      outcome: SteerOutcome;
-      /** Short neutral description (why it was refused, what changed). */
-      detail: string;
-      at: Timestamp;
-    };
+export type TaskEvent = TaskEventData;
 
 export type TaskEventType = TaskEvent["type"];
 
@@ -113,6 +93,20 @@ export function isTerminalTaskEvent(
 /** Bus topic of a task event: `<owner>.task.<type>` (`game.minecraft.task.done`). */
 export function taskTopic(owner: string, type: TaskEventType): string {
   return `${owner}.task.${type}`;
+}
+
+/** The family definition of each kind of task event. */
+const TASK_EVENT_DEFINITIONS: Readonly<Record<TaskEventType, AnyEventDefinition>> = {
+  started: TaskStarted,
+  progress: TaskProgress,
+  done: TaskDone,
+  failed: TaskFailed,
+  steered: TaskSteered,
+};
+
+/** Publishes `event` of a task of `owner` on `taskTopic(owner, event.type)`, by its family. */
+export function publishTaskEvent(publish: Publish, owner: string, event: TaskEvent): void {
+  publish(TASK_EVENT_DEFINITIONS[event.type], event, { type: taskTopic(owner, event.type) });
 }
 
 /** Inverse of `taskTopic`: `{owner, type}` of a task topic, or `null`. */

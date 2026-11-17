@@ -1,5 +1,5 @@
 import { isApiError } from "@/api/http";
-import { usePersonQuests } from "@/app/v4-queries";
+import { usePersonQuests } from "@/app/queries";
 import { ErrorLine, SkeletonRows } from "@/components/query-state";
 import { Dot } from "@/components/status";
 import { fmtInt } from "@/lib/format";

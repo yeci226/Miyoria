@@ -14,7 +14,8 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { renderCardSvg } from "@miyoria/card-face/render";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import type { IssuedCard } from "@miyoria/contracts/api";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { Resvg } from "@resvg/resvg-js";
 import sharp from "sharp";
 import { publicCard } from "./card.js";
@@ -30,7 +31,6 @@ import {
 import { clientKey, tooMany } from "./public.js";
 import { param, type Route } from "./route.js";
 import type { ApiContext, ApiState } from "./state.js";
-import type { IssuedCard } from "./types.js";
 
 const log = getLogger("api.og");
 

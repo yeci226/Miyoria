@@ -2,7 +2,7 @@
 // cut to size and passed one by one, a slip with a poem that cannot be shown is no slip, and a slip
 // that cannot be written is nothing (the caller gives the payment back).
 
-import { LlmRouterKey } from "@miyoria/llm";
+import { LlmRouterKey } from "@miyoria/llm/llm";
 import { describe, expect, it } from "vitest";
 import {
   checked,

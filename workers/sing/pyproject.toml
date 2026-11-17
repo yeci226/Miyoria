@@ -1,0 +1,59 @@
+# The sing worker's environment (workers/sing/server.py). Not a package: `uv sync --frozen`
+# installs the locked dependencies only.
+# Not in here: Applio's own environment for RVC inference (installed by Applio's installer next
+# to its model files, a manual item of service.toml) and Seed-VC's source (workers/models/seed-vc).
+# Keep in step with requirements.txt (workers/tests/test_projects.py checks it) while the old
+# install command still reads that file.
+[project]
+name = "miyoria-worker-sing"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # The CUDA builds, see [tool.uv.sources]; the two versions go together.
+    "torch==2.11.0",
+    "torchaudio==2.11.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "httpx>=0.27",
+    "numpy>=1.26,<2.3",
+    "scipy>=1.13",
+    "soundfile>=0.12",
+    "librosa>=0.10.2",
+    "pyloudnorm>=0.1.1",
+    # [default] brings yt-dlp-ejs; YouTube also needs a JS runtime (Node, already installed for
+    # Miyoria, or deno; SING_JS_RUNTIMES)
+    "yt-dlp[default]>=2026.10.26",
+    # vocal separation
+    "demucs==4.0.1",
+    # Seed-VC inference dependencies (a subset of its requirements.txt: no GUI, training or ASR)
+    "huggingface-hub>=0.28.1",
+    "transformers==4.46.3",
+    "munch==4.0.0",
+    "einops>=0.8.0",
+    "descript-audio-codec==1.0.0",
+    "pyyaml",
+    # lead / backing split (leadsplit.py, vendored MelBand-RoFormer in melband.py)
+    "beartype>=0.14",
+    "rotary-embedding-torch>=0.3.5",
+]
+
+[tool.uv]
+package = false
+# Workers run on Windows and Linux; nothing is locked for macOS.
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
+
+# The CUDA 12.8 builds of torch and torchaudio, replacing the old first pip step
+#   pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+# `explicit` keeps every other package on PyPI.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+torchaudio = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]

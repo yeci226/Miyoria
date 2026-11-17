@@ -1,0 +1,332 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "@miyoria/contracts/overlay",
+  "$defs": {
+    "OverlayActivityKind": {
+      "type": "string",
+      "enum": [
+        "thinking",
+        "synthesizing",
+        "song_prepare",
+        "singing"
+      ]
+    },
+    "OverlayActivityMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "activity"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OverlayActivityKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "elapsed_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "kind",
+        "label",
+        "detail",
+        "progress",
+        "elapsed_ms",
+        "duration_ms"
+      ]
+    },
+    "OverlayEmotionMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "emotion"
+        },
+        "name": {
+          "type": "string"
+        },
+        "intensity": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "intensity"
+      ]
+    },
+    "OverlayGiftMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "gift"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ]
+    },
+    "OverlayLevelsMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "levels"
+        },
+        "rms": {
+          "type": "number"
+        },
+        "bands": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "rms"
+      ]
+    },
+    "OverlayMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/OverlaySubtitleMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayEmotionMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayNoticeMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayActivityMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayGiftMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayScreenMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayTouchMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlaySpeakingMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayLevelsMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayStatusMessage"
+        }
+      ]
+    },
+    "OverlayNoticeMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "notice"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ]
+    },
+    "OverlayScreenKind": {
+      "type": "string",
+      "enum": [
+        "message",
+        "dedication"
+      ]
+    },
+    "OverlayScreenMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "screen"
+        },
+        "kind": {
+          "$ref": "#/$defs/OverlayScreenKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "song": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "kind",
+        "name",
+        "text",
+        "song"
+      ]
+    },
+    "OverlaySpeakingMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "speaking"
+        },
+        "state": {
+          "$ref": "#/$defs/OverlaySpeakingState"
+        }
+      },
+      "required": [
+        "type",
+        "state"
+      ]
+    },
+    "OverlaySpeakingState": {
+      "type": "string",
+      "enum": [
+        "started",
+        "stopped"
+      ]
+    },
+    "OverlayStatusMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "status"
+        },
+        "core": {
+          "type": "boolean"
+        },
+        "vts": {
+          "type": "boolean"
+        },
+        "obs": {
+          "type": "boolean"
+        },
+        "scene": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "streaming": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "core",
+        "vts",
+        "obs",
+        "scene",
+        "streaming"
+      ]
+    },
+    "OverlaySubtitleMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "subtitle"
+        },
+        "turn": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "final": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "turn",
+        "text",
+        "final"
+      ]
+    },
+    "OverlayTouchMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "touch"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "part": {
+          "$ref": "#/$defs/OverlayTouchPart"
+        }
+      },
+      "required": [
+        "type",
+        "x",
+        "y",
+        "part"
+      ]
+    },
+    "OverlayTouchPart": {
+      "type": "string",
+      "enum": [
+        "head",
+        "face",
+        "body",
+        "screen"
+      ]
+    }
+  }
+}

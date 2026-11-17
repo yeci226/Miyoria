@@ -1,4 +1,4 @@
-import type { DataCategoryId, DataCategoryView, DataNote } from "@/api/types";
+import type { DataCategoryId, DataCategoryView, DataNote } from "@miyoria/contracts/api";
 import type { NavPath } from "@/app/nav";
 
 export const CATEGORY_LABEL: Record<DataCategoryId, string> = {
@@ -13,6 +13,7 @@ export const CATEGORY_LABEL: Record<DataCategoryId, string> = {
   messages: "聊天紀錄",
   decisions: "決策紀錄",
   initiative: "主動發話狀態",
+  artifacts: "她做的檔案",
   people: "人物與帳號連結",
   channels: "頻道設定",
   voice_consent: "語音同意",
@@ -51,7 +52,7 @@ export const VIEW_LINK: Partial<Record<DataCategoryId, { to: NavPath; search?: R
   call_names: { to: "/character", search: { tab: "people" } },
   people: { to: "/character", search: { tab: "people" } },
   persona: { to: "/character", search: { tab: "persona" } },
-  inner: { to: "/inner", search: { tab: "feelings" } },
+  inner: { to: "/inner", search: { tab: "affect" } },
   knowledge: { to: "/inner", search: { tab: "knowledge" } },
   learning: { to: "/inner", search: { tab: "reflection" } },
   conversation: { to: "/inner", search: { tab: "knowledge" } },

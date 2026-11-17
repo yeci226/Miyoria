@@ -32,7 +32,7 @@
 //     MouthSmile = 0.1
 
 import { readFileSync } from "node:fs";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import type { JsonObject } from "@miyoria/types";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";

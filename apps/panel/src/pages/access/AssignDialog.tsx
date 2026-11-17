@@ -1,6 +1,7 @@
 import { Check, ChevronsUpDown, Hash } from "lucide-react";
 import { useDeferredValue, useId, useState } from "react";
-import type { AccountRef, AuthScope } from "@/api/types";
+import type { AuthScope } from "@miyoria/contracts/api";
+import type { AccountRef } from "@miyoria/contracts/wire";
 import { useAccessMutations, usePeople } from "@/app/queries";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";

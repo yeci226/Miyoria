@@ -5,7 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { type CardFaceProps, CardFace, W, H } from "@miyoria/card-face";
 import { useState } from "react";
-import type { IssuedCard } from "@/api/types";
+import type { IssuedCard } from "@miyoria/contracts/api";
 
 export { AFFINITY, CardFace, FAMILIARITY, FRAME_NAME, FRAME_SWATCH, TRUST } from "@miyoria/card-face";
 export type { CardFaceProps };

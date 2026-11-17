@@ -1,13 +1,14 @@
 // Discord OAuth login for the panel against a fake Discord: the full login → callback → cookie →
 // session flow, PKCE, state handling, open redirects, CSRF, write permission, logout, expiry,
-// revocation and session persistence (`tests/oauth.rs`).
+// revocation and session persistence.
 
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { AuthService, AuthServiceKey } from "@miyoria/auth";
+import type { AuthMethods, SessionInfo } from "@miyoria/contracts/api";
 import { EconomyError, EconomyKey } from "@miyoria/economy";
-import { Supervisor, SupervisorKey } from "@miyoria/kernel";
-import { RequestQueue, RequestQueueKey } from "@miyoria/queue";
+import { RequestQueue, RequestQueueKey } from "@miyoria/play/queue";
+import { Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
 import {
   type AuditEntry,
   AuditLogKey,
@@ -19,8 +20,9 @@ import {
 } from "@miyoria/store";
 import { type AccountRef, AuthorizerKey, type JsonValue } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
-import { ActiveProfileKey, ApiClient, ApiModule } from "../src/index.js";
-import { listenFetchable, raw } from "./support/http.js";
+import { ActiveProfileKey, ApiModule } from "../src/index.js";
+import { adminCalls } from "./support/admin.js";
+import { call, listenFetchable, raw } from "./support/http.js";
 import { TestStore } from "./support/stores.js";
 
 const TOKEN = "test-token";
@@ -262,8 +264,7 @@ async function harnessWith(
 describe("oauth", () => {
   it("full_login_flow_with_pkce", async () => {
     const h = await harnessWith(true);
-    const client = new ApiClient(h.base(), TOKEN);
-    const methods = await client.authMethods();
+    const methods = await call<AuthMethods>(h.base(), TOKEN, "GET", "/api/auth/methods");
     expect(methods.token && methods.discord).toBe(true);
 
     const authorize = await h.startLogin("/people");
@@ -320,10 +321,10 @@ describe("oauth", () => {
     expect(audit.some((e) => e.action === "panel.login" && e.ok)).toBe(true);
 
     // The bearer token keeps working, as `"api"`.
-    const me = await client.session();
+    const me = await call<SessionInfo>(h.base(), TOKEN, "GET", "/api/auth/session");
     expect(me.method).toBe("token");
     expect(me.user === null && me.permissions.write).toBe(true);
-    await client.queuePause(false);
+    await adminCalls(h.base(), TOKEN).queuePause(false);
     expect((await h.auditBy("api")).some((e) => e.action === "queue.resume")).toBe(true);
     // A wrong bearer token is not rescued by a valid cookie.
     const response = await fetch(`${h.base()}/api/queue`, {
@@ -416,6 +417,32 @@ describe("oauth", () => {
     const r = await h.withCookie("POST", "/api/queue/pause", cookie, true);
     expect(r.status).toBe(403);
     expect(r.body.error).toContain("admin.panel.write");
+  });
+
+  it("a_change_on_the_route_table_is_guarded_like_any_other", async () => {
+    const h = await harnessWith(true);
+    const owner = await h.loginCookie("owner-code");
+    const path = "/api/persona/style";
+    const json = { body: "x" };
+    const bare = await h.withCookie("PUT", path, owner, false, json);
+    expect(bare.status).toBe(403);
+    expect(bare.body.error).toContain("x-miyoria-request");
+    // Past the guard, the route runs: no persona here, so 503.
+    expect((await h.withCookie("PUT", path, owner, true, json)).status).toBe(503);
+
+    await h.auth.upsertRole("test", {
+      name: "viewer",
+      rank: 50,
+      grants: ["admin.panel.access"],
+      denies: [],
+      builtin: false,
+    });
+    await h.auth.assign("test", discord(VIEWER), "viewer", { type: "global" });
+    const viewer = await h.loginCookie("viewer-code");
+    expect((await h.withCookie("GET", "/api/auth/session", viewer, false)).status).toBe(200);
+    const looking = await h.withCookie("PUT", path, viewer, true, json);
+    expect(looking.status).toBe(403);
+    expect(looking.body.error).toContain("admin.panel.write");
   });
 
   it("data_management_needs_owner_data_manage", async () => {
@@ -607,13 +634,14 @@ describe("oauth", () => {
 
   it("without_oauth_config_only_the_token_works", async () => {
     const h = await harnessWith(false);
-    const client = new ApiClient(h.base(), TOKEN);
-    const methods = await client.authMethods();
+    const methods = await call<AuthMethods>(h.base(), TOKEN, "GET", "/api/auth/methods");
     expect(methods.token && !methods.discord).toBe(true);
     const response = await fetch(`${h.base()}/api/auth/oauth/login`, { redirect: "manual" });
     await response.arrayBuffer();
     expect(response.headers.get("location")).toBe("/login?error=disabled");
     expect((await h.withCookie("GET", "/api/queue", "A".repeat(43), false)).status).toBe(401);
-    expect((await client.session()).method).toBe("token");
+    expect((await call<SessionInfo>(h.base(), TOKEN, "GET", "/api/auth/session")).method).toBe(
+      "token",
+    );
   });
 });

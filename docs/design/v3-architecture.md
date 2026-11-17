@@ -138,7 +138,7 @@ interface LogEvent {
 - **`cause` 是關鍵**:面板的「意識軸」和所有除錯都靠它把聽到、想、說、做串起來。
 - 所有模組讀日誌的投影,不再互相訂閱私有狀態。
 - SQLite 存放,熱資料在記憶體,定期壓縮舊資料。重啟從日誌重建活動狀態,解決「重啟後遊戲開著卻顯示閒置」。
-- `packages/replay` 改成直接重播這條日誌。
+- `tools/replay` 改成直接重播這條日誌。
 
 ### Working Context:她現在知道什麼
 
@@ -421,7 +421,7 @@ V2 的混合式情緒保留,但**情緒要有消費者才有價值**,否則只�
 
 情緒怎麼接到輸出是一張表:`EMOTION_OUTPUTS`(`packages/types/src/affect-outputs.ts`),`packages/core/test/emotions.test.ts` 會檢查每個情緒真的走到一個輸出。情緒只改她怎麼說和想做什麼,不改規則:Directive、Floor 的打斷等級和 claim gate 都不讀情緒(`packages/core/test/emotion-guardrails.test.ts`)。多話程度只是 `base_lines` 的權重,有硬上下限(`[modules.arbiter.floor]` 的 `min_feeling_multiplier`、`max_feeling_multiplier`),不動已講句數,也繞不過 `max_unanswered`。
 
-現況:`self` 模組就是 Affect 模組,心情由它提供(`MoodSignalsKey`、`mood.changed`)。`mood` 模組還在,只在 `[modules.self] enabled = false` 時運作。Appraise 在 `packages/mind/src/appraise.ts`;`social` 的批次評估只在 `mind` 沒跑時才讀她的感受。
+現況:`self` 模組就是 Affect 模組,心情由它提供(`MoodSignalsKey`、`mood.changed`)。`mood` 模組已刪除。Appraise 在 `packages/heart/mind/src/appraise.ts`;`social` 的批次評估只在 `mind` 沒跑時才讀她的感受。
 
 ## 13. 語音
 
@@ -722,9 +722,9 @@ V2 的教訓是單元測試全過,上線全是問題。
 - **pass^k**:服從和誠實要連續都對。75% 的單次成功率,連三次只剩 42%。
 - **每階段驗收都在真實 Discord 和語音上跑一場**,把數字記進文件。
 
-**事故題庫:`packages/eval`**(11-08 起,14 題,全部取自 11-07 和 11-08 的真實紀錄)
+**事故題庫:`tools/eval`**(11-08 起,14 題,全部取自 11-07 和 11-08 的真實紀錄)
 
-- **為什麼不放 `packages/replay`**:replay 重播的是匯流排事件,`log_events` 裡沒有那種事件,而且要問的程式(表達式解析器、遊戲失敗保護、主人規則比對)分散在 agent、game、directive。`eval` 依賴它們,replay 維持輕。
+- **為什麼不放 `tools/replay`**:replay 重播的是匯流排事件,`log_events` 裡沒有那種事件,而且要問的程式(表達式解析器、遊戲失敗保護、主人規則比對)分散在 agent、game、directive。`eval` 依賴它們,replay 維持輕。
 - **跑法**:`pnpm eval`(`--k 5` 連跑五次、`--json`、只跑某幾題就在後面接 id)。紅燈就結束碼 1。`pnpm --filter @miyoria/eval test` 是同一份,多幾個檢查器的單元測試。
 - **題目**(`fixtures/*.json`):`trace` 是當時發生的事(她講了什麼、哪些請求到了 gate、遊戲決策、舞台狀態),`checks` 是她違反的規則,`control` 是正確的樣子。人名和 Discord id 換成 `owner`、`viewer-N`,別人的訊息只留 owner 的禁令。用 `pnpm --filter @miyoria/eval extract` 從資料庫重做,它只用唯讀開 `data/miyoria.db`。
 - **檢查**都是程式能判的規則:沒有標記漏進發言、工具真的被呼叫、同一個失敗的目標最多兩次、失敗有被說出來、同一句不重複、自言自語不超過 3 句、主人禁令之後她自己不能再開、禁令有被寫下、說了要做就要做。`min_said` 防止沉默的版本拿滿分。
@@ -757,7 +757,7 @@ V2 的教訓是單元測試全過,上線全是問題。
 
 順序依「最小的改動解決最痛的問題」排。每階段都有真實環境驗收。
 
-Owner 決定全部做完再一起實測,所以下表的驗收都還沒做。`[core] pipeline = "v2"` 可以退回 V2 流程。還沒做的只有要實際執行的項目:四項 GPU 檢查、ICL 試聽、Smart Turn 校準。
+Owner 決定全部做完再一起實測,所以下表的驗收都還沒做。`[core] pipeline = "v2"` 可以退回 V2 流程(V5 已移除這個開關,現在只有主線)。還沒做的只有要實際執行的項目:四項 GPU 檢查、ICL 試聽、Smart Turn 校準。
 
 | 階段 | 內容 | 驗收(真實環境一場) |
 |---|---|---|

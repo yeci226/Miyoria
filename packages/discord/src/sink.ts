@@ -1,9 +1,16 @@
 // `DiscordSink`: executes output actions through the bot account's REST client.
+//
+// A message may carry attachments, named by artifact id (`OutgoingMessage.attachments`). The sink
+// never sees a path: it asks the app's `AttachmentSource` for each one at send time, which checks
+// again that the channel may see the artifact, and uploads the bytes it gets back with the first
+// chunk of the text. Nothing is posted when one of them is refused.
 
-import { readFile } from "node:fs/promises";
 import type { CommandReply, ReplySink } from "@miyoria/commands";
 import {
   type AccountRef,
+  AttachmentError,
+  type AttachmentFile,
+  type AttachmentSource,
   type ContextKey,
   contextKeyString,
   type MessageRef,
@@ -33,10 +40,6 @@ export interface RestLike {
   put(route: `/${string}`, options?: RestRequest): Promise<unknown>;
   /** Only `describe` reads; without it contexts have no names. */
   get?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
-  /** Only `edit` uses it; without it messages cannot be edited. */
-  patch?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
-  /** Only `delete` uses it; without it messages cannot be deleted. */
-  delete?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
 }
 
 /** Discord's longest voice channel status. */
@@ -47,16 +50,41 @@ function nameOf(value: unknown): string | null {
   return typeof value.name === "string" && value.name.trim() !== "" ? value.name : null;
 }
 
+/** A file of a multipart request (discord.js's `RawFile`). */
 export interface RestFile {
   name: string;
-  data: Buffer;
-  contentType: string;
+  data: Uint8Array;
+  contentType?: string;
 }
 
 export interface RestRequest {
   body?: unknown;
   files?: RestFile[];
   signal?: AbortSignal;
+}
+
+/** Discord's default upload limit for a bot without a boosted guild, in bytes (10 MiB). */
+export const DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+/** Files one Discord message takes. */
+export const MAX_MESSAGE_FILES = 10;
+
+/** Discord JSON error codes that mean the upload itself was refused. */
+const ENTITY_TOO_LARGE = 40005;
+const MISSING_ACCESS = 50001;
+const MISSING_PERMISSIONS = 50013;
+
+function discordCode(error: unknown): number | null {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "number" ? code : null;
+}
+
+/** Outgoing attachments: where their bytes come from and how large one message's may be. */
+export interface SinkAttachments {
+  /** Looked up per message: the artifact store may be absent. */
+  source(): AttachmentSource | undefined;
+  /** Bytes of all files of one message together (`max_upload_bytes`). */
+  maxBytes(): number;
 }
 
 export class DiscordSendError extends Error {
@@ -101,20 +129,69 @@ export interface SinkEmoji {
 
 export class DiscordSink implements PlatformSink, ReplySink {
   readonly platform: PlatformId = PLATFORM;
-  readonly sendsFiles = true;
   readonly #rest: RestLike;
   readonly #moderation: () => ModerationService | undefined;
   readonly #emoji: SinkEmoji | null;
+  readonly #attachments: SinkAttachments | null;
 
   /** `moderation`: looked up per message, it may come and go. */
   constructor(
     rest: RestLike,
     moderation: () => ModerationService | undefined = () => undefined,
     emoji: SinkEmoji | null = null,
+    attachments: SinkAttachments | null = null,
   ) {
     this.#rest = rest;
     this.#moderation = moderation;
     this.#emoji = emoji;
+    this.#attachments = attachments;
+  }
+
+  /** What one message's files may weigh together; `null` while nothing can resolve them. */
+  attachmentLimit(context: ContextKey): number | null {
+    if (context.platform !== PLATFORM) return null;
+    const attachments = this.#attachments;
+    if (attachments === null || attachments.source() === undefined) return null;
+    const max = attachments.maxBytes();
+    return Number.isFinite(max) && max > 0 ? Math.floor(max) : null;
+  }
+
+  /**
+   * The files of a message, resolved now for `context`. Throws an `AttachmentError` when one may
+   * not go there, or when together they are more than a message takes.
+   */
+  async #resolve(
+    context: ContextKey,
+    message: OutgoingMessage,
+    signal?: AbortSignal,
+  ): Promise<AttachmentFile[]> {
+    const wanted = message.attachments ?? [];
+    if (wanted.length === 0) return [];
+    const limit = this.attachmentLimit(context);
+    const source = this.#attachments?.source();
+    if (limit === null || source === undefined) {
+      throw new AttachmentError("unavailable", "attachments cannot be sent from here");
+    }
+    if (wanted.length > MAX_MESSAGE_FILES) {
+      throw new AttachmentError(
+        "too_many",
+        `a Discord message takes at most ${MAX_MESSAGE_FILES} files`,
+      );
+    }
+    const files: AttachmentFile[] = [];
+    let left = limit;
+    for (const { artifact_id } of wanted) {
+      const file = await source.open(artifact_id, context, { maxBytes: left, signal });
+      if (file.data.length > left) {
+        throw new AttachmentError(
+          "too_large",
+          `the files are over the ${limit} bytes one message can carry there`,
+        );
+      }
+      left -= file.data.length;
+      files.push(file);
+    }
+    return files;
   }
 
   /** `:name:` → server emoji in guild channels, within the limits; recorded per channel. */
@@ -142,10 +219,14 @@ export class DiscordSink implements PlatformSink, ReplySink {
     signal?: AbortSignal,
   ): Promise<SentMessage> {
     const channel = channelOf(context);
+    // Before anything is posted: a refused file stops the whole message.
+    const files = await this.#resolve(context, message, signal);
     // Last line of defence: nothing moderation stops, no role / everyone / here mentions, no
     // secrets, whoever got this far.
     const safe = safeOutgoing(this.#moderation(), { path: "reply", text: message.text, context });
     const chunks = splitMessage(this.#withEmoji(context, safe.text), MAX_MESSAGE_LEN);
+    // Files alone make a message.
+    if (chunks.length === 0 && files.length > 0) chunks.push("");
     if (chunks.length === 0) throw new DiscordSendError("cannot send an empty message");
     let reference: Record<string, unknown> | null = null;
     if (message.reply_to) {
@@ -155,38 +236,51 @@ export class DiscordSink implements PlatformSink, ReplySink {
         fail_if_not_exists: false,
       };
     }
-    // All read before anything is sent, so a missing file sends nothing.
-    let files: RestFile[] | null = await inContext(`reading files for ${channel}`, () =>
-      Promise.all(
-        (message.files ?? []).map(async (f) => ({
-          name: f.name,
-          data: await readFile(f.path),
-          contentType: f.contentType,
-        })),
-      ),
-    );
     const quiet = (message as DiscordOutgoing).proactive === true;
     let first: string | null = null;
-    for (const chunk of chunks) {
+    for (const [index, chunk] of chunks.entries()) {
+      const upload = index === 0 ? files : [];
       const body: Record<string, unknown> = {
-        content: chunk,
+        ...(chunk === "" ? {} : { content: chunk }),
         // Users may be pinged by name; never roles, @everyone or @here. Replying must not ping
         // the replied-to author.
-        allowed_mentions:
-          message.mentions === false
-            ? { parse: [] }
-            : { parse: ["users"], roles: [], replied_user: false },
+        allowed_mentions: { parse: ["users"], roles: [], replied_user: false },
         ...(quiet ? { flags: MessageFlags.SuppressNotifications } : {}),
       };
       if (reference) {
         body.message_reference = reference;
         reference = null;
       }
-      const attached = files !== null && files.length > 0 ? { files } : {};
-      files = null;
-      const sent = await inContext(`sending message to ${contextKeyString(context)}`, () =>
-        this.#rest.post(Routes.channelMessages(channel), { body, signal, ...attached }),
-      );
+      if (upload.length > 0) {
+        body.attachments = upload.map((f, id) => ({ id, filename: f.filename }));
+      }
+      const request: RestRequest = { body, signal };
+      if (upload.length > 0) {
+        request.files = upload.map((f) => ({
+          name: f.filename,
+          data: f.data,
+          contentType: f.content_type,
+        }));
+      }
+      const sent = await inContext(`sending message to ${contextKeyString(context)}`, async () => {
+        try {
+          return await this.#rest.post(Routes.channelMessages(channel), request);
+        } catch (error) {
+          if (upload.length === 0) throw error;
+          const code = discordCode(error);
+          if (code === ENTITY_TOO_LARGE) {
+            throw new AttachmentError("too_large", "Discord says the upload is too large", {
+              cause: error,
+            });
+          }
+          if (code === MISSING_PERMISSIONS || code === MISSING_ACCESS) {
+            throw new AttachmentError("platform", "she may not attach files in that channel", {
+              cause: error,
+            });
+          }
+          throw error;
+        }
+      });
       first ??= messageId(sent);
     }
     const id = first as string;
@@ -208,41 +302,6 @@ export class DiscordSink implements PlatformSink, ReplySink {
           Routes.channelMessageOwnReaction(channel, id, encodeURIComponent(resolved)),
           { signal },
         );
-      },
-    );
-  }
-
-  /** New text for one of her messages: filtered like `send`, one message long, no pings at all. */
-  async edit(message: MessageRef, text: string, signal?: AbortSignal): Promise<void> {
-    const patch = this.#rest.patch?.bind(this.#rest);
-    if (!patch) throw new DiscordSendError("this REST client cannot edit messages");
-    const channel = channelOf(message.context);
-    const id = snowflake(message.id, "message");
-    const content = safeOutgoing(this.#moderation(), {
-      path: "reply",
-      text,
-      context: message.context,
-    }).text.slice(0, MAX_MESSAGE_LEN);
-    await inContext(
-      `editing message ${message.id} in ${contextKeyString(message.context)}`,
-      async () => {
-        await patch(Routes.channelMessage(channel, id), {
-          body: { content, allowed_mentions: { parse: [] } },
-          signal,
-        });
-      },
-    );
-  }
-
-  async delete(message: MessageRef, signal?: AbortSignal): Promise<void> {
-    const del = this.#rest.delete?.bind(this.#rest);
-    if (!del) throw new DiscordSendError("this REST client cannot delete messages");
-    const channel = channelOf(message.context);
-    const id = snowflake(message.id, "message");
-    await inContext(
-      `deleting message ${message.id} in ${contextKeyString(message.context)}`,
-      async () => {
-        await del(Routes.channelMessage(channel, id), { signal });
       },
     );
   }

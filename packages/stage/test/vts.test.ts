@@ -172,7 +172,7 @@ describe("vts", () => {
     );
     await waitUntil(() => vts.injections().length > 0);
     expect(vts.injections()[0].parameterValues.length).toBe(3);
-    // Parameters go out ordered by id (like the Rust BTreeMap).
+    // Parameters go out ordered by id.
     expect(vts.injections()[0].parameterValues.map((p: Json) => p.id)).toStrictEqual([
       "EyeLeftX",
       "FaceAngleX",

@@ -19,26 +19,23 @@ function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 }
 
 describe("parseStoreUrl", () => {
-  it("selects the backend", () => {
-    expect(parseStoreUrl(DEFAULT_STORE_URL)).toEqual({
-      backend: "sqlite",
-      path: "data/miyoria.db",
-    });
-    expect(parseStoreUrl("sqlite://data/x.db")).toEqual({ backend: "sqlite", path: "data/x.db" });
-    expect(parseStoreUrl("sqlite:///var/x.db")).toEqual({ backend: "sqlite", path: "/var/x.db" });
-    expect(parseStoreUrl("sqlite:///C:/x/y.db")).toEqual({ backend: "sqlite", path: "C:/x/y.db" });
-    expect(parseStoreUrl("sqlite:C:\\x\\y.db?mode=rwc")).toEqual({
-      backend: "sqlite",
-      path: "C:\\x\\y.db",
-    });
+  it("finds the SQLite path", () => {
+    expect(parseStoreUrl(DEFAULT_STORE_URL)).toEqual({ path: "data/miyoria.db" });
+    expect(parseStoreUrl("sqlite://data/x.db")).toEqual({ path: "data/x.db" });
+    expect(parseStoreUrl("sqlite:///var/x.db")).toEqual({ path: "/var/x.db" });
+    expect(parseStoreUrl("sqlite:///C:/x/y.db")).toEqual({ path: "C:/x/y.db" });
+    expect(parseStoreUrl("sqlite:C:\\x\\y.db?mode=rwc")).toEqual({ path: "C:\\x\\y.db" });
     for (const memory of ["sqlite::memory:", "memory://", "memory:", "sqlite://:memory:"]) {
-      expect(parseStoreUrl(memory)).toEqual({ backend: "sqlite", path: ":memory:" });
+      expect(parseStoreUrl(memory)).toEqual({ path: ":memory:" });
     }
-    expect(parseStoreUrl("postgres://u:p@h/db")).toEqual({
-      backend: "postgres",
-      url: "postgres://u:p@h/db",
-    });
-    expect(parseStoreUrl("postgresql://h/db").backend).toBe("postgres");
+  });
+
+  it("refuses PostgreSQL with a clear message, without echoing the URL", async () => {
+    for (const url of ["postgres://u:secret@h/db", "postgresql://h/db"]) {
+      expect(() => parseStoreUrl(url)).toThrow(/PostgreSQL is no longer supported/);
+      expect(() => parseStoreUrl(url)).not.toThrow(/secret/);
+      await expect(openStore(url)).rejects.toThrow(/sqlite:<path>/);
+    }
   });
 
   it("rejects unknown schemes without echoing the URL", () => {
@@ -76,9 +73,7 @@ describe("SqliteStore", () => {
       raw.close();
 
       const second = await SqliteStore.open(path);
-      expect(await second.schemaVersions()).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
-      ]);
+      expect(await second.schemaVersions()).toEqual([1]);
       expect(await second.moduleState.get("agent")).toBe(false);
       await second.close();
       await expect(second.moduleState.get("agent")).rejects.toThrow(/closed/);
@@ -89,9 +84,14 @@ describe("SqliteStore", () => {
       const path = join(dir, "x.db");
       await (await SqliteStore.open(path)).close();
       const raw = new DatabaseSync(path);
-      raw.exec("INSERT INTO schema_version (version, name, applied_at) VALUES (99, 'future', 0)");
+      raw.exec(
+        "INSERT INTO _migrations (plugin, version, name, checksum, applied_at) " +
+          "VALUES ('legacy', 99, 'future', 'x', 0)",
+      );
       raw.close();
-      await expect(SqliteStore.open(path)).rejects.toThrow(/migration 99 .* missing/);
+      await expect(SqliteStore.open(path)).rejects.toThrow(
+        /legacy migration 99 \(future\) was applied but this build does not have it/,
+      );
     }));
 
   it("two connections on one file see each other's writes", () =>
@@ -119,24 +119,4 @@ describe("SqliteStore", () => {
       await store.close();
     }
   });
-
-  it("caps decisions only when asked to on files", () =>
-    withTempDir(async (dir) => {
-      const store = await SqliteStore.open(join(dir, "d.db"), { maxDecisionsPerProfile: 2 });
-      try {
-        const context = { platform: "discord", scope: "g", channel: "c", kind: "channel" } as const;
-        for (const i of [1, 2, 3]) {
-          await store.decisions.append({
-            id: `01JAAAAAAAAAAAAAAAAAAAAAA${i}`,
-            profile: "p",
-            ts: new Date(i * 1000).toISOString(),
-            trace: { turn: "t", context, respond: false, score: 0, reasons: [String(i)] },
-          });
-        }
-        const recent = await store.decisions.recent("p", null, 10);
-        expect(recent.map((d) => d.trace.reasons[0])).toEqual(["3", "2"]);
-      } finally {
-        await store.close();
-      }
-    }));
 });

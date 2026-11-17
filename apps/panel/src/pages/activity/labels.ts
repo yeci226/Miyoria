@@ -1,17 +1,4 @@
-import type {
-  ActivityPhase,
-  ActivityRequest,
-  ActivityResource,
-  ActivityTask,
-  ActivityType,
-  ArbiterReason,
-  ArbiterVerdict,
-  LedgerKind,
-  LedgerOutcome,
-  TurnCancelCause,
-  TurnOutcome,
-  TurnReason,
-} from "@/api/types";
+import type { ActivityPhase, ActivityRequest, ActivityResource, ActivityTask, ActivityType, ArbiterReason, ArbiterVerdict, LedgerKind, LedgerOutcome, TurnCancelCause, TurnOutcome, TurnReason } from "@miyoria/contracts/api";
 import type { Tone } from "@/components/status";
 
 export const ACTIVITY_TYPE_LABEL: Record<ActivityType, string> = {
@@ -163,7 +150,8 @@ export const VERDICT_TONE: Record<ArbiterVerdict, Tone> = {
   expired: "neutral",
 };
 
-export const REASON_LABEL: Record<ArbiterReason, string> = {
+/** `repeat` and `nobody` have no label yet: the pages show the reason as the server wrote it. */
+export const REASON_LABEL: Partial<Record<ArbiterReason, string>> = {
   budget: "預算用完",
   rate: "次數上限",
   cooldown: "冷卻中",

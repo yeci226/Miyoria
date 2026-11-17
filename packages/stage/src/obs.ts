@@ -2,7 +2,7 @@
 // tests.
 
 import { writeFile } from "node:fs/promises";
-import { errorMessage, getLogger, SerialQueue, sleep, withTimeout } from "@miyoria/kernel";
+import { errorMessage, getLogger, SerialQueue, sleep, withTimeout } from "@miyoria/runtime/kernel";
 import OBSWebSocket, { type OBSRequestTypes, type OBSResponseTypes } from "obs-websocket-js/json";
 import { z } from "zod";
 import type { SceneTransition, StreamAction } from "./protocol.js";

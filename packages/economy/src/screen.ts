@@ -1,7 +1,7 @@
 // A paid message on the stream's screen (docs/design/economy.md §13): the text rules, the
 // per-person cooldown read from the ledger, and the event the overlay shows.
 
-import type { CoinEntry } from "@miyoria/store";
+import type { CoinEntry } from "./records.js";
 import type { ScreenEvent } from "./types.js";
 
 /** Longest message, in characters. */

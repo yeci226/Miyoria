@@ -1,0 +1,115 @@
+// How a sentence of hers is said in a voice channel on the new runner: through the mouth
+// (`MainLine.say`, which puts it on the voice lane as a `speak` action), so the one-mouth rule, the
+// output review and the delivery ledger stay what they are; the scheduler and the voice sink say
+// it. A run that started early says nothing until its wait is over (`hold`), and nothing more once
+// she was cut off or gave way.
+//
+// The line is not hers in the transcript yet: the voice host writes it there when it starts
+// playing (`Delivery.later`). Links and code blocks are never read out: they go to the voice
+// channel's text chat (`[modules.agent.voice] text_aside`) and into the transcript at once.
+//
+// `PlaceOutlet` gives each line to the outlet of its place: voice channels here, the rest to the
+// text host's.
+
+import { type ContextKey, VoiceSinkKey } from "@miyoria/types";
+import { type Agent, cleanReply, isSpeakable } from "../../agent/src/index.js";
+import { asideLine, type Delivery, type OutgoingLine, type Outlet } from "../../self/src/index.js";
+import { CUT_OFF, NO_ASIDE, UNSPOKEN } from "./voice-texts.js";
+
+/** What the outlet knows of a run's speech. */
+export interface SpokenRun {
+  /** Resolves once a run that started early may speak; `null`: it may. */
+  readonly hold: Promise<void> | null;
+  /** She was cut off or gave way: nothing more is said. */
+  readonly stopped: boolean;
+}
+
+export interface VoiceOutletHost {
+  /** The run of `turn`, when it is a voice run of the host. */
+  run(turn: string): SpokenRun | undefined;
+  /** A sentence of `turn` was handed to the mouth in `context`. */
+  queued(turn: string, context: ContextKey): void;
+  /** A line of hers was written in the voice channel's chat: `context`'s transcript has it now. */
+  wrote(context: ContextKey, text: string, turn: string): void;
+}
+
+export class VoiceOutlet implements Outlet {
+  readonly #agent: Agent;
+  readonly #host: VoiceOutletHost;
+
+  constructor(agent: Agent, host: VoiceOutletHost) {
+    this.#agent = agent;
+    this.#host = host;
+  }
+
+  async deliver(line: OutgoingLine, signal: AbortSignal): Promise<Delivery> {
+    const agent = this.#agent;
+    if (agent.muted) return { status: "blocked", reason: "緊急停止中" };
+    signal.throwIfAborted();
+    const run = this.#host.run(line.turn);
+    const hold = run?.hold ?? null;
+    if (hold !== null) await until(hold, signal);
+    if (run?.stopped) return { status: "blocked", reason: CUT_OFF };
+    agent.mainline.own(line.turn);
+    if (asideLine(line.text)) return await this.#aside(line);
+    const text = cleanReply(line.text, agent.persona.names());
+    if (!isSpeakable(text)) return { status: "blocked", reason: UNSPOKEN };
+    agent.ctx.services.get(VoiceSinkKey)?.prepare?.(line.place, text, undefined, line.emotion);
+    this.#host.queued(line.turn, line.place);
+    await agent.mainline.say({
+      context: line.place,
+      text,
+      emotion: line.emotion,
+      turn: line.turn,
+      source: "self",
+    });
+    return { status: "delivered", message_id: null, later: true };
+  }
+
+  /** A link or a code block: written in the voice channel's chat, never read out. */
+  async #aside(line: OutgoingLine): Promise<Delivery> {
+    const agent = this.#agent;
+    const place = line.place;
+    if (!agent.config.voice.text_aside || place.kind !== "voice") {
+      return { status: "blocked", reason: NO_ASIDE };
+    }
+    // On Discord a voice channel's text chat has the channel's own id.
+    const chat: ContextKey = { ...place, kind: "channel" };
+    await agent.mainline.say({ context: chat, text: line.text, turn: line.turn, source: "self" });
+    this.#host.wrote(place, line.text, line.turn);
+    return { status: "delivered", message_id: null, later: true };
+  }
+}
+
+/** Each line to the outlet of its place: voice channels to `voice`, the rest to `text`. */
+export class PlaceOutlet implements Outlet {
+  constructor(
+    readonly text: Outlet,
+    readonly voice: Outlet,
+  ) {}
+
+  deliver(line: OutgoingLine, signal: AbortSignal): Promise<Delivery> {
+    return line.place.kind === "voice"
+      ? this.voice.deliver(line, signal)
+      : this.text.deliver(line, signal);
+  }
+}
+
+/** Waits for `promise`; rejects when `signal` aborts first. */
+export function until(promise: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}

@@ -3,27 +3,26 @@
 // the floor held while it plays, skip / stop, the queue integration and the prompt section.
 
 import { join, resolve } from "node:path";
-import { ActuatorRegistry, ActuatorRegistryKey } from "@miyoria/actions";
 import { CommandRegistry, CommandRegistryKey, Invocation, Permissions } from "@miyoria/commands";
-import { Supervisor } from "@miyoria/kernel";
-import { RequestQueue, RequestQueueKey } from "@miyoria/queue";
+import { ActuatorRegistry, ActuatorRegistryKey } from "@miyoria/gate/actions";
+import { RequestQueue, RequestQueueKey } from "@miyoria/play/queue";
+import { Supervisor } from "@miyoria/runtime/kernel";
 import { MemorySettingsStore, SettingsStoreKey } from "@miyoria/store";
 import {
   type AccountRef,
-  ARBITER_IMPULSE_TOPIC,
+  type AnyEventDefinition,
+  type Arbiter,
+  ArbiterKey,
   AuthorizerKey,
   BaseAuthorizer,
   type ContextKey,
-  type Event,
+  type EventPayload,
+  Events,
+  type Impulse,
+  type ImpulseHost,
+  ImpulseHostKey,
   impulseReason,
   type JsonValue,
-  type MessageRef,
-  type Mind,
-  MindKey,
-  type MindSuggestion,
-  type PlatformSink,
-  PlatformSinks,
-  PlatformSinksKey,
   type PlaybackState,
   type PlayChunk,
   type PlayHandle,
@@ -32,18 +31,17 @@ import {
   PromptContributors,
   PromptContributorsKey,
   type PromptRequest,
-  SONG_PREPARE_TOPIC,
-  SONG_TOPIC,
+  type PublishedEvent,
+  type PublishMetaArgs,
   SongClipsKey,
   type SongCue,
   type SongPrepare,
-  SPEECH_PAUSE_TOPIC,
   SpeechPauseKey,
+  toTimestamp,
   VoiceFloorKey,
   type VoiceParticipant,
   type VoicePlayer,
   VoicePlayerKey,
-  v2Payload,
   type WorldState,
   WorldStateKey,
 } from "@miyoria/types";
@@ -67,6 +65,17 @@ import {
   type WorkerJob,
   workerQuery,
 } from "../src/index.js";
+import { oneWorker } from "./endpoints.js";
+
+// The player looks for a song's video on disk before asking the worker for it. No test writes
+// one, and a real file read does not finish while the clock is a fake one being advanced: the
+// song then started late on a slow machine. So the file is never there, at once.
+vi.mock("node:fs/promises", async (original) => ({
+  ...(await original<typeof import("node:fs/promises")>()),
+  access: async () => {
+    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  },
+}));
 
 const RATE = 48_000;
 const VOICE: ContextKey = { platform: "discord", scope: "g1", channel: "voice1", kind: "voice" };
@@ -97,16 +106,13 @@ function meta(id: string, title: string, seconds = 1): SongMeta {
     title,
     artist: "Artist",
     duration_s: seconds,
-    // Titles with "Instrumental" have no lyrics.
-    lyrics: title.includes("Instrumental")
-      ? null
-      : {
-          synced: true,
-          lines: [
-            { t: 0.2, text: "first line" },
-            { t: 0.6, text: "" },
-          ],
-        },
+    lyrics: {
+      synced: true,
+      lines: [
+        { t: 0.2, text: "first line" },
+        { t: 0.6, text: "" },
+      ],
+    },
     play: { sample_rate: RATE, samples: RATE * seconds },
     pitch: {},
     timings: {},
@@ -123,8 +129,9 @@ class FakeWorker implements SingWorker {
   readonly cancelled: string[] = [];
   /** Jobs told to take the GPU. */
   readonly gone: string[] = [];
-  /** What the worker was last told about who is listening. */
+  /** What the worker was last told about who is listening, and how often it was told. */
   told: GpuContext | null = null;
+  toldTimes = 0;
   readonly jobs = new Map<string, WorkerJob>();
   #next = 1;
   cacheHit = false;
@@ -187,6 +194,7 @@ class FakeWorker implements SingWorker {
 
   async context(context: GpuContext): Promise<void> {
     this.told = context;
+    this.toldTimes += 1;
   }
 
   exclusive(id: string, state: WorkerJob["exclusive"]): void {
@@ -293,81 +301,21 @@ class FakeVoice implements VoicePlayer {
   }
 }
 
-/** Her Discord messages: sends and edits (the lyrics card). */
-class FakeSink implements PlatformSink {
-  readonly platform = "discord";
-  readonly sent: string[] = [];
-  readonly sentTo: ContextKey[] = [];
-  readonly edits: string[] = [];
-  async send(context: ContextKey, message: { text: string }): Promise<MessageRef> {
-    this.sent.push(message.text);
-    this.sentTo.push(context);
-    return { context, id: String(this.sent.length) };
-  }
-  async react(): Promise<void> {}
-  async typing(): Promise<void> {}
-  async edit(_message: MessageRef, text: string): Promise<void> {
-    this.edits.push(text);
-  }
-  readonly deleted: string[] = [];
-  async delete(message: MessageRef): Promise<void> {
-    this.deleted.push(message.id);
-  }
-}
-
-/** A platform that cannot edit messages. */
-class SendOnlySink implements PlatformSink {
-  readonly platform = "discord";
-  readonly sent: string[] = [];
-  async send(context: ContextKey, message: { text: string }): Promise<MessageRef> {
-    this.sent.push(message.text);
-    return { context, id: "1" };
-  }
-  async react(): Promise<void> {}
-  async typing(): Promise<void> {}
-}
-
-class FakeMind implements Mind {
-  accepting = true;
-  readonly suggestions: MindSuggestion[] = [];
-  suggest(s: MindSuggestion): boolean {
-    this.suggestions.push(s);
-    return this.accepting;
-  }
-  thoughts() {
-    return [];
-  }
-  stats() {
-    return {
-      calls_last_hour: 0,
-      max_calls_per_hour: 0,
-      calls_total: 0,
-      tokens_total: 0,
-      last_at: null,
-      next_heartbeat_at: null,
-      idle_reason: null,
-    };
-  }
-}
-
-const playback = (state: "started" | "finished"): Event => ({
-  type: "voice_playback",
-  data: { context: VOICE, turn: "t-prep", state, text: "我去準備一下歌喔", emotion: null },
-});
+const playback = (state: "started" | "finished") =>
+  [
+    Events.VoicePlaybackEvent,
+    { context: VOICE, turn: "t-prep", state, text: "我去準備一下歌喔", emotion: null },
+  ] as const;
 
 function prepares(h: Harness): SongPrepare[] {
   return h.events.flatMap((e) =>
-    e.type === "custom" && e.data.topic === SONG_PREPARE_TOPIC
-      ? [e.data.payload as unknown as SongPrepare]
-      : [],
+    e.type === Events.SingPrepare.type ? [e.data as SongPrepare] : [],
   );
 }
 
 function pauses(h: Harness): boolean[] {
   return h.events.flatMap((e) =>
-    e.type === "custom" && e.data.topic === SPEECH_PAUSE_TOPIC
-      ? [(e.data.payload as { paused: boolean }).paused]
-      : [],
+    e.type === Events.SpeechPause.type ? [(e.data as { paused: boolean }).paused] : [],
   );
 }
 
@@ -379,34 +327,35 @@ class Harness {
   readonly sup = new Supervisor();
   worker = new FakeWorker();
   readonly voice = new FakeVoice();
-  readonly mind = new FakeMind();
   readonly prompts = new PromptContributors();
   readonly commands = new CommandRegistry(Permissions.fromStrings(["discord:7"]));
   readonly queue: RequestQueue;
   readonly registry: ActuatorRegistry;
-  readonly events: Event[] = [];
-  readonly sink = new FakeSink();
-  readonly sinks = new PlatformSinks();
+  readonly events: PublishedEvent[] = [];
+  /** What went to Core's other sink for the audience context (the hosts' GPU arbiters). */
+  readonly sent: GpuContext[] = [];
 
   private constructor(withMind: boolean, store: MemorySettingsStore | null) {
     const s = this.sup.services;
     if (store) s.provide("store", SettingsStoreKey, store);
     this.registry = new ActuatorRegistry({ services: s, builtins: false });
     this.queue = new RequestQueue(undefined, {
-      publisher: (event) => this.sup.bus.publish("queue", event),
+      publisher: this.sup.bus.publisher("queue"),
     });
     s.provide("app", ActuatorRegistryKey, this.registry);
     s.provide("app", AuthorizerKey, new AllowAll());
     s.provide("app", CommandRegistryKey, this.commands);
     s.provide("app", PromptContributorsKey, this.prompts);
     s.provide("app", RequestQueueKey, this.queue);
-    this.sinks.register(this.sink);
-    s.provide("app", PlatformSinksKey, this.sinks);
     s.provide("voice.link", VoicePlayerKey, this.voice);
-    if (withMind) s.provide("mind", MindKey, this.mind);
+    // She can be told and decide: the Arbiter admits her impulses and her runner wakes her.
+    if (withMind) {
+      s.provide("arbiter", ArbiterKey, {} as Arbiter);
+      s.provide("agent", ImpulseHostKey, {} as ImpulseHost);
+    }
     const sub = this.sup.bus.subscribe("*");
     void (async () => {
-      for await (const env of sub) this.events.push(env.event);
+      for await (const env of sub) this.events.push({ type: env.type, data: env.data });
     })();
   }
 
@@ -418,7 +367,13 @@ class Harness {
     const h = new Harness(withMind, restart?.store ?? null);
     if (restart?.worker) h.worker = restart.worker;
     await h.sup.register(
-      new SingModule(() => h.worker),
+      new SingModule(() => h.worker, {
+        endpoints: oneWorker(),
+        context: (services, context) => {
+          expect(services).toBe(h.sup.services);
+          h.sent.push(context);
+        },
+      }),
       { poll_ms: 100, quiet_ms: 200, lead_ms: 300, announce_max_secs: 5, ...(config as object) },
       true,
     );
@@ -436,25 +391,29 @@ class Harness {
     await done;
   }
 
-  async publish(event: Event): Promise<void> {
-    this.sup.bus.publish("test", event);
+  async publish<D extends AnyEventDefinition>(
+    definition: D,
+    data: EventPayload<D>,
+    ...meta: PublishMetaArgs<D>
+  ): Promise<void> {
+    this.sup.bus.publish("test", definition, data, ...meta);
     await settle();
   }
 
   /** She joins the voice channel; Owen and Amy are there (requesters are listening). */
   async join(people: AccountRef[] = [OWEN, AMY]): Promise<void> {
     this.voice.channels.set("g1", "voice1");
-    await this.publish({
-      type: "voice_joined",
-      data: { context: VOICE, participants: people.map(listener) },
+    await this.publish(Events.VoiceJoined, {
+      context: VOICE,
+      participants: people.map(listener),
     });
   }
 
   /** Who is in her voice channel now. */
   async members(people: AccountRef[]): Promise<void> {
-    await this.publish({
-      type: "voice_participants",
-      data: { context: VOICE, participants: people.map(listener) },
+    await this.publish(Events.VoiceParticipants, {
+      context: VOICE,
+      participants: people.map(listener),
     });
   }
 
@@ -472,17 +431,20 @@ class Harness {
   }
 
   cues(): SongCue[] {
-    return this.events
-      .filter((e) => e.type === "custom" && e.data.topic === SONG_TOPIC)
-      .map((e) => (e.type === "custom" ? (e.data.payload as unknown as SongCue) : (null as never)));
+    return this.events.filter((e) => e.type === Events.SingCue.type).map((e) => e.data as SongCue);
+  }
+
+  /** What she was told is ready (impulses `song_ready`): she decides whether to sing it now. */
+  get mind() {
+    return { suggestions: this.initiatives().filter((i) => i.reason === "song_ready") };
   }
 
   /** Her announcements: impulses of source `song` for the Arbiter (never `agent.initiative`). */
   initiatives() {
-    expect(this.events.some((e) => e.type === "agent_initiative")).toBe(false);
+    expect(this.events.some((e) => e.type === "agent.initiative")).toBe(false);
     return this.events.flatMap((e) => {
-      const impulse = v2Payload(e, ARBITER_IMPULSE_TOPIC);
-      if (!impulse) return [];
+      if (e.type !== Events.ArbiterImpulse.type) return [];
+      const impulse = e.data as Impulse;
       expect(impulse.source).toBe("song");
       return [
         {
@@ -513,33 +475,6 @@ describe("sing module", () => {
   afterEach(async () => {
     await h?.stop();
     vi.useRealTimers();
-  });
-
-  it("calls a searched song what was asked for: a video title can name something else", async () => {
-    h = await Harness.create();
-    await h.join();
-    await h.command("queue song request", { song: "I Really Want to Stay at Your House" });
-    h.worker.finish("j1", "Cyberpunk: Edgerunners", 1);
-    await settle(150);
-    const hint = h.initiatives().at(-1)?.hint;
-    expect(hint).toContain("I Really Want to Stay at Your House");
-    expect(hint).not.toContain("Cyberpunk");
-  });
-
-  it("calls a linked song by the worker's title: a link is no name", async () => {
-    h = await Harness.create();
-    await h.join();
-    await h.command("queue song request", { song: "https://youtu.be/abc" });
-    h.worker.finish("j1", "Song Title", 1);
-    await settle(150);
-    expect(h.initiatives().at(-1)?.hint).toContain("「Song Title」");
-  });
-
-  it("tells her to request every song asked for, and that a sung song can be sung again", async () => {
-    h = await Harness.create();
-    const tool = h.sup.services.require(ActuatorRegistryKey).get("sing.request")?.tool;
-    expect(tool?.description).toMatch(/每首.*sing_request/);
-    expect(tool?.description).toMatch(/唱過.*再/);
   });
 
   it("asks her mind when a song she agreed to is ready, and sings it when she starts it", async () => {
@@ -582,10 +517,7 @@ describe("sing module", () => {
     // Her opening line still plays: the floor is only held once the song does.
     expect(h.sup.services.require(VoiceFloorKey).holder("g1")).toBeNull();
     expect(await h.section()).toContain("要開始唱:#1");
-    await h.publish({
-      type: "agent_turn_completed",
-      data: { turn: "turn-1", context: VOICE, text: "唱囉" },
-    });
+    await h.publish(Events.AgentTurnCompleted, { turn: "turn-1", context: VOICE, text: "唱囉" });
     await settle(400);
     expect(h.voice.plays).toHaveLength(1);
     expect(h.sup.services.require(VoiceFloorKey).holder("g1")).toBe("song");
@@ -673,146 +605,6 @@ describe("sing module", () => {
     expect(await h.singer.voteSkip(BOB)).toBeNull();
   });
 
-  describe("only_on_request", () => {
-    const ask = () =>
-      h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "Long", by: "Amy" });
-
-    it("does not let her pick a song on her own", async () => {
-      h = await Harness.create({ only_on_request: true });
-      const own = await h.invoke(Principals.self(VOICE), "sing.request", { query: "Long" });
-      expect(own.status).toBe("denied");
-      expect(h.worker.submitted).toHaveLength(0);
-    });
-
-    it("does not let her start a song on her own", async () => {
-      h = await Harness.create({ only_on_request: true });
-      await h.join();
-      await ask();
-      const own = await h.invoke(Principals.self(VOICE), "sing.play", { song: 1 });
-      expect(own.status).toBe("denied");
-    });
-
-    it("offers her mind no singing, and her turns no way to start a song", async () => {
-      h = await Harness.create({ only_on_request: true });
-      expect(h.registry.get("sing.request")?.available?.()).toBe(false);
-      expect(h.registry.get("sing.play")?.available?.()).toBe(false);
-      expect(h.registry.get("sing.play")?.tool).toBeUndefined();
-      expect(h.registry.get("sing.request")?.tool?.description).not.toContain("sing_start");
-    });
-
-    it("still offers them with the setting off", async () => {
-      h = await Harness.create();
-      expect(h.registry.get("sing.play")?.available?.()).not.toBe(false);
-      expect(h.registry.get("sing.play")?.tool?.name).toBe("sing_start");
-    });
-
-    it("sings what someone asked for, without leaving it to her mind", async () => {
-      h = await Harness.create({ only_on_request: true });
-      await h.join();
-      const asked = await ask();
-      expect(asked.status === "done" && asked.result.text).toContain("好了她就會唱");
-      h.worker.finish("j1", "Long", 1);
-      await settle(150);
-      expect(h.mind.suggestions.filter((s) => s.reason === "song_ready")).toHaveLength(0);
-      await settle(7000);
-      expect(h.voice.plays).toHaveLength(1);
-    }, 15_000);
-
-    it("shows her no list, only the song she is singing", async () => {
-      h = await Harness.create({ only_on_request: true });
-      await h.join();
-      await ask();
-      expect(await h.section()).toBe("");
-      h.worker.finish("j1", "Long", 1);
-      await settle(150);
-      expect(h.singer.playing()?.no).toBe(1);
-      const body = await h.section();
-      expect(body).toContain("要開始唱");
-      expect(body).not.toContain("#");
-    });
-
-    it("forgets the list when Core restarts", async () => {
-      const store = new MemorySettingsStore();
-      await store.set("_global", SETLIST_KEY, { version: 1, next: 9, entries: [] });
-      h = await Harness.create({ only_on_request: true }, true, { store });
-      await ask();
-      await h.singer.save();
-      expect(h.singer.list.all()[0]?.no).toBe(1);
-      expect(await store.get("_global", SETLIST_KEY)).toEqual({
-        version: 1,
-        next: 9,
-        entries: [],
-      });
-    });
-  });
-
-  describe("sing.play by name", () => {
-    /** Song #1 "Long", ready, requested by Amy. */
-    async function ready(): Promise<void> {
-      h = await Harness.create();
-      await h.join();
-      await h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "Long", by: "Amy" });
-      h.worker.finish("j1", "Long", 1);
-      await settle(150);
-    }
-
-    /** Song #1 "Long" sung to the end. */
-    async function sungOnce(): Promise<void> {
-      await ready();
-      await h.invoke(Principals.self(VOICE), "sing.play", { song: 1 });
-      await settle(2600);
-      expect(h.singer.list.get(1)?.state).toBe("done");
-      h.worker.cacheHit = true;
-    }
-
-    it("starts a ready song she names", async () => {
-      await ready();
-      const played = await h.invoke(Principals.self(VOICE), "sing.play", { song: "《long》" });
-      expect(played.status === "done" && played.result.data).toMatchObject({ song: 1 });
-      expect(h.singer.playing()?.no).toBe(1);
-    });
-
-    it("reads a number written as text", async () => {
-      await ready();
-      const played = await h.invoke(Principals.self(VOICE), "sing.play", { song: "#1" });
-      expect(played.status === "done" && played.result.data).toMatchObject({ song: 1 });
-    });
-
-    it("sings a finished song again from the worker's cache, for who asked for it", async () => {
-      await sungOnce();
-      const again = await h.invoke(Principals.self(VOICE), "sing.play", { song: "Long" });
-      expect(again.status).toBe("done");
-      expect(h.worker.submitted).toHaveLength(2);
-      expect(h.worker.submitted[1]).toMatchObject({ query: "Long", key: 0 });
-      expect(h.singer.list.get(2)).toMatchObject({ requester_name: "Amy", forced: true });
-      await settle(7000);
-      expect(h.voice.plays).toHaveLength(2);
-    }, 15_000);
-
-    it("sings a finished song again by its number", async () => {
-      await sungOnce();
-      const again = await h.invoke(Principals.self(VOICE), "sing.play", { song: 1 });
-      expect(again.status === "done" && again.result.data).toMatchObject({ song: 2 });
-      expect(h.worker.submitted).toHaveLength(2);
-    });
-
-    it("sends a song not on the list to sing_request, without asking the worker", async () => {
-      await ready();
-      const played = await h.invoke(Principals.self(VOICE), "sing.play", { song: "Unknown" });
-      expect(played.status).toBe("failed");
-      expect(played.status === "failed" && played.error).toContain("sing_request");
-      expect(h.worker.submitted).toHaveLength(1);
-      expect(h.singer.playing()).toBeNull();
-    });
-
-    it("does not fall back to another song for a number not on the list", async () => {
-      await ready();
-      const played = await h.invoke(Principals.self(VOICE), "sing.play", { song: 9 });
-      expect(played.status).toBe("failed");
-      expect(h.singer.playing()).toBeNull();
-    });
-  });
-
   it("sings a commanded song as soon as it is ready and she is in voice", async () => {
     h = await Harness.create();
     expect(await h.command("queue song request", { song: "Song A" })).toContain("好了她就會唱");
@@ -827,72 +619,6 @@ describe("sing module", () => {
     await settle(6000 + 400);
     expect(h.voice.plays).toHaveLength(1);
     expect(h.mind.suggestions.filter((s) => s.reason === "song_ready")).toHaveLength(0);
-  });
-
-  async function singCommanded(
-    config: JsonValue = {},
-    title = "Song A",
-    before: (h: Harness) => Promise<void> = async () => {},
-  ): Promise<Harness> {
-    const harness = await Harness.create(config);
-    await before(harness);
-    await harness.command("queue song request", { song: title });
-    harness.worker.finish("j1", title, 1);
-    await settle(200);
-    await harness.join();
-    await settle(6000 + 400);
-    expect(harness.voice.plays).toHaveLength(1);
-    await settle(5000);
-    expect(harness.cues().at(-1)).toMatchObject({ state: "ended", outcome: "finished" });
-    return harness;
-  }
-
-  it("[modules.sing] lyrics_card posts a card in her voice channel and deletes it", async () => {
-    h = await singCommanded({ lyrics_card: true });
-    expect(h.sink.sent).toHaveLength(1);
-    expect(h.sink.sent[0]).toContain("🎵 **Song A**");
-    expect(h.sink.deleted).toEqual(["1"]);
-    expect(h.sink.sentTo).toEqual([VOICE]);
-  });
-
-  it("posts no lyrics card for a song without lyrics", async () => {
-    h = await singCommanded({ lyrics_card: true }, "Instrumental");
-    expect(h.sink.sent).toHaveLength(0);
-    expect(h.sink.edits).toHaveLength(0);
-  });
-
-  it("posts the lyrics card where she last typed in that server", async () => {
-    const sent = (context: ContextKey): Event => ({
-      type: "action_completed",
-      data: { action: "a1", turn: null, ok: true, error: null, message: { context, id: "m1" } },
-    });
-    const otherGuild: ContextKey = { ...TEXT, scope: "g2", channel: "text9" };
-    h = await singCommanded({ lyrics_card: true }, "Song A", async (harness) => {
-      await harness.publish(sent(TEXT));
-      await harness.publish(sent(otherGuild));
-    });
-    expect(h.sink.sentTo).toEqual([TEXT]);
-    expect(h.sink.deleted).toEqual(["1"]);
-  });
-
-  it("posts no lyrics card by default", async () => {
-    h = await singCommanded();
-    expect(h.sink.sent).toHaveLength(0);
-    expect(h.sink.edits).toHaveLength(0);
-  });
-
-  it("posts no lyrics card on a platform that cannot edit", async () => {
-    const sendOnly = new SendOnlySink();
-    h = await Harness.create({ lyrics_card: true });
-    h.sinks.register(sendOnly);
-    await h.command("queue song request", { song: "Song A" });
-    h.worker.finish("j1", "Song A", 1);
-    await settle(200);
-    await h.join();
-    await settle(6000 + 400 + 5000);
-    expect(h.cues().at(-1)).toMatchObject({ state: "ended", outcome: "finished" });
-    expect(sendOnly.sent).toHaveLength(0);
-    expect(h.sink.sent).toHaveLength(0);
   });
 
   it("a commanded song waits while its requester is out of the voice channel", async () => {
@@ -967,12 +693,17 @@ describe("sing module", () => {
     await h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "Later", by: "Amy" });
     await settle(2000);
     expect(h.worker.told).toEqual({ in_voice: true, listeners: 2, live: true, urgent: ["j1"] });
+    // The same, at the same moments, for the hosts' GPU arbiters.
+    expect(h.sent.at(-1)).toEqual(h.worker.told);
+    expect(h.sent.length).toBe(h.worker.toldTimes);
+    expect(h.sent.length).toBeGreaterThan(5);
   });
 
   it("does not bother the worker when no song is being prepared", async () => {
     h = await Harness.create();
     await settle(2000);
     expect(h.worker.told).toBeNull();
+    expect(h.sent).toEqual([]);
   });
 
   it("the start cue carries the song's video inside the worker's cache", async () => {
@@ -1091,10 +822,10 @@ describe("sing module", () => {
     expect(h.worker.gone).toEqual([]);
     expect(pause()).toBeNull();
     // She says it; once she is quiet the worker goes ahead and speech is off.
-    await h.publish(playback("started"));
+    await h.publish(...playback("started"));
     await settle(1600);
     expect(h.worker.gone).toEqual([]);
-    await h.publish(playback("finished"));
+    await h.publish(...playback("finished"));
     await settle(1600 + 800);
     expect(h.worker.gone).toEqual(["j1"]);
     expect(pause()).toBe("song");
@@ -1120,20 +851,20 @@ describe("sing module", () => {
     await h.command("queue song request", { song: "Song A" });
     h.worker.exclusive("j1", "waiting");
     await settle(200);
-    await h.publish(playback("started"));
+    await h.publish(...playback("started"));
     await settle(1600);
-    await h.publish(playback("finished"));
+    await h.publish(...playback("finished"));
     await settle(1600 + 800);
     expect(h.worker.gone).toEqual(["j1"]);
     h.worker.finish("j1", "Song A");
     await settle(1600);
 
-    await h.publish(playback("started")); // She is in the middle of a sentence.
+    await h.publish(...playback("started")); // She is in the middle of a sentence.
     await h.command("queue song request", { song: "Song B" });
     h.worker.exclusive("j2", "waiting");
     await settle(1600);
     expect(h.worker.gone).toEqual(["j1"]);
-    await h.publish(playback("finished"));
+    await h.publish(...playback("finished"));
     await settle(1600 + 800);
     expect(h.worker.gone).toEqual(["j1", "j2"]);
     expect(h.initiatives().filter((i) => i.reason === "song_prepare")).toHaveLength(1);
@@ -1207,24 +938,94 @@ describe("sing module", () => {
     expect(h.worker.gone).toEqual(["j1"]);
   });
 
-  it("starts after her opening line instead of over it", async () => {
-    h = await Harness.create();
-    await h.join();
-    h.worker.cacheHit = true;
-    expect(await h.command("queue song request", { song: "Cached" })).toContain("她馬上就唱");
-    await settle(1000);
-    await h.publish({
-      type: "voice_playback",
-      data: { context: VOICE, turn: "t", state: "started", text: "要唱囉", emotion: null },
+  describe("her announcement of a song that starts on its own", () => {
+    const decided = (h: Harness, verdict: "accepted" | "expired", turn: string | null) => {
+      const impulse = h.events.filter((e) => e.type === Events.ArbiterImpulse.type).at(-1)
+        ?.data as Impulse;
+      return h.publish(Events.ArbiterDecided, {
+        impulse: impulse.id,
+        source: "song",
+        verdict,
+        reason: verdict === "expired" ? "expired" : null,
+        detail: "",
+        retry_at: null,
+        merged_into: null,
+        turn,
+        task: null,
+        at: toTimestamp(Date.now()),
+      });
+    };
+    const playback = (h: Harness, turn: string, state: "started" | "finished") =>
+      h.publish(Events.VoicePlaybackEvent, {
+        context: VOICE,
+        turn,
+        state,
+        text: "要唱囉",
+        emotion: null,
+      });
+    const ready = async (): Promise<Harness> => {
+      const h = await Harness.create({ opening_window_ms: 600 });
+      await h.join();
+      h.worker.cacheHit = true;
+      await h.command("queue song request", { song: "Cached" });
+      return h;
+    };
+
+    it("starts after her opening line instead of over it", async () => {
+      h = await Harness.create();
+      await h.join();
+      h.worker.cacheHit = true;
+      expect(await h.command("queue song request", { song: "Cached" })).toContain("她馬上就唱");
+      await settle(1000);
+      await decided(h, "accepted", "t");
+      await playback(h, "t", "started");
+      await settle(3000);
+      expect(h.voice.plays).toHaveLength(0);
+      await h.publish(Events.AgentTurnCompleted, { turn: "t", context: VOICE, text: "要唱囉" });
+      await playback(h, "t", "finished");
+      await settle(400);
+      expect(h.voice.plays).toHaveLength(1);
     });
-    await settle(3000);
-    expect(h.voice.plays).toHaveLength(0);
-    await h.publish({
-      type: "voice_playback",
-      data: { context: VOICE, turn: "t", state: "finished", text: "要唱囉", emotion: null },
+
+    it("waits for it behind an answer of hers, and for what it says", async () => {
+      h = await ready();
+      // She is finishing an answer; the announcement waits for its turn.
+      await playback(h, "answer", "started");
+      await settle(100);
+      await playback(h, "answer", "finished");
+      await settle(300);
+      expect(h.voice.plays).toHaveLength(0);
+      await decided(h, "accepted", "opening");
+      await playback(h, "opening", "started");
+      await settle(500);
+      expect(h.voice.plays).toHaveLength(0);
+      await h.publish(Events.AgentTurnCompleted, {
+        turn: "opening",
+        context: VOICE,
+        text: "要唱囉",
+      });
+      await playback(h, "opening", "finished");
+      await settle(400);
+      expect(h.voice.plays).toHaveLength(1);
     });
-    await settle(400);
-    expect(h.voice.plays).toHaveLength(1);
+
+    it("is not waited for once it expired: the song starts, nothing is said late", async () => {
+      h = await ready();
+      await settle(300);
+      expect(h.voice.plays).toHaveLength(0);
+      await decided(h, "expired", null);
+      await settle(400);
+      expect(h.voice.plays).toHaveLength(1);
+      expect(h.initiatives()).toHaveLength(1);
+    });
+
+    it("starts at the end of the window when nothing was decided", async () => {
+      h = await ready();
+      await settle(500);
+      expect(h.voice.plays).toHaveLength(0);
+      await settle(500);
+      expect(h.voice.plays).toHaveLength(1);
+    });
   });
 
   it("without a mind, ready songs start on their own", async () => {
@@ -1466,11 +1267,9 @@ describe("sing module", () => {
       h.worker.finish("j2", "Song A", 1);
       await settle(6000 + 3000);
       expect(h.singer.list.get(2)?.state).toBe("done");
-      const shown = h.events.filter(
-        (e) => e.type === "custom" && e.data.topic === "economy.screen",
-      );
+      const shown = h.events.filter((e) => e.type === "economy.screen");
       expect(shown).toHaveLength(1);
-      expect(shown[0]?.type === "custom" && shown[0].data.payload).toMatchObject({
+      expect(shown[0]?.data).toMatchObject({
         kind: "dedication",
         text: "給今天加班的人",
         song: "Song A",
@@ -1487,9 +1286,7 @@ describe("sing module", () => {
       await h.singer.stop(false);
       await settle(50);
       expect(pay.refunds).toEqual(["e1"]);
-      expect(h.events.some((e) => e.type === "custom" && e.data.topic === "economy.screen")).toBe(
-        false,
-      );
+      expect(h.events.some((e) => e.type === "economy.screen")).toBe(false);
     });
 
     it("tells her about the dedication before the song, and keeps it in her prompt", async () => {
@@ -1610,10 +1407,8 @@ describe("song clips (party guess-the-song)", () => {
     await settle(61_000);
   }
 
-  const heard = (state: "started" | "finished", text: string): Event => ({
-    type: "voice_playback",
-    data: { context: VOICE, turn: "t", state, text, emotion: null },
-  });
+  const heard = (state: "started" | "finished", text: string) =>
+    [Events.VoicePlaybackEvent, { context: VOICE, turn: "t", state, text, emotion: null }] as const;
 
   it("lists the songs she has covered: the worker's library and what the set list just made", async () => {
     await room([
@@ -1700,11 +1495,11 @@ describe("song clips (party guess-the-song)", () => {
 
   it("waits for the line she is saying instead of playing over it", async () => {
     await room([cached("a", "Alpha", 60)]);
-    await h.publish(heard("started", "第一首來了"));
+    await h.publish(...heard("started", "第一首來了"));
     const outcome = clips().play(VOICE, "a", CLIP);
     await settle(3500);
     expect(h.voice.plays).toHaveLength(0);
-    await h.publish(heard("finished", "第一首來了"));
+    await h.publish(...heard("finished", "第一首來了"));
     await settle(500);
     expect(h.voice.plays).toHaveLength(1);
     await settle(5000);
@@ -1713,7 +1508,7 @@ describe("song clips (party guess-the-song)", () => {
 
   it("gives up when she never stops talking, rather than playing over her", async () => {
     await room([cached("a", "Alpha", 60)], { announce_max_secs: 2 });
-    await h.publish(heard("started", "說個不停"));
+    await h.publish(...heard("started", "說個不停"));
     const outcome = clips().play(VOICE, "a", CLIP);
     await settle(3000);
     await expect(outcome).resolves.toBe("failed");
@@ -1743,7 +1538,7 @@ describe("song clips (party guess-the-song)", () => {
     expect((h.voice.plays[0] as Play).stoppedWith).toBe(1500);
     // Stopped while still waiting for her: nothing starts.
     const early = new AbortController();
-    await h.publish(heard("started", "等一下"));
+    await h.publish(...heard("started", "等一下"));
     const waiting = clips().play(VOICE, "a", CLIP, early.signal);
     await settle(500);
     early.abort();

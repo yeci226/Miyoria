@@ -42,7 +42,7 @@ export function scopeEquals(a: AuthScope, b: AuthScope): boolean {
   }
 }
 
-/** Why a subject may hold a role. Serialized like Rust `#[serde(tag = "type")]`. */
+/** Why a subject may hold a role. Serialized as `{ type, ... }`. */
 export type Source =
   /** Listed in `[modules.auth] owners` (or `[modules.commands] owners`). */
   | { type: "config_owner" }

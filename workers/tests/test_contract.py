@@ -6,7 +6,7 @@ import re
 import struct
 
 import pytest
-from conftest import make_wav, pcm_to_wav
+from conftest import NO_BODY, make_wav, pcm_to_wav, send
 
 TEXT = "哼,你終於來了喔?我才、才沒有在等你呢。好啦,今天要做什麼?"
 
@@ -177,3 +177,57 @@ def test_tts_then_asr_roundtrip(asr_client, tts_client):
     assert a.status_code == 200
     expected_ms = len(r.content) / 2 / rate * 1000
     assert abs(a.json()["duration_ms"] - expected_ms) <= 2
+
+
+# ── request bodies the fake takes and refuses ────────────────────────────────
+# Pinned with the hand-written request model, before it was generated from the JSON Schema: the
+# generated one must take and refuse exactly the same, with the same status and error body.
+
+INVALID = "invalid request: "
+NOT_AN_OBJECT = INVALID + "body: Input should be a valid dictionary or object to extract fields from"
+
+FAKE_TTS_BODIES = [
+    ({"text": "你好。"}, 200, None),
+    ({"text": "你好。", "language": None, "emotion": None, "instruct": None, "voice": None, "priority": None}, 200, None),
+    ({"text": "你好。", "language": "zh", "emotion": "happy", "instruct": "輕聲", "voice": "default", "priority": "ahead"},
+     200, None),
+    ({"text": "你好。", "unknown": [1, 2]}, 200, None),
+    ({"text": "   "}, 400, {"error": "text is empty"}),
+    ({"text": "你好。", "voice": "nobody"}, 404, {"error": "unknown voice 'nobody' (available: deepseek-chan, default)"}),
+    ({}, 400, {"error": INVALID + "text: Field required"}),
+    ({"text": None}, 400, {"error": INVALID + "text: Input should be a valid string"}),
+    ({"text": 5}, 400, {"error": INVALID + "text: Input should be a valid string"}),
+    ({"text": "你好。", "language": 5}, 400, {"error": INVALID + "language: Input should be a valid string"}),
+    ({"text": "你好。", "emotion": ["happy"]}, 400, {"error": INVALID + "emotion: Input should be a valid string"}),
+    ({"text": "你好。", "instruct": {}}, 400, {"error": INVALID + "instruct: Input should be a valid string"}),
+    ({"text": "你好。", "voice": True}, 400, {"error": INVALID + "voice: Input should be a valid string"}),
+    ({"text": "你好。", "priority": 1}, 400, {"error": INVALID + "priority: Input should be a valid string"}),
+    ({"text": 1, "voice": 2}, 400, {"error": INVALID + "text: Input should be a valid string"}),
+    (b"[]", 400, {"error": NOT_AN_OBJECT}),
+    (b"null", 400, {"error": NOT_AN_OBJECT}),
+    (b"nope", 400, {"error": INVALID + "0: JSON decode error"}),
+    (NO_BODY, 400, {"error": INVALID + "body: Field required"}),
+]
+
+
+@pytest.mark.parametrize("body,status,answer", FAKE_TTS_BODIES)
+def test_fake_tts_request_bodies(fake_client, monkeypatch, body, status, answer):
+    monkeypatch.delenv("FAKE_VOICES", raising=False)
+    assert send(fake_client, "POST", "/tts", body) == (status, answer)
+
+
+def test_answers_fit_the_contract(asr_client, tts_client, asr_is_fake, tts_is_fake):
+    """The same for a real worker (WORKER_ASR_URL / WORKER_TTS_URL). In process, every answer is
+    checked anyway (response_contract.py); the fake's /health only has what every health has."""
+    import contracts
+
+    asr_health = contracts.WorkersHealth if asr_is_fake else contracts.WorkersAsrHealth
+    tts_health = contracts.WorkersHealth if tts_is_fake else contracts.WorkersTtsHealth
+    asr_health.model_validate_json(asr_client.get("/health").content, strict=True)
+    tts_health.model_validate_json(tts_client.get("/health").content, strict=True)
+    for client in (asr_client, tts_client):
+        contracts.WorkersBusy.model_validate_json(client.get("/busy").content, strict=True)
+    contracts.WorkersAsrReply.model_validate_json(_asr(asr_client, make_wav()).content, strict=True)
+    contracts.WorkersError.model_validate_json(tts_client.post("/tts", json={"text": " "}).content, strict=True)
+    if not tts_is_fake:
+        contracts.WorkersTtsVoices.model_validate_json(tts_client.get("/voices").content, strict=True)

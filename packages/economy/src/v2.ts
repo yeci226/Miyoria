@@ -1,8 +1,7 @@
 // Economy 2.0 (docs/design/v4-plan.md §10) as one object the service owns: every desk below shares
 // the service's ledger, its turns and its caps. Nothing here changes a balance without a ledger row.
 
-import { errorMessage } from "@miyoria/kernel";
-import type { CoinEntry } from "@miyoria/store";
+import { errorMessage } from "@miyoria/runtime/kernel";
 import type { AccountRef } from "@miyoria/types";
 import { AchievementDesk } from "./achievements.js";
 import { Collection } from "./collection.js";
@@ -14,6 +13,7 @@ import { PartyRewardDesk } from "./party.js";
 import { PlayDesk } from "./play.js";
 import { PredictionDesk } from "./predictions.js";
 import { QuestDesk } from "./quests.js";
+import type { CoinEntry } from "./records.js";
 import { RoomDesk } from "./room.js";
 import { ShopDesk } from "./shop.js";
 import type {

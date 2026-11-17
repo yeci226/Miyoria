@@ -1,4 +1,4 @@
-// A tiny stand-in for `tokio::sync::watch`: one current value, listeners told about changes.
+// A tiny watch cell: one current value, listeners told about changes.
 
 export type Unsubscribe = () => void;
 

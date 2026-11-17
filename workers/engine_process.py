@@ -32,6 +32,7 @@ import multiprocessing
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -184,4 +185,9 @@ class EngineProcess:
         """At once: nothing in the child gets a say. A ``recv`` waiting in another thread raises
         ``EngineGone``."""
         self._proc.kill()
+        deadline = time.monotonic() + 5
         self._proc.join(5)
+        # A `recv` in another thread watches the same process. Two waits on one child can make
+        # this join return before the exit is recorded, so `alive()` would still say yes.
+        while self._proc.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)

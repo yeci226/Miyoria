@@ -2,7 +2,13 @@
 // Searches use the memory engine's hybrid recall when the memory module runs, else the store's
 // full-text search; either way over every scope of the profile (an admin view).
 
-import { type MemoryEngine, MemoryEngineKey, tokenString } from "@miyoria/memory";
+import type {
+  MemoryItem,
+  MemoryPage,
+  MemoryRecordView,
+  UpdateMemoryRequest,
+} from "@miyoria/contracts/api";
+import { type MemoryEngine, MemoryEngineKey, tokenString } from "@miyoria/memory/memory";
 import {
   type MemoryFilter,
   type MemoryHit,
@@ -13,12 +19,10 @@ import {
   type MemoryScope,
 } from "@miyoria/store";
 import { isUlid, type ProfileId, toTimestamp } from "@miyoria/types";
-import { z } from "zod";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { boolParam, readJson, readQuery, usizeParam } from "./extract.js";
-import { json, noContent, param, type Route } from "./route.js";
+import { clampLimit, countOf } from "./extract.js";
 import { type ApiContext, type ApiState, toJson } from "./state.js";
-import type { MemoryItem, MemoryRecordView, Page, UpdateMemoryRequest } from "./types.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
@@ -27,7 +31,6 @@ const SCAN_LIMIT = 100_000;
 const MAX_CONTENT_CHARS = 4000;
 
 const ALL_KINDS: MemoryKind[] = ["episode", "fact", "self_note", "followup"];
-const MemoryKindSchema = z.enum(ALL_KINDS);
 
 /** A record without its search tokens and embedding vector. */
 export function recordView(r: MemoryRecord): MemoryRecordView {
@@ -67,34 +70,62 @@ function records(state: ApiState): Records {
   return { store, profile: state.profile(), engine: null };
 }
 
-const ListQuerySchema = z.object({
-  q: z.string().optional(),
-  kind: MemoryKindSchema.optional(),
-  subject: z
-    .string()
-    .transform((s) => s.toUpperCase())
-    .refine(isUlid, "invalid ULID")
-    .optional(),
-  before: z
-    .string()
-    .refine((s) => !Number.isNaN(Date.parse(s)), "invalid timestamp")
-    .optional(),
-  include_superseded: boolParam.optional(),
-  limit: usizeParam.optional(),
-});
-type ListQuery = z.output<typeof ListQuerySchema>;
+/** The query of the list, as the handler gets it: the checks of `subject` and `before` are its own. */
+interface ListQuery {
+  q?: string | undefined;
+  kind?: MemoryKind | undefined;
+  /** A person's ULID, upper-cased. */
+  subject?: string | undefined;
+  /** A time (pagination). */
+  before?: string | undefined;
+  include_superseded?: boolean | undefined;
+  limit?: number | undefined;
+}
+
+type RawQuery = {
+  q?: string | undefined;
+  kind?: MemoryKind | undefined;
+  subject?: string | undefined;
+  before?: string | undefined;
+  include_superseded?: "true" | "false" | undefined;
+  limit?: string | undefined;
+};
+
+const queryError = (message: string) =>
+  ApiError.badRequest(`Failed to deserialize query string: ${message}`);
+
+/** What the schema leaves to the handler: `subject` is an ULID, `before` a time. */
+function listQuery(raw: RawQuery): ListQuery {
+  let subject: string | undefined;
+  if (raw.subject !== undefined) {
+    subject = raw.subject.toUpperCase();
+    if (!isUlid(subject)) throw queryError("subject: invalid ULID");
+  }
+  if (raw.before !== undefined && Number.isNaN(Date.parse(raw.before))) {
+    throw queryError("before: invalid timestamp");
+  }
+  return {
+    q: raw.q,
+    kind: raw.kind,
+    subject,
+    before: raw.before,
+    include_superseded:
+      raw.include_superseded === undefined ? undefined : raw.include_superseded === "true",
+    limit: countOf(raw.limit),
+  };
+}
 
 function sameScope(a: MemoryScope, b: MemoryScope): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-async function list(state: ApiState, c: ApiContext): Promise<Response> {
-  const q = readQuery(c, ListQuerySchema);
+async function list(state: ApiState, raw: RawQuery): Promise<MemoryPage> {
+  const q = listQuery(raw);
   const recs = records(state);
   const { store, profile } = recs;
-  const limit = Math.min(Math.max(q.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+  const limit = clampLimit(q.limit, DEFAULT_LIMIT, MAX_LIMIT);
   const text = q.q?.trim() ?? "";
-  if (text !== "") return json(await search(state, recs, q, text, limit));
+  if (text !== "") return search(state, recs, q, text, limit);
 
   const filter: MemoryFilter = {
     subject: q.subject ?? null,
@@ -108,11 +139,10 @@ async function list(state: ApiState, c: ApiContext): Promise<Response> {
   const more = found.length > limit;
   const kept = found.slice(0, limit);
   const last = kept[kept.length - 1];
-  const page: Page<MemoryItem> = {
+  return {
     items: kept.map((r) => ({ record: recordView(r) })),
     next_cursor: more && last ? last.created_at : null,
   };
-  return json(page);
 }
 
 /** Every scope the profile has records in: an admin search may look everywhere. */
@@ -139,7 +169,7 @@ async function search(
   q: ListQuery,
   text: string,
   limit: number,
-): Promise<Page<MemoryItem>> {
+): Promise<MemoryPage> {
   const { store, profile, engine } = recs;
   const before = q.before !== undefined ? Date.parse(q.before) : null;
   const keep = (r: MemoryRecord) =>
@@ -217,24 +247,23 @@ async function find(
   return record;
 }
 
-const UpdateMemorySchema = z
-  .object({
-    content: z.string().nullish(),
-    kind: MemoryKindSchema.nullish(),
-    importance: z.number().nullish(),
-    done: z.boolean().nullish(),
-  })
-  .transform((r): UpdateMemoryRequest => {
-    const out: UpdateMemoryRequest = {};
-    if (r.content != null) out.content = r.content;
-    if (r.kind != null) out.kind = r.kind;
-    if (r.importance != null) out.importance = r.importance;
-    if (r.done != null) out.done = r.done;
-    return out;
-  });
-
-async function update(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, UpdateMemorySchema);
+async function update(
+  state: ApiState,
+  c: ApiContext,
+  id: string,
+  body: UpdateMemoryRequest,
+): Promise<MemoryRecordView> {
+  // A field that is `null` is as good as left out.
+  const request: {
+    content?: string;
+    kind?: MemoryKind;
+    importance?: number;
+    done?: boolean;
+  } = {};
+  if (body.content != null) request.content = body.content;
+  if (body.kind != null) request.kind = body.kind;
+  if (body.importance != null) request.importance = body.importance;
+  if (body.done != null) request.done = body.done;
   const content = request.content?.trim();
   if (content === "") throw ApiError.badRequest("`content` must not be empty");
   if (content !== undefined && [...content].length > MAX_CONTENT_CHARS) {
@@ -244,7 +273,7 @@ async function update(state: ApiState, c: ApiContext): Promise<Response> {
     throw ApiError.badRequest("`importance` must be between 0 and 1");
   }
   const { store, profile } = records(state);
-  const record = { ...(await find(store, profile, param(c, "id"))) };
+  const record = { ...(await find(store, profile, id)) };
   if (content !== undefined && content !== record.content) {
     record.content = content;
     record.tokens = tokenString(content);
@@ -266,11 +295,10 @@ async function update(state: ApiState, c: ApiContext): Promise<Response> {
   if (failure !== null) detail.error = ApiError.internal(failure).message;
   await state.audit(c, "memory.update", record.id, toJson(detail), failure === null);
   if (failure !== null) throw ApiError.internal(failure);
-  return json(recordView(record));
+  return recordView(record);
 }
 
-async function remove(state: ApiState, c: ApiContext): Promise<Response> {
-  const id = param(c, "id");
+async function remove(state: ApiState, c: ApiContext, id: string): Promise<void> {
   const { store, profile } = records(state);
   const record = await find(store, profile, id);
   let removed = false;
@@ -284,13 +312,15 @@ async function remove(state: ApiState, c: ApiContext): Promise<Response> {
   await state.audit(c, "memory.delete", record.id, detail, failure === null);
   if (failure !== null) throw ApiError.internal(failure);
   if (!removed) throw unknownMemory(id);
-  return noContent();
 }
 
-export function memoryRoutes(state: ApiState): Route[] {
-  return [
-    { method: "GET", path: "/api/memory", handler: (c) => list(state, c) },
-    { method: "PATCH", path: "/api/memory/:id", handler: (c) => update(state, c) },
-    { method: "DELETE", path: "/api/memory/:id", handler: (c) => remove(state, c) },
-  ];
-}
+/** The memory routes on the route table (`@miyoria/contracts/api`). */
+export const memoryRpc = {
+  list: os.memory.list.handler(({ input, context }) => list(context.state, input.query)),
+  update: os.memory.update.handler(({ input, context }) =>
+    update(context.state, context.c, input.params.id, input.body),
+  ),
+  remove: os.memory.remove.handler(({ input, context }) =>
+    remove(context.state, context.c, input.params.id),
+  ),
+};

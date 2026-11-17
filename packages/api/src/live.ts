@@ -9,13 +9,13 @@
 // Both go away with `[modules.api.public] enabled = false`, and answer 503 while the `live` module
 // is not running.
 
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import type { PatRequest, PatResult } from "@miyoria/contracts/api";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { type LiveEvent, type LiveFeed, LiveFeedKey } from "@miyoria/types";
-import { z } from "zod";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { readJson } from "./extract.js";
 import { clientKey, tooMany } from "./public.js";
-import { json, param, type Route } from "./route.js";
+import { param, type Route } from "./route.js";
 import type { ApiContext, ApiState } from "./state.js";
 
 const log = getLogger("api.live");
@@ -131,8 +131,6 @@ function liveStream(state: ApiState, c: ApiContext): Response {
  * Empty, or where on the picture (both coordinates, 0..1): the session says who pats, nothing in
  * the request can.
  */
-const Unit = z.number().finite().min(0).max(1);
-const PatSchema = z.union([z.object({}).strict(), z.object({ x: Unit, y: Unit }).strict()]);
 
 // ---- her picture ------------------------------------------------------------------------------
 
@@ -257,9 +255,8 @@ async function video(state: ApiState, c: ApiContext): Promise<Response> {
 }
 
 /** `POST /api/member/live/pat`. */
-async function pat(state: ApiState, c: ApiContext): Promise<Response> {
+async function pat(state: ApiState, c: ApiContext, body: PatRequest): Promise<PatResult> {
   const session = c.get("member");
-  const body = await readJson(c, PatSchema);
   const feed = feedOf(state);
   const spot = "x" in body ? { x: body.x, y: body.y } : undefined;
   let outcome: Awaited<ReturnType<LiveFeed["pat"]>>;
@@ -274,9 +271,14 @@ async function pat(state: ApiState, c: ApiContext): Promise<Response> {
     throw ApiError.unavailable(NOT_RUNNING);
   }
   if (outcome.status === "closed") throw new ApiError(403, PATS_CLOSED);
-  if (outcome.status === "too_many") return tooMany(outcome.wait_ms);
-  return json({ pats: outcome.pats });
+  if (outcome.status === "too_many") throw ApiError.tooMany(outcome.wait_ms);
+  return { pats: outcome.pats };
 }
+
+/** The head-pat on the route table; served only while the public side is on (see `rpc.ts`). */
+export const livePatRpc = {
+  pat: os.member.pat.handler(({ input, context }) => pat(context.state, context.c, input.body)),
+};
 
 /** The live page's routes; none when `[modules.api.public] enabled` is off. */
 export function liveRoutes(state: ApiState): Route[] {
@@ -294,6 +296,5 @@ export function liveRoutes(state: ApiState): Route[] {
       public: true,
       handler: (c) => video(state, c),
     },
-    { method: "POST", path: "/api/member/live/pat", member: true, handler: (c) => pat(state, c) },
   ];
 }

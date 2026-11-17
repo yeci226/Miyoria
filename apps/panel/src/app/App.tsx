@@ -1,8 +1,8 @@
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { RouterProvider } from "@tanstack/react-router";
+import { createBrowserHistory, type RouterHistory } from "@tanstack/react-router";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { describeError, isApiError } from "@/api/http";
-import type { AuthMethods } from "@/api/types";
+import type { AuthMethods } from "@miyoria/contracts/api";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -12,9 +12,8 @@ import { PublicSite } from "@/pages/public/PublicSite";
 import { isLivePath, LivePage } from "@/pages/public/live/LivePage";
 import { Backdrop } from "./Backdrop";
 import { ConnectionProvider, useConnection } from "./connection";
-import { EventStreamProvider } from "./events-store";
 import { createQueryClient } from "./query-client";
-import { type AppRouter, createAppRouter } from "./router";
+import type { AppRouter } from "./router";
 import { type AuthState, checkVisitor, rememberVisitor, type Visitor } from "./visitor";
 import {
   loginErrorMessage,
@@ -28,18 +27,21 @@ import {
 /** Her tank: the landing for someone not logged in. Split out with its fonts and water. */
 const Landing = lazy(() => import("@/pages/public/landing/Landing"));
 
+/** The admin panel (shell, router, pages, event stream): only an admin downloads it. */
+const AdminApp = lazy(() => import("./AdminApp"));
+
 /** Where an admin signed in with Discord finds their own member page. */
 export const OWN_PAGE = "/me";
 
-/** The page's path and query from the router's history (`/card/MYR-…`, `/me`, `/login?error=…`). */
-function pathOf(router: AppRouter): string {
-  const { pathname, search } = router.history.location;
+/** The page's path and query from the history (`/card/MYR-…`, `/me`, `/login?error=…`). */
+function pathOf(history: RouterHistory): string {
+  const { pathname, search } = history.location;
   return `${pathname || "/"}${search}`;
 }
 
 function OwnPage({ onLogout, onBack }: { onLogout: () => void; onBack: () => void }) {
   const { api } = useConnection();
-  const member = useQuery({ queryKey: ["member", "session"], queryFn: ({ signal }) => api.memberSession({ signal }) });
+  const member = useQuery({ queryKey: ["member", "session"], queryFn: ({ signal }) => api.rpc.member.session(undefined, { signal }) });
   if (member.data) return <PublicSite member={member.data} onLogout={onLogout} onBack={onBack} />;
   return (
     <div className="flex min-h-svh items-center justify-center px-4">
@@ -57,15 +59,15 @@ function OwnPage({ onLogout, onBack }: { onLogout: () => void; onBack: () => voi
   );
 }
 
-function Authenticated({ router, initial }: { router: AppRouter; initial?: Visitor }) {
+function Authenticated({ router, history, initial }: { router?: AppRouter; history: RouterHistory; initial?: Visitor }) {
   const { config, api, signOut } = useConnection();
   const [auth, setAuth] = useState<AuthState>(() => initial?.auth ?? { status: "checking" });
   const [methods, setMethods] = useState<AuthMethods | null>(() => initial?.methods ?? null);
   // Already asked (by the landing page that handed over): the first check is not needed.
   const asked = useRef(initial !== undefined);
-  const path = useSyncExternalStore(router.history.subscribe, () => pathOf(router));
-  const [tokenLogin, setTokenLogin] = useState(() => wantsTokenLogin(pathOf(router)));
-  const [loginError, setLoginError] = useState<string | null>(() => loginErrorIn(pathOf(router)));
+  const path = useSyncExternalStore(history.subscribe, () => pathOf(history));
+  const [tokenLogin, setTokenLogin] = useState(() => wantsTokenLogin(pathOf(history)));
+  const [loginError, setLoginError] = useState<string | null>(() => loginErrorIn(pathOf(history)));
   const [recheck, setRecheck] = useState(0);
   const authRef = useRef(auth);
   authRef.current = auth;
@@ -116,8 +118,8 @@ function Authenticated({ router, initial }: { router: AppRouter; initial?: Visit
   // A failed Discord login's `/login?error=…` is read once, then the address goes back to `/`, so
   // the router never sees the login path and a reload does not show the error again.
   useEffect(() => {
-    if (loginErrorIn(path) !== null) router.history.replace("/");
-  }, [path, router]);
+    if (loginErrorIn(path) !== null) history.replace("/");
+  }, [path, history]);
 
   // `/login` is how the owner reaches the token form from a member's page.
   useEffect(() => {
@@ -172,7 +174,7 @@ function Authenticated({ router, initial }: { router: AppRouter; initial?: Visit
       <QueryClientProvider client={queryClient}>
         <OwnPage
           onLogout={logout}
-          onBack={() => router.history.push("/")}
+          onBack={() => history.push("/")}
         />
       </QueryClientProvider>
     );
@@ -225,9 +227,9 @@ function Authenticated({ router, initial }: { router: AppRouter; initial?: Visit
   return (
     <SessionProvider value={sessionValue}>
       <QueryClientProvider client={queryClient}>
-        <EventStreamProvider>
-          <RouterProvider router={router} />
-        </EventStreamProvider>
+        <Suspense fallback={<div className="min-h-svh" aria-busy="true" aria-label="讀取中" />}>
+          <AdminApp router={router} history={history} />
+        </Suspense>
       </QueryClientProvider>
     </SessionProvider>
   );
@@ -235,12 +237,12 @@ function Authenticated({ router, initial }: { router: AppRouter; initial?: Visit
 
 /** `initial`: who the landing page found at the door before handing over. */
 export function App({ router, initial }: { router?: AppRouter; initial?: Visitor }) {
-  const [r] = useState(() => router ?? createAppRouter());
+  const [history] = useState(() => router?.history ?? createBrowserHistory());
   return (
     <ConnectionProvider>
       <TooltipProvider>
         <Backdrop />
-        <Authenticated router={r} initial={initial} />
+        <Authenticated router={router} history={history} initial={initial} />
         <Toaster />
       </TooltipProvider>
     </ConnectionProvider>

@@ -5,6 +5,7 @@
 // goal's execution is an `Impulse` (arbiter.ts) whose result is written back to the ledger.
 // "No time" (`whenever`) is never "due": only `at`, `when_online` and `after_activity` fire.
 
+import type { GoalData } from "@miyoria/contracts/events";
 import type { Handle } from "./handle.js";
 import type { ContextKey } from "./platform.js";
 import { serviceKey } from "./service-key.js";
@@ -24,30 +25,8 @@ export type GoalStatus = "pending" | "active" | "done" | "dropped";
 /** Who wrote the goal. */
 export type GoalSource = "plan" | "plan_daily" | "reflect" | "panel";
 
-export interface Goal {
-  id: string;
-  /** 「找 Owen 問報告結果」 */
-  what: string;
-  /** 「好幾天沒跟他講話了,有點想他」 */
-  why: string;
-  trigger: GoalTrigger;
-  /** Coarse steps (開台 → 玩 MC 一小時 → 收台聊天); empty: none. */
-  steps: string[];
-  status: GoalStatus;
-  /** Mandatory: past it the goal is dropped automatically. */
-  expires: Timestamp;
-  /** Who it is about, when someone. */
-  person: Handle | null;
-  /** Where it should happen, when somewhere specific. */
-  context: ContextKey | null;
-  source: GoalSource;
-  created_at: Timestamp;
-  updated_at: Timestamp;
-  /** When it was done or dropped. */
-  closed_at: Timestamp | null;
-  /** Why it was dropped (expired, she changed her mind, a step failed). */
-  close_reason: string | null;
-}
+/** One of her goals (contract: `GoalSchema` in @miyoria/contracts/events). */
+export type Goal = GoalData;
 
 /** What the trigger check needs to know (pure; the agenda owner fills it in). */
 export interface TriggerProbe {
@@ -142,6 +121,3 @@ export interface GoalAgenda {
 }
 
 export const GoalAgendaKey = serviceKey<GoalAgenda>("GoalAgenda");
-
-/** Payload: `Goal`, for every new or changed goal. */
-export const GOAL_TOPIC = "plan.goal";

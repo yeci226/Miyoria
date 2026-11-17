@@ -1,4 +1,4 @@
-import type { LlmCallKind, LlmCallRecord, LlmCallStatus, LlmPricing } from "@/api/types";
+import type { LlmCallKind, LlmCallRecord, LlmCallStatus, LlmPricing } from "@miyoria/contracts/api";
 import type { Tone } from "@/components/status";
 
 /** Purposes in words; unknown ones show their key. */

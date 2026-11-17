@@ -1,150 +1,237 @@
 # 幫 Miyoria 架翻唱(sing)worker:給主機提供者的說明
 
-你要做的是在你的電腦上跑 **sing worker**(點歌翻唱的 GPU 服務),Owen 的 Core 透過 **Tailscale** 連到你。你**不需要**跑 Core、Discord bot、ASR、TTS 或任何其他服務。
+你要做的是把你的顯示卡借給 Owen 的 Core,在你的電腦上跑 **sing worker**(點歌翻唱的 GPU 服務)。你**不需要**跑 Core、Discord bot、ASR、TTS 或任何其他服務,也不需要 Discord token 或 LLM 的金鑰。
 
 ```
-Owen 的電腦:Core ──HTTP──▶ Tailscale ──▶ 你的電腦:sing worker(:8005)
-                  ◀── 做好的歌(音訊 + 歌詞資訊)
+你的電腦(hostd + sing)  ──主動撥出一條連線──▶  Owen 的 Core
+                          ◀── Core 的請求走這條線回來
+                          ──▶ 做好的歌(音訊、影片、歌詞資訊)也走這條線
 ```
 
-Core 送一個工作(`POST /jobs`),worker 做完(yt-dlp 下載 → 人聲分離 → 切主唱 → RVC 轉成她的聲音 → 混音 → 找歌詞),Core 再用 HTTP 把音訊抓回去播。
+**你的電腦不用開任何埠、不用設防火牆、不用告訴 Owen 你的 IP。** 你電腦上的管家(hostd)主動連到 Owen 的 Core;Core 要請 sing 做歌時,請求就走這條已經連好的線回來,做好的歌也從同一條線傳回去。你的電腦只需要連得到 Owen 給你的 Core 位址(兩個:管理 API 和控制連線,見第 3 步)。
+
+worker 做的事:Core 送一個工作,worker 做完(yt-dlp 下載 → 人聲分離 → 切主唱 → RVC 轉成她的聲音 → 混音 → 找歌詞),Core 再把音訊抓回去播。
+
+**還在用舊版(手動跑、固定位址的 worker)?** 看最後一節「還在用舊版的話」。
 
 ## 0. 需求
 
 | 項目 | 需求 |
 |---|---|
-| 系統 | Windows 10/11(專案是照 Windows 做的;Linux 也能跑 worker 本身,但 `miyoria start` 的分頁啟動只支援 Windows Terminal) |
-| 顯示卡 | NVIDIA,建議 8 GB 以上 VRAM;轉換階段 PyTorch 峰值約 3.2 GB,分離更高(不夠會自動退到 CPU,但很慢)。要先裝好 NVIDIA 驅動 |
-| 軟體 | Git、Python 3.11–3.13、Node.js(yt-dlp 解 YouTube 要用)、ffmpeg(要在 PATH)、Tailscale |
+| 系統 | Windows 10/11(專案是照 Windows 做的) |
+| 顯示卡 | NVIDIA,建議 8 GB 以上 VRAM(`service.toml` 的估計是約 7.5 GB);轉換階段 PyTorch 峰值約 3.2 GB,分離更高(不夠會自動退到 CPU,但很慢)。要先裝好支援 CUDA 12.8 的 NVIDIA 驅動 |
+| 軟體 | Git、Node.js 24 以上、[uv](https://docs.astral.sh/uv/)(`winget install --id=astral-sh.uv -e`)、ffmpeg(要在 PATH,`winget install --id=Gyan.FFmpeg -e`)。Python 不用自己裝:uv 會依 `pyproject.toml` 找或下載 3.11–3.13 |
 | 硬碟 | 模型約數 GB,歌曲快取預設最多 6 GB(`SING_CACHE_MAX_GB`) |
-| 網路 | 能連 YouTube(下載用)、`lrclib.net`(歌詞) |
+| 網路 | 連得到 Owen 的 Core(位址由他給),能連 YouTube(下載用)和 `lrclib.net`(歌詞) |
 
-## 1. 加入 Tailscale
+`miyoria` 套件還沒有發佈到 npm,所以要從 repository 跑:下面的 `miyoria <指令>` 在 repository 裡都寫成 `pnpm dev <指令>`。
 
-1. 兩台電腦都裝 Tailscale。Owen 邀請你進他的 tailnet,或是你把你的機器分享給他(Tailscale 管理頁 → 機器 → Share)。
-2. 在你的電腦查 Tailscale 位址:
-   ```bash
-   tailscale ip -4        # 100.x.y.z
-   ```
-3. worker **沒有任何認證**,所以:
-   - 把 worker 綁在這個 Tailscale 位址(不要綁 `0.0.0.0`),只有 tailnet 裡的裝置連得到;
-   - 在 Tailscale ACL 只允許 Owen 的機器連你的 `:8005`;
-   - 不要對外開 Windows 防火牆的 8005,只放行 Tailscale 網卡(如果要加規則:`New-NetFirewallRule -DisplayName "miyoria-sing" -Direction Inbound -LocalPort 8005 -Protocol TCP -InterfaceAlias "Tailscale" -Action Allow`)。
+## 1. 取得程式碼
 
-## 2. 取得程式碼
-
-```bash
-git clone https://github.com/owenliu0924/miyoria.git
-cd miyoria
-pnpm install        # 只有要用 miyoria 指令才需要;手動裝 worker 可以略過
+```powershell
+git clone https://github.com/owenliu0924/Miyoria.git
 ```
 
-## 3. 安裝 sing worker(手動,最不容易出錯)
-
-在 `workers/` 底下:
-
-```bash
-cd workers
-python -m venv .venv-sing
-# 先裝 CUDA 版 torch,不然 pip 會抓到 CPU 版
-.venv-sing/Scripts/pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
-.venv-sing/Scripts/pip install -r sing/requirements.txt
+```powershell
+cd Miyoria
 ```
 
-(也可以用 `miyoria init` 選「自訂」只勾 `sing`,再 `miyoria install` / `miyoria doctor` / `miyoria start`,效果相同;細節見 `workers/README.md` 的「快速安裝」。)
+```powershell
+node scripts/setup.mjs
+```
 
-## 4. 模型與資料(需要 Owen 提供的部分)
+`setup.mjs` 啟用 pnpm、安裝相依套件,然後接著跑設定精靈(下一步)。整個 `workers/` 資料夾都要用,不能只拿 `workers/sing`。
 
-預設轉換鏈是 `SING_VOICE=rvc`,需要下列檔案(放在 `workers/` 底下):
+## 2. 設定這台電腦並安裝 sing
+
+設定精靈(`pnpm dev init`)第一題選第三項:**這台只提供服務給別台的 Core**。它問你要提供哪些服務時,勾 `sing`。這一步只寫 `host.toml`(這台電腦跑什麼),不會建環境。已經跑過 `init` 的話,直接做下一個指令也可以。
+
+```powershell
+pnpm dev add sing
+```
+
+它做這些事:
+
+- 用 uv 把 `workers/sing/pyproject.toml` 和 `uv.lock` 裝成一個環境(放在 `data/host/envs/sing`),包括 CUDA 12.8 版的 torch。第一次要下載很多東西,要等一陣子;失敗了重新執行同一個指令,做完的會跳過;
+- 檢查 ffmpeg 在不在 PATH;
+- 列出**要你自己放的東西**。
+
+### 要自己放的模型和資料
+
+路徑從 repository 根目錄算起。前兩項是 Owen 的聲音資產,**請 Owen 提供**,只放在你的本機,不要上傳或再分享。
 
 | 路徑 | 內容 | 來源 |
 |---|---|---|
-| `models/applio/` | Applio 原始碼 + 它自己的 `venv/`(RVC 在子程序裡跑) + 她的 RVC 模型 `logs/miyoria-deepseek-48k/miyoria-deepseek-48k_40e_11000s.pth` | **Owen 提供**(她的聲音模型,不進 git;用別的路徑就設 `SING_APPLIO_DIR` / `SING_RVC_MODEL`) |
-| `voices/deepseek-chan/ref.wav`(+ `ref.txt`) | 她的參考音;worker 啟動時會檢查這個檔在不在 | **Owen 提供**(不進 git;或設 `SING_REF`) |
-| `models/lead-split/becruily-bs/` | 主唱 / 伴唱分離模型 | Hugging Face `becruily/bs-roformer-karaoke` |
-| `models/vocal-split/MelBandRoformer.ckpt` + `.yaml` | 人聲分離 | Hugging Face `KimberleyJSN/melbandroformer`;缺的話退回 Demucs(第一次自動下載) |
-| `models/seed-vc/` | Seed-VC 原始碼 | 只有 `seedvc` 轉換鏈用得到,預設可略過 |
+| `workers/models/applio/` | Applio 原始碼 + 它自己的 `venv/`(RVC 在子程序裡跑)+ 她的 RVC 模型 `logs/miyoria-deepseek-48k/miyoria-deepseek-48k_40e_11000s.pth` | Owen 提供(用別的路徑就設 `SING_APPLIO_DIR` / `SING_RVC_MODEL`) |
+| `workers/voices/deepseek-chan/ref.wav`(和 `ref.txt`) | 她的參考音;worker 啟動時會檢查這個檔在不在 | Owen 提供(或設 `SING_REF`) |
+| `workers/models/lead-split/becruily-bs/` | 主唱 / 伴唱分離模型 | Hugging Face `becruily/bs-roformer-karaoke`;沒有就不切主唱 |
+| `workers/models/vocal-split/MelBandRoformer.ckpt` + `.yaml` | 人聲分離 | Hugging Face `KimberleyJSN/melbandroformer`;沒有就退回 Demucs(第一次自動下載) |
+| `workers/models/seed-vc/` | Seed-VC 原始碼(要有 `modules/` 這個資料夾) | github.com/Plachtaa/seed-vc。**不能略過**:worker 啟動時就檢查它在不在,沒有就啟動失敗(`Seed-VC not found at ...`),即使預設轉換鏈 `rvc` 用不到它 |
 
-第一首歌會自動下載約 2 GB 的模型。她的 RVC 模型和參考音是 Owen 的聲音資產,請只放在你的本機,不要上傳或再分享。
-
-## 5. 設定與啟動
-
-建議在 `workers/sing/` 底下啟動,用環境變數設定(PowerShell):
+第一首歌還會自動下載約 2 GB 的模型。檢查還缺什麼:
 
 ```powershell
-cd workers/sing
-$env:HOST = "100.x.y.z"          # 你的 Tailscale 位址(只聽 tailnet)
-$env:PORT = "8005"
-$env:SING_LYRICS_URL = "http://<Owen 的 Tailscale IP>:8007"   # 歌詞交給 Owen 那邊的歌詞服務(見第 6 節)
-../.venv-sing/Scripts/python server.py
+pnpm dev doctor
 ```
 
-重點環境變數(完整清單在 `workers/README.md` 第 9 節):
+## 3. 向 Owen 要邀請碼,加入他的 Core
 
-| 變數 | 說明 |
+Owen 在他的 Core 那台執行 `miyoria host invite --name <你的名字>`。它印出一組**只能用一次、10 分鐘內有效**的邀請碼,和一整行要你執行的指令。Owen 要先把 Core 的管理 API(`7878`)和控制連線(`7880`)改成你連得到的位址(區網或 Tailscale),做法在 [OPERATIONS.md](OPERATIONS.md) 的「多台電腦」。如果他的 Core 只在 Tailscale 上,他會請你裝 Tailscale 並加入他的 tailnet:這只是讓你的電腦連得到 Core,不是讓 Core 連進你的電腦。
+
+在你的電腦上執行那一行,長得像:
+
+```powershell
+pnpm dev host join http://100.64.0.5:7878 --code <邀請碼> --name <你的名字>
+```
+
+它把這台電腦的金鑰存在 `data/host/host.key`(**不要傳給別人**;Owen 用 `host remove` 就能讓它失效),並在 `host.toml` 寫下 `[cluster] url`。名字沒給時,依序用 `host.toml` 的 `name`、再用電腦的名字。
+
+然後請 Owen 在他那台核准你:
+
+```powershell
+miyoria host approve <你的名字>
+```
+
+**核准之前,你的服務不會被使用。**
+
+## 4. 啟動
+
+```powershell
+pnpm dev up
+```
+
+它在背景啟動你這台的 hostd,再由 hostd 啟動 `sing`,等健康檢查通過才印出結果。hostd 會在 sing 當掉時自己重啟,log 寫在 `data/host/logs/sing.log`。
+
+確認有起來:
+
+```powershell
+pnpm dev status          # sing 要是執行中、健康
+pnpm dev logs sing -f    # 看 log,Ctrl+C 離開
+```
+
+請 Owen 在他那台看 `miyoria host ls`:你的電腦要是「已連線」,核准的能力要有 `sing`。第一首歌要多等一下,因為模型第一次才下載。
+
+**不用再設 `HOST`、`PORT`、`SING_LYRICS_URL` 這些環境變數。**hostd 啟動 worker 時自己給(位址只綁你這台的 `127.0.0.1`,埠 `8005`)。沒有任何東西對外聽。
+
+## 5. 日常
+
+| 要做的事 | 指令 |
 |---|---|
-| `HOST` / `PORT` | 綁定位址 / 埠,預設 `127.0.0.1` / `8005`。**一定要改成 Tailscale 位址**,否則 Owen 連不到 |
-| `SING_OFFLOAD_URLS` | **留空**。這是做歌時叫 TTS / ASR 讓出顯卡用的,你的電腦上沒有它們 |
-| `SING_LYRICS_URL` | Owen 那邊的歌詞服務網址。找歌詞(含問 LLM、ASR 抽查)都在 Owen 那邊做,你不需要金鑰,也不用連 ASR。沒設的話你的 worker 會自己找,但找不到時沒有 LLM 可問 |
-| `SING_LYRICS_ASR` | 設 `0` = 不做 ASR 抽查,也不會把主唱音軌傳給歌詞服務 |
-| `SING_CACHE_MAX_GB` / `SING_CACHE_MAX_DAYS` | 歌曲快取上限,預設 6 GB / 14 天 |
-| `SING_DATA_DIR` | 快取位置,預設 `<repo>/data/songs` |
+| 更新程式 | `pnpm dev update`(拉最新程式、需要時重建環境,一次一個重啟正在跑的服務) |
+| 停掉 | `pnpm dev down` |
+| 再啟動 | `pnpm dev up` |
+| 登入 Windows 時自動啟動 | `pnpm dev host autostart on`(`off` 關掉,`status` 看目前) |
+| 看狀態 / log | `pnpm dev status`、`pnpm dev logs sing -f` |
 
-啟動成功後,**在你的電腦上**先測:
+`update` 不會動到 `workers/models/`、`workers/voices/` 和歌曲快取(`data/songs`):這些不在 git 裡。
 
-```bash
-curl http://100.x.y.z:8005/health
-```
+## 6. Owen 這邊怎麼用
 
-## 6. Owen 這邊怎麼接上 Core
-
-Owen 編輯 `miyoria.toml`:
+你被核准、服務連線之後,Core 自己找得到你的 sing:Owen 不用寫你的位址。Core 依登記處挑第一個健康的 sing;要讓你的先、他自己的後,在 `miyoria.toml` 寫(名字是你加入時用的名字):
 
 ```toml
-[modules.sing]
-url = "http://100.x.y.z:8005"     # 你的 Tailscale 位址
-fallback_urls = ["http://127.0.0.1:8005"]   # 連不上你的時候,改用 Owen 自己電腦上的 worker
-timeout_secs = 20                  # 跨網路建議放寬(抓歌的音訊自動乘 10 倍)
+[modules.cluster.order]
+sing = ["你的名字", "他自己那台的名字"]
 ```
 
-**連不上時退回 Owen 自己的 worker**(`fallback_urls`,可省略):新點的歌先送到 `url`,連不上(你的電腦關了、不在 tailnet 上)就依序送 `fallback_urls`。點歌的請求如果已經連上、只是回應逾時,就不換台(那台可能已經收下,換台會兩張顯卡各做一次),照單一 worker 的方式回報錯誤。一首歌在哪台做,之後查進度、抓音軌和影片都找同一台(檔案在那台);那台連不上超過 `fallback_retry_secs`(預設 30 秒)還是不回,這首歌就在下一台重做,原本那台回來時會取消留在它那邊的工作。連不上的那台這段時間內不再問,之後會再試,回來了新點的歌就又送回去。只有「連不上」才換台,worker 有回應的錯誤(例如連結的網域不允許)照常回報。同一個位址在 `url` 和 `fallback_urls` 重複寫只算一次。Owen 的電腦上要有在跑的 sing worker(`miyoria up` / `start` 的 inference 角色會啟動它;平常不佔顯卡)。
+**連不上時退回 Owen 自己的 worker**:Owen 那台要有在跑的 sing(`miyoria add sing`,平常不佔顯卡)。新點的歌先送到排最前面的,連不上(你的電腦關了、斷線)就送下一個。點歌的請求如果已經連上、只是回應逾時,就不換台(那台可能已經收下,換台會兩張顯卡各做一次),照單一 worker 的方式回報錯誤。一首歌在哪台做,之後查進度、抓音軌和影片都找同一台(檔案在那台);那台連不上超過 `[modules.sing] fallback_retry_secs`(預設 30 秒)還是不回,這首歌就在下一台重做,原本那台回來時會取消留在它那邊的工作。連不上的那台這段時間內不再問,之後會再試。只有「連不上」才換台,worker 有回應的錯誤(例如連結的網域不允許)照常回報。
 
-然後重啟 Core。在 Owen 的電腦測:
+**歌詞。**你的 sing worker 自己找歌詞(lrclib、網易雲)。需要問 LLM(猜這是哪首歌)和 ASR 抽查歌詞時,你的 hostd 請 Owen 的 Core 代跑:用的是 Owen 的模型和金鑰,金鑰不會到你的電腦,每次呼叫記在 Owen 的每日預算和呼叫紀錄裡。所以你**不需要**金鑰,也不用另外跑歌詞服務。
 
-```bash
-curl http://100.x.y.z:8005/health
-curl -X POST http://100.x.y.z:8005/jobs -H "content-type: application/json" -d '{"query":"Cartoon On & On NCS"}'
-curl http://100.x.y.z:8005/jobs/<id>     # state / stage / progress
-```
+## 7. 已知限制
 
-**歌詞服務(Owen 這邊也要啟動)**:找歌詞要用 Owen 的 LLM 設定和 ASR,所以跑在 Owen 的電腦上,對方的 worker 透過 `SING_LYRICS_URL` 呼叫它。啟動(Owen 的電腦,在 `workers/` 底下):
-
-```powershell
-python -m venv .venv-lyrics
-.venv-lyrics/Scripts/pip install -r lyrics/requirements.txt
-$env:HOST = "100.a.b.c"     # Owen 自己的 Tailscale 位址
-$env:PORT = "8007"
-cd lyrics; ../.venv-lyrics/Scripts/python server.py
-```
-
-它沒有認證,一樣只綁 Tailscale 位址並用 ACL 只放行對方的機器。ASR 抽查預設連 `127.0.0.1:8003`(Owen 本機的 ASR),不用另外設定。對方傳過來的只有 16 kHz 單聲道的主唱音軌(每分鐘約 2 MB)。
-
-注意:**不要**用 `miyoria init` 的 `[machine.hosts] inference` 去指到你的機器。那個欄位是「asr / tts / sing 同一台」的單一位址,會連 `ASR_URL` / `TTS_URL` 也一起改過去,但你這台沒有 ASR / TTS。直接手動改 `[modules.sing] url` 就好。
-
-## 7. 已知限制(程式目前沒處理)
-
-1. **歌曲影片**:Core 播歌前會從 worker 的 `/songs/{id}/files/video.mp4` 把影片下載到自己的 `data/songs/<id>/`,所以 worker 在別台也能放影片。前提是 Core 和 Stage 在同一台(Stage 讀的是 Core 這台的本機路徑)。
-2. **歌詞對齊仍在對方的 worker**:歌詞服務只負責找歌詞和驗證,拿到歌詞後的時間對齊要讀音訊,在 worker 做。歌詞服務沒開時,這首歌沒有字幕,不會放錯的詞。
-3. **做歌時不會再讓 TTS / ASR 讓出顯卡**:因為 worker 不在同一台,她說話和做歌不會互相搶 VRAM(反而更好),但也沒有「她先說一句我去準備歌」的流程;若 Core 端還是有這句提示,可以把 `[modules.sing] prepare_notice = false`。
-4. **沒有認證**:全靠 Tailscale 隔離,請照第 1 節設 ACL / 綁定位址。
-5. 這個 worker 一次只做一首歌(佇列),你那邊 GPU 被別的程式(遊戲)占住時會變慢。
+1. **歌曲影片**:Core 播歌前會從 worker 的 `/songs/{id}/files/video.mp4` 把影片下載到自己的 `data/songs/<id>/`(也走同一條連線),所以 worker 在別台也能放影片。前提是 Core 和 Stage 在同一台(Stage 讀的是 Core 這台的本機路徑)。
+2. **做歌時不會讓 TTS / ASR 讓出顯卡**:你的電腦上沒有它們,所以她說話和做歌不會互相搶 VRAM(反而更好),但也沒有「她先說一句我去準備歌」的流程;若 Core 端還是有這句提示,Owen 可以把 `[modules.sing] prepare_notice = false`。
+3. 這個 worker 一次只做一首歌(佇列),你那邊 GPU 被別的程式(遊戲)占住時會變慢。
+4. 做歌的細節(GPU 怎麼和別的程式分)見 [workers/README.md](../workers/README.md) 第 9 節。
 
 ## 8. 疑難排解
 
-| 症狀 | 檢查 |
+先看 `pnpm dev status` 和 `pnpm dev logs sing -f`。
+
+| 症狀 | 原因 / 處理 |
 |---|---|
-| Owen 連不到 | `tailscale ping`、`HOST` 是否設成 Tailscale 位址、防火牆 / ACL |
-| 啟動時說 reference voice not found | 缺 `voices/deepseek-chan/ref.wav` 或 `SING_REF` |
-| 「RVC model or Applio not found」警告 | `models/applio/`(`core.py`、`venv/`、`.pth`)不完整,會退成別的轉換鏈 |
+| `host join` 說代碼無效或過期 | 代碼只能用一次、10 分鐘有效。請 Owen 再 `host invite` 一組 |
+| `host join` 連不上 Core | Core 預設只聽本機。請 Owen 把 `[modules.api] bind` 和 `[modules.cluster] bind` 改成你連得到的位址,並確認你的電腦連得到(Tailscale 要在線)。Owen 的 `invite` 發現只聽本機時會提醒 |
+| `host join` 說這台已經加入過別的 Core | 先請原來的 Core 的主人 `host remove <名字>`,再加 `--force` |
+| `up` 之後 Owen 的 `host ls` 看不到你,或沒有 `sing` | 他還沒 `host approve`;或你的 `up` 沒成功(看 `status`);或這台的 `host.toml` 沒有 `[cluster] url`(重新 `host join`) |
+| 啟動時說 reference voice not found | 缺 `workers/voices/deepseek-chan/ref.wav` 或 `SING_REF` |
+| 啟動時說 Seed-VC not found | 缺 `workers/models/seed-vc/modules/`(或 `SING_SEEDVC_DIR` 指錯),見第 2 步 |
+| 「RVC model or Applio not found」警告 | `workers/models/applio/`(`core.py`、`venv/`、`.pth`)不完整,會退成別的轉換鏈 |
 | 找歌卡住 | ffmpeg 不在 PATH、Node 沒裝、`SING_YTDLP_CACHE` 寫不進去 |
 | 轉換很慢 | VRAM 不夠退到 CPU,或 GPU 被別的程式占住 |
+| 想改 worker 的設定值(快取大小等) | 在 `host.toml` 加 `[services.sing]` 的 `env = { SING_CACHE_MAX_GB = "10" }`,再 `pnpm dev restart sing`。完整清單見 `workers/README.md` 第 9 節 |
+
+## 還在用舊版的話
+
+這是 hostd 之前的做法:手動跑 worker,用固定位址(通常是 Tailscale 位址),Owen 在設定檔寫你的位址。新的做法(上面)不需要這些;能換就換。這一節留給還沒換的人。
+
+**怎麼運作。**你在 PowerShell 手動啟動 worker,綁在你的 Tailscale 位址(`tailscale ip -4`,例如 `100.x.y.z`),Owen 的 Core 從他那邊連到 `http://100.x.y.z:8005`。這種 worker **沒有任何認證**(沒有 hostd 給 token,不檢查),所以:
+
+- 一定要綁在 Tailscale 位址,不要綁 `0.0.0.0`;
+- 在 Tailscale ACL 只允許 Owen 的機器連你的 `:8005`;
+- Windows 防火牆只放行 Tailscale 網卡(系統管理員 PowerShell):
+
+  ```powershell
+  New-NetFirewallRule -DisplayName "miyoria-sing" -Direction Inbound -LocalPort 8005 -Protocol TCP -InterfaceAlias "Tailscale" -Action Allow
+  ```
+
+**啟動。**在 `workers\sing`,用 uv 建環境、設環境變數、啟動(環境變數只在這個視窗有效):
+
+```powershell
+cd workers\sing
+uv sync --frozen
+$env:HOST = "100.x.y.z"          # 你的 Tailscale 位址
+$env:PORT = "8005"
+$env:SING_LYRICS_URL = "http://<Owen 的 Tailscale IP>:8007"   # 歌詞交給 Owen 那邊的歌詞服務(見下)
+uv run --frozen python server.py
+```
+
+(舊的 `workers\.venv-sing` 虛擬環境還能用:`.\.venv-sing\Scripts\python.exe server.py`。要換成新做法又不想重新下載,在 `host.toml` 寫 `[services.sing]` 的 `python = "<repository>\workers\.venv-sing"`(環境資料夾),hostd 就用那個環境,不會動它;`pnpm dev host migrate` 會從舊的 `[machine]` 設定替你寫。)
+
+`SING_OFFLOAD_URLS` 留空(預設):你的電腦上沒有 TTS / ASR。`SING_LYRICS_ASR=0` = 不做 ASR 抽查,也不會把主唱音軌傳給歌詞服務。啟動後在你的電腦測(輸出有 `"status":"ok"`):
+
+```powershell
+curl.exe http://100.x.y.z:8005/health
+```
+
+**Owen 那邊。**編輯 `miyoria.toml`:
+
+```toml
+[modules.sing]
+url = "http://100.x.y.z:8005"               # 你的 Tailscale 位址
+fallback_urls = ["http://127.0.0.1:8005"]   # 連不上你的時候,改用 Owen 自己電腦上的 worker
+timeout_secs = 20                           # 跨網路建議放寬(抓歌的音訊自動乘 10 倍)
+```
+
+這兩個位址進入登記處成為「靜態」項目,連不上時換台的規則和第 6 節一樣。也可以用 `[modules.cluster.static.<名字>]` 寫 `provides = ["sing"]` 和 `url`。位址寫法要一致(`localhost` 和 `127.0.0.1` 不算同一個)。然後重啟 Core,在 Owen 的電腦測 `curl.exe http://100.x.y.z:8005/health`。
+
+**歌詞服務(Owen 這邊,舊版才需要)。**你的 worker 不在 hostd 之下、沒有加入 Core 時,不能請 Core 代跑 LLM 和 ASR。所以 Owen 在他的電腦上另外跑歌詞服務,你的 worker 用 `SING_LYRICS_URL` 呼叫它。因為歌詞服務也沒有 hostd,Owen 要手動啟動(在 `workers\lyrics`):
+
+```powershell
+cd workers\lyrics
+uv sync --frozen
+$env:HOST = "100.a.b.c"     # Owen 自己的 Tailscale 位址
+$env:PORT = "8007"
+$env:SING_LYRICS_LLM_URL = "https://.../v1"   # 歌詞專用的 LLM(OpenAI 相容)
+$env:SING_LYRICS_LLM_KEY = "..."
+$env:SING_LYRICS_LLM_MODEL = "..."
+uv run --frozen python server.py
+```
+
+它也沒有認證,一樣只綁 Tailscale 位址並用 ACL 只放行對方的機器。沒設 `SING_LYRICS_LLM_URL` 和 `_MODEL` 就不問 LLM,只用規則找。ASR 抽查預設連 `127.0.0.1:8003`;hostd 啟動的 ASR 會檢查 token,手動跑的歌詞服務沒有 token,會得到 401,所以要抽查就要有手動跑的 ASR(用 `SING_LYRICS_ASR_URL` 指過去),不然設 `SING_LYRICS_ASR=0`。對方傳過來的只有 16 kHz 單聲道的主唱音軌(每分鐘約 2 MB)。歌詞的時間對齊仍在你的 worker(它要讀音訊);歌詞服務沒開時,這首歌沒有字幕,不會放錯的詞。
+
+**舊版的疑難排解**(Tailscale 能 ping 通,但 8005 連不上):在你的電腦依序檢查。
+
+1. worker 有沒有在聽 8005:
+
+   ```powershell
+   Get-NetTCPConnection -LocalPort 8005 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress, OwningProcess
+   ```
+
+   沒有輸出:worker 沒啟動,看視窗裡的錯誤。`LocalAddress` 是 `127.0.0.1`:忘了設 `$env:HOST`。是你的 Tailscale 位址:綁定正確,看下一步(`0.0.0.0` 連得到但違反上面的規則,請改掉)。
+2. 用 Tailscale 位址連自己:`Test-NetConnection 100.x.y.z -Port 8005`,`TcpTestSucceeded` 要是 `True`。
+3. 防火牆規則:`Get-NetFirewallRule -DisplayName "miyoria-sing"`;沒有就用上面的 `New-NetFirewallRule` 加上,規則裡的 `-InterfaceAlias "Tailscale"` 要和 `Get-NetAdapter` 看到的網卡名稱一樣。
+4. Tailscale ACL 有沒有放行 Owen 的機器到你的 `:8005`(管理頁的 Access controls)。從 Owen 的電腦測 `Test-NetConnection 100.x.y.z -Port 8005`。
+
+要停掉舊的 worker:在跑它的視窗按 Ctrl+C;找不到視窗時,用上面第 1 項的指令看是誰在聽 8005,再 `Stop-Process -Id <OwningProcess>`。

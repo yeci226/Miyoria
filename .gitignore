@@ -21,11 +21,13 @@ spikes/speech-bench/out/
 **/.venv/
 __pycache__/
 
-# 資料庫備份(scripts/backup.sh):只放本機 / 自己的備份位置
+# 資料庫備份:只放本機 / 自己的備份位置
 /backups/
 
 # 本機設定(用 `miyoria init` / `miyoria config` 產生)
 /miyoria.toml
+# 這台電腦跑哪些服務(`miyoria init` / `miyoria add` / `miyoria host migrate` 產生)
+/host.toml
 
 # TypeScript build state
 *.tsbuildinfo
@@ -34,6 +36,8 @@ coverage/
 # 本機執行資料與 Python 虛擬環境
 /data/
 workers/.venv-*/
+# TMP / TEMP for Python and pip when the system temp folder is not writable
+/workers/.tmp/
 
 # Claude Code 子代理的暫存 worktree,和它的預覽設定
 /.claude/worktrees/
@@ -43,14 +47,20 @@ workers/.venv-*/
 pytest-of-*/
 .pytest-tmp/
 .tmp-build/
+# pip 和 PyTorch 在工作資料夾留下的暫存(pip 的 metadata / unpack、torch inductor 快取)
+/workers/pip-metadata-*/
+/workers/pip-unpack-*/
+/torchinductor_*/
+/workers/torchinductor_*/
 # The owner's panel pictures (background, login): game art, local only
 apps/panel/public/*.local.*
 
-# Live2D Cubism Core and Web Framework, fetched per apps/card-studio/vendor.md (Live2D licences)
-/apps/card-studio/vendor/
-/apps/card-studio/dist/
+# Live2D Cubism Core and Web Framework, fetched per tools/card-studio/vendor.md (Live2D licences)
+/tools/card-studio/vendor/
+/tools/card-studio/dist/
 
 # MediaMTX binary (downloaded, see workers/mediamtx/README.md)
 workers/mediamtx/mediamtx.exe
 workers/mediamtx/LICENSE
 workers/mediamtx/mediamtx.log
+.tmp-test

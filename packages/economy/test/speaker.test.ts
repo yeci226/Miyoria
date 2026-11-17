@@ -3,9 +3,9 @@
 // author of the message she answers, a message pays once, voice needs a spoken yes, and the
 // refusals are the panel's, as data.
 
-import { ActionDeniedError, ActuatorRegistry, CapabilityTool } from "@miyoria/actions";
-import { getLogger, ServiceRegistry } from "@miyoria/kernel";
-import { CoinLedgerStoreKey, PeopleStoreKey, SqliteStore } from "@miyoria/store";
+import { ActionDeniedError, ActuatorRegistry, CapabilityTool } from "@miyoria/gate/actions";
+import { getLogger, ServiceRegistry } from "@miyoria/runtime/kernel";
+import { PeopleStoreKey, SqliteStore } from "@miyoria/store";
 import {
   type AccountRef,
   AffectStateKey,
@@ -21,8 +21,10 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { EconomyConfigSchema } from "../src/config.js";
 import { ALREADY_CHECKED_IN, EconomyService, FULL, STRANGER } from "../src/economy.js";
+import { CoinLedgerStoreKey } from "../src/records.js";
 import { NO_SPEAKER, speakerCapabilities, VOICE_CONFIRM_MS } from "../src/tools.js";
 import { EconomyError } from "../src/types.js";
+import { ledgerOf, walletOf } from "./ledger.js";
 
 const DAY = 86_400_000;
 /** 2026-11-08 12:00 local (UTC+8). */
@@ -57,7 +59,7 @@ async function rig(): Promise<Rig> {
   stores.push(store);
   const services = new ServiceRegistry();
   const k = "test";
-  services.provide(k, CoinLedgerStoreKey, store.coins);
+  services.provide(k, CoinLedgerStoreKey, ledgerOf(store));
   services.provide(k, PeopleStoreKey, store.people);
   for (const [a, name] of [
     [ALICE, "Alice"],
@@ -115,22 +117,18 @@ async function rig(): Promise<Rig> {
 }
 
 async function fund(r: Rig, account: AccountRef, amount: number) {
-  await r.store.coins.post(
-    {
-      id: newId(),
-      profile: "p",
-      account,
-      delta: amount,
-      reason: "talked",
-      ref: null,
-      idem_key: null,
-      ts: toTimestamp(r.clock.at),
-    },
-    { wallet: [account] },
-  );
+  await ledgerOf(r.store).post({
+    id: newId(),
+    person: walletOf(r.store, account),
+    delta: amount,
+    reason: "talked",
+    ref: null,
+    idem_key: null,
+    ts: toTimestamp(r.clock.at),
+  });
 }
 
-const balance = (r: Rig, a: AccountRef) => r.store.coins.balance("p", [a]);
+const balance = (r: Rig, a: AccountRef) => ledgerOf(r.store).balance("p", walletOf(r.store, a));
 
 /** A tool call in a reactive turn: `speaker` wrote message `id` in `context`. */
 async function say(

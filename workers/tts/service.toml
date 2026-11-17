@@ -1,0 +1,45 @@
+# TTS worker: text to speech (faster-qwen3-tts by default), workers/tts/server.py.
+name = "tts"
+kind = "worker"
+provides = ["tts"]
+summary = "語音合成(Qwen3-TTS,faster 後端)"
+
+[install]
+runtime = "python"
+python = ">=3.11,<3.14"
+# pyproject.toml and uv.lock here. The other backend (TTS_BACKEND=qwen-tts) syncs the
+# `qwen-tts` extra instead; the two extras conflict and never share an environment.
+project = "."
+extras = ["faster"]
+check_imports = ["torch", "faster_qwen3_tts"]
+
+[[install.models]]
+repo = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"   # downloaded by the worker itself on its first start (4-5 GB)
+
+[[install.manual]]
+path = "workers/voices/{voice}/ref.wav"
+what = "她的聲音參考音(ref.wav,不進 git)"
+
+[[install.manual]]
+path = "workers/voices/{voice}/ref.txt"
+what = "參考音實際說的內容(ref.txt)"
+
+[run]
+command = ["{python}", "server.py"]
+cwd = "."
+port = 8002
+host_env = "HOST"
+port_env = "PORT"
+# The plan also sets VOICES_DIR to workers/voices for a machine with a [machine] section; the
+# worker's own default (./voices) would point inside workers/tts.
+env = { TTS_DEFAULT_VOICE = "deepseek-chan", VOICES_DIR = "{service}/../voices" }
+
+[run.health]
+http = "/health"
+
+[gpu]
+policy = "evictable"
+vram_mb = { resident = 5000, peak = 5000 }
+offload = "/offload"
+reload = "/reload"
+busy = "/busy"

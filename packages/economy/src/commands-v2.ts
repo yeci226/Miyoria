@@ -14,7 +14,7 @@ import {
   notice,
   typedCommand,
 } from "@miyoria/commands";
-import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/kernel";
+import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import { newId } from "@miyoria/types";
 import { STRANGER, WALLET_NODE } from "./economy.js";
 import { unlockLines } from "./notices.js";

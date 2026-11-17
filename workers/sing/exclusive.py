@@ -28,6 +28,12 @@ import threading
 import time
 from typing import Any, Callable
 
+try:  # workers/service_auth.py; a worker run by hand sends nothing
+    from service_auth import peer_headers
+except ImportError:
+    def peer_headers() -> dict[str, str]:  # type: ignore[misc]
+        return {}
+
 log = logging.getLogger("miyoria.sing.exclusive")
 
 Poster = Callable[[str, dict[str, Any], float], dict[str, Any]]
@@ -36,7 +42,7 @@ Poster = Callable[[str, dict[str, Any], float], dict[str, Any]]
 def http_post(url: str, body: dict[str, Any], timeout: float) -> dict[str, Any]:
     import httpx
 
-    r = httpx.post(url, json=body, timeout=timeout)
+    r = httpx.post(url, json=body, timeout=timeout, headers=peer_headers())
     r.raise_for_status()
     out = r.json()
     return out if isinstance(out, dict) else {}
@@ -63,6 +69,11 @@ class Exclusive:
         self._lock = threading.Lock()
         self._reload: threading.Thread | None = None
         self._ended = threading.Event()
+        self._after: Callable[[], None] | None = None
+        # When speech went offline (the first offload asked) and was asked back (the reload started):
+        # with the window's own times, its real silence (gpu.py ``window_closed``).
+        self.offline_at: float | None = None
+        self.asked_back_at: float | None = None
 
     def share(self, free_mb: int | None) -> None:
         """The job runs next to the workers: nothing to offload, nothing to wait for."""
@@ -87,7 +98,7 @@ class Exclusive:
         if cancelled():
             raise Cancelled()
         self.state = "offloading"
-        t0 = time.monotonic()
+        t0 = self.offline_at = time.monotonic()
         for url in self.urls:
             self.asked.append(url)
             try:
@@ -114,18 +125,19 @@ class Exclusive:
                 except Exception as e:  # noqa: BLE001
                     log.info("could not renew the offload of %s: %s", url, e)
 
-    def end(self) -> None:
-        """Starts loading the offloaded workers again (idempotent)."""
+    def end(self, after: Callable[[], None] | None = None) -> None:
+        """Starts loading the offloaded workers again (idempotent). ``after`` runs once they are back."""
         with self._lock:
             self._ended.set()
             if self._reload is not None or self.state in (None, "done", "shared"):
                 return
             self.state = "reloading"
+            self._after = after
             self._reload = threading.Thread(target=self._reload_all, name="sing-reload", daemon=True)
             self._reload.start()
 
     def _reload_all(self) -> None:
-        t0 = time.monotonic()
+        t0 = self.asked_back_at = time.monotonic()
         # Every worker asked, also those whose offload timed out: it may have finished after we
         # stopped waiting (a reload of a loaded worker answers "already" at once).
         for url in self.asked:
@@ -138,6 +150,8 @@ class Exclusive:
                 log.warning("could not reload %s: %s", url, e)
         self.timings["reload_s"] = round(time.monotonic() - t0, 2)
         self.state = "done"
+        if self._after is not None:
+            self._after()
 
     def join(self, timeout: float | None = None) -> None:
         t = self._reload

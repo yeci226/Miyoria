@@ -1,17 +1,10 @@
 import type { ReactNode } from "react";
-import type { ConversationNote, FieldSource, KnowledgeDoc } from "@/api/types";
-import { useConversationNotes, useKnowledge } from "@/app/queries";
+import type { ConversationNote, FieldSource } from "@miyoria/contracts/api";
+import { useConversationNotes } from "@/app/queries";
 import { EmptyLine, QueryView, SkeletonRows } from "@/components/query-state";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { contextShort, fmtDateTime, fmtRelative } from "@/lib/format";
-
-const SUBJECT_KIND: Record<KnowledgeDoc["subject"]["type"], string> = {
-  person: "人",
-  guild: "伺服器",
-  self: "她自己",
-  topic: "主題",
-};
+import { NotesBrowser } from "./NotesBrowser";
 
 const SOURCE_KIND: Record<FieldSource["kind"], string> = {
   self: "她",
@@ -113,98 +106,6 @@ export function JsonTree({
   );
 }
 
-function DocCard({ doc }: { doc: KnowledgeDoc }) {
-  const root = doc.sources[""];
-  return (
-    <article className="grid gap-3 py-3" aria-label={`${doc.kind}「${doc.title}」`}>
-      <header className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <h4 className="font-medium">{doc.title}</h4>
-        <Badge variant="outline">{doc.kind}</Badge>
-        <code className="font-mono text-xs text-muted-foreground">{doc.short_id}</code>
-        <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-          v{doc.version} · <When at={doc.updated_at} />
-          {root && <SourceTag source={root} />}
-        </span>
-      </header>
-      <JsonTree value={doc.content} sources={doc.sources} parent={root} />
-      {doc.history.length > 0 && (
-        <details className="text-xs text-muted-foreground">
-          <summary className="cursor-pointer select-none hover:text-foreground">改過 {doc.history.length} 次</summary>
-          <ol className="mt-2 grid gap-1" aria-label="版本">
-            {[...doc.history].reverse().map((h) => (
-              <li key={h.version} className="font-mono">
-                v{h.version} · {fmtDateTime(h.at)} · {h.name ?? SOURCE_KIND[h.by]}
-                {h.why ? ` · ${h.why}` : ""} · {h.ops.join("、")}
-              </li>
-            ))}
-          </ol>
-        </details>
-      )}
-    </article>
-  );
-}
-
-interface Group {
-  key: string;
-  label: string;
-  kind: string;
-  docs: KnowledgeDoc[];
-}
-
-function groups(docs: KnowledgeDoc[]): Group[] {
-  const out = new Map<string, Group>();
-  for (const d of docs) {
-    const s = d.subject;
-    const key = s.type === "person" ? `p:${s.person}` : s.type === "guild" ? `g:${s.guild}` : s.type === "topic" ? `t:${s.name}` : "self";
-    const g = out.get(key) ?? { key, label: d.subject_label, kind: SUBJECT_KIND[s.type], docs: [] };
-    g.docs.push(d);
-    out.set(key, g);
-  }
-  // Herself first, then the most recently changed.
-  return [...out.values()]
-    .map((g) => ({ ...g, docs: [...g.docs].sort((a, b) => a.kind.localeCompare(b.kind, "zh-TW") || b.updated_at.localeCompare(a.updated_at)) }))
-    .sort((a, b) => (a.key === "self" ? -1 : b.key === "self" ? 1 : (b.docs[0]?.updated_at ?? "").localeCompare(a.docs[0]?.updated_at ?? "")));
-}
-
-function DocumentsCard() {
-  const knowledge = useKnowledge();
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          她整理的資料
-          {knowledge.data && knowledge.data.documents.length > 0 && (
-            <span className="font-normal text-muted-foreground tabular-nums">{knowledge.data.documents.length}</span>
-          )}
-        </CardTitle>
-      </CardHeader>
-      <QueryView query={knowledge} skeleton={<SkeletonRows count={3} />}>
-        {(k) =>
-          k.documents.length === 0 ? (
-            <EmptyLine>她還沒有整理任何資料</EmptyLine>
-          ) : (
-            <div className="divide-y divide-line-soft">
-              {groups(k.documents).map((g) => (
-                <section key={g.key} aria-label={g.label}>
-                  <h3 className="flex items-baseline gap-2 pt-3 pb-1 text-[13px] font-medium">
-                    {g.label}
-                    <span className="text-xs font-normal text-muted-foreground">{g.kind}</span>
-                  </h3>
-                  <div className="divide-y divide-line-soft">
-                    {g.docs.map((d) => (
-                      <DocCard key={d.id} doc={d} />
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          )
-        }
-      </QueryView>
-    </Card>
-  );
-}
-
 function NoteItem({ n }: { n: ConversationNote }) {
   return (
     <li className="grid gap-x-6 gap-y-2 py-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
@@ -250,7 +151,7 @@ function ConversationsCard() {
 export function KnowledgeTab() {
   return (
     <div className="grid gap-(--stage-gap)">
-      <DocumentsCard />
+      <NotesBrowser />
       <ConversationsCard />
     </div>
   );

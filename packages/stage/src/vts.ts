@@ -7,7 +7,7 @@
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { isJsonObject, type JsonObject, type JsonValue } from "@miyoria/types";
 import WebSocket from "ws";
 import { z } from "zod";
@@ -213,7 +213,7 @@ export class VtsClient {
     return this.#closedPromise;
   }
 
-  /** Closes the connection (the Rust `Drop`). */
+  /** Closes the connection. */
   close(): void {
     if (this.#closed) return;
     this.#markClosed();

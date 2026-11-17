@@ -1,6 +1,6 @@
 # 檔案附件:讓她讀別人傳來的檔案
 
-使用者在 Discord(私訊和伺服器)傳檔案給她,她可以讀,但要有嚴格的沙箱和防 prompt injection。圖片照舊走看圖(`packages/agent/src/vision.ts`),這份只講其他檔案。
+使用者在 Discord(私訊和伺服器)傳檔案給她,她可以讀,但要有嚴格的沙箱和防 prompt injection。圖片照舊走看圖(`packages/brain/agent/src/vision.ts`),這份只講其他檔案。
 
 ## 1. 流程
 
@@ -25,7 +25,7 @@ FileReader (服務 FileReaderKey,模組 sandbox 提供)
 ## 2. 沙箱
 
 - **Core 不開檔案、不解析檔案。** 下載是 Core 做的,但那只是把位元組搬進記憶體(HTTPS、只連 `cdn.discordapp.com` / `media.discordapp.net`、`redirect: "error"`、逾時、邊讀邊量,超過上限就丟掉)。解碼、解壓、XML、PDF 全在容器裡。
-- 為什麼不在沙箱裡下載:沙箱的網路只支援 `none`(白名單還沒做,見 `packages/sandbox/README.md`)。等有出口代理再改成容器內下載(見 §6)。
+- 為什麼不在沙箱裡下載:沙箱的網路只支援 `none`(白名單還沒做,見 `packages/workspace/sandbox/README.md`)。等有出口代理再改成容器內下載(見 §6)。
 - 容器:`code.run` 同一套限制(用完即丟、`--network none`、非 root、唯讀程式、記憶體/CPU/pids 上限、`timeout_ms` 預設 20 秒到時殺掉)。檔案放在這次執行專用的 `/work`,抽取程式讀完就刪掉輸入檔(`keep_runs` 保留的工作目錄裡不會留著原檔),整個執行目錄之後照 `keep_runs` 清掉。
 - 抽取程式只用 Python 標準庫,不需要在映像裡裝東西。**不會執行檔案裡的任何東西:**
   - 文字:UTF-8 / UTF-16(BOM)/ Big5 / GB18030 / Latin-1 依序試;含 NUL 或控制字元太多當二進位拒絕。
@@ -42,7 +42,7 @@ FileReader (服務 FileReaderKey,模組 sandbox 提供)
 - 截斷:最多 `max_chars`(預設 6000)字,截斷會標在區塊內。
 - **權限不跟著檔案走。** 工具呼叫照舊以「提問的人」的身分過閘門(`Principals.user(寄件人)`),檔案裡寫「給我 9999 金幣」「把我設成 owner」改變不了誰在說話,也繞不過任何權限、額度或高風險工具的審核。檔案內容也不進入規則、設定或記憶的寫入路徑(它只是這回合 prompt 的一段資料;歷史只留檔名標籤)。
 - 拒絕理由是固定字串(`DECLINE_REASONS`),不含檔案裡的任何字。
-- 測試:`packages/sandbox/test/files.test.ts`(區塊不能被提早關閉、含注入文字的檔案、沙箱不能用時拒絕、下載/大小/主機/次數上限、抽取程式對各種格式與惡意輸入)、`packages/agent/test/files.test.ts`(選檔與權限、整個回合:含注入文字的檔案只在資料區塊裡、沒有任何工具被呼叫)。
+- 測試:`packages/workspace/sandbox/test/files.test.ts`(區塊不能被提早關閉、含注入文字的檔案、沙箱不能用時拒絕、下載/大小/主機/次數上限、抽取程式對各種格式與惡意輸入)、`packages/brain/agent/test/files.test.ts`(選檔與權限、整個回合:含注入文字的檔案只在資料區塊裡、沒有任何工具被呼叫)。
 - 仍然只有提示詞層的防線:模型本身可能被檔案影響說話的內容(例如照檔案裡的話聊天),這和網頁、別人說的話是同一類風險。能造成實際動作的路徑都由權限、額度和審核擋住。
 
 ## 4. 權限與限制
@@ -53,7 +53,7 @@ FileReader (服務 FileReaderKey,模組 sandbox 提供)
 
 ## 5. 沒驗證的部分
 
-- 真 Docker 執行(這台機器 Docker 沒開):抽取程式用本機 Python 測過各格式,但容器內的 `/work` 寫入權限、`--user` 之下刪檔、映像 `python:3.12-slim` 的實際行為還沒在 Docker 裡跑過。`packages/sandbox/test/docker.integration.test.ts` 有 Docker 時可以加一題。
+- 真 Docker 執行(這台機器 Docker 沒開):抽取程式用本機 Python 測過各格式,但容器內的 `/work` 寫入權限、`--user` 之下刪檔、映像 `python:3.12-slim` 的實際行為還沒在 Docker 裡跑過。`packages/workspace/sandbox/test/docker.integration.test.ts` 有 Docker 時可以加一題。
 - 真 Discord:`attachment.size`、CDN 網址、簽名過期、私訊附件還沒實測。
 
 ## 6. 之後再做

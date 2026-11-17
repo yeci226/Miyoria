@@ -17,10 +17,11 @@
 // The commission is a document (docs.ts); the coins are ledger rows (reason `commission`, refunds
 // keyed on the row), so a crash never loses or doubles a payment.
 
-import { errorMessage } from "@miyoria/kernel";
+import { errorMessage } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
-  customEvent,
+  type EventPayload,
+  Events,
   type JsonValue,
   safeName,
   toTimestamp,
@@ -30,9 +31,7 @@ import { type EconomyService, type Member, STRANGER } from "./economy.js";
 import { pickById, shortId } from "./purse.js";
 import { EconomyError } from "./types.js";
 import {
-  COMMISSION_DONE_TOPIC,
   COMMISSION_KINDS,
-  COMMISSION_TOPIC,
   type CommissionKind,
   type CommissionResult,
   type CommissionView,
@@ -184,7 +183,6 @@ export class CommissionDesk {
     };
     const doc: EconomyDoc = {
       id,
-      profile: this.e.profile,
       kind: KIND,
       owner: who.account,
       status: "open",
@@ -223,7 +221,10 @@ export class CommissionDesk {
       price: d.price,
       due_at: d.due_at,
     };
-    this.e.publish(customEvent(COMMISSION_TOPIC, payload));
+    this.e.publish(
+      Events.EconomyCommission,
+      payload as EventPayload<typeof Events.EconomyCommission>,
+    );
   }
 
   // ---- doing them ------------------------------------------------------------------------
@@ -268,15 +269,13 @@ export class CommissionDesk {
       return { ...doc, status: "delivered", version: doc.version + 1, data: next };
     });
     const d = asData(done);
-    this.e.publish(
-      customEvent(COMMISSION_DONE_TOPIC, {
-        id: shortId(done.id),
-        status: "delivered",
-        kind: d.kind,
-        account: done.owner ? { platform: done.owner.platform, id: done.owner.id } : null,
-        text: body,
-      }),
-    );
+    this.e.publish(Events.EconomyCommissionDone, {
+      id: shortId(done.id),
+      status: "delivered",
+      kind: d.kind,
+      account: done.owner ? { platform: done.owner.platform, id: done.owner.id } : null,
+      text: body,
+    });
     this.e.purse.audit("economy.commission.deliver", { commission: done.id });
     await this.e.purse.refresh();
     return this.#view(done);
@@ -286,15 +285,13 @@ export class CommissionDesk {
   async decline(ref: string, why: string): Promise<CommissionView> {
     const note = [...why.trim()].slice(0, MAX_NOTE_CHARS).join("");
     const doc = await this.e.serial(async () => this.#end(await this.#pick(ref), "declined", note));
-    this.e.publish(
-      customEvent(COMMISSION_DONE_TOPIC, {
-        id: shortId(doc.id),
-        status: "declined",
-        kind: asData(doc).kind,
-        account: doc.owner ? { platform: doc.owner.platform, id: doc.owner.id } : null,
-        text: note,
-      }),
-    );
+    this.e.publish(Events.EconomyCommissionDone, {
+      id: shortId(doc.id),
+      status: "declined",
+      kind: asData(doc).kind,
+      account: doc.owner ? { platform: doc.owner.platform, id: doc.owner.id } : null,
+      text: note,
+    });
     this.e.purse.audit("economy.commission.decline", { commission: doc.id });
     return this.#view(doc);
   }
@@ -353,7 +350,7 @@ export class CommissionDesk {
   async mine(account: AccountRef): Promise<CommissionView[]> {
     const who = await this.e.member(account);
     if (!who) return [];
-    const rows = await this.#docs().list(this.e.profile, KIND, { owners: who.wallet, limit: 20 });
+    const rows = await this.#docs().list(this.e.profile, KIND, { owners: who.accounts, limit: 20 });
     return rows.map((d) => this.#view(d));
   }
 }

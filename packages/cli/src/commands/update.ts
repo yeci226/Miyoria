@@ -1,6 +1,10 @@
 // `miyoria update`: pull, install, and rebuild what changed (SDK, extension `dist`, panel, overlay,
 // Minecraft mod jar). Rebuilds are decided by file times, so an unchanged tree does nothing.
 // Replacing the installed mod jar backs the old one up first and asks (`--yes` skips the question).
+// Then the services (docs/design/v5-hostd.md §9): every enabled Python service whose install record
+// differs from the lock, the extras or the descriptor is synced again, and every running service
+// that was synced or whose folder changed in the pull is restarted, one at a time through the
+// guard. A guarded service that is busy is reported and left running.
 
 import {
   copyFileSync,
@@ -12,8 +16,16 @@ import {
   statSync,
   unlinkSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
-import type { Config } from "@miyoria/kernel";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { HOST_ERROR_CODE, type HostServiceList } from "@miyoria/contracts/host";
+import {
+  type CatalogEntry,
+  HostdClient,
+  HostRpcError,
+  inspectService,
+  loadCatalog,
+} from "@miyoria/hostd";
+import type { Config } from "@miyoria/runtime/kernel";
 import {
   type BuildTarget,
   buildTargets,
@@ -24,11 +36,12 @@ import {
   modFreshness,
   modInfo,
 } from "../stack/builds.js";
-import { legacyConfigNotes } from "../stack/checks.js";
 import { repoRoot } from "../stack/config.js";
 import { defaultRunner, type Runner, tailLines } from "../stack/system.js";
-import { dim, fail, note, ok, println, section, warn } from "../ui.js";
+import { bold, dim, fail, note, ok, println, section, warn } from "../ui.js";
+import { catalogRoot, hostTarget, loadHost, rpcText, watchStarts } from "./host.js";
 import { loadConfig } from "./node.js";
+import { openInstaller, printInstall, progressPrinter, type ServiceDeps } from "./services.js";
 
 export class UpdateError extends Error {
   override readonly name = "UpdateError";
@@ -43,6 +56,10 @@ export interface UpdateOptions {
   dryRun?: boolean;
   /** Do not build or install the Minecraft mod. */
   skipMod?: boolean;
+  /** Sync the environments, but restart nothing. */
+  noRestart?: boolean;
+  /** `--host-config`: the host.toml of this machine (default: next to the config file). */
+  hostConfig?: string;
 }
 
 export interface UpdateDeps {
@@ -52,6 +69,8 @@ export interface UpdateDeps {
   env: Record<string, string | undefined>;
   platform: NodeJS.Platform;
   now: () => Date;
+  /** The installer's seams for the services part (tests). */
+  services?: ServiceDeps;
 }
 
 export function defaultUpdateDeps(confirm: UpdateDeps["confirm"]): UpdateDeps {
@@ -81,23 +100,29 @@ export function installNeeded(root: string): boolean {
   }
 }
 
-async function pull(root: string, deps: UpdateDeps, dryRun: boolean): Promise<boolean> {
+/** What a pull changed: the commit before and after. `null` when nothing was pulled. */
+export interface PullResult {
+  before: string;
+  after: string;
+}
+
+async function pull(root: string, deps: UpdateDeps, dryRun: boolean): Promise<PullResult | null> {
   if (!existsSync(join(root, ".git"))) {
     note("不是 git 資料夾,略過 pull");
-    return false;
+    return null;
   }
   if (dryRun) {
     note("會執行:git pull --ff-only(工作目錄有未提交的變更就略過)");
-    return false;
+    return null;
   }
   const status = await deps.run("git", ["status", "--porcelain"], { cwd: root, timeoutMs: 30_000 });
   if (status.missing) {
     warn("找不到 git,略過 pull");
-    return false;
+    return null;
   }
   if (status.stdout.trim() !== "") {
     warn("工作目錄有未提交的變更,略過 git pull(用 --no-pull 可不顯示這則)");
-    return false;
+    return null;
   }
   const head = () => deps.run("git", ["rev-parse", "HEAD"], { cwd: root, timeoutMs: 15_000 });
   const before = (await head()).stdout.trim();
@@ -107,9 +132,71 @@ async function pull(root: string, deps: UpdateDeps, dryRun: boolean): Promise<bo
     for (const l of failureTail(result.stdout, result.stderr)) println(l);
     throw new UpdateError("pull 失敗,沒有改動任何建置");
   }
-  const changed = (await head()).stdout.trim() !== before;
+  const after = (await head()).stdout.trim();
+  const changed = after !== before;
   ok(changed ? "已更新到最新的提交" : "已經是最新");
-  return changed;
+  return changed ? { before, after } : null;
+}
+
+/** The files a pull changed, from `git diff --name-only`; `null` when git cannot say. */
+async function changedFiles(
+  root: string,
+  pulled: PullResult,
+  deps: UpdateDeps,
+): Promise<string[] | null> {
+  const r = await deps.run("git", ["diff", "--name-only", `${pulled.before}..${pulled.after}`], {
+    cwd: root,
+    timeoutMs: 30_000,
+  });
+  if (r.missing || r.code !== 0) return null;
+  return r.stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+}
+
+/**
+ * The services a change set touches: those whose folder holds a changed file, and every Python
+ * service when a file directly under `workers/` (the modules the workers share) changed.
+ */
+export function servicesChangedBy(
+  files: readonly string[],
+  entries: readonly CatalogEntry[],
+  root: string,
+): Set<string> {
+  const shared = files.some((f) => /^workers\/[^/]+\.py$/.test(f));
+  const out = new Set<string>();
+  for (const entry of entries) {
+    const folder = relative(root, entry.dir).replaceAll("\\", "/");
+    if (files.some((f) => f === folder || f.startsWith(`${folder}/`))) out.add(entry.name);
+    else if (shared && entry.descriptor.install.runtime === "python") out.add(entry.name);
+  }
+  return out;
+}
+
+export interface ServicePlanInput {
+  /** Enabled services in start order, with what is true of each. */
+  services: ReadonlyArray<{ name: string; stale: boolean; running: boolean; changed: boolean }>;
+}
+
+export interface ServiceUpdatePlan {
+  /** Synced while it is not running. */
+  syncStopped: string[];
+  /** Running and stale: stopped (through the guard), synced, started. */
+  syncAndRestart: string[];
+  /** Running and only its folder changed: restarted. */
+  restart: string[];
+}
+
+/** What `update` does to the services, before it does it. */
+export function planServiceUpdate(input: ServicePlanInput): ServiceUpdatePlan {
+  const plan: ServiceUpdatePlan = { syncStopped: [], syncAndRestart: [], restart: [] };
+  for (const s of input.services) {
+    if (s.stale && !s.running) plan.syncStopped.push(s.name);
+    else if (s.stale) plan.syncAndRestart.push(s.name);
+    else if (s.running && s.changed) plan.restart.push(s.name);
+  }
+  return plan;
 }
 
 async function install(root: string, deps: UpdateDeps, force: boolean, dryRun: boolean) {
@@ -268,6 +355,163 @@ async function updateMod(
   return good;
 }
 
+/** The packaged install has no git checkout: the package manager upgrades it. */
+export const UPGRADE_HINT =
+  "用 npm 安裝的:`npm update -g miyoria`(pnpm:`pnpm update -g miyoria`)升級套件,再重新執行 `miyoria update`";
+
+/**
+ * The services part: sync the stale environments, then restart what changed, one at a time. Returns
+ * the number of failures. Does nothing without a host.toml.
+ */
+export async function updateServices(
+  configPath: string,
+  options: UpdateOptions,
+  deps: UpdateDeps,
+  pulled: { root: string; files: string[] | null } | null,
+): Promise<number> {
+  const target = hostTarget(configPath, options.hostConfig);
+  if (!existsSync(target.hostToml)) {
+    note("沒有 host.toml,略過服務的同步與重啟(`miyoria add <服務>` 會建立它)");
+    return 0;
+  }
+  const host = loadHost(target);
+  const root = catalogRoot(target.hostToml);
+  const catalog = loadCatalog(root);
+  const installDeps = { ...deps.services?.install, root };
+  const enabled = Object.entries(host.config.services)
+    .filter(([name, s]) => s.enabled && catalog.services.has(name))
+    .map(([name]) => catalog.services.get(name) as CatalogEntry);
+
+  const client = await HostdClient.connect(host.state.root);
+  const listed: HostServiceList["services"] =
+    client === null ? [] : (await client.call<HostServiceList>("service.list")).services;
+  const running = new Set(
+    listed.filter((s) => s.state === "running" || s.state === "starting").map((s) => s.name),
+  );
+  // Start order: the daemon's list when there is one, else host.toml's.
+  const order = listed.length > 0 ? listed.map((s) => s.name) : enabled.map((e) => e.name);
+  const changed =
+    pulled?.files != null
+      ? servicesChangedBy(pulled.files, enabled, pulled.root)
+      : new Set<string>();
+
+  const stale = new Set<string>();
+  for (const entry of enabled) {
+    const inspected = inspectService(entry, host, installDeps);
+    if (inspected.runtime.kind !== "managed") continue;
+    if (options.force || inspected.runtime.state?.state !== "ready") stale.add(entry.name);
+  }
+  const plan = planServiceUpdate({
+    services: order
+      .filter((name) => enabled.some((e) => e.name === name))
+      .map((name) => ({
+        name,
+        stale: stale.has(name),
+        running: running.has(name),
+        changed: changed.has(name),
+      })),
+  });
+
+  section("服務");
+  const nothing = plan.syncStopped.length + plan.syncAndRestart.length + plan.restart.length === 0;
+  if (nothing && client === null) {
+    ok("環境都與 uv.lock、extras 和 service.toml 一致");
+    return 0;
+  }
+  if (options.dryRun) {
+    if (plan.syncStopped.length > 0) note(`會同步環境:${plan.syncStopped.join("、")}`);
+    if (plan.syncAndRestart.length > 0) {
+      note(`會停止、同步、再啟動(經過保護):${plan.syncAndRestart.join("、")}`);
+    }
+    if (plan.restart.length > 0) note(`會重啟(經過保護):${plan.restart.join("、")}`);
+    if (nothing) ok("環境都與 uv.lock、extras 和 service.toml 一致");
+    return 0;
+  }
+
+  const installer = await openInstaller(target, host, deps.services);
+  let failures = 0;
+  const later: string[] = [];
+
+  // Stopped services: one call; a running daemon also reads the descriptors again for them.
+  const stopped = enabled.map((e) => e.name).filter((name) => !running.has(name));
+  if (stopped.length > 0 && (plan.syncStopped.length > 0 || client !== null)) {
+    try {
+      const done = await installer.update(
+        { services: stopped, ...(options.force ? { force: true } : {}) },
+        progressPrinter(),
+      );
+      for (const r of done.services) {
+        if (r.runtime.state === "current") continue;
+        if (printInstall(r, { brief: true })) failures += 1;
+      }
+    } catch (error) {
+      failures += 1;
+      fail(rpcText(error));
+    }
+  }
+
+  const syncOne = async (name: string): Promise<boolean> => {
+    try {
+      const result = await installer.install(
+        { service: name, only_stale: !options.force, no_files: true },
+        progressPrinter(),
+      );
+      return !printInstall(result, { brief: true });
+    } catch (error) {
+      fail(`${name}  ${rpcText(error)}`);
+      return false;
+    }
+  };
+
+  const logs = host.state.logs;
+  const restartOne = async (name: string, how: "restart" | "stop-sync-start"): Promise<void> => {
+    if (client === null) return;
+    try {
+      if (how === "restart") {
+        await client.call(
+          "service.restart",
+          { service: name, force: false },
+          { timeoutMs: 120_000 },
+        );
+      } else {
+        // A running Python cannot be overwritten on Windows: stop it first, through the guard.
+        await client.call("service.stop", { service: name, force: false }, { timeoutMs: 120_000 });
+        if (!(await syncOne(name))) failures += 1;
+        await client.call("service.start", { service: name });
+      }
+    } catch (error) {
+      if (error instanceof HostRpcError && error.code === HOST_ERROR_CODE.Guarded) {
+        warn(`${bold(name)}  她正在唱歌或直播,沒有動它:${error.message}`);
+        later.push(name);
+        return;
+      }
+      failures += 1;
+      fail(`${name}  ${rpcText(error)}`);
+      return;
+    }
+    const watched = await watchStarts(client, [name], logs, 10 * 60_000);
+    if (watched.failed.length > 0) failures += 1;
+  };
+
+  for (const name of [...plan.syncAndRestart, ...plan.restart]) {
+    if (options.noRestart) {
+      if (plan.syncAndRestart.includes(name) && !(await syncOne(name))) failures += 1;
+      later.push(name);
+      continue;
+    }
+    await restartOne(name, plan.syncAndRestart.includes(name) ? "stop-sync-start" : "restart");
+  }
+  if (later.length > 0) {
+    warn(
+      options.noRestart
+        ? `沒有重啟(--no-restart):${later.join("、")}。要用新版時:${later.map((n) => `\`miyoria restart ${n}\``).join("、")}`
+        : `還在忙所以沒有重啟:${later.join("、")}。等她不忙再執行 ${later.map((n) => `\`miyoria restart ${n}\``).join("、")}(要先同步環境的,重新執行 \`miyoria update\`)`,
+    );
+  }
+  if (nothing) ok("環境都與 uv.lock、extras 和 service.toml 一致");
+  return failures;
+}
+
 export async function run(
   configPath: string,
   options: UpdateOptions,
@@ -275,16 +519,19 @@ export async function run(
 ): Promise<void> {
   const root = repoRoot(configPath);
   if (!root) {
-    throw new UpdateError(
-      "`update` 要在 Miyoria 的原始碼資料夾裡用;用 npm 安裝的請改用 `npm update -g miyoria`",
-    );
+    // A packaged install: the package manager upgrades the code; the services part still runs.
+    note(UPGRADE_HINT);
+    const failures = await updateServices(configPath, options, deps, null);
+    if (failures > 0) throw new UpdateError(`${failures} 項沒有完成,見上面的訊息`);
+    return;
   }
   const config = await loadConfig(configPath);
   const configDir = dirname(resolve(configPath));
   if (options.dryRun) section("更新計畫(dry-run,不會改任何東西)");
 
   let failures = 0;
-  if (!options.noPull) await pull(root, deps, options.dryRun === true);
+  const pulled = options.noPull ? null : await pull(root, deps, options.dryRun === true);
+  const files = pulled === null ? null : await changedFiles(root, pulled, deps);
   await install(root, deps, options.force === true, options.dryRun === true);
 
   for (const t of buildTargets(root, configDir, config)) {
@@ -305,14 +552,19 @@ export async function run(
 
   if (!options.skipMod && !(await updateMod(root, config, deps, options))) failures++;
 
-  const notes = legacyConfigNotes(config);
-  if (notes.length > 0) {
-    section("設定裡 V2 留下的舊值(沒有自動改寫)");
-    for (const n of notes) warn(n);
-  }
+  failures += await updateServices(
+    configPath,
+    options,
+    deps,
+    pulled === null ? null : { root, files },
+  );
 
   if (failures > 0) throw new UpdateError(`${failures} 項沒有完成,見上面的訊息`);
   if (!options.dryRun) {
-    println("\n完成。已經在執行的 core / worker 要重啟才會用新版(`miyoria up`)。");
+    println(
+      options.noRestart
+        ? "\n完成。已經在執行的服務沒有重啟(--no-restart);要用新版時 `miyoria restart <服務>`。"
+        : "\n完成。",
+    );
   }
 }

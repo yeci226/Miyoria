@@ -1,10 +1,11 @@
-// `GET /metrics` (Prometheus text format 0.0.4): the process-wide registry of `@miyoria/kernel`
+// `GET /metrics` (Prometheus text format 0.0.4): the process-wide registry of `@miyoria/runtime/kernel`
 // (bus, LLM, speech, agent turns, filled by those packages) plus what is read at scrape time:
 // module states, process uptime and memory.
 //
 // It needs the bearer token (or a panel session) like `/api`, unless `[modules.api]
 // metrics_public = true`.
 
+import { MIYORIA_VERSION } from "@miyoria/llm/llm";
 import {
   METRICS_CONTENT_TYPE,
   type MetricFamily,
@@ -12,8 +13,7 @@ import {
   metrics,
   renderMetrics,
   SupervisorKey,
-} from "@miyoria/kernel";
-import { MIYORIA_VERSION } from "@miyoria/llm";
+} from "@miyoria/runtime/kernel";
 import type { ModuleStateKind } from "@miyoria/types";
 import type { Route } from "./route.js";
 import type { ApiState } from "./state.js";

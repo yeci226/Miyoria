@@ -1,0 +1,34 @@
+# Turn worker: end-of-turn (Smart Turn) and voice activity (Silero) on the CPU, workers/turn/server.py.
+name = "turn"
+kind = "worker"
+provides = ["turn", "vad"]
+summary = "判斷講完與語音活動偵測(CPU)"
+
+[install]
+runtime = "python"
+python = ">=3.11,<3.14"
+project = "."
+check_imports = ["onnxruntime"]
+
+# Without these two files the worker still runs and Core falls back to silence length.
+# Paths are under the host's model folder (<state>/models); [run] env points the worker there.
+[[install.files]]
+url = "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx?download=true"
+path = "smart-turn/smart-turn-v3.2-cpu.onnx"
+
+[[install.files]]
+url = "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx"
+path = "silero-vad/silero_vad.onnx"
+
+[run]
+command = ["{python}", "server.py"]
+cwd = "."
+port = 8006
+host_env = "HOST"
+port_env = "PORT"
+# `miyoria add` puts the two model files in the host's model folder; the worker's own default is
+# workers/models, which a source checkout used before.
+env = { TURN_SMART_MODEL = "{models}/smart-turn/smart-turn-v3.2-cpu.onnx", TURN_SILERO_MODEL = "{models}/silero-vad/silero_vad.onnx" }
+
+[run.health]
+http = "/health"

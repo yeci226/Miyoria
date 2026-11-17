@@ -1,6 +1,7 @@
-// Her purse (docs/design/economy.md §13): coins that are hers. Rows of the same ledger on a
-// synthetic account, `{ platform: "self", id: <profile> }`, which no platform adapter produces, so
-// it cannot be a person's wallet. Money gets in by her share of paid gifts and by goals that are
+// Her purse (docs/design/economy.md §13): coins that are hers. Rows of the same ledger in a
+// wallet of its own, `PURSE`, which is no person's. Where she acts as someone (a screened text,
+// the audit trail) she is the synthetic account `{ platform: "self", id: <profile> }`, which no
+// platform adapter produces. Money gets in by her share of paid gifts and by goals that are
 // reached; it leaves as treats, expressions she buys herself, and bounties.
 //
 // * A share (`her_share`, floored) of what someone pays to feed her, write her, send an expression
@@ -10,17 +11,10 @@
 //   (one entry, replaced when it changes) and `purse_news` (what just happened).
 // * Money in her purse is hers to spend: it counts toward none of the caps on `give_coins`.
 
-import { ActuatorRegistryKey } from "@miyoria/actions";
-import { errorMessage } from "@miyoria/kernel";
+import { ActuatorRegistryKey } from "@miyoria/gate/actions";
+import { errorMessage } from "@miyoria/runtime/kernel";
 import { SingerKey } from "@miyoria/sing";
-import {
-  AuditLogKey,
-  BountyStoreKey,
-  type CoinEntry,
-  type CoinPost,
-  DealStoreKey,
-  GoalStoreKey,
-} from "@miyoria/store";
+import { AuditLogKey } from "@miyoria/store";
 import {
   type AccountRef,
   accountRefString,
@@ -32,6 +26,14 @@ import {
   toTimestamp,
 } from "@miyoria/types";
 import type { EconomyService, Member } from "./economy.js";
+import {
+  BountyStoreKey,
+  type CoinEntry,
+  type CoinPost,
+  DealStoreKey,
+  GoalStoreKey,
+  PURSE,
+} from "./records.js";
 import { EconomyError, GIFT_EXPRESSIONS, type GiftExpression } from "./types.js";
 
 /** The platform of the purse's account. */
@@ -74,7 +76,7 @@ export class Purse {
 
   constructor(private readonly e: EconomyService) {}
 
-  /** The account her coins are rows of. */
+  /** The account she acts as for her purse (screening, audit); her coins are `PURSE`'s. */
   get account(): AccountRef {
     return { platform: PURSE_PLATFORM, id: this.e.profile };
   }
@@ -82,8 +84,7 @@ export class Purse {
   #entry(delta: number, reason: string, ref: string | null, key: string | null): CoinEntry {
     return {
       id: newId(),
-      profile: this.e.profile,
-      account: this.account,
+      person: PURSE,
       delta,
       reason,
       ref,
@@ -93,24 +94,22 @@ export class Purse {
   }
 
   async balance(): Promise<number> {
-    return this.e.ledger().balance(this.e.profile, [this.account]);
+    return this.e.ledger().balance(this.e.profile, PURSE);
   }
 
   /** Puts `amount` in (once per `key`). */
   credit(amount: number, reason: string, ref: string | null, key: string): Promise<CoinPost> {
-    return this.e.ledger().post(this.#entry(amount, reason, ref, key), { wallet: [this.account] });
+    return this.e.ledger().post(this.#entry(amount, reason, ref, key));
   }
 
   /** Takes `amount` out (once per `key`); `short` when she has less. */
   debit(amount: number, reason: string, ref: string | null, key: string): Promise<CoinPost> {
-    return this.e
-      .ledger()
-      .post(this.#entry(-amount, reason, ref, key), { wallet: [this.account], covered: true });
+    return this.e.ledger().post(this.#entry(-amount, reason, ref, key), { covered: true });
   }
 
   /** What left the purse under `reasons` since the day began. */
   async spentToday(reasons: readonly string[]): Promise<number> {
-    const rows = await this.e.ledger().entries(this.e.profile, [this.account], {
+    const rows = await this.e.ledger().entries(this.e.profile, PURSE, {
       reasons,
       since: this.e.todayStart(),
       limit: MAX_ROWS,
@@ -144,14 +143,12 @@ export class Purse {
     try {
       if (!SHARED_REASONS.includes(entry.reason) && entry.reason !== "deal_escrow") return;
       const ledger = this.e.ledger();
-      const wallet = [this.account];
-      const shared = await ledger.byKey(this.e.profile, wallet, `share:${entry.id}`);
+      const shared = await ledger.byKey(this.e.profile, PURSE, `share:${entry.id}`);
       if (!shared) return;
       const amount = Math.min(shared.delta, Math.max(await this.balance(), 0));
       if (amount < 1) return;
       const post = await ledger.post(
         this.#entry(-amount, "her_share_back", entry.id, `shareback:${entry.id}`),
-        { wallet },
       );
       if (post.status === "posted") this.#later();
     } catch (error) {
@@ -160,27 +157,24 @@ export class Purse {
   }
 
   /**
-   * Returns a held charge to the account that paid it, once (the same key `Economy.refund` uses, so
-   * the two cannot both pay). Works for someone she no longer lets in.
+   * Returns a held charge to the wallet of the account that paid it, once (the same key
+   * `Economy.refund` uses, so the two cannot both pay). Works for someone she no longer lets in;
+   * the account's person is found through identity (a stranger has none: 403).
    */
   async giveBack(held: { id: string; account: AccountRef; amount: number }): Promise<boolean> {
     const ledger = this.e.ledger();
-    const wallet = [held.account];
+    const who = await this.e.holder(held.account);
     const key = `refund:${held.id}`;
-    if ((await ledger.byKey(this.e.profile, wallet, key)) !== null) return false;
-    const post = await ledger.post(
-      {
-        id: newId(),
-        profile: this.e.profile,
-        account: held.account,
-        delta: held.amount,
-        reason: "refund",
-        ref: held.id,
-        idem_key: key,
-        ts: toTimestamp(this.e.now()),
-      },
-      { wallet },
-    );
+    if ((await ledger.byKey(this.e.profile, who.wallet, key)) !== null) return false;
+    const post = await ledger.post({
+      id: newId(),
+      person: who.wallet,
+      delta: held.amount,
+      reason: "refund",
+      ref: held.id,
+      idem_key: key,
+      ts: toTimestamp(this.e.now()),
+    });
     return post.status === "posted";
   }
 
@@ -213,19 +207,15 @@ export class Purse {
       const out = await this.debit(given, "purse_treat", id, `treat:${id}`);
       if (out.status !== "posted") return { given: 0, left: out.balance };
       try {
-        await this.e.ledger().post(
-          {
-            id: newId(),
-            profile: this.e.profile,
-            account: who.account,
-            delta: given,
-            reason: "purse_gift",
-            ref: text,
-            idem_key: `treat:${id}`,
-            ts: toTimestamp(this.e.now()),
-          },
-          { wallet: who.wallet },
-        );
+        await this.e.ledger().post({
+          id: newId(),
+          person: who.wallet,
+          delta: given,
+          reason: "purse_gift",
+          ref: text,
+          idem_key: `treat:${id}`,
+          ts: toTimestamp(this.e.now()),
+        });
       } catch (error) {
         await this.credit(given, "purse_return", id, `treat-back:${id}`);
         throw error;
@@ -250,7 +240,7 @@ export class Purse {
     if (this.#singing()) throw new EconomyError(409, "你正在唱歌");
     const id = newId();
     const paid = await this.e.serial(async () => {
-      const rows = await this.e.ledger().entries(this.e.profile, [this.account], {
+      const rows = await this.e.ledger().entries(this.e.profile, PURSE, {
         reasons: ["purse_expression", "purse_return"],
         since: this.e.todayStart(),
         limit: MAX_ROWS,

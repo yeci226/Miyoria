@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { EarnReason } from "@/api/types";
-import type { EconomyHealth, PredictionView, ReachedGoal, RoomItem } from "@/api/v4-types";
+import type { EconomyHealth, PredictionView, ReachedGoal, RoomItem } from "@miyoria/contracts/api";
 import { mockFetch, renderRoute } from "@/test/render";
 import { EARN_REASON_LABEL, ISSUED_REASONS, reasonLabel, RECOVERED_REASONS } from "./labels";
 
@@ -25,7 +25,7 @@ const health = (over: Partial<EconomyHealth> = {}): EconomyHealth => ({
 
 describe("經濟 / 健康度", () => {
   it("draws issued against recovered per day with the week's ratio", async () => {
-    mockFetch((_m, u) => (u.pathname === "/api/economy2/health" ? { body: health() } : undefined));
+    mockFetch((_m, u) => (u.pathname === "/api/economy/health" ? { body: health() } : undefined));
     renderRoute("/economy");
     const block = (await screen.findByRole("heading", { name: "這七天回收率" })).closest("section") as HTMLElement;
     expect(block).toHaveTextContent("59%");
@@ -41,7 +41,7 @@ describe("經濟 / 健康度", () => {
 
   it("says why there is no chart while no store provides the totals", async () => {
     mockFetch((_m, u) =>
-      u.pathname === "/api/economy2/health" ? { body: health({ available: false, days: [], week: { issued: 0, recovered: 0, ratio: null } }) } : undefined,
+      u.pathname === "/api/economy/health" ? { body: health({ available: false, days: [], week: { issued: 0, recovered: 0, ratio: null } }) } : undefined,
     );
     renderRoute("/economy");
     expect(await screen.findByText(/帳本的資料庫沒有提供每日總數/)).toBeInTheDocument();
@@ -50,7 +50,7 @@ describe("經濟 / 健康度", () => {
   });
 
   it("shows the inflation warning and what each side counts", async () => {
-    mockFetch((_m, u) => (u.pathname === "/api/economy2/health" ? { body: health({ warn: "這個禮拜發出去 220,只收回 130,通貨膨脹中" }) } : undefined));
+    mockFetch((_m, u) => (u.pathname === "/api/economy/health" ? { body: health({ warn: "這個禮拜發出去 220,只收回 130,通貨膨脹中" }) } : undefined));
     renderRoute("/economy");
     expect(await screen.findByRole("alert")).toHaveTextContent("通貨膨脹中");
     const how = screen.getByLabelText("怎麼算");
@@ -63,11 +63,11 @@ describe("經濟 / 健康度", () => {
     const a = renderRoute("/economy");
     expect((await screen.findAllByLabelText("載入中")).length).toBeGreaterThan(0);
     a.unmount();
-    mockFetch((_m, u) => (u.pathname === "/api/economy2/health" ? { status: 503, body: { error: "economy module (economy 2.0) is not available" } } : undefined));
+    mockFetch((_m, u) => (u.pathname === "/api/economy/health" ? { status: 503, body: { error: "economy module (economy 2.0) is not available" } } : undefined));
     const b = renderRoute("/economy");
     expect(await screen.findByText("經濟(economy 模組)沒有啟動")).toBeInTheDocument();
     b.unmount();
-    mockFetch((_m, u) => (u.pathname === "/api/economy2/health" ? { status: 500, body: { error: "boom" } } : undefined));
+    mockFetch((_m, u) => (u.pathname === "/api/economy/health" ? { status: 500, body: { error: "boom" } } : undefined));
     renderRoute("/economy");
     expect(await screen.findByRole("alert")).toHaveTextContent("boom");
   });
@@ -76,7 +76,7 @@ describe("經濟 / 健康度", () => {
 describe("經濟 / 委託、預測、房間", () => {
   it("lists the commissions that wait for her", async () => {
     mockFetch((_m, u) =>
-      u.pathname === "/api/economy2/commissions"
+      u.pathname === "/api/economy/commissions"
         ? {
             body: {
               currency: "魚幣",
@@ -96,9 +96,9 @@ describe("經濟 / 委託、預測、房間", () => {
 
   it("has empty states for commissions, predictions and the room", async () => {
     mockFetch((_m, u) => {
-      if (u.pathname === "/api/economy2/commissions") return { body: { currency: "魚幣", commissions: [] } };
-      if (u.pathname === "/api/economy2/predictions") return { body: { currency: "魚幣", predictions: [] } };
-      if (u.pathname === "/api/economy2/room") return { body: { currency: "魚幣", room: [] } };
+      if (u.pathname === "/api/economy/commissions") return { body: { currency: "魚幣", commissions: [] } };
+      if (u.pathname === "/api/economy/predictions") return { body: { currency: "魚幣", predictions: [] } };
+      if (u.pathname === "/api/economy/room") return { body: { currency: "魚幣", room: [] } };
       return undefined;
     });
     const a = renderRoute("/economy?tab=commissions");
@@ -123,9 +123,10 @@ describe("經濟 / 委託、預測、房間", () => {
       closes_at: new Date(Date.now() + 3_600_000).toISOString(),
       status: "open",
       winner: null,
+      my_bet: null,
     };
     const done: PredictionView = { ...open, id: "P0", question: "osu 幾分", status: "resolved", winner: "岩漿", options: [{ label: "岩漿", staked: 50, backers: 1, multiplier: 1 }], total: 50 };
-    mockFetch((_m, u) => (u.pathname === "/api/economy2/predictions" ? { body: { currency: "魚幣", predictions: [open, done] } } : undefined));
+    mockFetch((_m, u) => (u.pathname === "/api/economy/predictions" ? { body: { currency: "魚幣", predictions: [open, done] } } : undefined));
     renderRoute("/economy?tab=predictions");
     const list = await screen.findByRole("list", { name: "預測" });
     const first = within(list).getByText("她這場 Minecraft 會怎麼死?").closest("li") as HTMLElement;
@@ -142,7 +143,7 @@ describe("經濟 / 委託、預測、房間", () => {
       { id: "sofa", label: "沙發", kind: "furniture", kind_label: "家具", price: 500, funded: 125, backers: 4, placed: false },
       { id: "bg", label: "星空背景", kind: "background", kind_label: "背景", price: 300, funded: 300, backers: 9, placed: true },
     ];
-    mockFetch((_m, u) => (u.pathname === "/api/economy2/room" ? { body: { currency: "魚幣", room: items } } : undefined));
+    mockFetch((_m, u) => (u.pathname === "/api/economy/room" ? { body: { currency: "魚幣", room: items } } : undefined));
     renderRoute("/economy?tab=room");
     const table = await screen.findByRole("table", { name: "房間的東西" });
     const sofa = within(table).getByText("沙發").closest("tr") as HTMLElement;

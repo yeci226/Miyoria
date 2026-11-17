@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useWorkspace } from "@/app/v4-queries";
+import { useWorkspace } from "@/app/queries";
 import { SearchInput } from "@/components/controls";
 import { ModuleQuery } from "@/components/module-query";
 import { EmptyLine } from "@/components/query-state";

@@ -1,0 +1,3 @@
+# The generator of contracts.py (python gen_contracts.py). Pinned: another version may write
+# different code, and CI fails when the checked-in file is not what this one writes.
+datamodel-code-generator==0.96.0

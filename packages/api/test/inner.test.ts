@@ -1,10 +1,10 @@
 // `GET /api/self` and `GET /api/world` against fake `SelfState` / `WorldState` services.
 
-import { Supervisor, SupervisorKey } from "@miyoria/kernel";
-import { type Social, SocialKey } from "@miyoria/social";
+import { heartTables, type PeopleDirectory, PeopleDirectoryKey } from "@miyoria/heart/person";
+import { Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
+import { SqliteStore, StoreKey } from "@miyoria/store";
 import {
   type ContextKey,
-  type Feeling,
   type PlatformSink,
   PlatformSinks,
   PlatformSinksKey,
@@ -16,7 +16,8 @@ import {
   WorldStateKey,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
-import { ActiveProfileKey, ApiClient, ApiModule } from "../src/index.js";
+import { ActiveProfileKey, ApiModule } from "../src/index.js";
+import { adminCalls } from "./support/admin.js";
 import { raw, statusOf } from "./support/http.js";
 
 const TOKEN = "test-token";
@@ -64,11 +65,6 @@ const SNAPSHOT: SelfSnapshot = {
   ],
 };
 
-const FEELINGS: Feeling[] = [
-  { person: "person-1", text: "有點在意他", updated_at: "2026-11-02T11:30:00.000Z", by: "self" },
-  { person: "person-9", text: "不太熟", updated_at: "2026-11-01T11:30:00.000Z", by: "panel" },
-];
-
 const WORLD: WorldSnapshot = {
   at: "2026-11-02T12:00:00.000Z",
   time: {
@@ -106,11 +102,11 @@ const WORLD: WorldSnapshot = {
   ],
 };
 
-const fakeSelf = { snapshot: () => SNAPSHOT, feelings: () => FEELINGS } as unknown as SelfState;
+const fakeSelf = { snapshot: () => SNAPSHOT } as unknown as SelfState;
 const fakeWorld = { snapshot: () => WORLD } as unknown as WorldState;
 const fakeSocial = {
   displayName: (p: string) => (p === "person-1" ? "Owen" : null),
-} as unknown as Social;
+} as unknown as PeopleDirectory;
 
 const sups: Supervisor[] = [];
 afterEach(async () => {
@@ -127,13 +123,13 @@ async function harness() {
   await sup.startAll();
   const base = api.url();
   if (!base) throw new Error("api is not running");
-  return { sup, base, client: new ApiClient(base, TOKEN) };
+  return { sup, base, adm: adminCalls(base, TOKEN) };
 }
 
 describe("inner routes", () => {
   it("are 503 while the modules are stopped and need the token", async () => {
     const h = await harness();
-    expect(await statusOf(h.client.self())).toBe(503);
+    expect(await statusOf(h.adm.self())).toBe(503);
     const world = await raw(h.base, "GET", "/api/world", { token: TOKEN });
     expect(world.status).toBe(503);
     expect((world.body as { error: string }).error).toContain("world module");
@@ -143,16 +139,37 @@ describe("inner routes", () => {
     expect((await raw(h.base, "POST", "/api/self", { token: TOKEN })).status).toBe(405);
   });
 
-  it("serve her inner state with named feelings", async () => {
+  it("serve her inner state with her impressions of people from the heart's rows", async () => {
     const h = await harness();
+    const store = await SqliteStore.open(":memory:", { plugins: [heartTables] });
+    sups.push({ stopAll: () => store.close() } as unknown as Supervisor);
+    const rows = store.plugin(heartTables).people;
+    rows.edit(
+      "person-1",
+      { impression: "有點在意他" },
+      { now: Date.parse("2026-11-02T11:30:00Z") },
+    );
+    rows.edit("person-9", { impression: "不太熟" }, { now: Date.parse("2026-11-01T11:30:00Z") });
+    rows.edit("person-7", { call_name: "沒印象的人" });
+    h.sup.services.provide("app", StoreKey, store);
     h.sup.services.provide("self", SelfStateKey, fakeSelf);
-    h.sup.services.provide("social", SocialKey, fakeSocial);
-    const self = await h.client.self();
+    h.sup.services.provide("heart", PeopleDirectoryKey, fakeSocial);
+    const self = await h.adm.self();
     expect(self).toEqual({
       ...SNAPSHOT,
       feelings: [
-        { ...FEELINGS[0], display_name: "Owen" },
-        { ...FEELINGS[1], display_name: null },
+        {
+          person: "person-1",
+          text: "有點在意他",
+          updated_at: "2026-11-02T11:30:00.000Z",
+          display_name: "Owen",
+        },
+        {
+          person: "person-9",
+          text: "不太熟",
+          updated_at: "2026-11-01T11:30:00.000Z",
+          display_name: null,
+        },
       ],
     });
   });
@@ -170,7 +187,7 @@ describe("inner routes", () => {
     };
     sinks.register(sink);
     h.sup.services.provide("kernel", PlatformSinksKey, sinks);
-    const world = await h.client.world();
+    const world = await h.adm.world();
     expect(world.people).toEqual(WORLD.people);
     expect(world.channels).toEqual([{ ...WORLD.channels[0], label: "Miyoria / 雜談" }]);
     expect(world.time.part_of_day).toBe("晚上");

@@ -6,7 +6,7 @@
 
 import { Download } from "lucide-react";
 import { forwardRef, useRef, useState } from "react";
-import type { FortuneField, IssuedFortune } from "@/api/types";
+import type { FortuneField, IssuedFortune } from "@miyoria/contracts/api";
 import { Button } from "@/components/ui/button";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";

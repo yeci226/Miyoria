@@ -1,0 +1,1609 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "@miyoria/contracts/workers",
+  "$defs": {
+    "WorkersAsrHealth": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "device": {
+          "type": "string"
+        },
+        "backend": {
+          "type": "string"
+        },
+        "offloaded": {
+          "type": "boolean"
+        },
+        "loading": {
+          "type": "boolean"
+        },
+        "released_mb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "since": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reload_at": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vram_allocated_mb": {
+          "type": "number"
+        },
+        "device_total_mb": {
+          "type": "number"
+        },
+        "device_used_mb": {
+          "type": "number"
+        },
+        "device_free_mb": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "status",
+        "offloaded",
+        "loading",
+        "released_mb"
+      ]
+    },
+    "WorkersAsrReply": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "language": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "emotion": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audio_events": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "duration_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "WorkersBusy": {
+      "type": "object",
+      "properties": {
+        "busy": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "busy"
+      ]
+    },
+    "WorkersError": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error"
+      ]
+    },
+    "WorkersHealth": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "WorkersLyricsHealth": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "WorkersLyricsHints": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "raw_title": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "artist": {
+          "type": "string"
+        },
+        "uploader": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "track": {
+          "type": "string"
+        },
+        "meta_artist": {
+          "type": "string"
+        },
+        "alt_title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "duration": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "WorkersLyricsReply": {
+      "type": "object",
+      "properties": {
+        "found": {
+          "type": "boolean"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersLyricsResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "found",
+        "result"
+      ]
+    },
+    "WorkersLyricsResult": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "synced": {
+          "type": "boolean"
+        },
+        "lrc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plain": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "track": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artist": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "how": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "matched": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "duration_s": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "query",
+            "duration_s"
+          ]
+        },
+        "checks": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        },
+        "tried": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "synced",
+        "lrc",
+        "plain",
+        "track",
+        "artist",
+        "how",
+        "confidence",
+        "matched",
+        "checks",
+        "tried",
+        "llm"
+      ]
+    },
+    "WorkersOffloadReply": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "offloaded",
+            "reloading"
+          ]
+        },
+        "offload_ms": {
+          "type": "number"
+        },
+        "already": {
+          "type": "boolean"
+        },
+        "cancelled_reload": {
+          "type": "boolean"
+        },
+        "drained": {
+          "type": "boolean"
+        },
+        "vram_before_mb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vram_after_mb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "device_used_before_mb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "device_used_after_mb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "released_mb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "since": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reload_at": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "offload_ms"
+      ]
+    },
+    "WorkersOffloadRequest": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_s": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "WorkersReloadReply": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "offloaded"
+          ]
+        },
+        "reload_ms": {
+          "type": "number"
+        },
+        "already": {
+          "type": "boolean"
+        },
+        "cancelled": {
+          "type": "boolean"
+        },
+        "vram_mb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "device_total_mb": {
+          "type": "number"
+        },
+        "device_used_mb": {
+          "type": "number"
+        },
+        "device_free_mb": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    "WorkersSingBacking": {
+      "type": "string",
+      "enum": [
+        "keep",
+        "drop",
+        "convert",
+        "acapella"
+      ]
+    },
+    "WorkersSingGpuContext": {
+      "type": "object",
+      "properties": {
+        "in_voice": {
+          "default": false,
+          "type": "boolean"
+        },
+        "listeners": {
+          "default": 0,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "live": {
+          "default": false,
+          "type": "boolean"
+        },
+        "urgent": {
+          "default": [],
+          "maxItems": 200,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "WorkersSingGpuStatus": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "default": "auto",
+          "type": "string"
+        },
+        "stage": {
+          "default": "",
+          "type": "string"
+        },
+        "mode": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "code": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "free_mb": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "total_mb": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "need_mb": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "step_s": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "baseline_s": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "spilling": {
+          "default": false,
+          "type": "boolean"
+        },
+        "spills": {
+          "default": 0,
+          "type": "number"
+        },
+        "waited_s": {
+          "default": 0,
+          "type": "number"
+        },
+        "silenced_s": {
+          "default": 0,
+          "type": "number"
+        },
+        "silence_est_s": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "silence_max_s": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "policy",
+        "stage",
+        "mode",
+        "code",
+        "reason",
+        "free_mb",
+        "total_mb",
+        "need_mb",
+        "step_s",
+        "baseline_s",
+        "spilling",
+        "spills",
+        "waited_s",
+        "silenced_s",
+        "silence_est_s",
+        "silence_max_s"
+      ]
+    },
+    "WorkersSingHealth": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "device": {
+          "type": "string"
+        },
+        "backend": {
+          "type": "string"
+        },
+        "busy": {
+          "type": "boolean"
+        },
+        "queued": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "vram_allocated_mb": {
+          "type": "number"
+        },
+        "gpu": {
+          "type": "object",
+          "properties": {
+            "policy": {
+              "type": "string"
+            },
+            "policy_source": {
+              "type": "string"
+            },
+            "cuda": {
+              "type": "boolean"
+            },
+            "total_mb": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "free_mb": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "headroom_mb": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "audience": {
+              "type": "object",
+              "properties": {
+                "in_voice": {
+                  "type": "boolean"
+                },
+                "listeners": {
+                  "type": "number"
+                },
+                "live": {
+                  "type": "boolean"
+                },
+                "age_s": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "fresh": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "in_voice",
+                "listeners",
+                "live",
+                "age_s",
+                "fresh"
+              ]
+            },
+            "learned": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "job": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkersSingGpuStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "policy",
+            "cuda",
+            "total_mb",
+            "free_mb",
+            "audience",
+            "learned",
+            "job"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "WorkersSingJob": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "done",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "stage": {
+          "default": "",
+          "type": "string"
+        },
+        "progress": {
+          "default": 0,
+          "type": "number"
+        },
+        "error": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "song_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cached": {
+          "default": false,
+          "type": "boolean"
+        },
+        "position": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "default": "",
+                  "type": "string"
+                },
+                "artist": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "title",
+                "artist"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "song": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersSingSongMeta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exclusive": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "waiting",
+                "offloading",
+                "active",
+                "reloading",
+                "done",
+                "shared"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gpu": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersSingGpuStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "stage",
+        "progress",
+        "error",
+        "song_id",
+        "cached",
+        "position",
+        "source",
+        "song",
+        "exclusive",
+        "gpu"
+      ]
+    },
+    "WorkersSingJobReply": {
+      "type": "object",
+      "properties": {
+        "job": {
+          "$ref": "#/$defs/WorkersSingJob"
+        }
+      },
+      "required": [
+        "job"
+      ]
+    },
+    "WorkersSingJobRequest": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 300
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artist": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 120
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pitch": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -24,
+              "maximum": 24
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "default": 0,
+          "type": "integer",
+          "minimum": -12,
+          "maximum": 12
+        },
+        "backing": {
+          "default": "keep",
+          "$ref": "#/$defs/WorkersSingBacking"
+        },
+        "force": {
+          "default": false,
+          "type": "boolean"
+        },
+        "exclusive_ack": {
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "WorkersSingJobsReply": {
+      "type": "object",
+      "properties": {
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersSingJob"
+          }
+        }
+      },
+      "required": [
+        "jobs"
+      ]
+    },
+    "WorkersSingLibrary": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersSingLibraryEntry"
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ]
+    },
+    "WorkersSingLibraryEntry": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "artist": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "split": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "title",
+        "artist",
+        "split"
+      ]
+    },
+    "WorkersSingLyricLine": {
+      "type": "object",
+      "properties": {
+        "t": {
+          "type": "number"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "t",
+        "text"
+      ]
+    },
+    "WorkersSingLyricsReply": {
+      "type": "object",
+      "properties": {
+        "found": {
+          "type": "boolean"
+        },
+        "previous": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "track": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "provider",
+            "track"
+          ]
+        },
+        "kept": {
+          "type": "boolean"
+        },
+        "lyrics": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "found"
+      ]
+    },
+    "WorkersSingLyricsRequest": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artist": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fresh": {
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "WorkersSingOk": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    },
+    "WorkersSingPruneRequest": {
+      "type": "object",
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "WorkersSingSongMeta": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "type": "string"
+        },
+        "artist": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_s": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "lyrics": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "synced": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "lines": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/WorkersSingLyricLine"
+                  }
+                }
+              },
+              "required": [
+                "synced",
+                "lines"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "play": {
+          "type": "object",
+          "properties": {
+            "sample_rate": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "samples": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "sample_rate",
+            "samples"
+          ]
+        },
+        "pitch": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        },
+        "timings": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "peak_vram_mb": {
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "has_video": {
+          "default": false,
+          "type": "boolean"
+        },
+        "video": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "file": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backing": {
+          "type": "string"
+        },
+        "beats": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "bpm": {
+                  "type": "number"
+                },
+                "times": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  }
+                }
+              },
+              "required": [
+                "bpm",
+                "times"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "artist",
+        "duration_s",
+        "lyrics",
+        "play",
+        "pitch",
+        "timings",
+        "peak_vram_mb",
+        "has_video",
+        "video"
+      ]
+    },
+    "WorkersSingSongReply": {
+      "type": "object",
+      "properties": {
+        "song": {
+          "$ref": "#/$defs/WorkersSingSongMeta"
+        }
+      },
+      "required": [
+        "song"
+      ]
+    },
+    "WorkersSingSongsReply": {
+      "type": "object",
+      "properties": {
+        "songs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersSingSongMeta"
+          }
+        }
+      },
+      "required": [
+        "songs"
+      ]
+    },
+    "WorkersTtsHealth": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "offloaded": {
+          "type": "boolean"
+        },
+        "model": {
+          "type": "string"
+        },
+        "device": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "backend": {
+          "type": "string"
+        },
+        "sample_rate": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "streaming": {
+          "type": "boolean"
+        },
+        "chunk_size": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stream_probe": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "voices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "instruct_supported": {
+          "type": "boolean"
+        },
+        "clone_mode": {
+          "type": "string"
+        },
+        "voice_bank": {
+          "type": "boolean"
+        },
+        "released_mb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "engine_pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "loading": {
+          "type": "boolean"
+        },
+        "since": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reload_at": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "vram_allocated_mb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "device_total_mb": {
+          "type": "number"
+        },
+        "device_used_mb": {
+          "type": "number"
+        },
+        "device_free_mb": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "status",
+        "offloaded"
+      ]
+    },
+    "WorkersTtsOffloadRequest": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_s": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "drain_s": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "WorkersTtsRequest": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "emotion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instruct": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "voice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "WorkersTtsVoice": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "ref_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "x_vector_only": {
+          "type": "boolean"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "ref_text",
+        "x_vector_only",
+        "references"
+      ]
+    },
+    "WorkersTtsVoices": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clone_mode": {
+          "type": "string"
+        },
+        "voice_bank": {
+          "type": "boolean"
+        },
+        "voices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersTtsVoice"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "default",
+        "clone_mode",
+        "voice_bank",
+        "voices"
+      ]
+    },
+    "WorkersTurnHealth": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "smart_turn": {
+          "type": "boolean"
+        },
+        "silero": {
+          "type": "boolean"
+        },
+        "threshold": {
+          "type": "number"
+        },
+        "errors": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "status",
+        "smart_turn",
+        "silero",
+        "threshold",
+        "errors"
+      ]
+    },
+    "WorkersTurnReply": {
+      "type": "object",
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "probability": {
+          "type": "number"
+        },
+        "inference_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "complete",
+        "probability"
+      ]
+    }
+  }
+}

@@ -1,6 +1,6 @@
 // `attention_key` (docs/design/v3-architecture.md §6, §8): the content key of a thing that
 // happened, so saying it again in other words is still the same thing. V2's narration stop-gap
-// (`@miyoria/game` narration.ts, `Impulse.attention`) and the V3 fact layer use the same keys,
+// (`@miyoria/play/game` narration.ts, `Impulse.attention`) and the V3 fact layer use the same keys,
 // which is what lets a later phase replace the one with the other.
 
 import { isJsonObject, type JsonObject, type JsonValue } from "./json.js";

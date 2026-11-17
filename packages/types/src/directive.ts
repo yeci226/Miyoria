@@ -11,6 +11,7 @@
 // The authority of a rule comes from the account that made it, resolved by the service. Nothing
 // here takes an authority from a caller, and no text of a message ever reaches that decision.
 
+import type { DirectiveChangedData } from "@miyoria/contracts/events";
 import type { Principal } from "./actuator.js";
 import type { Subject } from "./auth.js";
 import type { Handle } from "./handle.js";
@@ -32,10 +33,6 @@ export function isDirectiveEffect(value: unknown): value is DirectiveEffect {
 export const DIRECTIVE_AUTHORITIES = ["owner", "moderator", "system", "viewer"] as const;
 
 export type DirectiveAuthority = (typeof DIRECTIVE_AUTHORITIES)[number];
-
-export function isDirectiveAuthority(value: unknown): value is DirectiveAuthority {
-  return typeof value === "string" && (DIRECTIVE_AUTHORITIES as readonly string[]).includes(value);
-}
 
 /** What a rule applies to. Every field narrows it; a field left out does not. */
 export interface DirectiveScope {
@@ -186,17 +183,5 @@ export interface Directives {
 
 export const DirectivesKey = serviceKey<Directives>("Directives");
 
-/** Bus topic: a rule was added or removed (`DirectiveChangedBody`). */
-export const DIRECTIVE_CHANGED_TOPIC = "directive.changed";
-
-/** The `body` of a `directive` log line, and the payload of `DIRECTIVE_CHANGED_TOPIC`. */
-export interface DirectiveChangedBody {
-  op: "add" | "remove" | "refused" | "proposal_dropped";
-  /** What the panel shows. */
-  text: string;
-  directive: Directive | null;
-  /** Who did it (`discord:1`, a panel actor, `directive` for what the rules themselves did). */
-  by: string;
-  /** `proposal_dropped`: which one. */
-  proposal?: string;
-}
+/** The `body` of a `directive` log line, and the payload of `Events.DirectiveChanged`. */
+export type DirectiveChangedBody = DirectiveChangedData;

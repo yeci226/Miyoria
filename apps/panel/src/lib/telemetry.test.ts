@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { TelemetryPoint, Thought } from "@/api/types";
+import type { Thought } from "@/api/types";
+import type { TelemetryPoint } from "@miyoria/contracts/api";
 import { extent, niceMax, ticks } from "@/components/charts/scale";
 import { bucketize, quantile, thoughtColumns, thoughtOutcome } from "./telemetry";
 
@@ -22,7 +23,6 @@ function point(min: number, calls: number, firstToken: { count: number; buckets:
       errors: 0,
       first_token: { count: firstToken.count, sum_s: 0, buckets: firstToken.buckets.map(([le_s, count]) => ({ le_s, count })) },
     },
-    mind: null,
     voice_sessions: 0,
     speaking: false,
     events,

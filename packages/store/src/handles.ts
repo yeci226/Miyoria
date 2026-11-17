@@ -3,12 +3,13 @@
 // account had when it was first seen, kept here so it never changes between calls; only a
 // second person with the same name gets a suffix (`Owen`, `Owen#2`).
 //
-// The table lives in `SettingsStore` under the node-wide settings profile (one row per
+// This table lives in `SettingsStore` under the node-wide settings profile (one row per
 // account, key `handle:<platform>:<id>`), is read into memory at start and answers
 // synchronously; new rows are written in the background. It is shared by every profile, like
-// the people it names.
+// the people it names. The SQLite store keeps handles in `persons.handle` instead
+// (`identity/adapters.ts`); this one stays for other settings stores and in-memory fallbacks.
 
-import { errorMessage, getLogger, SerialQueue } from "@miyoria/kernel";
+import { errorMessage, getLogger, SerialQueue } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
   accountRefString,
@@ -57,11 +58,20 @@ function parseEntry(value: JsonValue): HandleEntry | null {
 
 const lower = (handle: Handle) => handle.toLowerCase();
 
+/** The handle directory as core uses it: the `HandleDirectory` service plus two start-up calls. */
+export interface PersonHandleDirectory extends HandleDirectory {
+  /** The handle of a known person (assigned if none of their accounts has one yet). */
+  ensurePerson(person: Person): Handle;
+  /** Gives every known person a handle; run once at start. */
+  syncPeople(people: readonly Person[]): void;
+}
+
 /**
  * `HandleDirectory` backed by `SettingsStore` (or by nothing: `settings` null keeps the table
- * in memory only, for tests and as the fallback of modules that find no shared directory).
+ * in memory only, for tests and as the fallback of modules that find no shared directory). The
+ * SQLite store has its own over the `identity` tables (`SqliteStore.handles`).
  */
-export class StoredHandleDirectory implements HandleDirectory {
+export class StoredHandleDirectory implements PersonHandleDirectory {
   readonly #settings: SettingsStore | null;
   readonly #clock: Clock;
   readonly #entries: HandleEntry[] = [];

@@ -1,6 +1,6 @@
 import { ListX, Music, Play, Plus, SkipForward } from "lucide-react";
 import { useId, useState } from "react";
-import type { SongView } from "@/api/types";
+import type { SongView } from "@miyoria/contracts/api";
 import { useSongMutations, useSongs } from "@/app/queries";
 import { READ_ONLY_HINT, useCanWrite } from "@/app/session";
 import { ConfirmDialog } from "@/components/confirm";

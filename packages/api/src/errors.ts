@@ -1,6 +1,10 @@
 import { STATUS_CODES } from "node:http";
-import { errorMessage } from "@miyoria/kernel";
-import type { ErrorBody } from "./types.js";
+import { errorMessage } from "@miyoria/runtime/kernel";
+
+/** Every error response: `{ "error": "..." }`. */
+export interface ErrorBody {
+  error: string;
+}
 
 /**
  * The message of the fallback for unknown `/api/*` routes; the panel shows "not provided by
@@ -15,6 +19,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** Extra response headers (`retry-after`, `cache-control`). */
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
   }
@@ -31,6 +37,14 @@ export class ApiError extends Error {
     return new ApiError(409, message);
   }
 
+  /** `429` with how long to wait, never cached. */
+  static tooMany(waitMs: number): ApiError {
+    return new ApiError(429, "too many requests", {
+      "cache-control": "no-store",
+      "retry-after": String(Math.max(Math.ceil(waitMs / 1000), 1)),
+    });
+  }
+
   static unavailable(message: string): ApiError {
     return new ApiError(503, message);
   }
@@ -45,7 +59,7 @@ export class ApiError extends Error {
   }
 
   toResponse(): Response {
-    const headers = new Headers({ "content-type": "application/json" });
+    const headers = new Headers({ "content-type": "application/json", ...this.headers });
     if (this.status === 401) headers.set("www-authenticate", "Bearer");
     const body: ErrorBody = { error: this.message };
     return new Response(JSON.stringify(body), { status: this.status, headers });

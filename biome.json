@@ -19,7 +19,8 @@
       "!spikes",
       "!profiles",
       "!extensions/minecraft/mod",
-      "!packages/eval/fixtures",
+      "!tools/eval/fixtures",
+      "!packages/contracts/schema",
       "!**/dist",
       "!**/coverage"
     ]

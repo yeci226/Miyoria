@@ -13,7 +13,7 @@ import {
   Permissions,
   registerMenus,
 } from "@miyoria/commands";
-import { ServiceRegistry } from "@miyoria/kernel";
+import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import { type MessageActionRequest, MessageActionsKey } from "@miyoria/types";
 import { ApplicationCommandType, ComponentType, MessageFlags } from "discord.js";
 import { describe, expect, test } from "vitest";

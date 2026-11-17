@@ -12,50 +12,45 @@
 // * Deals (deals.ts) are someone's promise of a snack for a task; payment is read off this ledger.
 // * Spends of this process take turns, so two clicks cannot both pass a check meant for one.
 
-import { ActuatorRegistryKey } from "@miyoria/actions";
-import { errorMessage, type Logger, SerialQueue, type ServiceLookup } from "@miyoria/kernel";
-import { SingerKey } from "@miyoria/sing";
+import { ActuatorRegistryKey } from "@miyoria/gate/actions";
 import {
-  AuditLogKey,
-  type CoinCap,
-  type CoinEntry,
-  type CoinLedgerStore,
-  CoinLedgerStoreKey,
-  type CoinRule,
-  type Goal,
-  type GoalFulfiller,
-  PeopleStoreKey,
-  type Person,
-} from "@miyoria/store";
+  errorMessage,
+  type Logger,
+  SerialQueue,
+  type ServiceLookup,
+} from "@miyoria/runtime/kernel";
+import { SingerKey } from "@miyoria/sing";
+import { AuditLogKey, PeopleStoreKey, type Person } from "@miyoria/store";
 import {
   type AccountRef,
-  AffectStateKey,
+  type AnyEventDefinition,
   AuthorizerKey,
   accountRefString,
   type Clock,
   type ContextKey,
-  customEvent,
-  type Event,
   EventLogKey,
+  type EventPayload,
+  Events,
   HandleDirectoryKey,
+  type HeartEvidenceInput,
+  HeartKey,
   holdsBack,
   inspectInput,
   type JsonValue,
   ModerationKey,
-  NOTICE_TOPIC,
   newId,
   type PersonId,
   Principals,
   type ProfileId,
+  type Publish,
+  type PublishMetaArgs,
   RelationshipEffectsKey,
   SelfStateKey,
-  SOCIAL_EVENT_TOPIC,
   SocialSignalsKey,
   safeName,
   sameAccount,
   type Timestamp,
   toTimestamp,
-  v2Event,
 } from "@miyoria/types";
 import { setBoard, sponsorBoard } from "./board.js";
 import { BountyBoard } from "./bounties.js";
@@ -64,6 +59,15 @@ import { DealDesk } from "./deals.js";
 import { type EconomyDocStore, EconomyDocsKey, MemoryDocs } from "./docs.js";
 import { GoalDesk } from "./goals.js";
 import { Purse } from "./purse.js";
+import {
+  type CoinCap,
+  type CoinEntry,
+  type CoinLedgerStore,
+  CoinLedgerStoreKey,
+  type CoinRule,
+  type Goal,
+  type GoalFulfiller,
+} from "./records.js";
 import { MAX_SCREEN_CHARS, screenEvent, screenText, screenWait, waitMinutes } from "./screen.js";
 import { otherName, sendCoins } from "./transfer.js";
 import {
@@ -80,7 +84,6 @@ import {
   type FeedResult,
   type FramesResult,
   GIFT_EXPRESSIONS,
-  GIFT_TOPIC,
   type GiftEvent,
   type GiftExpression,
   type GiftItem,
@@ -94,7 +97,6 @@ import {
   type PledgeResult,
   type Purchase,
   type ReachedGoalView,
-  SCREEN_TOPIC,
   type ShopItem,
   type SpendResult,
   type TransferResult,
@@ -219,6 +221,22 @@ export function streakOf(days: ReadonlySet<number>, today: number): number {
 const CONTROL = /[\u0000-\u001f\u007f]/g;
 
 /** A display name for the overlay: one line, at most 32 characters. */
+/**
+ * Something that happened between her and someone, for her nightly reflection on them
+ * (`HeartKey.evidence`); nothing when the heart does not run. Never throws.
+ */
+export function heartEvidence(
+  services: ServiceLookup,
+  log: Pick<Logger, "warn">,
+  input: HeartEvidenceInput,
+): void {
+  try {
+    services.get(HeartKey)?.evidence?.(input);
+  } catch (error) {
+    log.warn({ err: errorMessage(error), kind: input.kind }, "cannot record evidence");
+  }
+}
+
 function plainName(name: string): string {
   const flat = name.replace(CONTROL, " ").replace(/\s+/g, " ").trim();
   const cut = [...flat].slice(0, 32).join("");
@@ -246,10 +264,29 @@ export interface Spent {
 export interface Member {
   account: AccountRef;
   person: Person;
+  /** Their wallet in the ledger: the person (`records.ts`). */
+  wallet: PersonId;
   /** Every account of the person, `account` included. */
-  wallet: AccountRef[];
+  accounts: AccountRef[];
   /** The display name of `account` (untrusted). */
   name: string;
+}
+
+/**
+ * `account` as a member of `person` (the person identity resolved it to): the wallet is the
+ * person, the accounts every account of theirs.
+ */
+export function memberOf(account: AccountRef, person: Person): Member {
+  const accounts = person.accounts.map((a) => a.account);
+  if (!accounts.some((a) => sameAccount(a, account))) accounts.push(account);
+  const own = person.accounts.find((a) => sameAccount(a.account, account));
+  return {
+    account,
+    person,
+    wallet: person.id,
+    accounts,
+    name: own?.display_name ?? person.display_name,
+  };
 }
 
 export interface EconomyDeps {
@@ -257,7 +294,7 @@ export interface EconomyDeps {
   services: ServiceLookup;
   profile: ProfileId;
   clock: Clock;
-  publish: (event: Event) => void;
+  publish: Publish;
   log: Logger;
   /** A number in [0, 1) for draws; `Math.random` unless a test pins it. */
   random?: () => number;
@@ -347,14 +384,13 @@ export class EconomyService implements Economy {
     if (amount <= 0) return { status: "capped", entry: null, paid: 0 };
     const caps: CoinCap[] = [
       {
-        accounts: who.wallet,
+        wallet: who.wallet,
         reasons: cap.reasons,
         since: this.#dayStart(this.#today()),
         limit: cap.limit,
       },
     ];
     const post = await this.#ledger().post(this.#entry(who, amount, reason, ref, key), {
-      wallet: who.wallet,
       caps,
       partial,
     });
@@ -401,8 +437,13 @@ export class EconomyService implements Economy {
     return this.#dayStart(this.#today());
   }
 
-  publish(event: Event): void {
-    this.#d.publish(event);
+  /** Publishes on the bus as the economy module. */
+  publish<D extends AnyEventDefinition>(
+    definition: D,
+    data: EventPayload<D>,
+    ...meta: PublishMetaArgs<D>
+  ): void {
+    this.#d.publish(definition, data, ...meta);
   }
 
   /** Runs `fn` in turn with every other spend of this process. */
@@ -512,15 +553,12 @@ export class EconomyService implements Economy {
     if (!people) return null;
     const person = await people.personByAccount(account);
     if (!person) return null;
+    // Whether she blocked them: their heart row (`SocialSignalsKey`, by account or by person).
     const social = s.get(SocialSignalsKey);
-    const affect = s.get(AffectStateKey);
     const authorizer = s.get(AuthorizerKey);
-    if ((!social && !affect) || !authorizer?.allows(account, WALLET_NODE)) return null;
-    if (social?.attitude(account)?.blocked || affect?.card(person.id)?.blocked) return null;
-    const wallet = person.accounts.map((a) => a.account);
-    if (!wallet.some((a) => sameAccount(a, account))) wallet.push(account);
-    const own = person.accounts.find((a) => sameAccount(a.account, account));
-    return { account, person, wallet, name: own?.display_name ?? person.display_name };
+    if (!social || !authorizer?.allows(account, WALLET_NODE)) return null;
+    if (social.attitude(account)?.blocked || social.attitudeOf?.(person.id)?.blocked) return null;
+    return memberOf(account, person);
   }
 
   async #known(account: AccountRef): Promise<Member> {
@@ -556,8 +594,7 @@ export class EconomyService implements Economy {
   ): CoinEntry {
     return {
       id: newId(),
-      profile: this.#d.profile,
-      account: who.account,
+      person: who.wallet,
       delta,
       reason,
       ref,
@@ -610,14 +647,13 @@ export class EconomyService implements Economy {
     if (!who) return null;
     const since = this.#dayStart(this.#today());
     const cap: CoinCap = {
-      accounts: who.wallet,
+      wallet: who.wallet,
       reasons: [reason],
       since,
       limit: this.#cap(reason, false),
     };
     const post = await this.#turns.run(() =>
       this.#ledger().post(this.#entry(who, amount, reason, ref, key), {
-        wallet: who.wallet,
         caps: [cap],
         partial: true,
       }),
@@ -937,7 +973,7 @@ export class EconomyService implements Economy {
           streak % 7 === 0 ? `streak:${streak}` : null,
           `checkin:${day}`,
         ),
-        { wallet: who.wallet },
+        {},
       );
       if (post.status !== "posted") throw new EconomyError(409, ALREADY_CHECKED_IN);
       return { gained, streak, balance: post.balance };
@@ -961,11 +997,10 @@ export class EconomyService implements Economy {
     const c = this.#d.config;
     const since = this.#dayStart(this.#today());
     const rule: CoinRule = {
-      wallet: who.wallet,
       partial: true,
       caps: [
-        { accounts: who.wallet, reasons: ["her_gift"], since, limit: c.her_gift_per_person },
-        { accounts: null, reasons: ["her_gift"], since, limit: c.her_gift_total },
+        { wallet: who.wallet, reasons: ["her_gift"], since, limit: c.her_gift_per_person },
+        { wallet: null, reasons: ["her_gift"], since, limit: c.her_gift_total },
       ],
     };
     const ref = [...reason.trim()].slice(0, 100).join("") || null;
@@ -987,7 +1022,6 @@ export class EconomyService implements Economy {
     key: string,
   ): Promise<Spent> {
     const post = await this.#ledger().post(this.#entry(who, -price, reason, ref, key), {
-      wallet: who.wallet,
       covered: true,
     });
     if (post.status === "short") throw new EconomyError(402, `${this.#d.config.currency}不夠`);
@@ -1009,7 +1043,7 @@ export class EconomyService implements Economy {
   async #refund(who: Member, entry: CoinEntry): Promise<number> {
     const post = await this.#ledger().post(
       this.#entry(who, -entry.delta, "refund", entry.id, `refund:${entry.id}`),
-      { wallet: who.wallet },
+      {},
     );
     // What she was given of it goes back too.
     await this.purse.claw(entry);
@@ -1130,7 +1164,6 @@ export class EconomyService implements Economy {
       const first = await this.#first(who, idem);
       if (first) return { entry_id: first.entry.id, balance: first.balance, duplicate: true };
       const post = await this.#ledger().post(this.#entry(who, amount, "admin_adjust", text, idem), {
-        wallet: who.wallet,
         covered: amount < 0,
       });
       if (post.status === "short") {
@@ -1161,10 +1194,7 @@ export class EconomyService implements Economy {
     const people = this.#d.services.get(PeopleStoreKey);
     const person = people ? await people.personByAccount(account) : null;
     if (!person) throw new EconomyError(403, STRANGER);
-    const wallet = person.accounts.map((a) => a.account);
-    if (!wallet.some((a) => sameAccount(a, account))) wallet.push(account);
-    const own = person.accounts.find((a) => sameAccount(a.account, account));
-    return { account, person, wallet, name: own?.display_name ?? person.display_name };
+    return memberOf(account, person);
   }
 
   async refund(account: AccountRef, entryId: string): Promise<boolean> {
@@ -1251,7 +1281,7 @@ export class EconomyService implements Economy {
     if (!("entry" in spent)) return spent;
     if (spent.fresh) {
       const name = plainName(who.name);
-      this.#d.publish(customEvent(SCREEN_TOPIC, screenEvent(name, body) as unknown as JsonValue));
+      this.#d.publish(Events.EconomyScreen, screenEvent(name, body));
       // Silent, like a letter: she may read it out when free, and a song is not interrupted.
       this.#perceive(who, spent.entry, `${safeName(who.name)}把一則留言放上了大螢幕:「${body}」`);
       this.#audit(who, "economy.screen_message", { charged: price, chars: [...body].length });
@@ -1371,7 +1401,7 @@ export class EconomyService implements Economy {
         }
         await this.#ledger().selectFrame(
           this.#d.profile,
-          who.account,
+          who.wallet,
           req.select,
           toTimestamp(this.#d.clock.now()),
         );
@@ -1416,8 +1446,15 @@ export class EconomyService implements Economy {
       context: null,
       hunger: 0,
     };
-    this.#d.publish(customEvent(SOCIAL_EVENT_TOPIC, payload));
+    this.#d.publish(Events.SocialEvent, payload as EventPayload<typeof Events.SocialEvent>);
     await this.#bond(who);
+    heartEvidence(this.#d.services, this.#d.log, {
+      person: who.person.id,
+      kind: "gift",
+      detail: `送了你${label}`,
+      weight: Math.abs(entry.delta),
+      at: this.#d.clock.now(),
+    });
     this.#perceive(who, entry, `${safeName(who.name)}送了你${label}`);
     this.#announce(who, item ?? "expression", count, label);
   }
@@ -1450,7 +1487,7 @@ export class EconomyService implements Economy {
 
   #announce(who: Member, item: GiftItem, count: number, label: string): void {
     const gift: GiftEvent = { name: plainName(who.name), item, count, label };
-    this.#d.publish(customEvent(GIFT_TOPIC, gift as unknown as JsonValue));
+    this.#d.publish(Events.EconomyGift, gift);
   }
 
   /** Something she knows from now on, silently (her working context, as data). */
@@ -1511,20 +1548,18 @@ export class EconomyService implements Economy {
     const summary = `${safeName(who.name)}寫了一封信給你:「${text}」`;
     if (this.#perceive(who, entry, summary)) return;
     const now = this.#d.clock.now();
-    this.#d.publish(
-      v2Event(NOTICE_TOPIC, {
-        id: newId(),
-        at: toTimestamp(now),
-        source: "economy",
-        task: null,
-        turn: null,
-        context: null,
-        ok: true,
-        code: null,
-        text: summary,
-        expires_at: toTimestamp(now + LETTER_TTL_MS),
-      }),
-    );
+    this.#d.publish(Events.AgentNotice, {
+      id: newId(),
+      at: toTimestamp(now),
+      source: "economy",
+      task: null,
+      turn: null,
+      context: null,
+      ok: true,
+      code: null,
+      text: summary,
+      expires_at: toTimestamp(now + LETTER_TTL_MS),
+    });
   }
 
   #handle(person: PersonId): string | null {

@@ -1,7 +1,7 @@
 // `/api/directives`: the panel says who is asking, and the rules decide what that person may do.
 
-import { DirectiveService } from "@miyoria/directive";
-import { ServiceRegistry, Supervisor, SupervisorKey } from "@miyoria/kernel";
+import { DirectiveService, directiveTables } from "@miyoria/brain/directive";
+import { ServiceRegistry, Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
 import { openStore, type Store } from "@miyoria/store";
 import {
   type AccountRef,
@@ -12,8 +12,9 @@ import {
   type Subject,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
-import { directiveRoutes } from "../src/directives.js";
+import { directivesRpc } from "../src/directives.js";
 import { ActiveProfileKey, ApiModule } from "../src/index.js";
+import { tableRoutes } from "../src/rpc.js";
 import type { ApiContext, ApiState } from "../src/state.js";
 import { raw } from "./support/http.js";
 
@@ -41,7 +42,11 @@ async function rules(services: ServiceRegistry) {
   const store = await openStore("memory://");
   stores.push(store);
   services.provide("test", AuthorizerKey, new Roles());
-  const service = new DirectiveService({ services, store: store.directives, profile: "p" });
+  const service = new DirectiveService({
+    services,
+    store: store.plugin(directiveTables),
+    profile: "p",
+  });
   await service.refresh();
   services.provide("kernel", DirectivesKey, service);
   return service;
@@ -65,22 +70,27 @@ async function harness() {
 
 /** A request of a panel session, for the routes that look at the account. */
 function session(account: AccountRef, body: unknown, id = ""): ApiContext {
+  const request = id
+    ? new Request(`http://panel.test/api/directives/${id}`, { method: "DELETE" })
+    : new Request("http://panel.test/api/directives", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
   return {
     get: () => ({ kind: "session", write: true, record: { account } }),
-    req: {
-      param: () => id,
-      query: () => undefined,
-      header: () => "application/json",
-      text: async () => JSON.stringify(body),
-    },
+    req: { raw: request },
   } as unknown as ApiContext;
 }
 
 async function sessionRoutes() {
   const services = new ServiceRegistry();
   const service = await rules(services);
-  const state = { service: () => service } as unknown as ApiState;
-  const routes = directiveRoutes(state);
+  const state = {
+    service: () => service,
+    publicSide: { config: { enabled: false } },
+  } as unknown as ApiState;
+  const routes = tableRoutes(state, { directives: directivesRpc });
   const post = routes.find((r) => r.method === "POST");
   const del = routes.find((r) => r.method === "DELETE");
   if (!post || !del) throw new Error("no routes");

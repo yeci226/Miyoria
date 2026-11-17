@@ -1,3 +1,4 @@
+import type { ActionSettledData } from "@miyoria/contracts/events";
 import { type ActionId, newId, type TurnId } from "./ids.js";
 import {
   type ContextKey,
@@ -21,8 +22,6 @@ export function voiceLane(platform: string, scope: string): LaneKey {
   return `voice:${platform}:${scope}`;
 }
 
-export const AVATAR_LANE: LaneKey = "avatar";
-
 /**
  * Serialized as the snake_case name. Lower rank = more urgent (see `PRIORITY_RANK`):
  * `system` (system / admin output) > `direct` (reply to someone who addressed her) >
@@ -45,7 +44,7 @@ export function comparePriority(a: Priority, b: Priority): number {
 }
 
 /**
- * Internally tagged (`{"type": "send_message", ...}`), like the Rust serde shape.
+ * Internally tagged (`{"type": "send_message", ...}`).
  * `speak` says `text` in a voice channel (executed through `VoiceSink`); use a `voiceLane` so
  * her speech is serialized.
  * `actuate` runs a capability call the gate already approved (`ticket`, executed through
@@ -61,26 +60,11 @@ export type ActionPayload =
 
 /** Platform the payload goes to (`core` for an `actuate` without a context). */
 /**
- * Payload of `ACTION_SETTLED_TOPIC`: how a line of hers left the scheduler. `action_completed`
+ * Payload of `Events.ActionSettled`: how a line of hers left the scheduler. `action.completed`
  * says an action ended; this says which line it was, so "sent" can be told from a dropped typing
  * indicator (`error`: `expired`, `cancelled` and `coalesced` mean it never went out).
  */
-export interface ActionSettled {
-  action: ActionId;
-  turn: TurnId | null;
-  type: "send_message" | "speak";
-  context: ContextKey;
-  text: string;
-  ok: boolean;
-  error: string | null;
-  /** The message a successful `send_message` created. */
-  message: MessageRef | null;
-  /** Moderation replaced the line (the rule): what she meant did not reach anyone. */
-  blocked?: string | null;
-}
-
-/** Published next to `action_completed` for every `send_message` and `speak` action. */
-export const ACTION_SETTLED_TOPIC = "action.settled";
+export type ActionSettled = ActionSettledData;
 
 export function actionPlatform(payload: ActionPayload): string {
   if (payload.type === "react") return payload.message.context.platform;

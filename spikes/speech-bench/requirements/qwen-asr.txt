@@ -1,7 +1,0 @@
-# Qwen3-ASR (transformers backend). Install the CUDA build of torch FIRST, e.g.
-#   pip install torch --index-url https://download.pytorch.org/whl/cu128
-# otherwise pip on Windows pulls the CPU-only torch from PyPI.
-# vLLM backend (Linux / WSL2 only):  pip install -U "qwen-asr[vllm]"
-# Optional, Linux/WSL2 recommended:  pip install -U flash-attn --no-build-isolation
--r common.txt
-qwen-asr

@@ -12,6 +12,10 @@ The pipeline (``find_lyrics``):
    shaky match is spot-checked against the lead vocal by ASR when that is on. A mismatch is rejected: no
    lyrics beat wrong lyrics.
 
+When hostd runs this service (hostd_client.py), what this machine may lack comes from Core through it: the
+language model (``cluster.llm``, lyricsllm.py) and the ASR spot check (``cluster.fetch`` to the cluster's
+``asr``), unless ``SING_LYRICS_ASR_URL`` names an ASR worker explicitly.
+
 Pure Python (plus ``httpx``), so the tests run without the GPU stack; all network goes through
 ``http_json`` / ``lyricsllm.chat`` / ``asr_text``, which the tests replace.
 """
@@ -27,6 +31,17 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+try:  # workers/service_auth.py; a worker run by hand sends nothing
+    from service_auth import peer_headers
+except ImportError:
+    def peer_headers() -> dict[str, str]:  # type: ignore[misc]
+        return {}
+
+try:  # workers/hostd_client.py; a worker run by hand has no hostd
+    import hostd_client
+except ImportError:
+    hostd_client = None  # type: ignore[assignment]
 
 log = logging.getLogger("miyoria.sing.lyrics")
 
@@ -412,12 +427,65 @@ def acceptable(c: Candidate) -> bool:
 # ── ASR spot check ───────────────────────────────────────────────────────────
 
 
+# ``asr_url`` that sends the spot check through hostd to the cluster's ASR (``cluster.fetch``).
+HOSTD_ASR = "hostd:asr"
+# Where the ASR worker is when nothing says otherwise: on this machine.
+LOCAL_ASR = "http://127.0.0.1:8003"
+
+
+def _multipart(field: str, filename: str, ctype: str, data: bytes) -> tuple[bytes, str]:
+    """A ``multipart/form-data`` body with one file, and its content type."""
+    import secrets
+
+    boundary = "miyoria-" + secrets.token_hex(12)
+    head = (f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
+            f"Content-Type: {ctype}\r\n\r\n").encode()
+    return head + data + f"\r\n--{boundary}--\r\n".encode(), f"multipart/form-data; boundary={boundary}"
+
+
+def _asr_via_hostd(wav: bytes, timeout: float) -> str | None:
+    """The spot check through hostd and Core (``cluster.fetch``, capability ``asr``, ``POST /asr``)."""
+    import base64
+    import json
+
+    assert hostd_client is not None
+    body, ctype = _multipart("audio", "clip.wav", "audio/wav", wav)
+    try:
+        r = hostd_client.call("cluster.fetch", {
+            "capability": "asr", "method": "POST", "path": "/asr",
+            "headers": {"content-type": ctype}, "body": base64.b64encode(body).decode("ascii"),
+        }, timeout)
+    except Exception as e:
+        if getattr(e, "code", None) == getattr(hostd_client, "NOT_LINKED", None):
+            # hostd has no link to Core: the ASR worker of this machine, as without hostd.
+            log.info("hostd is not linked to Core; asking the local ASR worker")
+            return _asr_direct(wav, LOCAL_ASR, timeout)
+        log.info("asr spot check through hostd failed: %s", e)
+        return None
+    if not isinstance(r, dict) or r.get("status") != 200:
+        return None
+    try:
+        return str(json.loads(base64.b64decode(str(r.get("body") or ""))).get("text") or "")
+    except (ValueError, AttributeError) as e:
+        log.info("asr spot check answer unreadable: %s", e)
+        return None
+
+
 def asr_text(wav: bytes, url: str, timeout: float) -> str | None:
-    """What the ASR worker hears in a wav clip (None if it is away or offloaded). The tests replace this."""
+    """What the ASR worker hears in a wav clip (None if it is away or offloaded). The tests replace this.
+
+    ``url`` ``HOSTD_ASR``: through hostd and Core to the cluster's ASR."""
+    if url == HOSTD_ASR and hostd_client is not None:
+        return _asr_via_hostd(wav, timeout)
+    return _asr_direct(wav, url, timeout)
+
+
+def _asr_direct(wav: bytes, url: str, timeout: float) -> str | None:
     import httpx
 
     try:
-        r = httpx.post(url.rstrip("/") + "/asr", files={"audio": ("clip.wav", wav, "audio/wav")}, timeout=timeout)
+        r = httpx.post(url.rstrip("/") + "/asr", files={"audio": ("clip.wav", wav, "audio/wav")}, timeout=timeout,
+                       headers=peer_headers())
         if r.status_code != 200:
             return None
         return str(r.json().get("text") or "")
@@ -513,6 +581,7 @@ def find_lyrics(
     budget_s: float = 45.0,
     timeout: float = 8.0,
     min_confident: float = 0.72,
+    asr_wait: Callable[[], None] | None = None,
 ) -> dict[str, Any] | None:
     """The best lyrics for the video described by ``hints``, or None.
 
@@ -521,13 +590,16 @@ def find_lyrics(
     ``llm(hints, tried)`` returns the song(s) it believes the video is (called, at most twice, when the
     direct queries found nothing sure enough; ``tried`` is what already found nothing; see lyricsllm.py).
     ``asr_mode``: ``auto`` checks only matches that are not confident yet, ``1`` always, ``0`` never; it
-    needs ``audio`` (the lead vocal) and ``asr_url``.
+    needs ``audio`` (the lead vocal) and ``asr_url``. ``asr_wait`` runs before the first spot check: a lookup
+    that runs next to the conversion waits there until the ASR worker can be asked (not offloaded, not
+    competing with the conversion for the card).
     """
     deadline = time.monotonic() + budget_s
     cands: list[Candidate] = []
     done: list[Query] = []
     seen: set[tuple[str, str]] = set()
     llm_info: dict[str, Any] | None = None
+    waited = [asr_wait is None]
 
     def search_one(q: Query) -> list[Candidate]:
         new = search_lrclib(q.title, q.artist, q.how, timeout)
@@ -563,6 +635,7 @@ def find_lyrics(
 
     def settle() -> Candidate | None:
         """First acceptable candidate that has lyrics, fits the audio and survives the ASR check."""
+        nonlocal deadline
         ok = sorted((c for c in cands if acceptable(c)), key=lambda c: (bool(c.lrc), c.confidence), reverse=True)
         # a NetEase hit has its lyrics fetched only now, so look at the best few
         for c in sorted(ok, key=lambda c: c.confidence, reverse=True)[:4]:
@@ -580,6 +653,12 @@ def find_lyrics(
                 c.confidence = round(min(c.confidence, 0.7), 3)  # plain: no timing to check
             want = asr_mode == "1" or (asr_mode == "auto" and c.confidence < 0.85)
             if want and lines and audio is not None and asr_url and audio.exists():
+                if not waited[0]:
+                    waited[0] = True
+                    assert asr_wait is not None
+                    t_wait = time.monotonic()
+                    asr_wait()
+                    deadline += time.monotonic() - t_wait  # the wait is not the lookup's time
                 a = asr_spot_check(lines, audio, asr_url)
                 if a is not None:
                     c.checks["asr"] = a
@@ -633,9 +712,23 @@ def hints_of(src: Any) -> dict[str, Any]:
     return {k: v for k, v in h.items() if v}
 
 
+def default_asr_url() -> str:
+    """Where the spot check goes: ``SING_LYRICS_ASR_URL`` when set (empty: no check), else through hostd when
+    hostd runs this service, else the ASR worker on this machine."""
+    import os
+
+    if "SING_LYRICS_ASR_URL" in os.environ:
+        return os.environ["SING_LYRICS_ASR_URL"]
+    if hostd_client is not None and hostd_client.available():
+        return HOSTD_ASR
+    return LOCAL_ASR
+
+
 def search(hints: dict[str, Any], duration: float | None, *, cache_dir: Path | None = None, audio: Path | None = None,
-           asr_url: str | None = None, fresh: bool = False) -> dict[str, Any] | None:
-    """``find_lyrics`` with the worker's settings (SING_LYRICS_* env, Core's LLM); never raises."""
+           asr_url: str | None = None, fresh: bool = False,
+           asr_wait: Callable[[], None] | None = None) -> dict[str, Any] | None:
+    """``find_lyrics`` with the worker's settings (SING_LYRICS_* env, the model of lyricsllm.py, the ASR of
+    ``default_asr_url``); never raises."""
     import os
 
     try:
@@ -647,12 +740,13 @@ def search(hints: dict[str, Any], duration: float | None, *, cache_dir: Path | N
             if cfg:
                 proposer = lyricsllm.make_proposer(
                     cfg, cache_dir, timeout=float(os.environ.get("SING_LYRICS_LLM_TIMEOUT_S", "20")), fresh=fresh)
-        asr = asr_url if asr_url is not None else os.environ.get("SING_LYRICS_ASR_URL", "http://127.0.0.1:8003")
+        asr = asr_url if asr_url is not None else default_asr_url()
         return find_lyrics(
             hints, duration, llm=proposer, audio=audio, asr_url=asr or None,
             asr_mode=os.environ.get("SING_LYRICS_ASR", "auto"),
             netease=os.environ.get("SING_LYRICS_NETEASE", "1") != "0",
             budget_s=float(os.environ.get("SING_LYRICS_BUDGET_S", "45")),
+            asr_wait=asr_wait,
         )
     except Exception as e:  # lyrics are best effort
         log.warning("lyrics search failed: %s", e)

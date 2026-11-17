@@ -5,22 +5,26 @@ import type { Readable, Writable } from "node:stream";
 import { type GameAdapter, type RegisteredAdapter, registerGameAdapter } from "./game.js";
 import { RpcError, RpcPeer } from "./rpc.js";
 import { type TaskExecutor, type TaskExecutorInfoInput, TaskFailure, type TaskSteer } from "./task.js";
-import { topicMatches } from "./topics.js";
+import { definitionPattern, is, topicMatches } from "./topics.js";
 import {
+  type AnyEventDefinition,
   type ArgKind,
   type ExecutorDecl,
   type CommandReply,
   type CommandSpec,
   type Contributions,
   type Envelope,
+  type EnvelopeOf,
   ErrorCode,
   type InitializeParams,
   type InitializeResult,
   type Invocation,
   type JsonSchema,
   type Permissions,
+  PROTOCOL_VERSION,
   type PromptRequest,
   type PromptSection,
+  type PublishOptions,
   type ToolCallContext,
   type ToolDecl,
 } from "./types.js";
@@ -41,6 +45,11 @@ export interface ToolDefinition {
   parameters?: JsonSchema;
   /** Permission node the triggering user needs. */
   permission?: string;
+  /**
+   * It only looks (a lookup, a status) and changes nothing: when the model asks for several such
+   * calls in one step they run at the same time. Leave unset for anything with side effects.
+   */
+  readOnly?: boolean;
   /** Returns the text the model sees; non-strings are JSON encoded. */
   run(args: Record<string, any>, ctx: ToolCallContext): unknown;
 }
@@ -108,10 +117,25 @@ export interface ExtensionContext {
     unregister(path: string | string[]): Promise<void>;
   };
   readonly events: {
-    /** Subscribes to a topic pattern; returns an unsubscribe function. */
+    /**
+     * Subscribes to a topic pattern (`"voice.playback"`, `"game.*"`, `"*"`); returns an
+     * unsubscribe function. Only types the host granted (`[permissions] events`) arrive.
+     */
     on(pattern: string, handler: EventHandler): () => void;
-    /** Publishes a custom event (needs a granted pattern, or `ext.<id>.*`). */
-    publish(topic: string, payload?: unknown, options?: { correlation?: string }): Promise<void>;
+    /**
+     * Subscribes to one event definition (`Events.VoicePlaybackEvent`): the handler gets only
+     * its events, with `data` typed as its payload.
+     */
+    on<D extends AnyEventDefinition>(
+      definition: D,
+      handler: (envelope: EnvelopeOf<D>) => void | Promise<void>,
+    ): () => void;
+    /**
+     * Publishes one event of a registered type: `ext.<id>.<name>` (any JSON payload), or
+     * `game.<game>.<name>` for a declared game adapter. The host checks `data` against the
+     * type's schema and refuses built-in types and types nobody registered.
+     */
+    publish(type: string, data?: unknown, options?: PublishOptions): Promise<void>;
   };
   readonly prompt: {
     register(key: string, contribute: PromptContributor): Promise<void>;
@@ -175,6 +199,7 @@ export function toolDecl(tool: ToolDefinition): ToolDecl {
     description: tool.description,
     parameters,
     permission: tool.permission ?? null,
+    ...(tool.readOnly === true ? { read_only: true } : {}),
   };
 }
 
@@ -208,6 +233,25 @@ function taskError(error: unknown): RpcError {
   return new RpcError(ErrorCode.InternalError, error instanceof Error ? error.message : String(error), {
     code: "internal",
   });
+}
+
+/** Why the extension refuses a host that speaks protocol `theirs`, saying which side is older. */
+export function hostMismatch(theirs: unknown): string {
+  if (typeof theirs !== "number") {
+    return `the host did not say which extension protocol it speaks; this extension speaks ${PROTOCOL_VERSION}`;
+  }
+  const older =
+    theirs < PROTOCOL_VERSION
+      ? "the host is older: update Miyoria"
+      : "the extension is older: rebuild it against a newer @miyoria/sdk";
+  return `the host speaks extension protocol ${theirs} and this extension speaks ${PROTOCOL_VERSION}; ${older}`;
+}
+
+/** Whether a notification's `envelope` has what delivery reads (`type`, `v`). */
+function isEnvelope(value: unknown): value is Envelope {
+  if (typeof value !== "object" || value === null) return false;
+  const e = value as { type?: unknown; v?: unknown };
+  return typeof e.type === "string" && typeof e.v === "number";
 }
 
 function toText(value: unknown): string {
@@ -356,7 +400,8 @@ export class ExtensionRuntime {
 
   #onNotification(method: string, params: unknown): void {
     if (method === "event") {
-      this.#deliver(params as Envelope);
+      const envelope = (params as { envelope?: unknown } | null)?.envelope;
+      if (isEnvelope(envelope)) this.#deliver(envelope);
     } else if (method === "shutdown") {
       void this.shutdown();
     }
@@ -364,13 +409,16 @@ export class ExtensionRuntime {
 
   async #initialize(params: InitializeParams): Promise<InitializeResult> {
     if (this.#phase !== "waiting") throw new RpcError(ErrorCode.InvalidRequest, "already initialized");
+    if (params.protocol !== PROTOCOL_VERSION) {
+      throw new RpcError(ErrorCode.InvalidRequest, hostMismatch(params.protocol));
+    }
     this.#phase = "activating";
     await this.#def.activate(this.#context(params));
     this.#phase = "active";
     const contributions = this.#pending;
     this.#pending = { tools: [], commands: [], prompts: [], subscriptions: [] };
     if (contributions.executor === undefined) delete contributions.executor;
-    return { contributions };
+    return { protocol: PROTOCOL_VERSION, contributions };
   }
 
   /** Runs shutdown hooks and `deactivate`, then exits. */
@@ -395,12 +443,12 @@ export class ExtensionRuntime {
 
   #deliver(envelope: Envelope): void {
     for (const [pattern, handlers] of this.#handlers) {
-      if (!topicMatches(pattern, envelope.topic)) continue;
+      if (!topicMatches(pattern, envelope.type)) continue;
       for (const handler of handlers) {
         Promise.resolve()
           .then(() => handler(envelope))
           .catch((error: unknown) =>
-            this.#log("error", "event handler failed", { topic: envelope.topic, error: String(error) }),
+            this.#log("error", "event handler failed", { type: envelope.type, error: String(error) }),
           );
       }
     }
@@ -468,7 +516,10 @@ export class ExtensionRuntime {
         },
       },
       events: {
-        on(pattern, handler) {
+        on: ((target: string | AnyEventDefinition, handler: EventHandler) => {
+          const pattern = typeof target === "string" ? target : definitionPattern(target);
+          const run: EventHandler =
+            typeof target === "string" ? handler : (envelope) => (is(target, envelope) ? handler(envelope) : undefined);
           let set = rt.#handlers.get(pattern);
           if (!set) {
             set = new Set();
@@ -479,10 +530,10 @@ export class ExtensionRuntime {
                 rt.#log("error", "subscribe failed", { pattern, error: String(error) }),
               );
           }
-          set.add(handler);
+          set.add(run);
           return () => {
             const current = rt.#handlers.get(pattern);
-            if (!current?.delete(handler) || current.size > 0) return;
+            if (!current?.delete(run) || current.size > 0) return;
             rt.#handlers.delete(pattern);
             if (rt.#phase === "activating") {
               rt.#pending.subscriptions = rt.#pending.subscriptions.filter((p) => p !== pattern);
@@ -490,12 +541,14 @@ export class ExtensionRuntime {
               rt.peer.request("events.unsubscribe", { topics: [pattern] }).catch(() => {});
             }
           };
-        },
-        async publish(topic, payload, options) {
+        }) as ExtensionContext["events"]["on"],
+        async publish(type, data, options) {
           await rt.peer.request("events.publish", {
-            topic,
-            payload: payload ?? null,
-            ...(options?.correlation ? { correlation: options.correlation } : {}),
+            type,
+            data: data ?? null,
+            ...(options?.turn ? { turn: options.turn } : {}),
+            ...(options?.parent ? { parent: options.parent } : {}),
+            ...(options?.key ? { key: options.key } : {}),
           });
         },
       },

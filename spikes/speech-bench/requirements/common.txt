@@ -1,5 +1,0 @@
-# Shared by every venv (and enough on its own for `asr_bench.py summarize`).
-numpy>=1.26
-soundfile>=0.12
-scipy>=1.11          # resample_poly 48k -> 16k
-opencc-python-reimplemented>=0.1.7   # pure-Python OpenCC (s2tw / s2twp); no native build on Windows

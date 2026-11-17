@@ -11,8 +11,16 @@
 // until named here.
 
 import { randomBytes } from "node:crypto";
+import type {
+  CardField,
+  CardPoseChoice,
+  CardPrices,
+  IssuedCard,
+  MemberCard,
+  MemberCards,
+} from "@miyoria/contracts/api";
 import { type Economy, EconomyError, EconomyKey, type PaidItem } from "@miyoria/economy";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import {
   type MemberCardRecord,
   type MemberCardStore,
@@ -21,6 +29,7 @@ import {
 } from "@miyoria/store";
 import {
   type AccountRef,
+  HeartKey,
   isJsonObject,
   type JsonObject,
   type JsonValue,
@@ -28,19 +37,11 @@ import {
   toTimestamp,
 } from "@miyoria/types";
 import { type CardWords, POSE_WORDS } from "./card-words.js";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { clientKey, localDay, tooMany } from "./public.js";
-import { param, type Route } from "./route.js";
+import { clientKey, localDay } from "./public.js";
 import type { SessionRecord } from "./session.js";
 import type { ApiContext, ApiState } from "./state.js";
-import type {
-  CardField,
-  CardPoseChoice,
-  CardPrices,
-  IssuedCard,
-  MemberCard,
-  MemberCards,
-} from "./types.js";
 
 const log = getLogger("api.card");
 
@@ -56,7 +57,11 @@ const NO_WALLET = "錢包現在不能用";
 const BAD_POSE = "這張立繪現在不能選";
 const NOTHING_TO_REROLL = "今天沒有可以重抽的卡";
 
-/** Pictures of her per affinity band; `stranger` for someone she does not know (or will not say). */
+/**
+ * Pictures of her per affinity band (`bondBand`, the whole scale); `stranger` for someone she does
+ * not know (or will not say). The bands past 非常好 take its pictures.
+ */
+const NEAREST: readonly string[] = ["heart", "blush", "squint"];
 export const CARD_POSES: Readonly<Record<string, readonly string[]>> = {
   stranger: ["calm", "finger"],
   很差: ["cold"],
@@ -64,7 +69,12 @@ export const CARD_POSES: Readonly<Record<string, readonly string[]>> = {
   普通: ["calm", "finger", "smug"],
   不錯: ["smile", "finger", "hand"],
   很好: ["blush", "squint", "hand"],
-  非常好: ["heart", "blush", "squint"],
+  非常好: NEAREST,
+  很親近: NEAREST,
+  心意相通: NEAREST,
+  像家人一樣: NEAREST,
+  無可取代: NEAREST,
+  永恆的羈絆: NEAREST,
 };
 
 // ---- serials --------------------------------------------------------------------------------
@@ -347,6 +357,7 @@ async function issue(
         issued_at: card.issued_at,
         snapshot,
       });
+      cardEvidence(state, holder, card, extras.replaces !== null);
       return card;
     } catch (error) {
       if (!(error instanceof StoreError) || !/already exists/.test(error.message) || attempt >= 2) {
@@ -354,6 +365,22 @@ async function issue(
       }
       card.serial = newSerial();
     }
+  }
+}
+
+/** A card she gave them is evidence for her nightly reflection on them (`card`). Never throws. */
+function cardEvidence(state: ApiState, holder: CardHolder, card: IssuedCard, reroll: boolean) {
+  if (holder.person === null) return;
+  try {
+    state.optional(HeartKey)?.evidence?.({
+      person: holder.person,
+      kind: "card",
+      detail: `${reroll ? "重抽了" : "拿到了"}你的第 ${card.number} 張卡片${card.foil ? "(閃卡)" : ""}`,
+      weight: null,
+      at: state.now(),
+    });
+  } catch (error) {
+    log.warn({ err: errorMessage(error) }, "cannot record a card as evidence");
   }
 }
 
@@ -524,49 +551,37 @@ export async function deleteCards(state: ApiState, accounts: readonly AccountRef
 
 // ---- the public check -----------------------------------------------------------------------
 
-function answer(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      // A card can be deleted: nobody may keep the answer.
-      "cache-control": "no-store",
-      "x-content-type-options": "nosniff",
-    },
-  });
-}
+/** What every answer of the check carries: a card can be deleted, so nobody may keep the answer. */
+const CHECK_HEADERS = { "cache-control": "no-store", "x-content-type-options": "nosniff" };
 
 /** `GET /api/public/card/{serial}`. */
-async function checkCard(state: ApiState, c: ApiContext): Promise<Response> {
+async function checkCard(state: ApiState, c: ApiContext, input: string): Promise<IssuedCard> {
   const wait = state.publicSide.admitCardCheck(clientKey(c));
-  if (wait !== null) return tooMany(wait);
-  const missing = () => answer(404, { error: NO_SUCH_CARD });
-  const serial = normalizeSerial(param(c, "serial"));
+  if (wait !== null) throw ApiError.tooMany(wait);
+  const missing = () => new ApiError(404, NO_SUCH_CARD, CHECK_HEADERS);
+  const serial = normalizeSerial(input);
   const store = state.optional(MemberCardStoreKey);
-  if (serial === null || !store) return missing();
+  if (serial === null || !store) throw missing();
   let found: MemberCardRecord | null;
   try {
     found = await store.bySerial(state.profile(), serial);
   } catch (error) {
     log.warn({ error: errorMessage(error) }, "cannot check a card");
-    return answer(503, { error: "not available right now" });
+    throw new ApiError(503, "not available right now", CHECK_HEADERS);
   }
   const card = found && isJsonObject(found.snapshot) ? issuedCard(found) : null;
-  return card ? answer(200, card) : missing();
+  if (!card) throw missing();
+  return card;
 }
 
-/** The public card check; none when `[modules.api.public] enabled` is off. */
-export function cardCheckRoutes(state: ApiState): Route[] {
-  if (!state.publicSide.config.enabled) return [];
-  return [
-    {
-      method: "GET",
-      path: "/api/public/card/:serial",
-      public: true,
-      handler: (c) => checkCard(state, c),
-    },
-  ];
-}
+/** `GET /api/public/card/{serial}`; served only while the public side is on (see `rpc.ts`). */
+export const cardCheckRpc = {
+  card: os.public.card.handler(async ({ input, context }) => {
+    const card = await checkCard(context.state, context.c, input.params.serial);
+    for (const [name, value] of Object.entries(CHECK_HEADERS)) context.resHeaders?.set(name, value);
+    return card;
+  }),
+};
 
 /**
  * The card behind a serial for a page that is open to anyone (the link preview): `null` for a

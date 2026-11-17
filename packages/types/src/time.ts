@@ -1,9 +1,7 @@
-/**
- * A point in time as an RFC 3339 / ISO 8601 UTC string, e.g. `"2026-11-01T12:00:00.000Z"`.
- * This is how chrono's `DateTime<Utc>` crosses every boundary (events, store records, API).
- * Compare with `Date.parse`, never as strings: other writers may use more fraction digits.
- */
-export type Timestamp = string;
+import type { Timestamp } from "@miyoria/contracts/wire";
+
+/** A point in time as an RFC 3339 / ISO 8601 UTC string (a contract: `@miyoria/contracts/wire`). */
+export type { Timestamp } from "@miyoria/contracts/wire";
 
 /** Source of "now". Inject it instead of calling `Date.now()` so tests can control time. */
 export interface Clock {

@@ -3,7 +3,7 @@
 // She used to read the amounts out herself ("扣了你 20 幣,你還剩 80"): from a tool result only
 // she saw, so the numbers came out in her voice and her words. Money is a system fact; the card
 // says it, and she only reacts (the action executor posts `ActionResult.receipt` where the turn
-// is and tells her so: `@miyoria/actions` registry).
+// is and tells her so: `@miyoria/gate/actions` registry).
 
 import { type CardBlock, type CommandReply, cardReply } from "@miyoria/commands";
 import type { AccountRef } from "@miyoria/types";

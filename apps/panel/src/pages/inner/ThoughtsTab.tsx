@@ -1,14 +1,7 @@
 import { Brain, Check, ChevronRight, X } from "lucide-react";
 import { type ReactNode, useDeferredValue, useId, useState } from "react";
-import type {
-  IntentStatus,
-  MindView,
-  PendingApproval,
-  Thought,
-  ThoughtDigest,
-  ThoughtIntent,
-  ThoughtTriggerKind,
-} from "@/api/types";
+import type { Thought } from "@/api/types";
+import type { IntentStatus, MindView, PendingApproval, ThoughtDigest, ThoughtIntent, ThoughtTriggerKind } from "@miyoria/contracts/api";
 import { useApprovals, useDigests, useMind, useMindMutations, useThoughtHistory } from "@/app/queries";
 import { BarList, ChartBlock, SegmentBar } from "@/components/charts/charts";
 import { SearchInput } from "@/components/controls";
@@ -43,8 +36,6 @@ function When({ at }: { at: string | null }) {
 function stateOf(m: MindView): { tone: Tone; label: string } {
   if (m.paused) return { tone: "warning", label: "已緊急停止" };
   if (!m.running) return { tone: "neutral", label: "心智迴圈未啟動" };
-  if (m.stats?.idle_reason === "budget exhausted") return { tone: "danger", label: "額度用完" };
-  if (!m.accepting) return { tone: "neutral", label: "休息中" };
   return { tone: "success", label: "運作中" };
 }
 
@@ -94,15 +85,8 @@ function AutonomyCard() {
       <QueryView query={mind} skeleton={<SkeletonRows count={1} />}>
         {(v) => (
           <dl className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-5 [&>div:last-child]:col-span-2 sm:[&>div:last-child]:col-span-1" aria-label="心智迴圈">
-            <Fact label="這小時">
-              {v.stats ? `${v.stats.calls_last_hour} / ${v.stats.max_calls_per_hour}` : "—"}
-            </Fact>
-            <Fact label="token">{v.stats ? v.stats.tokens_total.toLocaleString("zh-TW") : "—"}</Fact>
-            <Fact label="上次想">
+            <Fact label="上次記下">
               <When at={v.stats?.last_at ?? null} />
-            </Fact>
-            <Fact label="下次心跳">
-              <When at={v.stats?.next_heartbeat_at ?? null} />
             </Fact>
             <Fact label="沒事做">
               {idle && idle.thoughts > 0 ? (

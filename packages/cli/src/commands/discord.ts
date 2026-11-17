@@ -2,7 +2,7 @@
 // every server it is in). Use it once to remove duplicates left from earlier global / guild
 // mode runs; `miyoria core` registers the current set again when it starts.
 
-import type { Config } from "@miyoria/kernel";
+import type { Config } from "@miyoria/runtime/kernel";
 import type { Prompter } from "../prompt.js";
 import { bold, dim, fail, ok, println, warn } from "../ui.js";
 import { loadConfig } from "./node.js";

@@ -3,7 +3,12 @@
 
 import { EventEmitter } from "node:events";
 import { CommandRegistry } from "@miyoria/commands";
-import { defineManifest, type Module, type ModuleContext, Supervisor } from "@miyoria/kernel";
+import {
+  defineManifest,
+  type Module,
+  type ModuleContext,
+  Supervisor,
+} from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
   type JsonValue,
@@ -210,7 +215,7 @@ async function rig(privacy: Privacy | null, presenceIntents = true) {
     await new Promise((r) => setTimeout(r, 10));
     const out: { topic: string; payload: JsonValue }[] = [];
     for (let e = events.tryRecv(); e; e = events.tryRecv()) {
-      if (e.event.type === "custom") out.push(e.event.data);
+      out.push({ topic: e.type, payload: e.data as JsonValue });
     }
     return out;
   };

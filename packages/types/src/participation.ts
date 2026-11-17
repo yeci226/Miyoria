@@ -24,8 +24,6 @@ export const PLAY_ACTIVITIES = [
   "prediction_join",
 ] as const;
 
-export type PlayActivity = (typeof PLAY_ACTIVITIES)[number];
-
 /**
  * `paid`: coins were added (`paid` > 0). `duplicate`: the key was used before. `capped`: today's
  * limit of this activity or of all play is reached. `stranger`: she does not know them, or has

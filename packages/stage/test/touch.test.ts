@@ -1,7 +1,14 @@
 // Touches: the bus event becomes a `touch` message (validated), the overlay hub throttles them,
 // and the avatar reaction is coalesced.
 
-import { customEvent } from "@miyoria/types";
+import {
+  type AnyEventDefinition,
+  type Envelope,
+  type EventPayload,
+  Events,
+  eventEnvelope,
+  type PublishMetaArgs,
+} from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
   encodeMessage,
@@ -9,19 +16,25 @@ import {
   OverlayHub,
   parseCoreMessage,
   parseTouch,
-  TOUCH_TOPIC,
   TouchConfigSchema,
   TouchReaction,
   TouchThrottle,
 } from "../src/index.js";
 
+/** An event as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  def: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+): Envelope => eventEnvelope("test", def, data, ...meta);
+
 describe("touch messages", () => {
   it("live.touch becomes touch; junk is dropped", () => {
     const f = new Forwarder(false);
     const ok = { x: 0.25, y: 1, part: "head" };
-    expect(f.onEvent(customEvent(TOUCH_TOPIC, ok))).toStrictEqual([{ type: "touch", ...ok }]);
+    expect(f.onEvent(ev(Events.LiveTouch, ok as never))).toStrictEqual([{ type: "touch", ...ok }]);
     // Extra fields (names) are not forwarded.
-    expect(f.onEvent(customEvent(TOUCH_TOPIC, { ...ok, name: "Owen" }))).toStrictEqual([
+    expect(f.onEvent(ev(Events.LiveTouch, { ...ok, name: "Owen" } as never))).toStrictEqual([
       { type: "touch", ...ok },
     ]);
     for (const bad of [
@@ -34,9 +47,7 @@ describe("touch messages", () => {
       null,
       [],
     ]) {
-      expect(f.onEvent(customEvent(TOUCH_TOPIC, bad as never)), JSON.stringify(bad)).toStrictEqual(
-        [],
-      );
+      expect(f.onEvent(ev(Events.LiveTouch, bad as never)), JSON.stringify(bad)).toStrictEqual([]);
       expect(parseTouch(bad as never)).toBeNull();
     }
   });

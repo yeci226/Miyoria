@@ -4,33 +4,41 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ActivityModule } from "@miyoria/activity";
-import { FactsModule, toReplayLines } from "@miyoria/facts";
-import { defineManifest, type Module, type ModuleContext, Supervisor } from "@miyoria/kernel";
-import { entryTopic, formatEntry, isReplayInput, parseReplayLog } from "@miyoria/replay";
+import { ActivityModule } from "@miyoria/brain/activity";
+import { FactsModule, toReplayLines } from "@miyoria/memory/facts";
+import {
+  defineManifest,
+  type Module,
+  type ModuleContext,
+  Supervisor,
+} from "@miyoria/runtime/kernel";
+import {
+  entryTopic,
+  formatEntry,
+  isReplayInput,
+  parseReplayLog,
+} from "@miyoria/runtime/replay-log";
 import { SqliteStore } from "@miyoria/store";
 import {
   ActivityManagerKey,
   type ActivitySnapshot,
-  customEvent,
   EventLogKey,
+  Events,
   type GameResume,
   GameResumeKey,
-  SYSTEM_SHUTDOWN_TOPIC,
 } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const VOICE = { platform: "discord", scope: "g", channel: "v", kind: "voice" } as const;
 const ACTIVITY = { restore_grace_ms: 300, restore_poll_ms: 20 };
 
-const session = (state: "started" | "stopped", extra: object = {}) =>
-  customEvent("game.director.session", {
-    state,
-    game: "minecraft",
-    game_name: "Minecraft",
-    context: { ...VOICE },
-    ...extra,
-  });
+const session = (state: "started" | "stopped", extra: object = {}) => ({
+  state,
+  game: "minecraft",
+  game_name: "Minecraft",
+  context: { ...VOICE },
+  ...extra,
+});
 
 /** The game module, as far as a restart cares: says the session back once the game is reachable. */
 class FakeGame implements Module {
@@ -45,15 +53,15 @@ class FakeGame implements Module {
       resume: async () => {
         if (!this.reachable) return "waiting";
         this.resumed++;
-        ctx.publish(session("started"));
+        ctx.publish(Events.GameDirectorSession, session("started"));
         return "resumed";
       },
     };
     ctx.provide(GameResumeKey, resume);
   }
 
-  publish(event: ReturnType<typeof session>): void {
-    this.#ctx?.publish(event);
+  publish(data: ReturnType<typeof session>): void {
+    this.#ctx?.publish(Events.GameDirectorSession, data);
   }
 
   /** What the director does on its way down. */
@@ -79,7 +87,7 @@ async function boot(path: string, game: FakeGame) {
   await sup.startAll();
   const snapshot = (): ActivitySnapshot => sup.services.require(ActivityManagerKey).snapshot();
   const down = async (clean: boolean) => {
-    if (clean) sup.bus.publish("kernel", customEvent(SYSTEM_SHUTDOWN_TOPIC, {}));
+    if (clean) sup.bus.publish("kernel", Events.SystemShutdown, {});
     await sup.stopAll();
     await store.close();
   };

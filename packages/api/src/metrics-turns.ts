@@ -11,6 +11,15 @@
 // outcome rows: a turn that reached the model says which of them fired and how often
 // (`CountedOutcome.corrections`), so each one is counted beside the turns it was measured over.
 
+import type {
+  CorrectionStat,
+  CorrectionsBucket,
+  FollowupStopReasons,
+  MetricRatio,
+  TurnMetrics,
+  TurnMetricsBucket,
+  TurnMetricsDay,
+} from "@miyoria/contracts/api";
 import { type DecisionLog, DecisionLogKey, type DecisionRecord } from "@miyoria/store";
 import {
   CORRECTION_KINDS,
@@ -21,11 +30,9 @@ import {
   type TurnOutcomeRecord,
   toTimestamp,
 } from "@miyoria/types";
-import { z } from "zod";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { clampLimit, readQuery, usizeParam } from "./extract.js";
-import { json, type Route } from "./route.js";
-import type { ApiState } from "./state.js";
+import { clampLimit, countOf } from "./extract.js";
 
 const DEFAULT_DAYS = 7;
 const MAX_DAYS = 30;
@@ -34,93 +41,11 @@ export const MAX_OUTCOME_ROWS = 40_000;
 export const MAX_DECISION_ROWS = 80_000;
 const DAY_MS = 86_400_000;
 
-/** `sent / total`; `rate` is `null` with no samples, never 0. */
-export interface Ratio {
-  sent: number;
-  total: number;
-  rate: number | null;
-}
-
-export interface LatencyStat {
-  p50_ms: number | null;
-  p90_ms: number | null;
-  samples: number;
-}
-
-/** Why a follow-up she did not answer stopped. */
-export interface StopReasons {
-  /** Her share of the recent messages was over the cap. */
-  anti_spam: number;
-  /** The score was under the level's minimum. */
-  low_score: number;
-  /** The gate passed it on and the dice said no. */
-  lost_roll: number;
-  /** The floor (the microphone or the channel) was refused. */
-  floor: number;
-  /** "Talking with her": handed to the model, which chose silence. */
-  passed_silent: number;
-  /** Anything else: the model's other silences, cancelled, errors, other gates. */
-  other: number;
-}
-
-/** How often one correction fired in one channel: firings, and the turns it fired in. */
-export interface CorrectionCount {
-  events: number;
-  turns: number;
-}
-
-/** One correction, in voice and in text. */
-export interface CorrectionStat {
-  voice: CorrectionCount;
-  text: CorrectionCount;
-}
-
-export interface CorrectionsBucket {
-  /**
-   * Turns that reached the model and carry their corrections, by channel: what a share like
-   * "fired on 0.3% of replies" is counted over. Rows written before the count existed are not.
-   */
-  measured: { voice: number; text: number };
-  /** Every kind, zeros included. */
-  kinds: Record<CorrectionKind, CorrectionStat>;
-}
-
-export interface MetricsBucket {
-  /** Turns counted (outcomes plus refused gate decisions). */
-  turns: number;
-  /** Someone replied to what she said: how often she answered (`reply_to_her`). */
-  followup: Ratio;
-  /** Nobody called her: how often she joined in (`ambient`). */
-  ambient: Ratio;
-  /** Someone called her (`addressed`). */
-  addressed: Ratio;
-  /** Voice, addressed turns that made sound: from the last focus input to her first output. */
-  voice_latency: LatencyStat;
-  /** Voice turns that made sound: `initiative` against `addressed` and `reply_to_her`. */
-  voice_origin: { self_started: number; answering: number };
-  /** Turns by how they ended; a refused gate decision counts as `silence`. */
-  outcomes: { sent: number; silence: number; cancelled: number; error: number };
-  /** Follow-ups that got no answer, by why. */
-  followup_stopped: StopReasons;
-  /** What the code changed of her output after the model wrote it. */
-  corrections: CorrectionsBucket;
-}
-
-export interface MetricsDay extends MetricsBucket {
-  /** Local date, `YYYY-MM-DD`. */
-  day: string;
-}
-
-export interface TurnMetrics {
-  days: number;
-  /** ISO time the window starts (the local midnight `days - 1` days ago). */
-  from: string;
-  /** More history than one request reads: the oldest day may be partial. */
-  truncated: boolean;
-  overall: MetricsBucket;
-  /** Oldest first, one per local day of the window, empty days included. */
-  daily: MetricsDay[];
-}
+// The shapes of the answer are the route table's (`@miyoria/contracts/api`).
+type Ratio = MetricRatio;
+type StopReasons = FollowupStopReasons;
+type MetricsBucket = TurnMetricsBucket;
+type MetricsDay = TurnMetricsDay;
 
 type Kind = "addressed" | "reply_to_her" | "ambient" | "initiative" | "notice";
 
@@ -385,26 +310,14 @@ export async function loadTurnRows(
   };
 }
 
-const QuerySchema = z.object({ days: usizeParam.optional() });
-
-export function turnMetricsRoutes(state: ApiState): Route[] {
-  return [
-    {
-      method: "GET",
-      path: "/api/turns/metrics",
-      handler: async (c) => {
-        const q = readQuery(c, QuerySchema);
-        const days = clampLimit(q.days, DEFAULT_DAYS, MAX_DAYS);
-        const log = state.service(DecisionLogKey, "decision log");
-        const now = Date.now();
-        const { outcomes, decisions, truncated } = await loadTurnRows(
-          log,
-          state.profile(),
-          now,
-          days,
-        );
-        return json(aggregateTurnMetrics(outcomes, decisions, { now, days, truncated }));
-      },
-    },
-  ];
-}
+/** `GET /api/turns/metrics`, on the route table (it joins the `turns` group). */
+export const turnMetricsRpc = {
+  metrics: os.turns.metrics.handler(async ({ input, context }) => {
+    const { state } = context;
+    const days = clampLimit(countOf(input.query.days), DEFAULT_DAYS, MAX_DAYS);
+    const log = state.service(DecisionLogKey, "decision log");
+    const now = Date.now();
+    const { outcomes, decisions, truncated } = await loadTurnRows(log, state.profile(), now, days);
+    return aggregateTurnMetrics(outcomes, decisions, { now, days, truncated });
+  }),
+};

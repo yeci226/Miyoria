@@ -81,7 +81,7 @@
 
 | §11.2 | 改法 | 在哪裡 |
 |---|---|---|
-| 1 導演有紀錄 | 導演記得這場每一步:動作、結果(有進展 / 沒有進展 / 失敗 / 被打斷)、失敗碼、遊戲的說明,每次決定都看得到,和事件分開一欄。**還沒做**:變成工作車道上的任務(多輪紀錄、工具迴圈),工作車道還沒有 | `packages/game/src/record.ts`、`director.ts` |
+| 1 導演有紀錄 | 導演記得這場每一步:動作、結果(有進展 / 沒有進展 / 失敗 / 被打斷)、失敗碼、遊戲的說明,每次決定都看得到,和事件分開一欄。**還沒做**:變成工作車道上的任務(多輪紀錄、工具迴圈),工作車道還沒有 | `packages/play/game/src/record.ts`、`director.ts` |
 | 2 目標有成功條件 | 決定多了 `want: {item, count}`(`obtain` 沒給就用它的物品);背包有了才算完成,她說完成但背包沒有不算。失敗一次不再結束目標(自己的目標也是),`max_attempts` 3 次、`max_goal_steps` 8 步、`max_goal_secs` 600 秒 | `decision.ts`、`director.ts`、`config.ts` |
 | 3 做完要有變化 | adapter 每個用身體的任務前後各看一次背包(加上 `item_picked`),`done` 帶 `data.outcome`;導演把沒有進展的 `done` 當一次失敗。空的 `mine`、拿已經有的東西、`explore` 沒看到新東西都是沒有進展。`stop` 變成即時動作,不是目標也不算成功 | `packages/types/src/game-outcome.ts`、adapter `progress.ts` |
 | 4 食物 | `obtain` 認得食物:打獵(跟著動物、準心對到就打)、熔爐烤熟、`farm` 收小麥再做麵包、`{item:"food"}` 挑附近最容易的;另有 `hunt {entity}` | adapter `planner.ts`、`obtain.ts` |
@@ -89,7 +89,7 @@
 | 6 少叫醒她 | `hostile_near`、`reflex_end` 不再觸發決定;失敗紀錄是獨立一欄(第 1 項) | `config.ts` |
 | 7 天黑和死掉 | adapter 從快照看出黃昏就送 `night_started`;導演自己開始 `shelter`(有床就睡,沒有就往下挖三格、從裡面封頂,等到天亮)。死掉記住位置和身上的東西,5 秒後自己開始 `recover` 走回去撿。被打斷的目標結束後回來 | adapter `survival.ts`、`adapter.ts`;`director.ts` |
 | 8 技能 | 有 `want` 的目標達成時,這個目標裡有進展的步驟存成技能,下次同樣的東西放進 prompt,也發 `game.director.skill`。**還沒做**:存下來跨重開(§8.3 的工作區),現在只活在模組裡 | `skills.ts` |
-| 9 紀錄和推理 | 決定的 trace 多了看到的狀態摘要、`want`、暫停中的做法;決定用 `reasoning: "low"`;11-08 的紀錄是測試。**還沒做**:`packages/eval` 的 `guard` 題目還是舊的防呆,要換成新的才會翻過來 | `director.ts`、`config.ts` |
+| 9 紀錄和推理 | 決定的 trace 多了看到的狀態摘要、`want`、暫停中的做法;決定用 `reasoning: "low"`;11-08 的紀錄是測試。**還沒做**:`tools/eval` 的 `guard` 題目還是舊的防呆,要換成新的才會翻過來 | `director.ts`、`config.ts` |
 
 模組(Java)沒有改。
 

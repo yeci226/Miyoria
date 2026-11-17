@@ -1,3 +1,0 @@
-# Optional reference: Whisper large-v3-turbo via faster-whisper (CTranslate2, CUDA 12 + cuDNN 9).
--r common.txt
-faster-whisper>=1.1

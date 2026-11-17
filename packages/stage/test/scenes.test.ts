@@ -2,17 +2,17 @@
 // debounce, manual hold, the ending curtain), the gate routing of `stage.scene` and transitions
 // on the Stage side with a fake OBS.
 
-import { ActuatorRegistry } from "@miyoria/actions";
-import { ServiceRegistry } from "@miyoria/kernel";
+import { ActuatorRegistry } from "@miyoria/gate/actions";
 import {
   type ChatProvider,
   type ChatRequest,
   type ChatStream,
   LlmRouter,
   parseModelRef,
-} from "@miyoria/llm";
+} from "@miyoria/llm/llm";
+import { ToolRegistry } from "@miyoria/llm/tools";
+import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import { MemorySettingsStore } from "@miyoria/store";
-import { ToolRegistry } from "@miyoria/tools";
 import { type JsonObject, Principals } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

@@ -554,17 +554,19 @@ describe("avatar loop run", () => {
     const controller = new AbortController();
     const done = loop.run(controller.signal, () => live);
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    await wait(150);
-    const whileLive = injected.length;
-    expect(whileLive).toBeGreaterThan(3);
+    // Waits for the count rather than for a fixed time: on a busy machine 150 ms holds few ticks.
+    const injections = async (more: number) => {
+      for (let i = 0; i < 200 && injected.length <= more; i++) await wait(10);
+      return injected.length;
+    };
+    expect(await injections(3)).toBeGreaterThan(3);
     live = false;
     await wait(30);
     const atPause = injected.length;
     await wait(150);
     expect(injected.length).toBe(atPause);
     live = true;
-    await wait(150);
-    expect(injected.length).toBeGreaterThan(atPause + 3);
+    expect(await injections(atPause + 3)).toBeGreaterThan(atPause + 3);
     controller.abort();
     await done;
   });

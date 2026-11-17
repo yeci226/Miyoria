@@ -8,24 +8,24 @@
 
 - [x] Monorepo 骨架:pnpm workspace、CI(Biome / typecheck / Vitest / build)、`.editorconfig`
 - [ ] 授權(待決定)
-- [ ] **Spike:Discord self 帳號**(程式已備好:`spikes/voice-node`,待你用小帳號執行):候選 self-bot 函式庫能不能在 DAVE 加密下分別接收每個人的音訊、送出音訊、推 Go Live(風險 R1);同一個伺服器裡 bot 帳號和 self 帳號同時在線
-- [ ] **Spike:ASR 評測**(程式已備好:`spikes/speech-bench`):SenseVoice-Small vs Qwen3-ASR-0.6B / 1.7B(Whisper turbo 當參考),用 Discord 真實錄音(台灣腔、夾日英、遊戲用語),量準確率、每段延遲、VRAM
-- [ ] **Spike:TTS 評測**(程式已備好:`spikes/speech-bench`):Qwen3-TTS(Base 複製、VoiceDesign → Clone)vs GPT-SoVITS(CosyVoice、IndexTTS2 有空再測),在 4070S 上跟遊戲同時跑,量首包延遲、即時率、VRAM、中日混說與情緒表現
+- [ ] **Spike:Discord self 帳號**(spike 程式已移除,留在 git 歷史):候選 self-bot 函式庫能不能在 DAVE 加密下分別接收每個人的音訊、送出音訊、推 Go Live(風險 R1);同一個伺服器裡 bot 帳號和 self 帳號同時在線
+- [ ] **Spike:ASR 評測**(評測程式已移除,留在 git 歷史):SenseVoice-Small vs Qwen3-ASR-0.6B / 1.7B(Whisper turbo 當參考),用 Discord 真實錄音(台灣腔、夾日英、遊戲用語),量準確率、每段延遲、VRAM
+- [ ] **Spike:TTS 評測**(評測程式已移除,留在 git 歷史):Qwen3-TTS(Base 複製、VoiceDesign → Clone)vs GPT-SoVITS(CosyVoice、IndexTTS2 有空再測),在 4070S 上跟遊戲同時跑,量首包延遲、即時率、VRAM、中日混說與情緒表現
 - [ ] **Spike:DeepSeek-chan 的聲音**:用 Qwen3-TTS VoiceDesign 依 `voice.toml` 的描述生成多個候選,挑一個固定成參考音
 - [ ] **Spike:VTS 嘴型**:匯入 DeepSeek-chan 模型,列出它的 expression / 參數,從音訊注入 `MouthOpen`,確認同步效果
-- [x] **Spike:LLM 抽象**:決定自己寫薄介面 + OpenAI 相容 provider(`@miyoria/llm`)
+- [x] **Spike:LLM 抽象**:決定自己寫薄介面 + OpenAI 相容 provider(`@miyoria/llm/llm`)
 - [ ] 寫下評測結果,更新 DECISIONS.md 的 🧪 項目
 
 **完成條件**:所有 🧪 項目有結論;repo 能 build、CI 綠燈。
 
 ## Phase 1:Kernel + 文字聊天 MVP
 
-- [x] `@miyoria/types`、`@miyoria/kernel`(Module、Supervisor、事件匯流排、service registry、設定與 JSON Schema)
-- [x] `@miyoria/store`(SQLite 預設 + Postgres / pgvector、migrations)、`deploy/docker-compose.yml`(Postgres 部分尚未對真資料庫測過)
-- [x] `@miyoria/llm`(OpenAI 相容供應者 + DeepSeek 專屬處理:推理內容過濾、前綴快取友善的 prompt 順序;依用途路由、成本記錄)
-- [x] `@miyoria/profile`(載入、驗證、執行期修改人格段落;所有資料帶 `profile_id`)+ 把 `profiles/deepseek-chan/` 定案
-- [x] `@miyoria/agent`:Stimulus、Conversation Session(working memory)、TurnCoordinator(debounce / 合併)、Attention 第一、二層、Expression Parser(文字部分)
-- [x] `@miyoria/scheduler`:`text` lane
+- [x] `@miyoria/types`、`@miyoria/runtime/kernel`(Module、Supervisor、事件匯流排、service registry、設定與 JSON Schema)
+- [x] `@miyoria/store`(SQLite、migrations)、`deploy/docker-compose.yml`(V5 拿掉了沒測過的 Postgres)
+- [x] `@miyoria/llm/llm`(OpenAI 相容供應者 + DeepSeek 專屬處理:推理內容過濾、前綴快取友善的 prompt 順序;依用途路由、成本記錄)
+- [x] `@miyoria/runtime/profile`(載入、驗證、執行期修改人格段落;所有資料帶 `profile_id`)+ 把 `profiles/deepseek-chan/` 定案
+- [x] `@miyoria/brain/agent`:Stimulus、Conversation Session(working memory)、TurnCoordinator(debounce / 合併)、Attention 第一、二層、Expression Parser(文字部分)
+- [x] `@miyoria/runtime/scheduler`:`text` lane
 - [x] `@miyoria/discord`:文字收發、輸入中、反應、rate limit(尚未連真的 Discord 測)
 - [x] `@miyoria/commands` 框架 + `/ping`、`/admin module ...`
 - [x] `/mode`、`/activeness`、`/persona show`(設定存進 DB,重開還在)
@@ -41,9 +41,9 @@
 
 - [x] `apps/voice-node`(TS):self 帳號登入、進出語音、每人 PCM 串流、播放音訊;用 [Voice Link 協定](protocols/voice-link.md)(WebSocket)接 Core
 - [x] 雙帳號整合:bot 收 `/join`、self 帳號執行;`voice:*` lane 經 `VoiceSink` 播放;self 掉線時語音降級、文字照常
-- [x] `@miyoria/speech`:ASR / TTS 介面、fallback chain;provider:`http-worker`、OpenAI 相容(雲端備援)、GPT-SoVITS
+- [x] `@miyoria/voice/speech`:ASR / TTS 介面、fallback chain;provider:`http-worker`、OpenAI 相容(雲端備援)、GPT-SoVITS
 - [x] `workers/`:ASR(SenseVoice / Qwen3-ASR)與 TTS(Qwen3-TTS,逐句串流)的 FastAPI worker、Docker、聲音設計工具、假 worker
-- [x] `@miyoria/voice`:每人能量 VAD + 斷句、ASR、轉繁體、幻聽過濾、Voice Room 成員
+- [x] `@miyoria/voice/voice`:每人能量 VAD + 斷句、ASR、轉繁體、幻聽過濾、Voice Room 成員
 - [x] 語音版 Attention(更保守)+ 逐句送 TTS + `voice` lane + barge-in(被打斷就丟掉那一輪剩下的句子)
 - [x] 語音同意流程(`/voice consent`、進頻道公告;預設 opt-out)
 - [x] `/join`、`/leave`、`/voice mode`、`/voice consent`
@@ -57,9 +57,9 @@
 
 ## Phase 3:記憶、社交、權限
 
-- [x] `@miyoria/memory`:Episode / Fact / Self note / Followup、背景 consolidation、混合檢索(全文 + 向量 + 新舊 + 重要度 + 在場者)、隱私範圍(私訊內容不外流)、jieba 斷詞、可選 embeddings、遺忘
+- [x] `@miyoria/memory/memory`:Episode / Fact / Self note / Followup、背景 consolidation、混合檢索(全文 + 向量 + 新舊 + 重要度 + 在場者)、隱私範圍(私訊內容不外流)、jieba 斷詞、可選 embeddings、遺忘
 - [x] `/memory show / forget / export`;工具 `remember` / `recall`
-- [x] `@miyoria/social`:Person / Account、`/link`、Relationship、Appraisal(規則 + LLM)、每日上限與報酬遞減、`/me`、`/admin person …`
+- [x] `@miyoria/heart/social`:Person / Account、`/link`、Relationship、Appraisal(規則 + LLM)、每日上限與報酬遞減、`/me`、`/admin person …`
 - [x] Mood 模組(往基準值回歸、日夜曲線、事件推動)
 - [x] `@miyoria/initiative`:冷場、followup、打招呼、有人進語音;每日上限、沒人理就退避、安靜時段
 - [x] `@miyoria/auth`:RBAC(owner / admin / moderator / trusted / user / restricted / blocked)、全域 / 伺服器 / 頻道範圍、Discord 角色對應、防越權、稽核紀錄
@@ -84,10 +84,10 @@
 
 ## Phase 5:擴充系統 + MCP
 
-- [x] `@miyoria/ext-host`:manifest、JSON-RPC over stdio、每個擴充是一個可啟停的 module、權限、熱重載(`miyoria ext dev`)
+- [x] `@miyoria/plugin-host/ext-host`:manifest、JSON-RPC over stdio、每個擴充是一個可啟停的 module、權限、熱重載(`miyoria ext dev`)
 - [x] `@miyoria/sdk`(TS):tools / commands / events / prompt / storage / game adapter
 - [x] `miyoria ext new / list / install / validate / dev`;範例 `extensions/examples/hello`
-- [x] `@miyoria/mcp`:MCP client(`@modelcontextprotocol/sdk`)、允許 / 禁止清單、權限、重連;可選唯讀 MCP server
+- [x] `@miyoria/plugin-host/mcp`:MCP client(`@modelcontextprotocol/sdk`)、允許 / 禁止清單、權限、重連;可選唯讀 MCP server
 - [ ] WASM 擴充(可選)
 
 **完成條件**:用 TS 寫一個新子系統或工具,`miyoria ext dev` 就能熱載入;MCP 工具可以安全地開放給她用。
@@ -109,8 +109,8 @@
 - [x] Game adapter 協定:`game = "<id>"` 的擴充擁有 `game.<id>.*` 命名空間
 - [x] `extensions/minecraft/mod`:Fabric 1.21.1 橋接模組(Baritone + 可選 AltoClef),`gradlew build` 通過
 - [x] `extensions/minecraft/adapter`:TS game adapter
-- [x] `@miyoria/game`:遊戲導演(慢迴路決策、目標延續、觀眾點單變目標、實況評論限流、死亡反應、mood 推動)、`/game start / stop / goal / status`
-- [x] `@miyoria/queue`:觀眾請求、公平排序、投票、overlay 顯示
+- [x] `@miyoria/play/game`:遊戲導演(慢迴路決策、目標延續、觀眾點單變目標、實況評論限流、死亡反應、mood 推動)、`/game start / stop / goal / status`
+- [x] `@miyoria/play/queue`:觀眾請求、公平排序、投票、overlay 顯示
 - [ ] 實測:真的 Minecraft 客戶端 + 她的帳號
 - [x] 不作弊:Baritone legit 設定、只看得到 / 挖得到看得見的方塊、工具等級不夠就拒絕並說缺什麼、`craft` / `smelt` / `place`(2026-11-02,還沒在遊戲裡實測)
 - [x] 自己開遊戲:`game.start` 時遊戲沒開,導演透過閘門送 adapter 的 `launch`,adapter 用 Prism Launcher 的 CLI 開實例(`--launch <實例> --world <最近玩的存檔>`,執行檔可設定、預設自動找)並等模組連上、世界載入;開不起來 / 逾時是失敗的動作並帶原因;`game.stop` 只關她自己開的遊戲(2026-11-03,只在測試裡驗證,還沒真的開過 Prism)
@@ -143,30 +143,12 @@
 Phase 0–8 先用 Rust 寫成原型(留在 git 歷史裡),之後整個改寫成 TypeScript(理由見 [DECISIONS.md](DECISIONS.md) ADR 13)。
 
 - [x] pnpm workspace(Node 24):`packages/*` 的 `@miyoria/*` 套件逐一移植,module id、設定鍵、事件、JSON 格式與預設值照舊,測試一併移植
-- [x] Store:SQLite(`node:sqlite`)預設 + PostgreSQL / pgvector,兩個後端跑同一份行為測試
+- [x] Store:SQLite(`node:sqlite`)跑一份行為測試(PostgreSQL 在 V5 拿掉)
 - [x] 端到端驗證:假 LLM + 假語音節點 + 假 worker 跑完整流程(文字、語音、Stage)
-- [x] npm 套件 `miyoria`:esbuild 打包(內含管理面板、內建角色、migrations),`npx miyoria@latest init` 就能開始;已可發佈(`pnpm release:publish`)
+- [x] npm 套件 `miyoria`:esbuild 打包(內含管理面板、內建角色、migrations),`pnpm dlx miyoria@latest init` 就能開始;已可發佈(`pnpm release:publish`)
 - [x] Docker 映像檔、CI 換成 Node 版本
 - [ ] 實測(跟上面各 phase 的「實測」項目相同):真的 DeepSeek、Discord(bot + self 帳號)、VTube Studio / OBS、Minecraft、Go Live
 
-## 看直播
-
-範圍和決策見 [DECISIONS.md](DECISIONS.md) ADR 14,架構見 [ARCHITECTURE.md](ARCHITECTURE.md) §6.7。
-
-第一階段(Discord Go Live,`[modules.watch]` 預設關閉):
-
-- [x] spike:對真的 Go Live 收串流、DAVE 解密、關鍵影格轉 JPEG、音訊(連看 30 分鐘)
-- [x] voice node 接收端(`apps/voice-node/src/watch/`)和 voice link 新訊息
-- [x] `@miyoria/watch`:`Watcher`、筆記、`SpeakGate`、串流聲音轉錄、Prompt 區段、`watch_look`
-- [x] 她自己決定看誰、換人、離開(`watch.start` / `watch.stop`),別人也可以請她看
-- [x] 同意與通知:`/me privacy watch:off`、通知卡、通知送不出去就不看
-- [ ] 實測完整流程:自己決定開始看、約一到兩分鐘最多一句、人聲不打斷她、`watch_look`、換人、`watch:off`、她 Go Live 時先停止、voice node 重啟後狀態正確
-
-第二階段(待辦,另開 spec):
-
-- [ ] Twitch / YouTube 瀏覽器來源(`WatchSource`);未驗證的風險是瀏覽器抓音訊,以及 Playwright Chromium 不含 H.264
-- [ ] 掉包重傳(NACK)、H.264 以外的編碼
-- [ ] 串流聲音偏小(平均約 -50 dB)的來源(接收端還是開播端)尚未確認
 ## v2 架構重整
 
 設計與 review 見 [design/v2-architecture.md](design/v2-architecture.md),實作紀錄見 [design/v2-implementation.md](design/v2-implementation.md)。
@@ -177,12 +159,12 @@ Phase 0–8 先用 Rust 寫成原型(留在 git 歷史裡),之後整個改寫成
 - [x] 階段 4:情緒與關係(遞減、互斥、一人一卡)
 - [x] 階段 5:計畫與日程(Appraise / Plan / Reflect、Goal agenda、日計畫)
 - [x] 階段 6:遊戲任務契約(task id + 原因碼)
-- [x] 回放測試(`packages/replay`)、面板的活動 / 帳本 / 情緒 / 目標 / prompt 檢視
+- [x] 回放測試(`tools/replay`)、面板的活動 / 帳本 / 情緒 / 目標 / prompt 檢視
 - [ ] 實測並對照 §4 的驗收指標(語音 p50 < 2.5 s、文字 p50 < 3 s、被叫開口率 > 70%、主動被擋率 < 20%)
 - [ ] Minecraft 換方法(另外討論)
 - [ ] 決定中日雙語語音是否保留;speculative 生成;Silero VAD
 
-## v4(程式在分支 `v4-int`,還沒上線)
+## v4(程式已合進 `main`)
 
 從「管住她」到「讓她有能力」:agent 迴圈和 context、人格重寫、開口節奏、她自己的生活、一起玩、經濟 2.0、遊戲。實測數字、原因、分階段和目前 PR 的處理見 [design/v4-plan.md](design/v4-plan.md)。
 

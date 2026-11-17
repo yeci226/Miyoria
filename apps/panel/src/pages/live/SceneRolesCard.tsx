@@ -1,6 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import { useId } from "react";
-import type { SceneRoleState, SceneRolesState } from "@/api/types";
+import type { SceneRoleState, SceneRolesState } from "@miyoria/contracts/api";
 import { useSceneRoleMutations, useSceneRoles } from "@/app/queries";
 import { READ_ONLY_HINT, useCanWrite } from "@/app/session";
 import { QueryView, SkeletonRows } from "@/components/query-state";

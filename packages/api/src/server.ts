@@ -1,44 +1,20 @@
 // Router, authentication and the fallback. The route groups live in sibling modules.
 
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
 import { AuthorizerKey } from "@miyoria/types";
 import { Hono } from "hono";
-import { affectRoutes } from "./affect.js";
-import { agencyRoutes } from "./agency.js";
-import { boardRoutes } from "./board.js";
-import { bodyRoutes } from "./body.js";
-import { cardCheckRoutes } from "./card.js";
-import { channelRoutes } from "./channels.js";
-import { controlRoutes } from "./control.js";
-import { coreRoutes } from "./core.js";
 import { dataRoutes } from "./data.js";
-import { directiveRoutes } from "./directives.js";
 import { ApiError, NO_SUCH_ENDPOINT } from "./errors.js";
-import { factRoutes } from "./facts.js";
-import { fortuneRoutes } from "./fortune-routes.js";
-import { goalAdminRoutes } from "./goals-admin.js";
-import { innerRoutes } from "./inner.js";
-import { learningRoutes } from "./learning.js";
 import { liveRoutes } from "./live.js";
-import { llmCallRoutes } from "./llmcalls.js";
 import { memberRoutes } from "./member.js";
-import { memoryRoutes } from "./memory.js";
 import { metricsRoutes } from "./metrics.js";
-import { turnMetricsRoutes } from "./metrics-turns.js";
-import { mindRoutes } from "./mind.js";
 import * as oauth from "./oauth.js";
 import { ogRoutes, rewriteHtml } from "./og.js";
-import { opsRoutes } from "./ops.js";
 import { servePanel } from "./panel.js";
-import { peopleRoutes } from "./people.js";
-import { personWalletRoutes } from "./people-wallet.js";
-import { planRoutes } from "./plan.js";
-import { promptRoutes } from "./prompts.js";
-import { clientKey, publicViewRoutes, tooMany } from "./public.js";
-import { roleRoutes } from "./roles.js";
-import { json, type Route } from "./route.js";
-import { sandboxRoutes } from "./sandbox.js";
+import { clientKey, tooMany } from "./public.js";
+import type { Route } from "./route.js";
+import { type ResponseCheck, rpcRoutes } from "./rpc.js";
 import {
   CSRF_HEADER,
   cookieToken,
@@ -50,9 +26,6 @@ import {
   tokenMatches,
 } from "./session.js";
 import type { ApiContext, ApiEnv, ApiState } from "./state.js";
-import { telemetryRoutes } from "./telemetry.js";
-import { v4Routes } from "./v4-routes.js";
-import { walletRoutes } from "./wallet.js";
 
 const log = getLogger("api.server");
 
@@ -118,7 +91,6 @@ async function authenticateMember(state: ApiState, c: ApiContext): Promise<Sessi
 
 function publicRoutes(state: ApiState): Route[] {
   const routes: Route[] = [
-    { method: "GET", path: "/api/auth/methods", handler: () => json(oauth.methods(state)) },
     {
       method: "GET",
       path: "/api/auth/oauth/login",
@@ -133,55 +105,26 @@ function publicRoutes(state: ApiState): Route[] {
   return routes.map((r) => ({ ...r, public: true }));
 }
 
-function sessionRoutes(): Route[] {
-  return [{ method: "GET", path: "/api/auth/session", handler: (c) => json(oauth.session(c)) }];
-}
-
 export interface AppOptions {
   /** Serve `GET /metrics` without authentication (`metrics_public`). Default `false`. */
   metricsPublic?: boolean;
+  /** How strictly admin responses are checked against their schema (see `rpc.ts`). */
+  responseCheck?: ResponseCheck;
 }
 
 /** Every route of the API. */
 export function routes(state: ApiState, options: AppOptions = {}): Route[] {
   return [
-    ...coreRoutes(state),
     ...publicRoutes(state),
-    ...publicViewRoutes(state),
-    ...cardCheckRoutes(state),
     ...ogRoutes(state),
-    ...boardRoutes(state),
     ...memberRoutes(state),
-    ...walletRoutes(state),
-    ...fortuneRoutes(state),
-    ...agencyRoutes(state),
-    ...sessionRoutes(),
-    ...peopleRoutes(state),
-    ...personWalletRoutes(state),
-    ...goalAdminRoutes(state),
-    ...memoryRoutes(state),
-    ...roleRoutes(state),
-    ...opsRoutes(state),
-    ...innerRoutes(state),
-    ...factRoutes(state),
-    ...channelRoutes(state),
     ...dataRoutes(state),
-    ...sandboxRoutes(state),
-    ...mindRoutes(state),
-    ...directiveRoutes(state),
-    ...planRoutes(state),
-    ...bodyRoutes(state),
-    ...affectRoutes(state),
-    ...promptRoutes(state),
-    ...turnMetricsRoutes(state),
-    ...learningRoutes(state),
-    ...controlRoutes(state),
-    ...llmCallRoutes(state),
-    ...telemetryRoutes(state),
     ...liveRoutes(state),
-    ...v4Routes(state),
 
     ...metricsRoutes(state, { public: options.metricsPublic ?? false }),
+
+    // The route table: the groups that have moved to `@miyoria/contracts/api`.
+    ...rpcRoutes(state, options.responseCheck ? { responseCheck: options.responseCheck } : {}),
   ];
 }
 

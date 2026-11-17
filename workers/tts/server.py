@@ -91,6 +91,9 @@ Environment
     TTS_DEFAULT_LANGUAGE   when request has none         (default Auto)
     TTS_GEN_KWARGS         JSON merged into every generate_* call, e.g. {"temperature":0.8}
     TTS_MIN_SENTENCE_CHARS (default 4)   TTS_MAX_SENTENCE_CHARS (default 80)
+    TTS_AHEAD_MAX_SENTENCE_CHARS  pieces of a ``priority: "ahead"`` line are at most this long
+                           (default 40; 0 = TTS_MAX_SENTENCE_CHARS). The GPU lock is taken per piece,
+                           so this bounds how long a line she needs now waits behind one for later
     TTS_CLONE_MODE         auto | xvec | icl             (default auto)
     TTS_VOICE_BANK         1 = pick a reference by language and emotion (default 0)
     TTS_MAX_TEXT_CHARS     reject longer requests (default 2000)
@@ -132,7 +135,6 @@ from typing import Any, AsyncIterator, Iterator
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from text_split import split_sentences
@@ -143,7 +145,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
     import device_memory
     from engine_process import EngineGone, EngineProcess, RemoteError
-except ImportError:  # the Docker image holds this folder only: the model stays in this process
+except ImportError:  # the Docker image holds this folder and contracts.py only: the model stays in this process
     device_memory = None
     EngineProcess = None
 
@@ -153,29 +155,25 @@ except ImportError:  # the Docker image holds this folder only: the model stays 
     class RemoteError(Exception):  # type: ignore[no-redef]
         pass
 
+try:
+    import service_auth
+except ImportError:  # never run open: with a token set, no check means no service
+    if os.environ.get("MIYORIA_SERVICE_TOKEN") or os.environ.get("MIYORIA_HOST_TOKEN"):
+        raise SystemExit("MIYORIA_SERVICE_TOKEN or MIYORIA_HOST_TOKEN is set but service_auth.py cannot be "
+                         "imported: refusing to start without the token check")
+    service_auth = None
+
+# The JSON bodies, generated from the JSON Schema of packages/contracts (gen_contracts.py).
+from contracts import WorkersTtsOffloadRequest as OffloadRequest  # noqa: E402
+from contracts import WorkersTtsRequest as TtsRequest  # noqa: E402
+
 MAX_TEXT_CHARS = int(os.environ.get("TTS_MAX_TEXT_CHARS", "2000"))
 MIN_CHARS = int(os.environ.get("TTS_MIN_SENTENCE_CHARS", "4"))
 MAX_CHARS = int(os.environ.get("TTS_MAX_SENTENCE_CHARS", "80"))
+# Lines synthesized ahead give the GPU lock back at every piece: a shorter piece is a shorter wait
+# for the line she is about to say. 0 = the same pieces as any other line.
+AHEAD_MAX_CHARS = int(os.environ.get("TTS_AHEAD_MAX_SENTENCE_CHARS", "40"))
 MAX_SECONDS_PER_CHAR = float(os.environ.get("TTS_MAX_SECONDS_PER_CHAR", "0.35"))
-# Silence between sentences of one request (0 = none, the upstream behaviour).
-SENTENCE_PAUSE_MS = int(os.environ.get("TTS_SENTENCE_PAUSE_MS", "0"))
-
-
-def apply_readings(text: str) -> str:
-    """Swap words for how they should be said, from $VOICES_DIR/readings.json ({"大肥魚": "デブざかな"}).
-    Only the audio changes; subtitles come from Core. Read per request so edits apply at once."""
-    path = os.path.join(os.environ.get("VOICES_DIR", "voices"), "readings.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            readings = json.load(f)
-    except FileNotFoundError:
-        return text
-    except (OSError, ValueError) as e:
-        log.warning("cannot read %s: %s", path, e)
-        return text
-    for word in sorted(readings, key=len, reverse=True):  # longest first
-        text = text.replace(word, readings[word])
-    return text
 # Qwen3-TTS-12Hz: 12 codec frames (= generated tokens) per second of audio.
 TOKENS_PER_SECOND = 12
 
@@ -186,6 +184,11 @@ def max_new_tokens(text: str) -> int | None:
         return None
     chars = sum(1 for c in text if not c.isspace())
     return int((chars * MAX_SECONDS_PER_CHAR + 2.0) * TOKENS_PER_SECOND)
+
+def ahead_max_chars() -> int:
+    """The longest piece of a line synthesized ahead (never longer than any other line's)."""
+    return min(AHEAD_MAX_CHARS, MAX_CHARS) if AHEAD_MAX_CHARS > 0 else MAX_CHARS
+
 
 _LANG = {
     "zh": "Chinese", "en": "English", "ja": "Japanese", "ko": "Korean", "de": "German",
@@ -987,8 +990,6 @@ class ChunkPump:
                     return
                 if self._offloading():
                     raise ApiError(503, "offloaded")
-                if i > 0 and SENTENCE_PAUSE_MS > 0 and self.rate:
-                    self._put(("chunk", b"\x00\x00" * (self.rate * SENTENCE_PAUSE_MS // 1000)))
                 with self._gpu():
                     if i == 0:
                         self.queue_ms = (time.perf_counter() - self.started) * 1000
@@ -1061,6 +1062,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Miyoria TTS worker", lifespan=lifespan)
+if service_auth is not None:
+    service_auth.install(app)  # every route needs the bearer token when hostd set one
 
 
 def _error(status: int, message: str) -> JSONResponse:
@@ -1084,15 +1087,6 @@ async def _validation_exc(_: Request, exc: RequestValidationError) -> JSONRespon
     return _error(400, f"invalid request: {where or 'body'}: {first.get('msg', 'bad value')}")
 
 
-class TtsRequest(BaseModel):
-    text: str
-    language: str | None = None
-    emotion: str | None = None
-    instruct: str | None = None
-    voice: str | None = None
-    priority: str | None = None  # "now" (default) | "ahead"
-
-
 @app.post("/tts")
 async def tts(req: TtsRequest) -> StreamingResponse:
     text = req.text.strip()
@@ -1100,7 +1094,8 @@ async def tts(req: TtsRequest) -> StreamingResponse:
         raise ApiError(400, "text is empty")
     if len(text) > MAX_TEXT_CHARS:
         raise ApiError(413, f"text too long ({len(text)} > {MAX_TEXT_CHARS} chars)")
-    sentences = split_sentences(apply_readings(text), MIN_CHARS, MAX_CHARS)
+    ahead = req.priority == "ahead"
+    sentences = split_sentences(text, MIN_CHARS, ahead_max_chars() if ahead else MAX_CHARS)
     if not sentences:
         raise ApiError(400, "text has nothing to speak (punctuation only)")
 
@@ -1116,7 +1111,7 @@ async def tts(req: TtsRequest) -> StreamingResponse:
     emotion = (req.emotion or "").strip().lower() or None
     reference = eng.reference_key(req.voice, language, emotion)
     pump = ChunkPump(eng, sentences, language, req.voice, instruct, state.pool, loop, emotion=emotion,
-                     rank=RANK_AHEAD if req.priority == "ahead" else RANK_NOW)
+                     rank=RANK_AHEAD if ahead else RANK_NOW)
     t0 = time.perf_counter()
     pump.start()
     try:
@@ -1212,12 +1207,6 @@ def _free_cuda() -> None:
     if cuda is not None and cuda.is_available():
         cuda.synchronize()
         cuda.empty_cache()
-
-
-class OffloadRequest(BaseModel):
-    reason: str | None = None
-    max_s: float | None = None
-    drain_s: float | None = None
 
 
 async def _drain(limit_s: float) -> bool:

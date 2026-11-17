@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Envelope } from "../api/types";
 import { foldDiff } from "@/components/diff-view";
+import { envelope } from "@/test/envelope";
 import { diffLines, diffStats } from "./diff";
-import { matchesAny, parseTopics, summarize, topicMatches, topicOf } from "./events";
+import { matchesAny, parseTopics, summarize, topicMatches } from "./events";
 import { contextKeyString } from "./format";
 import { readJson, readStorage, writeJson, writeStorage } from "./storage";
 
@@ -39,31 +39,26 @@ describe("topics", () => {
     expect(matchesAny(parseTopics("voice.*"), "agent.decision")).toBe(false);
   });
 
-  it("derives topics from event types and custom events", () => {
-    expect(topicOf({ type: "module_state_changed", data: { module: "m", state: "failed", reason: null } })).toBe(
-      "system.module.state",
-    );
-    expect(topicOf({ type: "custom", data: { topic: "voice.latency", payload: {} } })).toBe("voice.latency");
+  it("words module states, and shows the payload of a type it does not word", () => {
+    expect(summarize(envelope("system.module.state", { module: "m", state: "failed", reason: null }))).toEqual({
+      text: "m → failed",
+      tone: "danger",
+    });
+    expect(summarize(envelope("llm.budget", { state: "degraded" }))).toEqual({
+      text: '{"state":"degraded"}',
+      tone: "warn",
+    });
+    expect(summarize(envelope("voice.latency", null))).toEqual({ text: "", tone: "neutral" });
   });
 
   it("summarizes decisions", () => {
-    const env: Envelope = {
-      id: "1",
-      ts: "2026-11-01T00:00:00Z",
-      source: "agent",
-      causation: null,
-      correlation: null,
-      event: {
-        type: "agent_decision",
-        data: {
-          turn: "t",
-          context: { platform: "discord", scope: "g", channel: "c", kind: "channel" },
-          respond: false,
-          score: 0.3,
-          reasons: ["too busy"],
-        },
-      },
-    };
+    const env = envelope("agent.decision", {
+      turn: "t",
+      context: { platform: "discord", scope: "g", channel: "c", kind: "channel" },
+      respond: false,
+      score: 0.3,
+      reasons: ["too busy"],
+    });
     expect(summarize(env)).toEqual({ text: "略過 · 分數 0.30 · too busy", tone: "neutral" });
   });
 });

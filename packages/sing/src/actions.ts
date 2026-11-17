@@ -3,20 +3,18 @@
 // * `sing.request` (tool `sing_request`): prepare a song (search, link or library file). People
 //   asking her is a request she may turn down; commands and the panel force it (sung as soon as
 //   it is ready and she is free).
-// * `sing.play` (tool `sing_start`): sing a ready song now, after what she is saying. She can name
-//   it, and a song she already sang goes back on the list (the worker has it cached); a song not
-//   on the list has to go through `sing.request`, with its permission and limits.
+// * `sing.play` (tool `sing_start`): sing a ready song now, after what she is saying.
 // * `sing.stop` (tool `sing_stop`): stop the song (skip), or with `all` also drop the rest.
 // * `sing.steer` (no tool): change a song that has not started (its place in the list, its key).
 //   Only the ActivityManager's steer calls it, for the main line (docs/design/v3-architecture.md
 //   §10.6); it answers with the outcome as its data.
 
-import { type Capability, defineCapability } from "@miyoria/actions";
+import { type Capability, defineCapability } from "@miyoria/gate/actions";
 import { type JsonObject, type Principal, safeName } from "@miyoria/types";
 import { z } from "zod";
 import type { SingPermissions } from "./config.js";
-import { BACKING_MODES, type SongNo, songLabel } from "./setlist.js";
-import { SingError, type Singer } from "./singer.js";
+import { BACKING_MODES, songLabel } from "./setlist.js";
+import type { Singer } from "./singer.js";
 
 const RequestArgs = z.object({
   /** Song name (with the artist helps), a YouTube link, or `library:<file>`. */
@@ -36,11 +34,7 @@ const RequestArgs = z.object({
 });
 // Song numbers start at 1; a model that fills the optional field with 0 means "the first ready".
 const PlayArgs = z.object({
-  /** A number on the set list (also written as text, `#3`) or a song's name. */
-  song: z.preprocess(
-    (v) => (v === 0 ? null : v),
-    z.union([z.number().int().positive(), z.string().trim().min(1).max(300)]).nullish(),
-  ),
+  song: z.preprocess((v) => (v === 0 ? null : v), z.number().int().positive().nullish()),
 });
 const StopArgs = z.object({ all: z.boolean().nullish(), current: z.boolean().nullish() });
 const SteerArgs = z.object({
@@ -57,12 +51,6 @@ type PlayArgs = z.output<typeof PlayArgs>;
 type StopArgs = z.output<typeof StopArgs>;
 type SteerArgs = z.output<typeof SteerArgs>;
 
-/** The song she means: a set list number, a name, or `null` for the first ready one. */
-function songRef(song: PlayArgs["song"]): SongNo | string | null {
-  if (typeof song !== "string") return song ?? null;
-  return /^#?\d+$/.test(song) ? Number(song.replace("#", "")) : song;
-}
-
 /** Commands and the panel force a song: it is sung as soon as it is ready. */
 function forced(p: Principal): boolean {
   return (p.kind === "command" && p.override) || p.kind === "panel";
@@ -75,16 +63,7 @@ function byOf(p: Principal, by: string | null | undefined): string {
   return p.kind === "command" ? "指令" : "聊天室的人";
 }
 
-const NOBODY_ASKED = "she only sings what someone asks for";
-
-/** `onlyOnRequest` (`[modules.sing] only_on_request`): nothing here is hers to start alone. */
-export function singCapabilities(
-  singer: Singer,
-  perms: SingPermissions,
-  onlyOnRequest = false,
-): Capability[] {
-  const nobodyAsked = (p: Principal) => (onlyOnRequest && p.kind === "self" ? NOBODY_ASKED : null);
-
+export function singCapabilities(singer: Singer, perms: SingPermissions): Capability[] {
   const request = defineCapability<RequestArgs>({
     name: "sing.request",
     summary: "準備一首歌(用她的聲音翻唱)",
@@ -93,18 +72,13 @@ export function singCapabilities(
     permission: perms.request,
     // Downloading and converting take a minute of GPU time each.
     limits: { per_day: 40, per_person_per_day: 8, cooldown_ms: 0 },
-    available: () => !onlyOnRequest,
-    check: (_args, principal) => nobodyAsked(principal),
     tool: {
       name: "sing_request",
+      meta: { effect: "act", speed: "long", group: "sing" },
       description:
         "準備一首歌給你唱(在背景下載、分離人聲、轉成你的聲音,通常要一到兩分鐘;已經唱過的歌馬上好)。" +
-        (onlyOnRequest
-          ? "有人點歌的時候用;準備的時候照常聊天,好了就會開始唱,不用再做別的。"
-          : "有人點歌、你想唱的時候用;準備的時候照常聊天,好了會告訴你,再用 sing_start 開唱。") +
-        "一次點好幾首就每首各用一次 sing_request。" +
-        "query 寫歌名(加上歌手更準),也可以是 YouTube 或 bilibili 連結。" +
-        "歌不適合可以拒絕,但已經唱過不是拒絕的理由:唱過的歌有人點就再唱一次。",
+        "有人點歌、你想唱的時候用;準備的時候照常聊天,好了會告訴你,再用 sing_start 開唱。" +
+        "query 寫歌名(加上歌手更準),也可以是 YouTube 或 bilibili 連結。不想唱、歌不適合可以拒絕。",
       properties: {
         query: { type: "string", description: "歌名 + 歌手,或 YouTube / bilibili 連結" },
         key: { type: "integer", description: "整首升降幾個半音(-6 到 6,通常省略)" },
@@ -136,7 +110,7 @@ export function singCapabilities(
           requester: p.requester,
           requester_name: byOf(p, args.by),
           context: p.context,
-          forced: !practice && (forced(p) || onlyOnRequest),
+          forced: !practice && forced(p),
           practice,
           // Money moves only on the person's own command, never on her tool call.
           ...(p.kind === "command"
@@ -162,60 +136,22 @@ export function singCapabilities(
     risk: "low",
     args: PlayArgs,
     permission: perms.play,
-    available: () => !onlyOnRequest,
-    ...(onlyOnRequest
-      ? {}
-      : {
-          tool: {
-            name: "sing_start",
-            description:
-              "唱一首已經準備好的歌(在你所在的語音頻道;你這句話說完才開始,唱的時候你不能說話)。" +
-              "song 是歌單上的編號或歌名,省略 = 最早準備好的那首;剛唱過的歌也可以再唱一次。" +
-              "不在歌單上的歌要先用 sing_request 準備。開唱前用一句話開場。",
-            properties: { song: { type: "string", description: "歌單編號或歌名(可省略)" } },
-          },
-        }),
-    check(args, principal) {
-      const notAsked = nobodyAsked(principal);
-      if (notAsked) return notAsked;
+    tool: {
+      name: "sing_start",
+      meta: { effect: "act", speed: "long", group: "sing" },
+      description:
+        "唱一首已經準備好的歌(在你所在的語音頻道;你這句話說完才開始,唱的時候你不能說話)。" +
+        "song 是歌單上的編號,省略 = 最早準備好的那首。開唱前用一句話開場。",
+      properties: { song: { type: "integer", description: "歌單編號(可省略)" } },
+    },
+    check(args) {
       const now = singer.playing();
       if (now) return `already singing ${songLabel(now)}`;
       if (args.song == null && singer.list.ready().length === 0) return "no song is ready";
       return null;
     },
     async execute(args, ctx) {
-      const ref = songRef(args.song);
-      const p = ctx.principal;
-      const listed =
-        typeof ref === "string"
-          ? singer.list.named(ref)
-          : ref === null
-            ? null
-            : singer.list.get(ref);
-      if (typeof ref === "string" && listed === null) {
-        throw new SingError(`「${safeName(ref, 60)}」不在歌單上,要先用 sing_request 準備`);
-      }
-      if (listed?.state === "done") {
-        // Sung before, so the worker has it: back on the list for who asked for it.
-        const again = await singer.request(
-          {
-            query: listed.query,
-            key: listed.key,
-            backing: listed.backing,
-            requester: listed.requester,
-            requester_name: listed.requester_name,
-            context: p.context ?? listed.context,
-            forced: true,
-          },
-          ctx.signal,
-        );
-        return {
-          text: `${songLabel(again)} 再唱一次(#${again.no}),她有空就會開始。`,
-          data: { song: again.no },
-        };
-      }
-      const no = listed?.no ?? (typeof ref === "number" ? ref : null);
-      const entry = singer.play(no, p.context, ctx.request.turn);
+      const entry = singer.play(args.song ?? null, ctx.principal.context, ctx.request.turn);
       return {
         text: `準備開始唱 ${songLabel(entry)}(#${entry.no}),說完這句就開始。`,
         data: { song: entry.no },
@@ -231,6 +167,7 @@ export function singCapabilities(
     permission: perms.skip,
     tool: {
       name: "sing_stop",
+      meta: { effect: "act", speed: "instant", group: "sing" },
       description:
         "停止唱歌。預設停掉正在唱的這首;all = true 時歌單上還沒唱的也一起取消。" +
         "想讓這首唱完、只把後面的清掉(例如要收尾),用 all = true 加 current = false。",

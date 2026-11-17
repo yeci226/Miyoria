@@ -7,13 +7,13 @@
 //   herself, once per bounty. Cancelled or run out, the hold goes back to the purse.
 // * Bounties persist in `BountyStore`; a sweep ends what ran out.
 
-import { errorMessage } from "@miyoria/kernel";
-import { type Bounty, BountyStoreKey } from "@miyoria/store";
+import { errorMessage } from "@miyoria/runtime/kernel";
 import { type AccountRef, type ContextKey, newId, safeName, toTimestamp } from "@miyoria/types";
 import { cleanTask, guardTask } from "./deals.js";
 import type { EconomyService } from "./economy.js";
 import { STRANGER } from "./economy.js";
 import { PURSE_PLATFORM, pickById } from "./purse.js";
+import { type Bounty, BountyStoreKey } from "./records.js";
 import { type BountyView, EconomyError } from "./types.js";
 
 export const NO_BOUNTY = "沒有這個懸賞";
@@ -60,7 +60,6 @@ export class BountyBoard {
       const now = this.e.now();
       const made: Bounty = {
         id,
-        profile: this.e.profile,
         task,
         reward: req.reward,
         hold: held.entry.id,
@@ -110,19 +109,15 @@ export class BountyBoard {
       if (!moved) throw new EconomyError(409, NO_BOUNTY);
       const won: Bounty = { ...open, status: "awarded", closed_at: closed, winner: who.account };
       try {
-        await this.e.ledger().post(
-          {
-            id: newId(),
-            profile: this.e.profile,
-            account: who.account,
-            delta: open.reward,
-            reason: "bounty",
-            ref: open.id,
-            idem_key: `bounty:${open.id}`,
-            ts: closed,
-          },
-          { wallet: who.wallet },
-        );
+        await this.e.ledger().post({
+          id: newId(),
+          person: who.wallet,
+          delta: open.reward,
+          reason: "bounty",
+          ref: open.id,
+          idem_key: `bounty:${open.id}`,
+          ts: closed,
+        });
       } catch (error) {
         await this.e.purse.credit(open.reward, "bounty_return", open.id, `bounty-back:${open.id}`);
         throw error;

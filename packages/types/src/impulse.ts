@@ -2,7 +2,7 @@
 //
 // * `newImpulse`: the one way sources build an `Impulse` (arbiter.ts). Speak impulses carry the
 //   legacy initiative reason (`song_start`, `game`, `action_result`, ...) in `args.reason`, so
-//   the turn she opens reads the same as an `agent_initiative` turn did.
+//   the turn she opens reads the same as an `agent.initiative` turn did.
 // * `ImpulseHost` (provided by the agent): the Arbiter asks it for the conversation facts its
 //   floors need (channel level, whether she is there, when she last spoke) and hands it every
 //   accepted `speak` impulse (and her own `act` impulses, which may end in a turn). The host only

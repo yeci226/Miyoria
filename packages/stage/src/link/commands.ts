@@ -1,7 +1,6 @@
 // `/stream start | stop | status | scene <name>` commands. Starting, stopping and switching
 // scenes go through the actuator registry's gate (principal `command`, override).
 
-import { type ActuatorRegistry, deniedText } from "@miyoria/actions";
 import {
   type AnyComponentRoute,
   ArgKind,
@@ -17,7 +16,8 @@ import {
   type Invocation,
   notice,
 } from "@miyoria/commands";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { type ActuatorRegistry, deniedText } from "@miyoria/gate/actions";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { isJsonObject, type JsonObject, Principals } from "@miyoria/types";
 import { defaultStageStatus, type StageStatus, type StreamAction } from "../protocol.js";
 import type { StageLink } from "./link.js";

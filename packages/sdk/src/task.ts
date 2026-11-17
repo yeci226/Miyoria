@@ -1,9 +1,8 @@
 // The task contract for activity-type extensions (docs/design/v2-architecture.md §3.8).
 //
-// A copy of `@miyoria/types` `task.ts` (the SDK does not depend on the core packages; the JSON
-// shapes are identical and a test in `@miyoria/ext-host` compares them), plus `TaskRunner`: the
-// typed way to implement `TaskExecutor`. The runner owns the lifecycle so an extension only
-// writes `run(spec, task)`:
+// Its shapes are the ones in `@miyoria/contracts/ext` (the host reads the same schemas), plus
+// `TaskRunner`: the typed way to implement `TaskExecutor`. The runner owns the lifecycle so an
+// extension only writes `run(spec, task)`:
 //
 // - `start(spec)` accepts the task and emits `started`; exactly one of `done` / `failed`
 //   follows, never both and never twice.
@@ -13,68 +12,61 @@
 // - Whatever `run` does after its signal aborted is ignored: a stale task is harmless.
 // - `run` resolving = `done` with its detail; throwing `TaskFailure(code, detail)` = `failed`
 //   with that code; anything else thrown = `failed` / `internal`.
+//
+// Where the inferred type would differ from the shape this package always had, the old shape is
+// kept: `args`, `patch`, `state` and a `done` event's `data` are `unknown` here, JSON in the
+// contract.
+
+import {
+  EXT_LIMITS,
+  EXT_STEER_OUTCOMES,
+  EXT_TASK_FAILURE_CODES,
+  type ExtStructuredState,
+  type ExtSteerOutcome,
+  type ExtTaskEvent,
+  type ExtTaskFailureCode,
+  type ExtTaskId,
+  type ExtTaskSpec,
+  type ExtTaskSteer,
+} from "@miyoria/contracts/ext";
 
 /** A task's id: chosen by whoever starts it. */
-export type TaskId = string;
+export type TaskId = ExtTaskId;
 
 /** What a caller asks an executor to do. */
-export interface TaskSpec {
-  id: TaskId;
-  /** The goal in a stable, executor-defined form (`"obtain"`, `"goto"`, `"launch"`). */
-  goal: string;
+export type TaskSpec = Omit<ExtTaskSpec, "args"> & {
   /** Goal arguments (validated by the executor). */
   args: Record<string, unknown>;
-  /** Seconds the task may take before the executor gives up with `timeout`. */
-  budget_s: number;
-}
+};
 
-/** Why a task failed (same list and order as `@miyoria/types`). */
-export const TASK_FAILURE_CODES = [
-  "timeout",
-  "cancelled",
-  "superseded",
-  "busy",
-  "invalid",
-  "not_found",
-  "unreachable",
-  "precondition",
-  "disconnected",
-  "crashed",
-  "died",
-  "denied",
-  "internal",
-] as const;
+/** Why a task failed (same list and order as the contract). */
+export const TASK_FAILURE_CODES = EXT_TASK_FAILURE_CODES;
 
-export type TaskFailureCode = (typeof TASK_FAILURE_CODES)[number];
+export type TaskFailureCode = ExtTaskFailureCode;
 
 export function isTaskFailureCode(value: unknown): value is TaskFailureCode {
   return typeof value === "string" && (TASK_FAILURE_CODES as readonly string[]).includes(value);
 }
 
 /** How a steer went: it took effect, the executor refused it, or the task was already over. */
-export type SteerOutcome = "applied" | "rejected" | "too_late";
+export type SteerOutcome = ExtSteerOutcome;
+
+/** The outcomes, in the contract's order. */
+export const STEER_OUTCOMES = EXT_STEER_OUTCOMES;
 
 /**
  * A change of direction for a running task, keeping its progress (docs/design/v3-architecture.md
- * §10.6; same shape as `TaskSteer` of `@miyoria/types`).
+ * §10.6).
  */
-export interface TaskSteer {
-  id: string;
-  task: TaskId;
+export type TaskSteer = Omit<ExtTaskSteer, "patch"> & {
   /** The goal arguments to change (the executor validates them). */
   patch: Record<string, unknown>;
-  why: string;
-  cause: string;
-}
+};
 
 /** Lifecycle events of one task. Exactly one of `done` / `failed` ends it. */
 export type TaskEvent =
-  | { type: "started"; task: TaskId; goal: string; at: string }
-  | { type: "progress"; task: TaskId; progress: number | null; detail: string; at: string }
-  | { type: "done"; task: TaskId; detail: string; data: unknown; at: string }
-  | { type: "failed"; task: TaskId; code: TaskFailureCode; detail: string; at: string }
-  /** How a steer went (not a lifecycle end: the task keeps running after it). */
-  | { type: "steered"; task: TaskId; steer: string; outcome: SteerOutcome; detail: string; at: string };
+  | Exclude<ExtTaskEvent, { type: "done" }>
+  | (Omit<Extract<ExtTaskEvent, { type: "done" }>, "data"> & { data: unknown });
 
 export type TaskEventType = TaskEvent["type"];
 
@@ -88,13 +80,9 @@ export function taskTopic(owner: string, type: TaskEventType): string {
 }
 
 /** What `observe()` returns: structured state, never a text that has to be parsed again. */
-export interface StructuredState {
-  at: string;
+export type StructuredState = Omit<ExtStructuredState, "state"> & {
   state: Record<string, unknown>;
-  /** The task running now, if any. */
-  task: TaskId | null;
-  summary: string;
-}
+};
 
 /** What an activity-type executor implements. */
 export interface TaskExecutor {
@@ -134,7 +122,7 @@ export interface TaskExecutorInfoInput {
 }
 
 /** Largest accepted `budget_s` (one day). */
-export const MAX_TASK_BUDGET_S = 86_400;
+export const MAX_TASK_BUDGET_S = EXT_LIMITS.TASK_BUDGET_MAX_S;
 
 /** Thrown by `TaskWorker.run` (or used as an abort reason) to fail a task with a code. */
 export class TaskFailure extends Error {

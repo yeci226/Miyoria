@@ -18,6 +18,7 @@
 //    clears everything by hand.
 
 import { CommandRegistryKey, CommandsModule } from "@miyoria/commands";
+import { LlmRouterKey, userMessage, withLlmTag } from "@miyoria/llm/llm";
 import {
   defineManifest,
   errorMessage,
@@ -27,8 +28,7 @@ import {
   type ModuleContext,
   type ModuleManifest,
   withTimeout,
-} from "@miyoria/kernel";
-import { LlmRouterKey, userMessage, withLlmTag } from "@miyoria/llm";
+} from "@miyoria/runtime/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
 import {
   PlatformHistoriesKey,

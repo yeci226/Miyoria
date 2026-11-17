@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dices } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { isNotProvided } from "@/api/http";
-import type { BountyView, GoalView } from "@/api/types";
+import type { BountyView, GoalView } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { ConfirmDialog } from "@/components/confirm";
 import { EmptyLine, QueryView, SkeletonRows } from "@/components/query-state";
@@ -43,11 +43,11 @@ export function Fortune() {
   const currency = useWallet().data?.currency ?? "幣";
   const today = useQuery({
     queryKey: FORTUNE,
-    queryFn: ({ signal }) => api.memberFortune({ signal }),
+    queryFn: ({ signal }) => api.rpc.fortune.today(undefined, { signal }),
     retry,
   });
   const draw = useMutation({
-    mutationFn: () => api.memberDrawFortune(newKey()),
+    mutationFn: () => api.rpc.fortune.draw({ headers: { "idempotency-key": newKey() }, body: {} }),
     onSuccess: (r) => {
       client.setQueryData(FORTUNE, (old: typeof today.data) => (old ? { ...old, fortune: r.fortune } : old));
       patch((v) => ({ ...v, balance: r.balance }));
@@ -102,7 +102,7 @@ export function Transfer() {
   const idOk = /^[0-9]{1,25}$/.test(to.trim());
   const amountOk = Number.isInteger(n) && n >= 1 && n <= TRANSFER_MAX;
   const send = useMutation({
-    mutationFn: () => api.memberTransfer(to.trim(), n, newKey()),
+    mutationFn: () => api.rpc.wallet.transfer({ headers: { "idempotency-key": newKey() }, body: { to_discord_id: to.trim(), amount: n } }),
     onSuccess: (r) => {
       setAsking(false);
       setAmount("");
@@ -190,12 +190,12 @@ export function Board() {
   const id = useId();
   const board = useQuery({
     queryKey: BOARD,
-    queryFn: ({ signal }) => api.publicBoard({ signal }),
+    queryFn: ({ signal }) => api.rpc.public.board(undefined, { signal }),
     refetchInterval: POLL_MS,
     retry,
   });
   const toggle = useMutation({
-    mutationFn: (on: boolean) => api.memberBoard(on),
+    mutationFn: (on: boolean) => api.rpc.wallet.board({ body: { on } }),
     onSuccess: (r) => {
       patch((v) => ({ ...v, on_board: r.on_board }));
       notify.ok(r.on_board ? "你上榜了" : "你已經退出榜單");
@@ -284,7 +284,7 @@ function OpenGoal({ goal, currency }: { goal: GoalView; currency: string }) {
   const n = Number(amount);
   const ok = Number.isInteger(n) && n >= 1;
   const pledge = useMutation({
-    mutationFn: () => api.memberPledge(goal.id, n, newKey()),
+    mutationFn: () => api.rpc.agency.pledge({ params: { id: goal.id }, headers: { "idempotency-key": newKey() }, body: { amount: n } }),
     onSuccess: (r) => {
       setAmount("");
       patch((v) => ({ ...v, balance: r.balance }));
@@ -348,7 +348,7 @@ export function Goals() {
   const currency = useWallet().data?.currency ?? "幣";
   const goals = useQuery({
     queryKey: GOALS,
-    queryFn: ({ signal }) => api.memberGoals({ signal }),
+    queryFn: ({ signal }) => api.rpc.agency.goals(undefined, { signal }),
     refetchInterval: POLL_MS,
     retry,
   });
@@ -412,7 +412,7 @@ export function Bounties() {
   const currency = useWallet().data?.currency ?? "幣";
   const bounties = useQuery({
     queryKey: BOUNTIES,
-    queryFn: ({ signal }) => api.memberBounties({ signal }),
+    queryFn: ({ signal }) => api.rpc.agency.bounties(undefined, { signal }),
     refetchInterval: POLL_MS,
     retry,
   });

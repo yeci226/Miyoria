@@ -1,9 +1,8 @@
-# One pnpm workspace for every TypeScript package. `spikes/` stays out (throwaway experiments
-# with their own lockfiles).
+# One pnpm workspace for every TypeScript package.
 packages:
   - "packages/*"
   - "apps/*"
+  - "tools/*"
   - "extensions/*"
   - "extensions/*/adapter"
   - "extensions/examples/*"
-  - "!spikes/**"

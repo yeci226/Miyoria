@@ -17,6 +17,9 @@
 // Wiring: the app provides `AuthStoreKey` (required) and `AuditLogKey` (optional) and registers
 // `AuthModule`, which provides `AuthServiceKey`, `AuthorizerKey` and `AuthorizerPreloadKey` and
 // registers the `admin role ...` / `admin perm ...` commands.
+//
+// Storage: the plugin owns its tables (`schema.ts`, `migrations.ts`). Core opens the store with
+// `authTables` and provides `store.plugin(authTables).store` as `AuthStoreKey`.
 
 export {
   ADMIN,
@@ -34,8 +37,8 @@ export {
   USER,
 } from "./builtin.js";
 export { AuthCommands, COMMAND_PATHS } from "./commands.js";
+export { authSchema } from "./migrations.js";
 export {
-  type AuthConfig,
   AuthConfigSchema,
   AuthModule,
   AuthServiceKey,
@@ -66,3 +69,11 @@ export {
   errorChain,
   PRELOAD_TIMEOUT_MS,
 } from "./service.js";
+export {
+  type AuthPlugin,
+  type AuthSession,
+  AuthSessions,
+  AuthTables,
+  authTables,
+  SESSION_PREFIX,
+} from "./tables.js";

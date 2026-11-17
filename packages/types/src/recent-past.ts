@@ -98,13 +98,11 @@ export interface PlaceSummary {
   last_at: Timestamp;
 }
 
-/** Provided by the `memory` module. DMs are never among the places. */
+/** What the `memory` module reads of the other places. DMs are never among them. */
 export interface Elsewhere {
   places(where: Whereabouts, signal?: AbortSignal): Promise<PlaceSummary[]>;
   render(where: Whereabouts, maxChars: number, signal?: AbortSignal): Promise<string>;
 }
-
-export const ElsewhereKey = serviceKey<Elsewhere>("Elsewhere");
 
 // ---- threads with a person --------------------------------------------------------------------
 
@@ -183,7 +181,24 @@ export interface PersonProfile {
   handle: Handle;
   /** Relationship label and level, `null` when she has no card. */
   label: string | null;
+  /** Her 羈絆 level with them (-100..1000). */
   level: number | null;
+  /** Her owner (主人); absent on older producers. */
+  owner?: boolean;
+  /** How much she trusts them (0..100), `null` when not known; absent on older producers. */
+  trust?: number | null;
+  /**
+   * The slow values of the heart as words (`heartWords`: trust, familiarity, respect, ease,
+   * rapport), when the heart has a row for them; they replace `trust`'s number. The fast ones
+   * (warmth, grudge, longing) are block 7's. Absent: no row, or an older producer.
+   */
+  values?: {
+    trust: string;
+    familiarity: string;
+    respect: string;
+    ease: string;
+    rapport: string;
+  } | null;
   call_name: string | null;
   feeling: string | null;
   stance: string | null;
@@ -233,6 +248,8 @@ export interface TurnRetrievalQuery extends RetrievalQuery {
   recent?: readonly string[];
   /** The people she is talking with: a few of their key memories come back without a shared word. */
   talking_with?: readonly PersonId[];
+  /** A spoken turn: a search waits for its query's vector only the voice wait. */
+  voice?: boolean;
 }
 
 // ---- place access ----------------------------------------------------------------------------

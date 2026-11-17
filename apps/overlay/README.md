@@ -54,8 +54,8 @@ OBS:新增「瀏覽器」來源,網址 `http://127.0.0.1:7884/overlay/`,寬 1920
 這些不用手動建:在直播機上執行
 
 ```bash
-npx miyoria stage obs-setup --dry-run   # 先看會做什麼,不改 OBS
-npx miyoria stage obs-setup             # 建好場景和來源
+pnpm dlx miyoria stage obs-setup --dry-run   # 先看會做什麼,不改 OBS
+pnpm dlx miyoria stage obs-setup             # 建好場景和來源
 ```
 
 它照 `[stage.obs]` 連上 OBS,依 `[modules."stage.link".scenes] roles` 的 `sing` / `chat` / `game` 場景(沒設時是「唱歌」「聊天」,沒有 `game` 就不動遊戲場景)建好下面的版面,並把圓角遮罩寫到 `[stage] data_dir`。只會新增和更新 Miyoria 自己的來源;已經有的項目不會被搬動(要重新擺回預設位置用 `--relayout`),場景裡其他擷取 VTube Studio 的來源只會被隱藏、不會刪掉。版面依 OBS 的基礎解析度等比縮放。

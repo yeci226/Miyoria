@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import type { ActivitySnapshot, ActivityTask } from "@/api/types";
+import type { ActivitySnapshot, ActivityTask } from "@miyoria/contracts/api";
 import { useActivity, useActivityTasks } from "@/app/queries";
 import { EmptyLine, QueryView } from "@/components/query-state";
 import { StatusBadge, type Tone } from "@/components/status";

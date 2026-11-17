@@ -127,6 +127,30 @@ export interface MemoryRetrieval {
 
 export const MemoryRetrievalKey = serviceKey<MemoryRetrieval>("MemoryRetrieval");
 
+// ---- before a compaction --------------------------------------------------------------------
+
+/**
+ * What came of `SegmentFlush.beforeCompaction`: `done` every segment up to the cut was passed (or
+ * there was none); `late` the wait ran out and the pass goes on behind the compaction; `failed`
+ * the pass failed or is waiting to be retried; `off` the segment pass does not run here.
+ */
+export type SegmentFlushOutcome = "done" | "late" | "failed" | "off";
+
+/**
+ * Provided by the `memory` module: the segment pass of her memory (v5-brain.md, 記憶收成兩個寫入點)
+ * over a session's transcript, asked for before a compaction summarises its oldest lines.
+ */
+export interface SegmentFlush {
+  /**
+   * Passes the segments of `session` up to sequence `uptoSeq`. Waits at most the memory's own
+   * bound (`[modules.memory.segment] compaction_wait_ms`) and never throws: what is not done by
+   * then is done later in the background, from the lines still on disk.
+   */
+  beforeCompaction(session: string, uptoSeq: number): Promise<SegmentFlushOutcome>;
+}
+
+export const SegmentFlushKey = serviceKey<SegmentFlush>("SegmentFlush");
+
 // ---- notes about a person -------------------------------------------------------------------
 
 /**

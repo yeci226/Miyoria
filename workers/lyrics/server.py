@@ -1,9 +1,12 @@
-"""Lyrics service: finds synced lyrics for a song, for a song worker that runs on another machine.
+"""Lyrics service: finds synced lyrics for a song, for a song worker on another machine that has not joined.
 
-It runs where Core's language model and the ASR worker are (it reads ``miyoria.toml`` ``[llm]`` and
-asks ``SING_LYRICS_ASR_URL`` to spot-check the lyrics against the lead vocal), so the machine that
-makes the songs needs neither a model key nor a route to the ASR worker. The lookup itself is
-``workers/sing/lyrics.py`` (title readings, lrclib / NetEase, the language model, the checks), unchanged.
+A song worker on a machine that joined the cluster does its lyrics itself and asks Core through its hostd for
+the language model and the ASR spot check; it does not need this service. This one stays for a setup that has
+not moved (the song worker's ``SING_LYRICS_URL``). It does not read Core's config: the lookup
+(``workers/sing/lyrics.py``: title readings, lrclib / NetEase, the language model, the checks) gets its model
+and its ASR the same way the song worker does: through hostd when hostd runs this service, else from the
+explicit ``SING_LYRICS_LLM_URL`` / ``_KEY`` / ``_MODEL`` and ``SING_LYRICS_ASR_URL`` (default the ASR worker
+on this machine, ``http://127.0.0.1:8003``).
 
     POST /lyrics   multipart: ``hints`` (JSON), ``duration`` (s, optional), ``fresh`` (0/1, optional),
                    ``audio`` (the lead vocal as a wav, optional: needed for the ASR spot check)
@@ -13,7 +16,8 @@ makes the songs needs neither a model key nor a route to the ASR worker. The loo
 Environment: HOST / PORT (default 127.0.0.1 / 8007), the same ``SING_LYRICS_*`` settings as the song
 worker (``SING_LYRICS_LLM*``, ``SING_LYRICS_ASR`` / ``SING_LYRICS_ASR_URL``, ``SING_LYRICS_NETEASE``,
 ``SING_LYRICS_BUDGET_S``), ``LYRICS_CACHE_DIR`` (the language model's answers; default ``data/songs/_lyrics``).
-There is no authentication: bind it to a private address (Tailscale) only.
+Started by hand (no ``MIYORIA_SERVICE_TOKEN``) there is no authentication: bind it to a private address
+(Tailscale) only.
 """
 
 from __future__ import annotations
@@ -31,13 +35,24 @@ from fastapi.responses import JSONResponse
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "sing"))  # lyrics.py / lyricsllm.py live with the song worker
+sys.path.insert(1, str(HERE.parent))  # service_auth.py, shared by the workers
 
 import lyrics  # noqa: E402
+
+try:
+    import service_auth
+except ImportError:  # never run open: with a token set, no check means no service
+    if os.environ.get("MIYORIA_SERVICE_TOKEN") or os.environ.get("MIYORIA_HOST_TOKEN"):
+        raise SystemExit("MIYORIA_SERVICE_TOKEN or MIYORIA_HOST_TOKEN is set but service_auth.py cannot be "
+                         "imported: refusing to start without the token check")
+    service_auth = None
 
 log = logging.getLogger("miyoria.lyrics")
 MAX_AUDIO_BYTES = 64 * 1024 * 1024
 
 app = FastAPI(title="miyoria-lyrics")
+if service_auth is not None:
+    service_auth.install(app)  # every route needs the bearer token when hostd set one
 
 
 def cache_dir() -> Path:

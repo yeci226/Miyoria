@@ -1,23 +1,37 @@
+import { BondRing } from "@miyoria/card-face";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useDeferredValue, useMemo, useState } from "react";
-import type { PersonSummary } from "@/api/types";
+import type { PersonRow } from "@miyoria/contracts/api";
 import { usePeople } from "@/app/queries";
 import { SearchInput } from "@/components/controls";
 import { DataTable } from "@/components/data-table";
 import { Toolbar } from "@/components/page";
 import { QueryView } from "@/components/query-state";
-import { Bipolar, Meter } from "@/components/status";
+import { Meter } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { fmtDateTime, fmtRelative } from "@/lib/format";
 import { AffinityTrends } from "./AffinityTrends";
+import { tierText } from "./heart";
+
+/** The list's small ring and the bond beside it. */
+export function BondMark({ row }: { row: PersonRow }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span aria-hidden className="size-7 shrink-0 [&>svg]:size-full">
+        <BondRing {...row.ring} size="mark" title={tierText(row)} />
+      </span>
+      <span className="w-9 text-right font-mono text-xs tabular-nums">{String(Math.round(row.bond)).replace("-", "−")}</span>
+    </div>
+  );
+}
 
 export function PeopleTab({ onOpen }: { onOpen: (id: string) => void }) {
   const [q, setQ] = useState("");
   const deferred = useDeferredValue(q.trim());
   const people = usePeople({ q: deferred || undefined, limit: 200 });
 
-  const columns = useMemo<ColumnDef<PersonSummary>[]>(
+  const columns = useMemo<ColumnDef<PersonRow>[]>(
     () => [
       {
         id: "name",
@@ -44,48 +58,40 @@ export function PeopleTab({ onOpen }: { onOpen: (id: string) => void }) {
         id: "label",
         header: "關係",
         meta: { className: "whitespace-nowrap" },
-        cell: ({ row }) => row.original.label ?? <span className="text-muted-foreground">—</span>,
+        cell: ({ row }) => tierText(row.original),
       },
       {
         id: "affinity",
-        header: "好感",
-        meta: { className: "hidden w-36 sm:table-cell" },
-        cell: ({ row: { original: p } }) =>
-          p.relationship ? (
-            <div className="flex items-center gap-2">
-              <Bipolar value={p.relationship.affinity} label={`好感 ${Math.round(p.relationship.affinity)}`} />
-              <span className="w-8 text-right font-mono text-xs">{Math.round(p.relationship.affinity)}</span>
-            </div>
-          ) : (
-            <span className="text-muted-foreground">—</span>
-          ),
+        header: "羈絆",
+        meta: { className: "hidden w-28 sm:table-cell" },
+        cell: ({ row: { original: p } }) => (p.has_row ? <BondMark row={p} /> : <span className="text-muted-foreground">—</span>),
       },
       {
         id: "trust",
         header: "信任",
         meta: { className: "hidden w-24 md:table-cell" },
         cell: ({ row: { original: p } }) =>
-          p.relationship ? <Meter value={p.relationship.trust / 100} tone="brand" label={`信任 ${Math.round(p.relationship.trust)}`} /> : null,
+          p.has_row ? <Meter value={p.trust / 100} tone="brand" label={`信任 ${Math.round(p.trust)}`} /> : null,
       },
       {
         id: "familiarity",
         header: "熟悉",
         meta: { className: "hidden w-24 md:table-cell" },
         cell: ({ row: { original: p } }) =>
-          p.relationship ? <Meter value={p.relationship.familiarity / 100} label={`熟悉 ${Math.round(p.relationship.familiarity)}`} /> : null,
+          p.has_row ? <Meter value={p.familiarity / 100} label={`熟悉 ${Math.round(p.familiarity)}`} /> : null,
       },
       {
         id: "interactions",
         header: "互動",
         meta: { className: "hidden w-16 text-right lg:table-cell" },
-        cell: ({ row }) => row.original.relationship?.interactions ?? 0,
+        cell: ({ row }) => row.original.interactions,
       },
       {
         id: "last",
         header: "最近",
         meta: { className: "w-24 whitespace-nowrap text-muted-foreground" },
         cell: ({ row: { original: p } }) => {
-          const at = p.relationship?.last_interaction;
+          const at = p.last_interaction;
           return at ? (
             <time dateTime={at} title={fmtDateTime(at)}>
               {fmtRelative(at)}

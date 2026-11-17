@@ -1,10 +1,18 @@
 // Gifts: the protocol messages, the `stage.expression` capability, a gift expression on the model
 // (and her own face coming back), and the overlay's merged gift line.
 
-import { ActuatorRegistry } from "@miyoria/actions";
-import { ServiceRegistry } from "@miyoria/kernel";
-import { ToolRegistry } from "@miyoria/tools";
-import { customEvent, Principals } from "@miyoria/types";
+import { ActuatorRegistry } from "@miyoria/gate/actions";
+import { ToolRegistry } from "@miyoria/llm/tools";
+import { ServiceRegistry } from "@miyoria/runtime/kernel";
+import {
+  type AnyEventDefinition,
+  type Envelope,
+  type EventPayload,
+  Events,
+  eventEnvelope,
+  Principals,
+  type PublishMetaArgs,
+} from "@miyoria/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AvatarLoop,
@@ -25,6 +33,13 @@ import {
 } from "../src/index.js";
 import type { VtsClient } from "../src/vts.js";
 import { Watch } from "../src/watch.js";
+
+/** An event as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  def: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+): Envelope => eventEnvelope("test", def, data, ...meta);
 
 afterEach(() => vi.useRealTimers());
 
@@ -54,7 +69,7 @@ describe("gift messages", () => {
   it("the forwarder turns economy.gift into gift and drops junk", () => {
     const f = new Forwarder(false);
     const gift = { name: " Owen ", item: "dessert", count: 3.9, label: "一份甜點" };
-    expect(f.onEvent(customEvent("economy.gift", gift))).toStrictEqual([
+    expect(f.onEvent(ev(Events.EconomyGift, gift as never))).toStrictEqual([
       { type: "gift", name: "Owen", item: "dessert", count: 3, label: "一份甜點" },
     ]);
     for (const bad of [
@@ -64,7 +79,7 @@ describe("gift messages", () => {
       { ...gift, count: 0 },
       "nope",
     ]) {
-      expect(f.onEvent(customEvent("economy.gift", bad as never)), JSON.stringify(bad)).toEqual([]);
+      expect(f.onEvent(ev(Events.EconomyGift, bad as never)), JSON.stringify(bad)).toEqual([]);
     }
   });
 });

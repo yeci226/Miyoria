@@ -39,9 +39,18 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(1, str(Path(__file__).resolve().parent.parent))  # service_auth.py, shared by the workers
 
 from features import SAMPLE_RATE  # noqa: E402
 from models import FRAME, SileroVad, SmartTurn, load  # noqa: E402
+
+try:
+    import service_auth
+except ImportError:  # never run open: with a token set, no check means no service
+    if os.environ.get("MIYORIA_SERVICE_TOKEN") or os.environ.get("MIYORIA_HOST_TOKEN"):
+        raise SystemExit("MIYORIA_SERVICE_TOKEN or MIYORIA_HOST_TOKEN is set but service_auth.py cannot be "
+                         "imported: refusing to start without the token check")
+    service_auth = None
 
 log = logging.getLogger("miyoria.turn")
 
@@ -86,6 +95,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Miyoria end-of-turn worker", lifespan=lifespan)
+if service_auth is not None:
+    service_auth.install(app)  # every route needs the bearer token when hostd set one
 
 
 def _error(status: int, message: str) -> JSONResponse:

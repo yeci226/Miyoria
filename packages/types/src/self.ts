@@ -1,6 +1,6 @@
 // Her inner state (docs/design/autonomy.md §4, §23): emotions (七情), drives (六欲), boredom,
-// the policy she sets for herself, her agenda and how she feels about people (her notes, the
-// romance she feels, her crush). Provided by the `self` module as `SelfStateKey`; her mood stays
+// the policy she sets for herself and her agenda. How she feels about people is the heart's
+// (`HeartKey`, `heart_person`). Provided by the `self` module as `SelfStateKey`; her mood stays
 // with the `mood` module (which follows her emotions through `SelfState.affect`) and is only
 // included in snapshots.
 
@@ -116,29 +116,6 @@ export interface ShownEmotion {
   masked: boolean;
 }
 
-/** How she feels about one person beyond the social numbers. */
-export interface Heart {
-  person: PersonId;
-  /** Last display name she saw (untrusted). */
-  name: string | null;
-  /** 心動 0..1: grows on its own from warm, flirty, caring moments with people she likes. */
-  romance: number;
-  /** Active emotions toward them (0..1, decayed to now; absent = none). */
-  emotions: Partial<Record<PersonEmotionName, number>>;
-  /** Last time she saw them say anything. */
-  last_seen: Timestamp | null;
-  /** Last time they spent time with her (talked to her, were in voice with her). */
-  last_together: Timestamp | null;
-}
-
-/** The person she secretly has a crush on (暗戀): the highest romance above the threshold. */
-export interface Crush {
-  person: PersonId;
-  name: string | null;
-  romance: number;
-  since: Timestamp;
-}
-
 /** Mood offsets her emotions push toward (added to the mood's target). */
 export interface Affect {
   valence: number;
@@ -205,15 +182,6 @@ export interface AgendaBlock {
   at: Timestamp;
 }
 
-/** Her own description of how she feels about someone. */
-export interface Feeling {
-  person: PersonId;
-  text: string;
-  updated_at: Timestamp;
-  /** Who wrote it: `"self"` (her), `"panel"`, ... */
-  by: string;
-}
-
 export interface SelfSnapshot {
   at: Timestamp;
   /** From the `mood` module; `null` while it is not running. */
@@ -228,9 +196,6 @@ export interface SelfSnapshot {
   emotions?: EmotionReading[];
   /** What she shows of it; `null` when nothing stands out. */
   shown?: ShownEmotion | null;
-  /** People she has feelings about (romance or active emotions), highest romance first. */
-  hearts?: Heart[];
-  crush?: Crush | null;
 }
 
 export interface TalkativenessInput {
@@ -281,11 +246,6 @@ export interface SelfState {
   /** Lifts the hold of an item; `null` when it is not open or not blocked. */
   unblockAgenda(id: string): AgendaItem | null;
 
-  feeling(person: PersonId): Feeling | null;
-  feelings(): Feeling[];
-  /** Replaces her description of `person`; empty text deletes it (returns `null`). */
-  setFeeling(person: PersonId, text: string, by: string): Promise<Feeling | null>;
-
   /** What she feels, strongest first, at or above `min` (default: the noticeable ones). */
   emotions(min?: number): EmotionReading[];
   /**
@@ -293,16 +253,10 @@ export interface SelfState {
    * how fast it rises. `person`: who it is about.
    */
   feel(emotion: EmotionName, amount: number, cause: string, person?: PersonId | null): void;
-  /** Stirs or calms an emotion toward one person (and the matching emotion of her own). */
-  feelToward(person: PersonId, emotion: PersonEmotionName, amount: number, cause: string): void;
   /** What she shows of her strongest emotion (display rules); `null` when nothing stands out. */
   shown(): ShownEmotion | null;
   /** Mood offsets of her current emotions; never reads the mood (the mood reads this). */
   affect(): Affect;
-  heart(person: PersonId): Heart | null;
-  /** People she has feelings about, highest romance first. */
-  hearts(): Heart[];
-  crush(): Crush | null;
   /** Recent samples of her emotions, drives and mood, oldest first. */
   history(): EmotionSample[];
 }

@@ -3,7 +3,7 @@
 import { Link } from "@tanstack/react-router";
 import { OctagonPause, Play } from "lucide-react";
 import type { ReactNode } from "react";
-import type { EmergencyReport, EmergencyStep, MindView } from "@/api/types";
+import type { EmergencyReport, EmergencyStep, MindView } from "@miyoria/contracts/api";
 import { useMind, useMindMutations, useQueue, useSongs, useStage, useVoice, useWorld } from "@/app/queries";
 import { Dot, type Tone } from "@/components/status";
 import { Button } from "@/components/ui/button";
@@ -16,8 +16,6 @@ export const HER_NAME = "DeepSeek-chan";
 export function mindState(m: MindView): { tone: Tone; label: string } {
   if (m.paused) return { tone: "warning", label: "已緊急停止" };
   if (!m.running) return { tone: "neutral", label: "心智迴圈未啟動" };
-  if (m.stats?.idle_reason === "budget exhausted") return { tone: "danger", label: "額度用完" };
-  if (!m.accepting) return { tone: "neutral", label: "休息中" };
   return { tone: "success", label: "運作中" };
 }
 

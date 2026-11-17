@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
-import type { ArbiterDecisionView, ArbiterVerdict, LedgerEntry, LedgerLimits, RaisedTopic } from "@/api/types";
+import type { ArbiterDecisionView, ArbiterVerdict, LedgerEntry, LedgerLimits, RaisedTopic } from "@miyoria/contracts/api";
 import { useArbiterDecisions, useLedger } from "@/app/queries";
 import { Toolbar } from "@/components/page";
 import { EmptyLine, QueryView } from "@/components/query-state";

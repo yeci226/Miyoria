@@ -1,8 +1,7 @@
-// `openStore(url)`: picks a backend from a store URL.
+// `openStore(url)`: opens the SQLite database a store URL names.
 
 import type { Clock } from "@miyoria/types";
 import { StoreError } from "./common.js";
-import { PostgresStore, type PostgresStoreOptions } from "./postgres.js";
 import { SqliteStore, type SqliteStoreOptions } from "./sqlite.js";
 import type { Store } from "./stores.js";
 
@@ -12,27 +11,25 @@ export const DEFAULT_STORE_URL = "sqlite:data/miyoria.db";
 export interface OpenStoreOptions {
   clock?: Clock;
   sqlite?: Omit<SqliteStoreOptions, "clock">;
-  postgres?: Omit<PostgresStoreOptions, "clock">;
 }
 
-export type StoreLocation =
-  | { backend: "sqlite"; path: string }
-  | { backend: "postgres"; url: string };
+/** The SQLite database a store URL names: a file path, or `:memory:`. */
+export interface StoreLocation {
+  path: string;
+}
 
 /**
  * Parses a store URL:
  * - `sqlite:<path>` / `sqlite://<path>`: a SQLite file (relative paths resolve against the
  *   working directory; `sqlite:///abs/path` is absolute);
- * - `sqlite::memory:`, `memory://`, `memory:`: a fresh in-memory SQLite database;
- * - `postgres://...` / `postgresql://...`: PostgreSQL.
+ * - `sqlite::memory:`, `memory://`, `memory:`: a fresh in-memory SQLite database.
+ *
+ * Anything else is refused. PostgreSQL was removed: Miyoria stores everything in SQLite.
  */
 export function parseStoreUrl(url: string): StoreLocation {
   const trimmed = url.trim();
   if (trimmed.startsWith("memory:") || trimmed === "sqlite::memory:") {
-    return { backend: "sqlite", path: ":memory:" };
-  }
-  if (trimmed.startsWith("postgres://") || trimmed.startsWith("postgresql://")) {
-    return { backend: "postgres", url: trimmed };
+    return { path: ":memory:" };
   }
   if (trimmed.startsWith("sqlite:")) {
     let path = trimmed.slice("sqlite:".length);
@@ -42,19 +39,24 @@ export function parseStoreUrl(url: string): StoreLocation {
     const query = path.indexOf("?");
     if (query >= 0) path = path.slice(0, query);
     if (path === "") throw new StoreError("store URL `sqlite:` has no path");
-    return { backend: "sqlite", path: path === ":memory:" ? ":memory:" : decodeURI(path) };
+    return { path: path === ":memory:" ? ":memory:" : decodeURI(path) };
   }
   // Never echo the URL itself: it may carry a password.
   const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(trimmed)?.[0] ?? "(none)";
-  throw new StoreError(`unsupported store URL scheme \`${scheme}\``);
+  if (/^postgres(ql)?:$/i.test(scheme)) {
+    throw new StoreError(
+      `PostgreSQL is no longer supported (store URL scheme \`${scheme}\`): ` +
+        "set `core.database_url` to `sqlite:<path>` (default `sqlite:data/miyoria.db`)",
+    );
+  }
+  throw new StoreError(
+    `unsupported store URL scheme \`${scheme}\`: use \`sqlite:<path>\` or \`memory://\``,
+  );
 }
 
-/** Opens the store a URL names and runs pending migrations. */
+/** Opens the SQLite database a URL names and runs pending migrations. */
 export async function openStore(url: string, options: OpenStoreOptions = {}): Promise<Store> {
-  const location = parseStoreUrl(url);
+  const { path } = parseStoreUrl(url);
   const clock = options.clock;
-  if (location.backend === "postgres") {
-    return PostgresStore.connect(location.url, { ...options.postgres, ...(clock && { clock }) });
-  }
-  return SqliteStore.open(location.path, { ...options.sqlite, ...(clock && { clock }) });
+  return SqliteStore.open(path, { ...options.sqlite, ...(clock && { clock }) });
 }

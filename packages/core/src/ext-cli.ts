@@ -1,7 +1,7 @@
-// What `miyoria ext ...` needs from the extension host (legacy `miyoria_ext_host::cli`). The
-// adapter to `@miyoria/ext-host` lives in `modules.ts`.
+// What `miyoria ext ...` needs from the extension host. The
+// adapter to `@miyoria/plugin-host/ext-host` lives in `modules.ts`.
 
-import type { Config } from "@miyoria/kernel";
+import type { Config } from "@miyoria/runtime/kernel";
 
 export interface ExtensionManifestInfo {
   id: string;
@@ -29,7 +29,7 @@ export interface ExtensionValidation {
 }
 
 export interface NewExtensionOptions {
-  /** `@miyoria/sdk` version spec: `workspace:*` inside the monorepo, `^0.1.0` elsewhere. */
+  /** `@miyoria/sdk` version spec: `workspace:*` inside the monorepo, `^0.2.0` elsewhere. */
   sdk: string;
   id: string | null;
 }

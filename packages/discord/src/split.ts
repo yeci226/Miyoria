@@ -68,7 +68,7 @@ function fittingPrefix(chars: readonly string[], start: number, limit: number): 
 
 /**
  * `[chunk end, next chunk start]` as code point indexes within `head`, searched in its second
- * half (by UTF-8 bytes, like the legacy implementation).
+ * half (by UTF-8 bytes).
  */
 function breakPoint(head: readonly string[]): [number, number] | null {
   const offsets: number[] = [];

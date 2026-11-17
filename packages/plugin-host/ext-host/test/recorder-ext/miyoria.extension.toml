@@ -1,0 +1,9 @@
+id = "test.recorder"
+version = "0.0.2"
+kind = ["events"]
+runtime = "node"
+entry = "index.mjs"
+placement = "core"
+
+[permissions]
+events = ["custom.*", "agent.turn.completed"]

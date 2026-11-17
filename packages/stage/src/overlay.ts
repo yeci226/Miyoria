@@ -6,7 +6,8 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
-import { getLogger } from "@miyoria/kernel";
+import type { OverlayMessage } from "@miyoria/contracts/overlay";
+import { getLogger } from "@miyoria/runtime/kernel";
 import { type Gift, GiftMerger } from "./gifts.js";
 import { closeOnAbort, type ServeResult } from "./lipsync.js";
 import { formatAddress, HttpServer } from "./net.js";
@@ -14,6 +15,11 @@ import type { Activity, CoreMessage, SpeakingState, StageStatus } from "./protoc
 import { type Touch, TouchThrottle } from "./touch.js";
 
 const log = getLogger("stage.overlay");
+
+/** The text frame of an overlay message. */
+function frame(msg: OverlayMessage): string {
+  return JSON.stringify(msg);
+}
 
 /** Messages an overlay client may lag behind before it is dropped (like a broadcast of 256). */
 const MAX_BUFFERED = 1 << 20;
@@ -55,20 +61,20 @@ export class OverlayHub {
   }
 
   subtitle(turn: string, text: string, isFinal: boolean): void {
-    const v = JSON.stringify({ type: "subtitle", turn, text, final: isFinal });
+    const v = frame({ type: "subtitle", turn, text, final: isFinal });
     this.#snapshot.subtitle = v;
     this.#send(v);
   }
 
   emotion(name: string, intensity: number): void {
-    const v = JSON.stringify({ type: "emotion", name, intensity });
+    const v = frame({ type: "emotion", name, intensity });
     this.#snapshot.emotion = v;
     this.#send(v);
   }
 
   /** A status line (`""` clears it). */
   notice(text: string): void {
-    const v = JSON.stringify({ type: "notice", text });
+    const v = frame({ type: "notice", text });
     this.#snapshot.notice = text === "" ? null : v;
     this.#send(v);
   }
@@ -79,7 +85,7 @@ export class OverlayHub {
    */
   activity(activity: Activity): void {
     this.#snapshot.activity = activity.kind === null ? null : { activity, at: this.#now() };
-    this.#send(JSON.stringify({ type: "activity", ...activity }));
+    this.#send(frame({ type: "activity", ...activity }));
   }
 
   /** Hides the activity line if it shows anything (Core went away). */
@@ -102,14 +108,14 @@ export class OverlayHub {
   gift(gift: Gift): void {
     const line = this.#gifts.add(gift, this.#now());
     if (line === null) return;
-    this.#send(JSON.stringify({ type: "gift", text: line }));
+    this.#send(frame({ type: "gift", text: line }));
     clearTimeout(this.#giftTimer);
     const wait = Math.max((this.#gifts.deadline() ?? this.#now()) - this.#now(), 0);
     // No newer gift reset this timer: the line is due.
     this.#giftTimer = setTimeout(() => {
       this.#gifts.expire(this.#now());
       this.#gifts.endLine();
-      this.#send(JSON.stringify({ type: "gift", text: "" }));
+      this.#send(frame({ type: "gift", text: "" }));
     }, wait);
     this.#giftTimer.unref?.();
   }
@@ -120,18 +126,18 @@ export class OverlayHub {
    */
   screen(card: Extract<CoreMessage, { type: "screen" }>): void {
     const { kind, name, text, song } = card;
-    this.#send(JSON.stringify({ type: "screen", kind, name, text, song }));
+    this.#send(frame({ type: "screen", kind, name, text, song }));
   }
 
   /** A viewer's touch, passed on (at most a few a second; the rest are dropped). Not kept for new clients. */
   touch(touch: Touch): void {
     if (this.#listeners.size === 0 || !this.#touches.allow(this.#now())) return;
     const { x, y, part } = touch;
-    this.#send(JSON.stringify({ type: "touch", x, y, part }));
+    this.#send(frame({ type: "touch", x, y, part }));
   }
 
   speaking(state: SpeakingState): void {
-    this.#send(JSON.stringify({ type: "speaking", state }));
+    this.#send(frame({ type: "speaking", state }));
   }
 
   /**
@@ -141,14 +147,14 @@ export class OverlayHub {
   levels(rms: number, bands: readonly number[] | null): void {
     if (this.#listeners.size === 0) return;
     const round = (v: number) => Math.round(v * 1e4) / 1e4;
-    const v: Record<string, unknown> = { type: "levels", rms: round(rms) };
+    const v: OverlayMessage = { type: "levels", rms: round(rms) };
     if (bands !== null && bands.length > 0) v.bands = bands.map(round);
-    this.#send(JSON.stringify(v));
+    this.#send(frame(v));
   }
 
   /** `core`: the Stage is connected to Core. */
   status(status: StageStatus, core: boolean): void {
-    const v = JSON.stringify({
+    const v = frame({
       type: "status",
       core,
       vts: status.vts,
@@ -165,14 +171,14 @@ export class OverlayHub {
     const s = this.#snapshot;
     const out = [s.status, s.emotion, s.subtitle, s.notice].filter((v): v is string => v !== null);
     const gift = this.#gifts.current(this.#now());
-    if (gift !== null) out.push(JSON.stringify({ type: "gift", text: gift }));
+    if (gift !== null) out.push(frame({ type: "gift", text: gift }));
     if (s.activity !== null) {
       const { activity, at } = s.activity;
       const elapsed =
         activity.elapsed_ms === null
           ? null
           : Math.round(activity.elapsed_ms + Math.max(this.#now() - at, 0));
-      out.push(JSON.stringify({ type: "activity", ...activity, elapsed_ms: elapsed }));
+      out.push(frame({ type: "activity", ...activity, elapsed_ms: elapsed }));
     }
     return out;
   }

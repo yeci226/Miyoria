@@ -1,4 +1,4 @@
-import { defineExtension } from "@miyoria/sdk";
+import { defineExtension, Events } from "@miyoria/sdk";
 
 interface HelloConfig {
   greeting?: string;
@@ -38,10 +38,14 @@ export default defineExtension({
       },
     });
 
+    // By definition: the handler gets `agent.turn.completed` with `data` typed as its payload.
+    // The manifest grants it (`[permissions] events`).
     let turns = 0;
-    ctx.events.on("agent.turn.completed", () => {
+    ctx.events.on(Events.AgentTurnCompleted, (envelope) => {
       turns += 1;
-      if (turns % 100 === 0) ctx.log.info("she has talked a lot today", { turns });
+      if (turns % 100 === 0) {
+        ctx.log.info("she has talked a lot today", { turns, last: envelope.data.text.slice(0, 40) });
+      }
     });
 
     ctx.log.info("hello extension activated", { greeting, maxDice });

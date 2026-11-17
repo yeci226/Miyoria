@@ -10,8 +10,6 @@ import { CommandError, type InvocationData } from "./spec.js";
 /** `owner` (a configured owner) > `admin` (guild admin) > `user`. */
 export type Role = "user" | "admin" | "owner";
 
-export const ROLE_RANK: Readonly<Record<Role, number>> = { user: 0, admin: 1, owner: 2 };
-
 const accountKey = (account: AccountRef): string => `${account.platform}\0${account.id}`;
 
 const GRANTS: Readonly<Record<Role, BuiltinRole>> = {

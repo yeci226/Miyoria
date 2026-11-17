@@ -9,9 +9,9 @@
 | 語言 / 執行環境 | **TypeScript 5.9(strict、ESM)+ Node 24**,pnpm 9 workspace(2026-11 從 Rust 原型改寫,見 ADR 13) | 原生 `fetch`、`AbortSignal`、`node:sqlite`;Core、Stage、voice node、面板、SDK 同一種語言 |
 | HTTP / SSE API | Hono(`@hono/node-server`)+ zod 驗證;typed client 在 `@miyoria/api` | Panel 與 CLI 共用同一套路由;沒有另外產生 OpenAPI |
 | 節點間連線 | WebSocket + JSON(音訊用二進位訊框),`ws` | 2026-11-01 改:原本規劃 gRPC,但在 Windows 要裝 protoc;WebSocket 夠用而且 TS 節點好寫 |
-| DB | **SQLite(`node:sqlite`,預設)**;PostgreSQL + pgvector(`pg`,選用) | 2026-11 改:預設不必裝資料庫,`npx miyoria init` 就能跑;server 部署或要大量向量檢索時用 Postgres。兩個後端共用同一份行為測試(`packages/store/test/behaviour.test.ts`)與對應的 migrations |
-| 中文全文檢索 | `@node-rs/jieba` 斷詞;SQLite 用 FTS5、Postgres 存成 `simple` 設定的 `tsvector` | 不需要在 Postgres 裝 zhparser 之類的擴充,Docker 映像檔維持原版;jieba 有預編譯的原生套件,不用編譯 |
-| 嵌入模型 | 可選:任何 OpenAI 相容的 `/embeddings` 端點(Ollama / LM Studio 跑 bge-m3,或雲端) | 不設也能用(全文 + 新舊 + 重要度);SQLite 在 JS 端算 cosine,Postgres 用 pgvector |
+| DB | **SQLite(`node:sqlite`)**,只有這一種 | 2026-11 改:預設不必裝資料庫,`pnpm dlx miyoria init` 就能跑。2026-11-14 V5 拿掉 PostgreSQL(見 [design/v5-data.md](design/v5-data.md) D1):它從沒對真資料庫測過,也沒有事件紀錄的實作,Core 是一台機器上的一個行程 |
+| 中文全文檢索 | `@node-rs/jieba` 斷詞,SQLite 用 FTS5 | jieba 有預編譯的原生套件,不用編譯 |
+| 嵌入模型 | 可選:任何 OpenAI 相容的 `/embeddings` 端點(Ollama / LM Studio 跑 bge-m3,或雲端) | 不設也能用(全文 + 新舊 + 重要度);SQLite 在 JS 端算 cosine |
 | Discord bot 帳號 | discord.js(跑在 Core) | 文字、指令 |
 | Discord self 帳號 🧪 | TS voice node:`discord.js-selfbot-v13` 登入 + **`@discordjs/voice`**(透過 selfbot 的 `voiceAdapterCreator`)收發語音 + `@dank074/discord-video-stream` 負責 Go Live | 讀過套件原始碼:selfbot 內建語音沒有 DAVE;`@discordjs/voice` 有 DAVE 且每人一條串流;video-stream 有 DAVE 但不能收音。同一帳號能否同時收音 + Go Live 待 spike 驗證 |
 | 指令 / 設定精靈 | 自己寫的小型指令解析器 + `@clack/prompts` | 繁中說明、`--yes` 給腳本用 |
@@ -25,7 +25,7 @@
 | ASR 🧪 | 兩個主要候選對打:**SenseVoice-Small**(sherpa-onnx、CPU 就能跑、附情緒 / 笑聲等事件標記)vs **Qwen3-ASR-0.6B / 1.7B**(2026-01 開源,Apache-2.0,52 種語言與方言、單一模型支援串流與離線、準確度較高,但要 Python + vLLM、吃 GPU)。Whisper large-v3-turbo 當第三選擇;雲端備援 | 都以 Python worker(`workers/`)接入;判斷標準見下方「ASR 選型」 |
 | TTS 🧪 | 首選候選 **Qwen3-TTS**(2026-01 開源,Apache-2.0,0.6B / 1.7B;中日英同一模型;串流首包宣稱 97ms;3 秒聲音複製;VoiceDesign 可以用文字描述「設計」聲音)。對照組 GPT-SoVITS(微調動漫角色聲音最成熟)、CosyVoice、IndexTTS2;雲端備援 | 以獨立 worker 服務接入 |
 | 繁簡轉換 | OpenCC(`opencc-js`),ASR 輸出與 TTS 輸入都經過 | 多數中文模型偏簡體輸出;她的文字要維持 zh-TW |
-| LLM 抽象 | 自己定義的薄介面(`@miyoria/llm`)+ OpenAI 相容 provider(直接用 `fetch` 打 HTTP) | 能精細控制 prompt caching 與串流工具呼叫;DeepSeek 的 `reasoning_content` 另外處理 |
+| LLM 抽象 | 自己定義的薄介面(`@miyoria/llm/llm`)+ OpenAI 相容 provider(直接用 `fetch` 打 HTTP) | 能精細控制 prompt caching 與串流工具呼叫;DeepSeek 的 `reasoning_content` 另外處理 |
 | 日誌 / 指標 | pino(一個 root logger,`MIYORIA_LOG_LEVEL`);Prometheus 文字格式的 `GET /metrics`(自己寫的小 registry) | OpenTelemetry 待做 |
 | Panel | React + Vite + TanStack Query/Router,深色極簡(用 impeccable skill) | 生態最大 |
 | 擴充執行環境 | Node(預設)/ Deno / Bun / 原生執行檔 | 跨行程 JSON-RPC |
@@ -66,15 +66,10 @@ Phase 0 用你朋友在 Discord 的真實錄音測(台灣腔中文、夾日英�
 11. **Minecraft 走客戶端模組**:她開真正的 Minecraft 客戶端,Fabric 橋接模組(Java)以 Baritone(+ AltoClef)提供技能與反射,透過本機 WebSocket 給 TS adapter 用;畫面就是她的遊戲視窗。mineflayer(fork minecraft-mcp-server)當備案。LLM 只下高階目標,不直接操作底層動作。
 12. **Profile = 一個完整角色**(人格 + LLM + 聲音 + Live2D);profile 內的人格段落可以在執行期修改(有版本紀錄)。LLM 的用途設定叫 `purposes`(避免跟對話 role、權限 role 混淆)。
 13. **從 Rust 改寫成 TypeScript**(2026-11):Phase 0–8 的 Rust 原型(留在 git 歷史裡)改寫成 pnpm workspace 裡的 `@miyoria/*` 套件,module id、設定鍵、事件 topic、JSON 格式與預設值都照舊,舊的測試一併移植。
-    - **為什麼**:voice node、面板、overlay、SDK、擴充本來就是 TS,Core 也改成 TS 之後只剩一種語言、一套工具(型別、測試、lint)與一個 lockfile;Discord(discord.js)、MCP、OBS 的官方 / 主流函式庫都在 Node 生態;散佈變成 `npx miyoria@latest init`,不用裝 Rust 工具鏈或下載各平台執行檔。效能瓶頸在 LLM 與語音推論(遠端 / Python worker),不在 Core。
-    - **Node 24 + pnpm 9**:Node 24 內建 `node:sqlite`、`fetch`、`AbortSignal.any`、`util.parseEnv`,少掉一批依賴;pnpm workspace 讓每個子系統是獨立套件(module 之間只能透過 `@miyoria/kernel` 的事件與 service registry 溝通),開發時 `tsx` 直接跑原始碼(`@miyoria/source` 匯出條件),發佈時用 esbuild 打成單一套件。
-    - **SQLite 預設、Postgres 選用**:個人使用不必先架資料庫,資料是一個檔案(`data/miyoria.db`,好備份);`node:sqlite` 是內建的,不需要原生編譯。server 部署或資料量大時改 `DATABASE_URL=postgres://…`(pgvector 做向量檢索)。兩個後端實作同一組 store 介面、跑同一份行為測試。取代舊決策「只支援 Postgres」。
+    - **為什麼**:voice node、面板、overlay、SDK、擴充本來就是 TS,Core 也改成 TS 之後只剩一種語言、一套工具(型別、測試、lint)與一個 lockfile;Discord(discord.js)、MCP、OBS 的官方 / 主流函式庫都在 Node 生態;散佈變成 `pnpm dlx miyoria@latest init`,不用裝 Rust 工具鏈或下載各平台執行檔。效能瓶頸在 LLM 與語音推論(遠端 / Python worker),不在 Core。
+    - **Node 24 + pnpm 9**:Node 24 內建 `node:sqlite`、`fetch`、`AbortSignal.any`、`util.parseEnv`,少掉一批依賴;pnpm workspace 讓每個子系統是獨立套件(module 之間只能透過 `@miyoria/runtime/kernel` 的事件與 service registry 溝通),開發時 `tsx` 直接跑原始碼(`@miyoria/source` 匯出條件),發佈時用 esbuild 打成單一套件。
+    - **SQLite 預設、Postgres 選用**:個人使用不必先架資料庫,資料是一個檔案(`data/miyoria.db`,好備份);`node:sqlite` 是內建的,不需要原生編譯。取代舊決策「只支援 Postgres」。2026-11-14 V5 再改成只留 SQLite(見 [design/v5-data.md](design/v5-data.md) D1)。
     - **WebSocket + JSON 連線**:voice link、stage link、Admin API 的 SSE 都是純文字 / JSON(音訊用二進位訊框),瀏覽器與 Node 都能直接用,不需要 protoc 或程式碼產生;協定文件在 `docs/protocols/`。
-14. **她看朋友的 Go Live**(2026-11,擁有者決定並自負風險):`[modules.watch]` 預設關閉(opt-in),第一階段只做 Discord Go Live,Twitch / YouTube 另開 spec。
-    - **self-bot 風險**:看別人的串流是新的 self-bot 行為,可能增加封號風險,沿用 ADR 9 的自負風險原則。voice node 用的是同一個 self 帳號,所以一個帳號被封,語音和 Go Live 會一起沒有。
-    - **只解密關鍵影格和音訊**:接收端平常不解碼影片,每次截圖才要一個關鍵影格(PLI)再轉 JPEG。已用真的 Go Live 實測(連看 30 分鐘,連線與語音穩定,關鍵影格與音訊解密成功)。
-    - **依賴函式庫私有欄位**:收串流要碰 `@dank074/discord-video-stream` 與 `@snazzah/davey` 的私有欄位,全部關在 `apps/voice-node/src/watch/connection.ts`;啟動先檢查,欄位改了就回 `failed`,語音不受影響。
-    - **隱私**:本人用 `/me privacy watch:off` 拒絕,開始看時發通知卡,通知送不出去就不看;截圖、筆記、轉錄不寫磁碟、不進長期記憶。
 
 ## 3. 風險
 

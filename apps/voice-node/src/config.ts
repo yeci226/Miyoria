@@ -1,5 +1,5 @@
 // Config comes from the environment (a `.env` next to package.json is loaded if present).
-import "dotenv/config";
+import "./env.js";
 import { parseLogLevel, type LogLevel } from "./log.js";
 
 export type GoLiveVoiceMode = "hybrid" | "exclusive";

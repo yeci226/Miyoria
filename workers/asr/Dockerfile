@@ -1,6 +1,6 @@
-# ASR worker. Build one backend per image:
-#   docker build --build-arg BACKEND=sensevoice -t miyoria-asr .   (CPU ONNX, tiny)
-#   docker build --build-arg BACKEND=qwen3      -t miyoria-asr .   (PyTorch + qwen-asr, GPU)
+# ASR worker. Build one backend per image, from workers/ (the image also needs workers/contracts.py):
+#   docker build -f asr/Dockerfile --build-arg BACKEND=sensevoice -t miyoria-asr .   (CPU ONNX, tiny)
+#   docker build -f asr/Dockerfile --build-arg BACKEND=qwen3      -t miyoria-asr .   (PyTorch + qwen-asr, GPU)
 # The CUDA runtime base is only needed for qwen3 / sensevoice with ASR_SENSEVOICE_PROVIDER=cuda;
 # the pip torch wheels bundle their own CUDA libs, the base image supplies the driver-facing bits.
 # FlashAttention 2 needs nvcc: use a -devel base and --build-arg FLASH_ATTN=1 (slow build).
@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && python3 -m venv /opt/venv
 
 WORKDIR /app
-COPY requirements.txt requirements-sensevoice.txt requirements-qwen3.txt ./
+COPY asr/requirements.txt asr/requirements-sensevoice.txt asr/requirements-qwen3.txt ./
 RUN if [ "$BACKEND" = "qwen3" ]; then \
         pip install torch --index-url "$TORCH_INDEX" && pip install -r requirements-qwen3.txt; \
         if [ "$FLASH_ATTN" = "1" ]; then pip install flash-attn --no-build-isolation; fi; \
@@ -37,7 +37,7 @@ ENV HF_HOME=/home/worker/.cache/huggingface \
     ASR_BACKEND=${BACKEND} \
     HOST=0.0.0.0 PORT=8001
 
-COPY --chown=worker server.py tags.py ./
+COPY --chown=worker asr/server.py asr/tags.py contracts.py service_auth.py ./
 EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
     CMD python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=4).status == 200 else 1)"

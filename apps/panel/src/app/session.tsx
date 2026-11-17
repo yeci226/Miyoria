@@ -1,5 +1,5 @@
 import { createContext, type ReactNode, useContext } from "react";
-import type { SessionInfo } from "../api/types";
+import type { SessionInfo } from "@miyoria/contracts/api";
 
 /** What the Core said about the signed-in user (`GET /api/auth/session`). */
 export interface SessionValue {

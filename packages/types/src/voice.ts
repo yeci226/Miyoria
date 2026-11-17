@@ -1,48 +1,14 @@
+import type { ContextKey, PlaybackState } from "@miyoria/contracts/wire";
 import type { TurnId } from "./ids.js";
-import type { AccountRef, Author, ContextKey } from "./platform.js";
 import { serviceKey } from "./service-key.js";
-import type { Timestamp } from "./time.js";
 
-/** Someone in a voice channel she is in. */
-export interface VoiceParticipant {
-  account: AccountRef;
-  display_name: string;
-  /** One of her own accounts. */
-  is_self: boolean;
-  muted: boolean;
-  deafened: boolean;
-}
-
-/** One finished, transcribed utterance of one speaker. */
-export interface VoiceUtterance {
-  id: string;
-  /** Kind `voice`; `scope` = guild, `channel` = voice channel. */
-  context: ContextKey;
-  speaker: Author;
-  text: string;
-  language: string | null;
-  /** Emotion tag from the ASR model, if it reports one (e.g. SenseVoice). */
-  emotion: string | null;
-  /** Non-speech events detected in the audio (laughter, applause, ...). */
-  audio_events: string[];
-  started_at: Timestamp;
-  ended_at: Timestamp;
-  /** Time from end of speech to transcript, in ms. */
-  asr_ms: number;
-  /** How the turn was judged over, when a model judges it (`turn_engine = "smart-turn"`). */
-  turn?: VoiceTurnEnd;
-}
-
-/** How a speaker's turn ended. */
-export interface VoiceTurnEnd {
-  /** `turn`: the model says they are done; `timeout`: the longest silence; else silence or cap. */
-  ended_by: string;
-  /** The model's last answer; `null` when it did not give one. */
-  probability: number | null;
-}
-
-/** Her own speech playback. `interrupted`: stopped early, e.g. someone talked over her. */
-export type PlaybackState = "started" | "finished" | "interrupted" | "failed";
+// What is heard and who is there are contracts (`@miyoria/contracts/wire`).
+export type {
+  PlaybackState,
+  VoiceParticipant,
+  VoiceTurnEnd,
+  VoiceUtterance,
+} from "@miyoria/contracts/wire";
 
 export type SpeakOutcome = "completed" | "interrupted";
 
@@ -145,7 +111,7 @@ export const VoiceFloorKey = serviceKey<VoiceFloor>("VoiceFloor");
  * Her speech is off for a while because something else has the GPU (the song worker converts a
  * song, and the TTS / ASR workers dropped their models for it). Meanwhile the voice module does
  * not send her lines to TTS nor utterances to ASR, and failures that say `offloaded` are
- * expected. Provided by `sing`; changes are published as `SPEECH_PAUSE_TOPIC`
+ * expected. Provided by `sing`; changes are published as `Events.SpeechPause`
  * (`{paused, reason}`).
  */
 export interface SpeechPause {
@@ -154,20 +120,3 @@ export interface SpeechPause {
 }
 
 export const SpeechPauseKey = serviceKey<SpeechPause>("SpeechPause");
-
-/** Topic of `{paused: boolean, reason: string | null}` custom events. */
-export const SPEECH_PAUSE_TOPIC = "speech.pause";
-
-/**
- * Topic of `{context, turn}` custom events: a line of hers was sent to TTS. Its `voice_playback`
- * `started` (first audio playing) or `failed` follows.
- */
-export const SPEECH_SYNTH_TOPIC = "voice.synthesis";
-
-/**
- * Topic of `{context, turn, text, emotion}` custom events: a line of hers is about to play, about
- * `subtitle_lead_ms` from now (`[modules.voice]`). Its subtitle goes up now, so that where the
- * picture runs late (Go Live) it still arrives with her voice. Its `voice_playback` `started`
- * follows, or nothing if it is dropped first (a barge-in).
- */
-export const VOICE_UPCOMING_TOPIC = "voice.upcoming";

@@ -9,7 +9,7 @@
 //   (`GET /api/events` is the live bus stream.)
 // * `GET /api/facts/events/:id`, `.../:id/chain` (its causes, oldest first), `.../:id/effects`
 //   (what it caused).
-// * `GET /api/facts/context`, `GET /api/facts/deliveries`, `GET /api/facts/retryable`.
+// * `GET /api/facts/deliveries`: what really reached someone.
 
 import {
   type ContextKey,
@@ -21,24 +21,28 @@ import {
   isLogEventKind,
   type LogEvent,
   type LogEventFilter,
-  WorkingContextKey,
 } from "@miyoria/types";
+import { os } from "./contract.js";
 import { parseContextKeyString } from "./data.js";
 import { ApiError } from "./errors.js";
-import { json, param, type Route } from "./route.js";
-import type { ApiContext, ApiState } from "./state.js";
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 
-function limitOf(c: ApiContext): number {
-  const raw = Number(c.req.query("limit") ?? DEFAULT_LIMIT);
-  if (!Number.isFinite(raw)) throw ApiError.badRequest("limit is not a number");
-  return Math.min(Math.max(Math.floor(raw), 1), MAX_LIMIT);
+/** A value of the query string; a number only when a caller of the typed client passed one. */
+type Raw = string | number | undefined;
+
+function limitOf(raw: Raw): number {
+  const n = Number(raw ?? DEFAULT_LIMIT);
+  if (!Number.isFinite(n)) throw ApiError.badRequest("limit is not a number");
+  return clampLimit(n);
 }
 
-function listOf(c: ApiContext, name: string): string[] | undefined {
-  const raw = c.req.query(name);
+function clampLimit(limit: number = DEFAULT_LIMIT): number {
+  return Math.min(Math.max(Math.floor(limit), 1), MAX_LIMIT);
+}
+
+function listOf(raw: string | undefined): string[] | undefined {
   if (raw === undefined || raw === "") return undefined;
   return raw
     .split(",")
@@ -46,43 +50,56 @@ function listOf(c: ApiContext, name: string): string[] | undefined {
     .filter((s) => s !== "");
 }
 
-function contextOf(c: ApiContext): ContextKey | undefined {
-  const raw = c.req.query("context");
+function contextOf(query: { context?: string; context_kind?: string }): ContextKey | undefined {
+  const raw = query.context;
   if (raw === undefined || raw === "") return undefined;
   const context = parseContextKeyString(raw);
   if (context === null) throw ApiError.badRequest("context is not a context key");
-  const kind = c.req.query("context_kind");
+  const kind = query.context_kind;
   return kind === undefined ? context : { ...context, kind: kind as ContextKind };
 }
 
-function timeOf(c: ApiContext, name: string): string | undefined {
-  const raw = c.req.query(name);
+function timeOf(name: string, raw: string | undefined): string | undefined {
   if (raw === undefined || raw === "") return undefined;
   if (Number.isNaN(Date.parse(raw))) throw ApiError.badRequest(`${name} is not a timestamp`);
   return raw;
 }
 
 /** The filter of a `GET /api/facts/events` request. */
-export function eventFilter(c: ApiContext): LogEventFilter {
-  const filter: LogEventFilter = { limit: limitOf(c) };
-  const kinds = listOf(c, "kind");
+function eventFilter(query: {
+  kind?: string;
+  source?: string;
+  person?: string;
+  attention_key?: string;
+  context?: string;
+  context_kind?: string;
+  since?: string;
+  until?: string;
+  before?: string;
+  after?: string;
+  order?: string;
+  turn?: string;
+  limit?: Raw;
+}): LogEventFilter {
+  const filter: LogEventFilter = { limit: limitOf(query.limit) };
+  const kinds = listOf(query.kind);
   if (kinds) {
     if (!kinds.every(isLogEventKind)) throw ApiError.badRequest("unknown event kind");
     filter.kinds = kinds;
   }
-  const sources = listOf(c, "source");
+  const sources = listOf(query.source);
   if (sources) filter.sources = sources;
-  const context = contextOf(c);
+  const context = contextOf(query);
   if (context) filter.context = context;
-  const since = timeOf(c, "since");
+  const since = timeOf("since", query.since);
   if (since !== undefined) filter.since = since;
-  const until = timeOf(c, "until");
+  const until = timeOf("until", query.until);
   if (until !== undefined) filter.until = until;
   for (const name of ["person", "attention_key", "turn", "before", "after"] as const) {
-    const value = c.req.query(name);
+    const value = query[name];
     if (value !== undefined && value !== "") filter[name] = value;
   }
-  const order = c.req.query("order");
+  const order = query.order;
   if (order === "asc" || order === "desc") filter.order = order;
   return filter;
 }
@@ -117,65 +134,33 @@ async function turnEvents(log: EventLog, filter: LogEventFilter): Promise<LogEve
   return found.slice(0, filter.limit ?? DEFAULT_LIMIT);
 }
 
-export function factRoutes(state: ApiState): Route[] {
-  const events = () => state.service(EventLogKey, "facts module");
-  const ledger = () => state.service(DeliveryLedgerKey, "facts module");
-  return [
-    {
-      method: "GET",
-      path: "/api/facts/events",
-      handler: async (c) => {
-        const filter = eventFilter(c);
-        return json(
-          filter.turn === undefined
-            ? await events().query(filter)
-            : await turnEvents(events(), filter),
-        );
-      },
-    },
-    {
-      method: "GET",
-      path: "/api/facts/events/:id",
-      handler: async (c) => {
-        const event = await events().get(param(c, "id"));
-        if (event === null) throw ApiError.notFound("no such event");
-        return json(event);
-      },
-    },
-    {
-      method: "GET",
-      path: "/api/facts/events/:id/chain",
-      handler: async (c) => {
-        const chain = await events().chain(param(c, "id"));
-        if (chain.events.length === 0) throw ApiError.notFound("no such event");
-        return json(chain);
-      },
-    },
-    {
-      method: "GET",
-      path: "/api/facts/events/:id/effects",
-      handler: async (c) => json(await events().effects(param(c, "id"), { limit: limitOf(c) })),
-    },
-    {
-      method: "GET",
-      path: "/api/facts/context",
-      handler: (c) => json(state.service(WorkingContextKey, "facts module").buckets(contextOf(c))),
-    },
-    {
-      method: "GET",
-      path: "/api/facts/deliveries",
-      handler: (c) => {
-        const context = contextOf(c);
-        return json(ledger().recent({ limit: limitOf(c), ...(context ? { context } : {}) }));
-      },
-    },
-    {
-      method: "GET",
-      path: "/api/facts/retryable",
-      handler: (c) => {
-        const context = contextOf(c);
-        return json(ledger().retryable({ limit: limitOf(c), ...(context ? { context } : {}) }));
-      },
-    },
-  ];
-}
+/** The fact routes on the route table (`@miyoria/contracts/api`). */
+export const factsRpc = {
+  events: os.facts.events.handler(async ({ input, context }) => {
+    const filter = eventFilter(input.query);
+    const log = context.state.service(EventLogKey, "facts module");
+    return filter.turn === undefined ? await log.query(filter) : await turnEvents(log, filter);
+  }),
+  event: os.facts.event.handler(async ({ input, context }) => {
+    const event = await context.state.service(EventLogKey, "facts module").get(input.params.id);
+    if (event === null) throw ApiError.notFound("no such event");
+    return event;
+  }),
+  chain: os.facts.chain.handler(async ({ input, context }) => {
+    const chain = await context.state.service(EventLogKey, "facts module").chain(input.params.id);
+    if (chain.events.length === 0) throw ApiError.notFound("no such event");
+    return chain;
+  }),
+  effects: os.facts.effects.handler(async ({ input, context }) => {
+    const log = context.state.service(EventLogKey, "facts module");
+    return log.effects(input.params.id, { limit: clampLimit(input.query.limit) });
+  }),
+  deliveries: os.facts.deliveries.handler(({ input, context }) => {
+    const ledger = context.state.service(DeliveryLedgerKey, "facts module");
+    const where = contextOf(input.query);
+    return ledger.recent({
+      limit: limitOf(input.query.limit),
+      ...(where ? { context: where } : {}),
+    });
+  }),
+};

@@ -4,7 +4,7 @@
 
 import { useMutation } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
-import type { FeedItem, FeedResult, GiftExpression, ShopItem, SpendResult, WalletView } from "@/api/types";
+import type { FeedItem, FeedResult, GiftExpression, ShopItem, SpendResult, WalletView } from "@miyoria/contracts/api";
 import { isNotProvided } from "@/api/http";
 import { useApi } from "@/app/connection";
 import { ConfirmDialog } from "@/components/confirm";
@@ -49,7 +49,7 @@ function WalletBody({ w }: { w: WalletView }) {
   useEffect(() => () => clearTimeout(timer.current), []);
 
   const checkin = useMutation({
-    mutationFn: () => api.memberCheckin(),
+    mutationFn: () => api.rpc.wallet.checkin({ body: {} }),
     onSuccess: (r) => {
       patch((v) => ({
         ...v,
@@ -68,7 +68,7 @@ function WalletBody({ w }: { w: WalletView }) {
   });
 
   const feed = useMutation({
-    mutationFn: (item: FeedItem) => api.memberFeed(item, 1, newKey()),
+    mutationFn: (item: FeedItem) => api.rpc.wallet.feed({ headers: { "idempotency-key": newKey() }, body: { item, count: 1 } }),
     onSuccess: (r: FeedResult, item) => {
       patch((v) => ({ ...v, balance: r.balance }));
       if (r.accepted) {
@@ -171,7 +171,7 @@ function Letter({ item, currency }: { item: ShopItem; currency: string }) {
   const count = [...text.trim()].length;
   const over = count > LETTER_MAX;
   const send = useMutation({
-    mutationFn: (t: string) => api.memberLetter(t, newKey()),
+    mutationFn: (t: string) => api.rpc.wallet.letter({ headers: { "idempotency-key": newKey() }, body: { text: t } }),
     onSuccess: (r: SpendResult) => {
       patch((v) => ({ ...v, balance: r.balance }));
       if (r.accepted) setText("");
@@ -218,7 +218,7 @@ function ScreenMessage({ item, currency }: { item: ShopItem; currency: string })
   const count = [...text.trim()].length;
   const over = count > SCREEN_MAX;
   const send = useMutation({
-    mutationFn: (t: string) => api.memberScreen(t, newKey()),
+    mutationFn: (t: string) => api.rpc.wallet.screen({ headers: { "idempotency-key": newKey() }, body: { text: t } }),
     onSuccess: (r: SpendResult) => {
       patch((v) => ({ ...v, balance: r.balance }));
       if (r.accepted) setText("");
@@ -279,7 +279,7 @@ function ExpressionRow({ item, currency }: { item: ShopItem; currency: string })
   const key = item.id.replace(/^expression:/, "");
   const label = EXPRESSION_LABEL[key] ?? item.label;
   const send = useMutation({
-    mutationFn: () => api.memberExpression(key as GiftExpression, newKey()),
+    mutationFn: () => api.rpc.wallet.expression({ headers: { "idempotency-key": newKey() }, body: { expression: key as GiftExpression } }),
     onSuccess: (r: SpendResult) => {
       patch((v) => ({ ...v, balance: r.balance }));
       say(r);
@@ -320,7 +320,7 @@ function FrameRow({ item, w }: { item: ShopItem; w: WalletView }) {
   const owned = w.frames.owned.includes(fid);
   const selected = w.frames.selected === fid;
   const run = useMutation({
-    mutationFn: (req: { buy?: string; select?: string | null }) => api.memberFrame(req, newKey()),
+    mutationFn: (req: { buy?: string; select?: string | null }) => api.rpc.wallet.frame({ headers: { "idempotency-key": newKey() }, body: req }),
     onSuccess: (r) => {
       patch((v) => ({ ...v, balance: r.balance, frames: { owned: r.owned, selected: r.selected } }));
       setAsking(false);

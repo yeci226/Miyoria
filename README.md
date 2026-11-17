@@ -13,84 +13,62 @@ Miyoria
 ![Node.js 24](https://img.shields.io/badge/Node.js-24-339933.svg?style=flat-square&logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/Core-TypeScript-3178C6.svg?style=flat-square&logo=typescript&logoColor=white)
 ![Python](https://img.shields.io/badge/Workers-Python-3776AB.svg?style=flat-square&logo=python&logoColor=white)
-![SQLite](https://img.shields.io/badge/Store-SQLite%20%7C%20Postgres-003B57.svg?style=flat-square&logo=sqlite&logoColor=white)
+![SQLite](https://img.shields.io/badge/Store-SQLite-003B57.svg?style=flat-square&logo=sqlite&logoColor=white)
 ![Discord](https://img.shields.io/badge/Platform-Discord-5865F2.svg?style=flat-square&logo=discord&logoColor=white)
 
-## From an empty folder to her first reply
+## Set up your own copy
 
-You need Node.js 24 and a Discord bot token. Everything else has a default.
-
-```bash
-npx miyoria@latest init       # writes miyoria.toml, .env and profiles/: LLM endpoint, API key, model, Discord token
-npx miyoria doctor            # checks the config, the character, the LLM, Discord and the database
-npx miyoria chat              # talk to her in the terminal, no Discord needed
-npx miyoria core              # the Discord bot, her mind loop and the admin panel at http://127.0.0.1:7878/
-npx miyoria stage             # on the streaming PC: VTube Studio, OBS and the overlay
-npx miyoria stage obs-setup   # builds her OBS scenes and sources (add --dry-run to preview)
-```
-
-Her data lives in `data/miyoria.db` (SQLite through `node:sqlite`, so there is no database to install). `npx miyoria config` changes settings one at a time. `miyoria status`, `miyoria decisions` (why she spoke or stayed quiet) and `miyoria events 'agent.*'` let you watch a running Core. `npx miyoria --help` lists everything.
-
-## Quick start: from a fresh clone to the bot online and answering in your server
-
-You need Node.js 24 (`miyoria install` fills in pnpm, Python and ffmpeg), a Discord bot token (Developer Portal → Bot, with Message Content Intent turned on; by default she also needs the Presence and Server Members intents, and if you don't want them, run `miyoria config set modules."platform.discord.bot".presence_intents false` later), and an LLM API key (DeepSeek or any OpenAI-compatible service). **No GPU is needed**: speech recognition and synthesis, singing, VTube Studio, OBS and Minecraft are all optional and off by default, so out of the box she only chats in text.
+Start with [docs/SETUP.md](docs/SETUP.md) (Traditional Chinese): from an empty folder to her first reply in Discord, text only and no GPU, with voice, singing and a second machine as optional chapters. The npm package is not published yet; the page shows the repository path that works today.
 
 ```bash
 git clone <this repo> && cd Miyoria
-node scripts/setup.mjs        # checks pnpm (enables it through corepack if missing), runs pnpm install, then opens miyoria init
+node scripts/setup.mjs     # needs Node.js 24: checks pnpm, installs packages, then runs `miyoria init`
+pnpm build:web             # the admin panel (only when running from the repository)
+pnpm dev up                # `miyoria up`: starts hostd, which starts Core; the panel is at http://127.0.0.1:7878/
 ```
 
-`miyoria init` only asks what it needs: the LLM key, the Discord token and what this machine runs (the default is "core only", which is text chat with no GPU). At the end it asks once whether to install what this machine is missing now, with a list and the sizes. Then:
+You need Node.js 24, a Discord bot token and an LLM API key; no GPU. In the repository `pnpm dev <command>` is the same as `miyoria <command>`. Her data lives in `data/miyoria.db` (SQLite through `node:sqlite`, so there is no database to install). `miyoria config` changes settings one at a time. `miyoria status` lists this machine's services (state, health, port) and, when Core answers, its modules and LLM usage; `miyoria decisions` (why she spoke or stayed quiet) and `miyoria events 'agent.*'` let you watch a running Core. `miyoria --help` lists everything.
+
+## Several machines: hostd, add and up
+
+Every machine runs one small daemon, hostd. It reads `host.toml` (what this machine runs) and each service's `service.toml` (its port, health check and what it needs installed), starts the services, restarts one that crashes, and keeps its logs. Core, the voice node, Stage, the GPU workers (`asr`, `tts`, `sing`, `turn`, `lyrics`) and MediaMTX are all services with a folder and a `service.toml`. The pieces that need the GPU are the Python workers; `sing` asks `asr` and `tts` to give up the card while it makes a song, so those three belong on the same machine.
+
+In the source folder (`pnpm dev <command>` is the same as `miyoria <command>`). The workers need [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pnpm dev doctor               # checks Node, pnpm, the LLM, Discord, the database and what the chosen roles still lack
-pnpm dev start                # starts in Windows Terminal tabs (other systems: pnpm dev core)
-pnpm dev chat                 # or chat with her in the terminal first, no Discord needed
+miyoria init                  # first question: what this machine does (text chat, text plus voice, or only serve another machine's Core); writes host.toml
+miyoria add asr tts turn      # builds each service's environment with uv and downloads the small files; lists what you still place by hand
+miyoria doctor                # what this machine lacks: environments, model files, ports, the link to Core
+miyoria up                    # starts hostd in the background; it starts every service host.toml enables
+miyoria status                # each service's state, health and port; --all also lists every machine Core knows
+miyoria logs asr -f           # one service's log
+miyoria down                  # stops every service and ends hostd
+miyoria update                # pull, rebuild what is out of date, sync environments, restart one at a time
 ```
 
-To add voice, singing or streaming, run `miyoria init` again to change the roles (`inference` = ASR, TTS and singing, needs an NVIDIA GPU; `broadcast` = voice node and stage), then run `miyoria install`.
+`restart`, `down` and `update` refuse to touch Core, the voice node or Stage while she is singing or live (`--force` overrides). Details are in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-Windows only: the tabs of `miyoria start` (other systems use `miyoria up` or `miyoria core`), automatic installs through `winget` (macOS uses Homebrew; on Linux it prints the apt or dnf command and doesn't run sudo for you), and OBS, VTube Studio and the voice node's Go Live on the streaming PC (only tested on Windows). `miyoria install` doesn't install these, it only checks them and explains what to do: NVIDIA drivers and CUDA, Docker Desktop, OBS, VTube Studio, Minecraft and Prism Launcher. Workarounds for a particular machine (antivirus locking esbuild's temp files, ports reserved by WinNAT) are not default steps; `miyoria doctor --deep` only suggests them when something goes wrong.
-
-## Several machines: roles, install and start
-
-The services are split into three roles, and each machine only runs the ones you pick (the names live in `packages/cli/src/stack/roles.ts`, the only place to change them):
-
-| Role | Services | What it does |
-|---|---|---|
-| `broadcast` (streaming PC) | `voice-node`, `stage` | Discord voice and Go Live, VTube Studio, OBS and the overlay. OBS, VTube Studio and games also run here, but Miyoria doesn't start them |
-| `core` (bot server) | `core`, `turn` | The Discord bot, every module, the database and the admin panel (:7878). `turn` is the worker that decides when someone has finished speaking (used with `vad_engine = "silero"`). The file sandbox needs Docker |
-| `inference` (GPU machine) | `asr`, `tts`, `sing` | Every AI model. The three must be on the same machine, because sing asks the other two to give up the GPU while it makes a song |
-
-In the source folder (`pnpm dev <command>` is the same as `miyoria <command>`):
+A second machine, for example the one with the GPU, does not need its own Discord token, LLM key or database. It joins the Core:
 
 ```bash
-miyoria init                  # first question: what this machine runs (everything, one role, or custom); with several machines it then asks for each role's LAN address
-miyoria init --yes --roles inference --inference-host 192.168.1.20   # non-interactive (--roles: all, role or service names, comma separated)
-miyoria install --dry-run     # installs only what this machine needs: node packages and builds, each worker's venv and pip; lists what to download by hand at the end
-miyoria install
-miyoria doctor                # what this machine's roles lack: packages, venvs, model files, Docker, the other machines' addresses and connections
-miyoria start --dry-run       # which tabs it would open and which it skips because they are already running
-miyoria start                 # the roles set for this machine; one Windows Terminal tab per service
-miyoria start inference       # or name a role or service: broadcast, core, inference, all, asr, tts ...
+miyoria host invite                                  # on the Core machine: prints a one-time code (10 minutes) and the command for the other machine
+miyoria host join <core-address> --code <code>       # on the other machine
+miyoria host approve <name>                          # on the Core machine: until then the other machine's services are not used
+miyoria up                                           # on the other machine
 ```
 
-`miyoria start` opens one tab per service (in the same Windows Terminal window, `miyoria`), so you can see the output; close a tab or press Ctrl+C in it to stop that service. A service that already answers its health check, has something on its port or still has its tab open is not started a second time. Nothing is restarted automatically and nothing is stopped. On the GPU machine, asr and tts start first, and sing starts once they are ready. `miyoria up` is the other option: it runs in the background, writes logs to files and stops everything on Ctrl+C. Both commands read the same `[machine]` section.
+The other machine dials out to Core's control link (port 7880). Core's requests, and big files such as finished songs, travel back over that same connection, so the other machine opens no port and needs no firewall rule. Only the speech workers (`asr`, `tts`, `turn`) need a direct address, because live voice does not go through the relay: set `[network] advertise` in that machine's `host.toml`. The step-by-step version is in [docs/SETUP.md](docs/SETUP.md) (second machine) and [docs/sing-remote-host.md](docs/sing-remote-host.md) (lending a GPU for singing).
 
-The settings are in `miyoria.toml` (not in git):
+`host.toml` is not in git (`join` adds `[cluster] url` to it). A minimal one:
 
 ```toml
-[machine]
-roles = ["core"]               # broadcast | core | inference, more than one is fine; one machine = all three
-# services = ["core", "asr"]   # custom: list the services directly; this replaces roles
-[machine.hosts]
-core = "192.168.1.10"          # the machine running core: core binds this address (admin API / voice.link / stage.link), the streaming PC connects to it
-inference = "192.168.1.20"     # the machine running asr / tts / sing: the workers bind this address, core connects to it
+name = "gpu-pc"
+[services.asr]
+[services.tts]
+[services.sing]
 ```
 
-When everything is on one machine, both addresses are `127.0.0.1` (the default). When they are split, `miyoria init` writes the addresses where they are used: Core's `bind`, stage's `core_url`, `ASR_URL` / `TTS_URL` in `.env`, and `[modules.sing] url`. The streaming PC needs core's `STAGE_LINK_TOKEN` / `VOICE_LINK_TOKEN` (init asks you to paste them), and the voice node also needs `SELF_TOKEN` in `apps/voice-node/.env`. One thing is not handled yet when running split (see the [backlog](docs/design/backlog.md)): the Minecraft extension launches the game on the core machine. Song videos are fetched from the sing worker into Core's own `data/songs`, so Core and Stage must share a machine.
-
-Old config files without `[machine]` behave as before.
+Old config files with `[machine]` and `[stack]` are no longer read; `miyoria host migrate` writes a `host.toml` from them. One thing is not handled yet when running split (see the [backlog](docs/design/backlog.md)): the Minecraft extension launches the game on the core machine. Song videos are fetched from the sing worker into Core's own `data/songs`, so Core and Stage must share a machine.
 
 ## Autonomy at a glance
 
@@ -117,7 +95,6 @@ start = "decide"              # she picks the moment; a requested song starts on
 | Stream | Goes live on Discord through OBS, drives a Live2D model in VTube Studio (emotions, gestures, lip sync, idle motion), and picks OBS scenes |
 | Singing | Turns a song request (YouTube or a local file) into a cover in her voice (Demucs + Seed-VC), sings it with lyrics on the overlay, and shows the original video |
 | Games | Plays Minecraft 1.21.1 legitimately through a Fabric bridge and Baritone (no x-ray, real progression, crafting), with live commentary |
-| Watching | Watches a friend's Discord Go Live when she decides to (off by default): a screenshot every 30 seconds goes to a vision model, and she speaks up at most about once a minute. Anyone can opt out with `/me privacy watch:off` |
 | Overlay | An OBS browser source with typewriter subtitles, an emotion dot, live status, the request queue and voice bars along the left edge |
 | Web | Searches and reads web pages (up to 12,000 characters each, treated as data, never as instructions) and browses on stream |
 | Workspace | A named sandbox workspace where she writes files and runs code, with a network that only reaches an allow-list |
@@ -137,6 +114,7 @@ apps/overlay      OBS browser-source overlay, served by the Stage node on :7884
 apps/voice-node   Self-account voice node: Discord voice and Go Live streaming
 workers/          Python GPU workers: asr (:8003), tts (:8002), sing (:8005), plus fakes for testing
 extensions/       The Minecraft bridge mod and adapter, and example extensions
+tools/            Developer tools that Core does not load: the incident eval set, the replay harness, the card renderer
 profiles/         Characters: persona, voice, avatar mapping (the first one is DeepSeek-chan)
 deploy/           Dockerfile and Compose files for Core and the speech workers
 docs/             Architecture, design notes, protocols, decisions and the roadmap

@@ -1,6 +1,6 @@
 import { Check, Copy, Radio, Square } from "lucide-react";
 import { useState } from "react";
-import type { StageLink, StageState } from "@/api/types";
+import type { StageLinkState, StageState } from "@miyoria/contracts/api";
 import { useStage, useStageMutations } from "@/app/queries";
 import { READ_ONLY_HINT, useCanWrite } from "@/app/session";
 import { ConfirmDialog } from "@/components/confirm";
@@ -12,7 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 
-function LinkBadge({ name, link }: { name: string; link: StageLink }) {
+function LinkBadge({ name, link }: { name: string; link: StageLinkState }) {
   const badge = <StatusBadge tone={link.connected ? "success" : "neutral"}>{name}</StatusBadge>;
   if (link.connected || !link.error) return badge;
   return (

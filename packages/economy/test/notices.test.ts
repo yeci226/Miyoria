@@ -3,23 +3,33 @@
 // where a goal was met, and nothing at all when there is no place to say it.
 
 import { CommandRegistry, type CommandReply, Permissions, ReplySinkKey } from "@miyoria/commands";
-import { getLogger } from "@miyoria/kernel";
+import { getLogger } from "@miyoria/runtime/kernel";
 import { SingerKey } from "@miyoria/sing";
-import { GoalStoreKey } from "@miyoria/store";
 import {
   type AccountRef,
+  type AnyEventDefinition,
   type ContextKey,
-  customEvent,
-  type Event,
+  type EventPayload,
+  Events,
+  eventEnvelope,
   type JsonValue,
-  SONG_TOPIC,
+  type PublishMetaArgs,
   toTimestamp,
 } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { EconomyCommands } from "../src/commands.js";
 import { Earnings } from "../src/earn.js";
+import { GoalStoreKey } from "../src/records.js";
 import { v2Capabilities } from "../src/v2-tools.js";
+import { economyOf, ledgerOf, walletOf } from "./ledger.js";
 import { ALICE, BOB, DAY, ERIN, fund, type Rig, rig, say, T0, TEXT } from "./rig.js";
+
+/** An event of `definition` as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  definition: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+) => eventEnvelope("test", definition, data, ...meta);
 
 const VOICE: ContextKey = { platform: "discord", scope: "g", channel: "v", kind: "voice" };
 
@@ -53,10 +63,10 @@ const part = (account: AccountRef) => ({
   muted: false,
   deafened: false,
 });
-const joined = (...who: AccountRef[]): Event =>
-  ({ type: "voice_joined", data: { context: VOICE, participants: who.map(part) } }) as never;
-const cue = (state: string, extra: Record<string, JsonValue> = {}): Event =>
-  customEvent(SONG_TOPIC, { state, song: "s1", ...extra });
+const joined = (...who: AccountRef[]) =>
+  ev(Events.VoiceJoined, { context: VOICE, participants: who.map(part) } as never);
+const cue = (state: string, extra: Record<string, JsonValue> = {}) =>
+  ev(Events.SingCue, { state, song: "s1", ...extra } as never);
 
 /** A finished song `s1` Alice requested, in a rig whose singer lists it. */
 function singer(r: Rig, requester: AccountRef | null = ALICE): void {
@@ -191,7 +201,7 @@ describe("song notices", () => {
     await earnings.onEvent(cue("started", { title: "小星星" }), T0);
     await earnings.onEvent(cue("ended", { outcome: "finished" }), T0);
     // The requester is still paid; nobody is told where it would be a guess.
-    expect(await r.store.coins.balance("p", [ALICE])).toBeGreaterThan(0);
+    expect(await ledgerOf(r.store).balance("p", walletOf(r.store, ALICE))).toBeGreaterThan(0);
     expect(posted).toEqual([]);
   });
 });
@@ -220,11 +230,10 @@ describe("game notices", () => {
 
 describe("goal notices", () => {
   async function goal(r: Rig, target = 50): Promise<string> {
-    r.services.provide("test", GoalStoreKey, r.store.goals);
+    r.services.provide("test", GoalStoreKey, economyOf(r.store).goals);
     const id = `g${target}`;
-    await r.store.goals.create({
+    await economyOf(r.store).goals.create({
       id,
-      profile: "p",
       title: "新麥克風",
       promise: "學三種貓叫",
       target,

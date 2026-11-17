@@ -24,8 +24,20 @@ ROOT = Path(__file__).resolve().parent.parent
 # The stubbed model packages live in this process; test_engine_process.py covers the real child.
 os.environ["TTS_ENGINE_PROCESS"] = "0"
 os.environ["ASR_ENGINE_PROCESS"] = "0"
+sys.path.insert(0, str(ROOT))  # contracts.py, gen_contracts.py
 for sub in ("fake", "tts", "asr"):
     sys.path.insert(0, str(ROOT / sub))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _answers_follow_the_contract():
+    """Every JSON answer of a worker in these tests is checked against contracts.py
+    (tests/response_contract.py)."""
+    from response_contract import install
+
+    undo = install()
+    yield
+    undo()
 
 
 def make_wav(seconds: float = 0.5, rate: int = 16_000, channels: int = 1, freq: float = 440.0) -> bytes:
@@ -42,6 +54,23 @@ def make_wav(seconds: float = 0.5, rate: int = 16_000, channels: int = 1, freq: 
         w.setframerate(rate)
         w.writeframes(frames.tobytes())
     return buf.getvalue()
+
+
+NO_BODY = object()
+"""For `send`: the request goes without a body."""
+
+
+def send(client, method: str, path: str, body=NO_BODY) -> tuple[int, dict | None]:
+    """Status and JSON answer (``None`` when the answer is not JSON) of a request whose body is
+    ``body`` as JSON. Bytes are sent as they are, as JSON: ``b"null"``, ``b"[]"``, broken JSON."""
+    if body is NO_BODY:
+        r = client.request(method, path)
+    elif isinstance(body, bytes):
+        r = client.request(method, path, content=body, headers={"content-type": "application/json"})
+    else:
+        r = client.request(method, path, json=body)
+    is_json = r.headers.get("content-type", "").startswith("application/json")
+    return r.status_code, (r.json() if is_json else None)
 
 
 def pcm_to_wav(pcm: bytes, rate: int) -> bytes:

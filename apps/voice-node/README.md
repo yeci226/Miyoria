@@ -20,7 +20,7 @@ Discord 語音 ⇄ (self 帳號) ⇄ voice-node ⇄ Voice Link(WebSocket) ⇄ Co
 ## 需求
 
 - Node ≥ 22.4(開發用 24)、pnpm 9
-- 不需要 ffmpeg(Opus 編解碼用純 WASM 的 `opusscript`;之後要省 CPU 可換 `@discordjs/opus`)
+- 語音(Opus 編解碼)不需要 ffmpeg:用純 WASM 的 `opusscript`,之後要省 CPU 可換 `@discordjs/opus`。**Go Live 要 ffmpeg 在 PATH 上**(`golive/encoder.ts` 用 `ffmpeg` 探測編碼器、做編碼和轉送)
 - Discord 語音會走 DAVE(端對端加密),由 `@discordjs/voice` + `@snazzah/davey` 處理;`pnpm report` 可以看依賴是否齊全
 
 ## 安裝與執行
@@ -31,15 +31,28 @@ cd apps/voice-node
 cp .env.example .env              # 然後填 SELF_TOKEN 等
 pnpm typecheck
 pnpm test
-pnpm start                        # tsx 直接跑 src/main.ts
+pnpm start                        # tsx 直接跑 src/main.ts(--conditions=@miyoria/source:workspace 套件用原始碼)
 ```
 
-也可以編譯後執行:
+協定的訊息定義在 workspace 套件 `@miyoria/contracts/voice-link`。`pnpm start`、`pnpm dev`、`pnpm test`、`pnpm typecheck` 直接讀它的原始碼,不用先編譯。
+
+也可以編譯後執行(`dist/` 用的是 `@miyoria/contracts` 編譯好的 `dist/`,所以要連它一起編):
 
 ```bash
-pnpm build                        # tsc → dist/
+pnpm --filter "@miyoria/voice-node..." build   # 先編 @miyoria/contracts,再 tsc → dist/
 pnpm start:dist                   # node dist/main.js
 ```
+
+### 用 hostd 跑(平常的做法)
+
+```bash
+miyoria add voice-node                  # 在 repository 裡;列出還要自己處理的事
+miyoria up voice-node                   # hostd 用 `pnpm start` 在這個資料夾跑它,在 Core 之後啟動
+```
+
+- `SELF_TOKEN` 永遠寫在 `apps/voice-node/.env`,hostd 不給。
+- **已經加入 Core 的電腦**(包括 `miyoria up` 自動連上本機 Core 的那台):`VOICE_LINK_URL` 和 `VOICE_LINK_TOKEN` 由 hostd 給(Core 把 voice link 的位址和 token 交給它),`.env` 裡不用填。hostd 給了值,`.env` 裡的同名變數不再用;Core 還沒送來、或這台沒有加入時,這兩個變數不會設,node 照舊讀自己的 `.env`。
+- 她在唱歌或直播時,`miyoria restart voice-node`、`down`、`update` 會拒絕重啟它(`--force` 才行)。
 
 `Ctrl+C`(SIGINT / SIGTERM)會:離開所有語音頻道 → 告訴 Core(`left`)→ 關掉 WebSocket → 登出 Discord。再按一次 `Ctrl+C` 直接強制結束。
 
@@ -48,8 +61,8 @@ pnpm start:dist                   # node dist/main.js
 | 變數 | 預設 | 說明 |
 |---|---|---|
 | `SELF_TOKEN` | (必填) | self 帳號(專用小帳號)的 user token。**只放在本機 `.env`,不要 commit、不要貼到任何地方**。`.env` 已被 `.gitignore` 排除。 |
-| `VOICE_LINK_URL` | `ws://127.0.0.1:7879/voice-link` | Core 的 voice.link 位址(對應 Core 設定的 `[modules."voice.link"] bind`)。 |
-| `VOICE_LINK_TOKEN` | (空) | 跟 Core 約好的共用 token,hello 時送出。 |
+| `VOICE_LINK_URL` | `ws://127.0.0.1:7879/voice-link` | Core 的 voice.link 位址(對應 Core 設定的 `[modules."voice.link"] bind`)。已加入 Core 的電腦由 hostd 給,不用填;手動跑或沒加入時才寫。 |
+| `VOICE_LINK_TOKEN` | (空) | 跟 Core 約好的共用 token,hello 時送出。已加入 Core 的電腦由 hostd 給,不用填;手動跑或沒加入時要跟 Core 的 `.env` 一樣。 |
 | `LOG_LEVEL` | `info` | `error` / `warn` / `info` / `debug`。`debug` 會印出 `@discordjs/voice` 的連線與 DAVE 細節。 |
 | `SILENCE_MS` | `400` | 某人停止說話多久算一段串流結束(`stream_close`)。建議 300~500。 |
 | `PLAYBACK_MAX_BUFFER_S` | `60` | 單一播放最多緩衝幾秒音訊,超過回報 `failed`(避免 Core 一次灌太多吃光記憶體)。 |
@@ -108,7 +121,7 @@ pnpm start:dist                   # node dist/main.js
 - **收音前要取得同意**(ARCHITECTURE §10.1):進頻道的人要知道她在聽、會被轉成文字。節點會把所有人的音訊送給 Core,是否處理由 Core 的同意名單決定;建議在頻道說明或進場時公告。節點不會把音訊寫到磁碟。
 - **身分共用**:Discord user id 是全域唯一的,官方 bot 在文字頻道看到的人與 self 帳號在語音聽到的人會對應到同一個 `Person`,記憶與好感共用。Core 要把 bot 和 self 兩個帳號 id 都登記為自己的帳號(避免自己回自己)。
 - **權限**:self 帳號要有該頻道的「檢視頻道」與「連線」權限,頻道不能是滿的;要被聽到還需要「說話」權限。
-- **DAVE**:Discord 語音已採端對端加密。收音、送音都靠 `@discordjs/voice` 內建的 DAVE(`@snazzah/davey`);**這個專案沒有實際連過 Discord 驗證**,Phase 0 的 spike(`spikes/voice-node`)就是要驗證這件事,結果以 spike 為準。
+- **DAVE**:Discord 語音已採端對端加密。收音、送音都靠 `@discordjs/voice` 內建的 DAVE(`@snazzah/davey`);**這個專案沒有實際連過 Discord 驗證**,Phase 0 的 spike(已移除,留在 git 歷史)就是要驗證這件事,結果以 spike 為準。
 - 一個 self 帳號同一時間在同一個伺服器只能待在一個語音頻道(Discord 的限制)。
 
 ## 疑難排解
@@ -135,7 +148,7 @@ src/
   main.ts             進入點:載入設定、登入 Discord、連 Core、處理 SIGINT
   config.ts           環境變數 / .env
   log.ts              分級日誌(不記 token)
-  protocol.ts         Voice Link v1:訊息型別、解析 / 驗證、二進位訊框編解碼
+  protocol.ts         Voice Link v1:用 @miyoria/contracts/voice-link 的 schema 解析 Core 的訊息,加上 schema 說不出的部分(join 要有 channel 或 user_id、fade_ms 四捨五入並夾到 10 秒、null 當省略);二進位訊框編解碼
   link.ts             Core 的 WebSocket 用戶端:hello/welcome、ping/pong、重連退避、close code
   node.ts             協調者:Core 指令 ⇄ 各伺服器的語音 session
   guild-voice.ts      單一語音 session:@discordjs/voice 連線、AudioPlayer、收音
@@ -158,6 +171,6 @@ test/                 vitest:協定、重新取樣、播放佇列(含假 player)
 
 ## 已知限制 / 尚未實測
 
-- 沒有對真的 Discord 連線測過(測試環境無法):所有 Discord 相關程式是依 `node_modules` 裡 `@discordjs/voice` 0.19.2 與 `@lng2004/discord.js-selfbot-v13` 3.7.2 的型別與原始碼寫的,版本與 `spikes/voice-node` 相同。請先用 spike 驗證 DAVE 收音 / 送音可行,再用本節點。
+- 沒有對真的 Discord 連線測過(測試環境無法):所有 Discord 相關程式是依 `node_modules` 裡 `@discordjs/voice` 0.19.2 與 `@lng2004/discord.js-selfbot-v13` 3.7.2 的型別與原始碼寫的,版本與 Phase 0 的 spike 相同(spike 已移除,留在 git 歷史)。
 - 播放是節點自己把 PCM 編成 Opus(`StreamType.Opus`),不經過 prism-media 的編碼器;`prism-media` 的 peer 依賴會警告 `opusscript` 版本(`^0.0.8` vs `0.1.1`),與 spike 相同,不影響這條路徑。
 - Go Live 與語音同時進行(hybrid)尚未對真的 Discord 驗證(見上);Go Live 的 DAVE 加密由 discord-video-stream 處理(`@snazzah/davey`),同樣沒有實測。

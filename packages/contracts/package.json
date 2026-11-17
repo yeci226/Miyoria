@@ -1,0 +1,117 @@
+{
+  "name": "@miyoria/contracts",
+  "version": "0.2.0",
+  "description": "Every shape that crosses a process boundary, written once as a zod schema. One folder per kind of contract (wire, events, voice-link, stage-link, overlay, workers); kit holds the rules the schemas follow and the JSON Schema emitter",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    "./api": {
+      "@miyoria/source": "./api/src/index.ts",
+      "types": "./dist/api/src/index.d.ts",
+      "default": "./dist/api/src/index.js"
+    },
+    "./events": {
+      "@miyoria/source": "./events/src/index.ts",
+      "types": "./dist/events/src/index.d.ts",
+      "default": "./dist/events/src/index.js"
+    },
+    "./ext": {
+      "@miyoria/source": "./ext/src/index.ts",
+      "types": "./dist/ext/src/index.d.ts",
+      "default": "./dist/ext/src/index.js"
+    },
+    "./host": {
+      "@miyoria/source": "./host/src/index.ts",
+      "types": "./dist/host/src/index.d.ts",
+      "default": "./dist/host/src/index.js"
+    },
+    "./overlay": {
+      "@miyoria/source": "./overlay/src/index.ts",
+      "types": "./dist/overlay/src/index.d.ts",
+      "default": "./dist/overlay/src/index.js"
+    },
+    "./stage-link": {
+      "@miyoria/source": "./stage-link/src/index.ts",
+      "types": "./dist/stage-link/src/index.d.ts",
+      "default": "./dist/stage-link/src/index.js"
+    },
+    "./voice-link": {
+      "@miyoria/source": "./voice-link/src/index.ts",
+      "types": "./dist/voice-link/src/index.d.ts",
+      "default": "./dist/voice-link/src/index.js"
+    },
+    "./wire": {
+      "@miyoria/source": "./wire/src/index.ts",
+      "types": "./dist/wire/src/index.d.ts",
+      "default": "./dist/wire/src/index.js"
+    },
+    "./workers": {
+      "@miyoria/source": "./workers/src/index.ts",
+      "types": "./dist/workers/src/index.d.ts",
+      "default": "./dist/workers/src/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      "./api": {
+        "types": "./dist/api/src/index.d.ts",
+        "default": "./dist/api/src/index.js"
+      },
+      "./events": {
+        "types": "./dist/events/src/index.d.ts",
+        "default": "./dist/events/src/index.js"
+      },
+      "./ext": {
+        "types": "./dist/ext/src/index.d.ts",
+        "default": "./dist/ext/src/index.js"
+      },
+      "./host": {
+        "types": "./dist/host/src/index.d.ts",
+        "default": "./dist/host/src/index.js"
+      },
+      "./overlay": {
+        "types": "./dist/overlay/src/index.d.ts",
+        "default": "./dist/overlay/src/index.js"
+      },
+      "./stage-link": {
+        "types": "./dist/stage-link/src/index.d.ts",
+        "default": "./dist/stage-link/src/index.js"
+      },
+      "./voice-link": {
+        "types": "./dist/voice-link/src/index.d.ts",
+        "default": "./dist/voice-link/src/index.js"
+      },
+      "./wire": {
+        "types": "./dist/wire/src/index.d.ts",
+        "default": "./dist/wire/src/index.js"
+      },
+      "./workers": {
+        "types": "./dist/workers/src/index.d.ts",
+        "default": "./dist/workers/src/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "gen": "tsx --conditions=@miyoria/source kit/src/gen.ts",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@orpc/contract": "~1.16.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

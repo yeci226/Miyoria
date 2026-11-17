@@ -1,4 +1,4 @@
-// Contracts of the voice party games (`@miyoria/party`, docs/design/v4-plan.md §9.1) that other
+// Contracts of the voice party games (`@miyoria/play/party`, docs/design/v4-plan.md §9.1) that other
 // modules implement, so neither side depends on the other's package:
 //
 // * `PartyRewards`: coins for the people who played. The economy provides it when it wants to; a

@@ -23,27 +23,28 @@
 import type { AddressInfo } from "node:net";
 import { isIPv4, isIPv6 } from "node:net";
 import { createAdaptorServer, type ServerType } from "@hono/node-server";
+import { BondRingImagesKey } from "@miyoria/heart/person";
+import { tokenize } from "@miyoria/memory/memory";
 import {
   defineManifest,
   errorMessage,
   interval,
   type Module,
   type ModuleContext,
-} from "@miyoria/kernel";
-import { tokenize } from "@miyoria/memory";
+} from "@miyoria/runtime/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
-import { ActivityManagerKey, KeepsakesKey, SONG_TOPIC } from "@miyoria/types";
+import { ActivityManagerKey, Events, KeepsakesKey } from "@miyoria/types";
 import { z } from "zod";
 import { KeepsakeService } from "./keepsakes.js";
 import { MONITOR_TOPICS, Monitor } from "./monitor.js";
 import { DiscordOAuthConfigSchema, OAuth, recheckMs, sessionTtlMs } from "./oauth.js";
 import { PANEL_DIR_ENV, pickDir } from "./panel.js";
 import { PublicConfigSchema, PublicSide, STATS_EVERY_MS } from "./public.js";
+import { RingImages } from "./ring-image.js";
 import { createApp } from "./server.js";
 import { Sessions } from "./session.js";
 import { ApiState, type PanelAuth, type Tokenizer } from "./state.js";
 import { SAMPLE_EVERY_MS, TELEMETRY_TOPICS } from "./telemetry.js";
-import { TRAIL_TOPIC } from "./trail.js";
 
 /** How often expired panel sessions are dropped. */
 export const PRUNE_EVERY_MS = 60 * 60_000;
@@ -81,7 +82,7 @@ export class ApiConfigError extends Error {
 }
 
 export interface ApiModuleOptions {
-  /** Search tokenizer for `/api/memory`. Default: `@miyoria/memory`'s `tokenize`. */
+  /** Search tokenizer for `/api/memory`. Default: `@miyoria/memory/memory`'s `tokenize`. */
   tokenize?: Tokenizer;
   /** Environment lookup for `MIYORIA_PANEL_DIR` (default `process.env`). */
   env?: (name: string) => string | undefined;
@@ -128,7 +129,7 @@ function isLoopback(address: string): boolean {
 
 /**
  * Ports above 1024 that `fetch` refuses to connect to (the Fetch standard's "bad ports"). Some
- * systems hand them out for port 0, which would make the server unreachable for `ApiClient`.
+ * systems hand them out for port 0, which would make the server unreachable for `fetch`.
  */
 export const FETCH_BLOCKED_PORTS: ReadonlySet<number> = new Set([
   1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
@@ -249,6 +250,8 @@ export class ApiModule implements Module {
     );
     // The same cards and slips the member page gives, for a command in chat.
     ctx.provide(KeepsakesKey, new KeepsakeService(state));
+    // The bond ring's picture for `/me profile` and `/admin person show`.
+    ctx.provide(BondRingImagesKey, new RingImages());
     const app = createApp(state, { metricsPublic: config.metrics_public });
     const server = createAdaptorServer({ fetch: app.fetch });
     let address: AddressInfo;
@@ -274,7 +277,7 @@ export class ApiModule implements Module {
     ctx.spawn("telemetry.events", async () => {
       for await (const env of counted) state.telemetry.handle(env);
     });
-    const decided = ctx.subscribe([TRAIL_TOPIC]);
+    const decided = ctx.subscribe([Events.ArbiterDecided.type]);
     ctx.spawn("arbiter.trail", async () => {
       for await (const env of decided) state.trail.handle(env);
     });
@@ -285,7 +288,7 @@ export class ApiModule implements Module {
 
     if (config.public.enabled) {
       const store = () => ctx.services.get(SettingsStoreKey);
-      const sung = ctx.subscribe([SONG_TOPIC]);
+      const sung = ctx.subscribe([Events.SingCue.type]);
       ctx.spawn("public.songs", async () => {
         for await (const env of sung) {
           publicSide.stats.handle(env, ctx.clock.now());

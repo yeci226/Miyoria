@@ -8,8 +8,8 @@
     "node": ">=22.4.0"
   },
   "scripts": {
-    "start": "tsx src/main.ts",
-    "dev": "tsx watch src/main.ts",
+    "start": "tsx --conditions=@miyoria/source src/main.ts",
+    "dev": "tsx watch --conditions=@miyoria/source src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start:dist": "node dist/main.js",
     "typecheck": "tsc --noEmit",
@@ -20,8 +20,7 @@
     "@dank074/discord-video-stream": "7.0.0",
     "@discordjs/voice": "0.19.2",
     "@lng2004/discord.js-selfbot-v13": "3.7.2",
-    "@lng2004/node-datachannel": "0.33.2-20260825",
-    "dotenv": "^18.0.9",
+    "@miyoria/contracts": "workspace:*",
     "opusscript": "0.1.1",
     "prism-media": "1.3.5",
     "ws": "^8.19.0"

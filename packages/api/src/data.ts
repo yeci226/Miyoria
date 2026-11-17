@@ -2,26 +2,25 @@
 // workspace on disk), with export, delete and a factory reset. Owner only (`owner.data.manage`;
 // the bearer token may do everything); the inventory itself is visible to every panel user.
 //
-// * `GET /api/data` → `DataInventoryView`
+// * `GET /api/data` → `DataInventoryView` (on the route table)
 // * `GET /api/data/export?categories=a,b` → a JSON backup (all exportable categories without
-//   `categories`), as an attachment
+//   `categories`), as an attachment (a plain route: it is a download)
 // * `POST /api/data/wipe` `{ categories, confirm? }` → `DataWipeResult`; categories marked
-//   `typed` need `confirm` = the profile id
+//   `typed` need `confirm` = the profile id (on the route table)
 // * `POST /api/data/backup` → the full backup as an attachment, with the one-time
-//   `x-miyoria-backup-token` header a reset needs
-// * `POST /api/data/reset` `{ confirm, backup_token }` → `DataWipeResult`
+//   `x-miyoria-backup-token` header a reset needs (a plain route: it is a download)
+// * `POST /api/data/reset` `{ confirm, backup_token }` → `DataWipeResult` (on the route table)
 //
 // A delete stops the modules caching the data (`Supervisor.pause`), deletes in one transaction,
 // starts them again, and clears what lives only in memory (the agent's channel overrides, the
 // auth cache). The audit log is never deleted; every delete and reset is audited.
 
 import { createHash, randomBytes } from "node:crypto";
-import { AgentHandleKey } from "@miyoria/agent";
 import { AuthServiceKey, builtinRoles } from "@miyoria/auth";
-import { errorMessage, getLogger, SupervisorKey } from "@miyoria/kernel";
-import { SandboxKey, type ScriptInfo } from "@miyoria/sandbox";
+import { AgentHandleKey } from "@miyoria/brain/agent";
+import type { DataInventoryView, DataNote, DataWipeResult } from "@miyoria/contracts/api";
+import { errorMessage, getLogger, SupervisorKey } from "@miyoria/runtime/kernel";
 import {
-  type CategoryInventory,
   categoryModules,
   DATA_CATEGORIES,
   type DataCategoryId,
@@ -39,13 +38,12 @@ import {
   type ContextKey,
   type JsonObject,
   type ProfileId,
-  type Timestamp,
   toTimestamp,
 } from "@miyoria/types";
-import { z } from "zod";
+import { SandboxKey, type ScriptInfo } from "@miyoria/workspace/sandbox";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { readJson } from "./extract.js";
-import { json, type Route } from "./route.js";
+import type { Route } from "./route.js";
 import { type ApiContext, type ApiState, actorOf } from "./state.js";
 
 const log = getLogger("api.data");
@@ -61,39 +59,6 @@ export const BACKUP_TOKEN_TTL_MS = 15 * 60_000;
 export const TOOLS_WORKSPACE = "tools_workspace";
 
 export type DataViewId = DataCategoryId | typeof TOOLS_WORKSPACE;
-
-/** Things the panel tells the owner after a delete. */
-export type DataNote =
-  /** Persona edits / module switches are gone from the store; live values change on restart. */
-  | "restart_core"
-  /** Voice consent is cached for up to a minute. */
-  | "consent_cache";
-
-export interface DataCategoryView extends Omit<CategoryInventory, "id"> {
-  id: DataViewId;
-  shared: boolean;
-  kept: boolean;
-  exportable: boolean;
-  confirm: "typed" | "simple";
-  /** Also deleted when this one is. */
-  requires: DataViewId[];
-}
-
-export interface DataInventoryView {
-  profile: ProfileId;
-  at: Timestamp;
-  /** May export, delete and reset (`owner.data.manage`). */
-  can_manage: boolean;
-  categories: DataCategoryView[];
-}
-
-export interface DataWipeResult {
-  deleted: DataViewId[];
-  counts: WipeCounts;
-  /** Modules that did not start again. */
-  failed_modules: string[];
-  notes: DataNote[];
-}
 
 interface BackupToken {
   profile: ProfileId;
@@ -144,11 +109,11 @@ async function scripts(state: ApiState): Promise<ScriptInfo[] | null> {
   }
 }
 
-async function inventory(state: ApiState, c: ApiContext): Promise<Response> {
+async function inventory(state: ApiState, c: ApiContext): Promise<DataInventoryView> {
   const store = state.service(ProfileDataStoreKey, "profile data store");
   const profile = state.profile();
   const found = await store.inventory(profile);
-  const categories: DataCategoryView[] = found.categories.map((inv) => {
+  const categories: DataInventoryView["categories"] = found.categories.map((inv) => {
     const c = dataCategory(inv.id);
     return {
       ...inv,
@@ -177,13 +142,7 @@ async function inventory(state: ApiState, c: ApiContext): Promise<Response> {
       requires: [],
     });
   }
-  const body: DataInventoryView = {
-    profile,
-    at: found.at,
-    can_manage: canManage(state, c),
-    categories,
-  };
-  return json(body);
+  return { profile, at: found.at, can_manage: canManage(state, c), categories };
 }
 
 // ---- export ---------------------------------------------------------------------------------
@@ -369,14 +328,12 @@ function needsTyped(ids: readonly DataViewId[]): boolean {
   return resolveCategories(storeIds(ids)).some((id) => dataCategory(id).confirm === "typed");
 }
 
-const WipeSchema = z.object({
-  categories: z.array(z.string()).min(1),
-  confirm: z.string().nullish(),
-});
-
-async function wipeData(state: ApiState, c: ApiContext): Promise<Response> {
-  requireManage(state, c);
-  const request = await readJson(c, WipeSchema);
+/** Needs `owner.data.manage` (the route's permission). */
+async function wipeData(
+  state: ApiState,
+  c: ApiContext,
+  request: { categories: string[]; confirm?: string | null | undefined },
+): Promise<DataWipeResult> {
   const ids = parseIds(request.categories);
   if (ids.length === 0) throw ApiError.badRequest("no categories to delete");
   for (const id of storeIds(ids)) {
@@ -410,7 +367,7 @@ async function wipeData(state: ApiState, c: ApiContext): Promise<Response> {
     { categories: [...result.deleted], counts: { ...result.counts } },
     true,
   );
-  return json(result);
+  return result;
 }
 
 // ---- factory reset --------------------------------------------------------------------------
@@ -452,11 +409,12 @@ async function backup(state: ApiState, c: ApiContext): Promise<Response> {
   return attachment(text, fileName(profile, "backup", now), { [BACKUP_TOKEN_HEADER]: token });
 }
 
-const ResetSchema = z.object({ confirm: z.string(), backup_token: z.string() });
-
-async function reset(state: ApiState, c: ApiContext): Promise<Response> {
-  requireManage(state, c);
-  const request = await readJson(c, ResetSchema);
+/** Needs `owner.data.manage` (the route's permission). */
+async function reset(
+  state: ApiState,
+  c: ApiContext,
+  request: { confirm: string; backup_token: string },
+): Promise<DataWipeResult> {
   const profile = state.profile();
   if (request.confirm.trim() !== profile) {
     throw ApiError.badRequest("type the profile id in `confirm` to reset");
@@ -495,15 +453,22 @@ async function reset(state: ApiState, c: ApiContext): Promise<Response> {
     { backup: issued.sha256, counts: { ...result.counts } },
     true,
   );
-  return json(result);
+  return result;
 }
 
+/** The data routes on the route table (`@miyoria/contracts/api`). */
+export const dataRpc = {
+  inventory: os.data.inventory.handler(({ context }) => inventory(context.state, context.c)),
+  wipe: os.data.wipe.handler(({ input, context }) =>
+    wipeData(context.state, context.c, input.body),
+  ),
+  reset: os.data.reset.handler(({ input, context }) => reset(context.state, context.c, input.body)),
+};
+
+/** The downloads, which stay plain routes: they answer an attachment, not JSON. */
 export function dataRoutes(state: ApiState): Route[] {
   return [
-    { method: "GET", path: "/api/data", handler: (c) => inventory(state, c) },
     { method: "GET", path: "/api/data/export", handler: (c) => exportData(state, c) },
-    { method: "POST", path: "/api/data/wipe", handler: (c) => wipeData(state, c) },
     { method: "POST", path: "/api/data/backup", handler: (c) => backup(state, c) },
-    { method: "POST", path: "/api/data/reset", handler: (c) => reset(state, c) },
   ];
 }

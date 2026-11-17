@@ -1,8 +1,8 @@
 // Affect and People (docs/design/v2-architecture.md §3.1, §3.6): her feelings with one writer.
 //
-// Three layers at three speeds: drives (hours, pure homeostasis), emotions (minutes, rule
-// events + Appraise) and bonds (days, one card per person). Mood is no longer stored: it is
-// derived from the three layers (plus the time-of-day energy curve).
+// Two layers here: drives (hours, pure homeostasis) and emotions (minutes, rule events and her
+// `feel`). How she feels about each person is the heart's (`heart.ts`, `heart_person`). Mood is not
+// stored: it is derived from the layers (plus the time-of-day energy curve).
 //
 // The only inputs to emotions are *events* (`AffectEvent` rule events and `AppraisalEvent`s);
 // nobody writes absolute numbers, and the program turns events into numbers (habituation,
@@ -12,19 +12,20 @@
 // The existing `Drives`, `DriveName`, `EmotionName`, `PersonEmotionName`, `EmotionReading` and
 // `ShownEmotion` (self.ts) and `Mood` (social.ts) are reused as they are.
 
+import type { AffectEventData, AffectSnapshotData } from "@miyoria/contracts/events";
+import {
+  BOND_TIER_FLOORS,
+  RELATIONSHIP_LABELS,
+  type RelationshipLabel,
+  TIER_STAGE_NUMERALS,
+  type TierStage,
+} from "@miyoria/contracts/wire";
+import { AFFINITY_MAX, AFFINITY_MIN, clampAffinity } from "./bond.js";
 import type { Handle } from "./handle.js";
 import type { PersonId } from "./ids.js";
 import type { ContextKey } from "./platform.js";
-import type {
-  DriveName,
-  Drives,
-  EmotionName,
-  EmotionReading,
-  PersonEmotionName,
-  ShownEmotion,
-} from "./self.js";
+import type { DriveName, EmotionName, EmotionReading } from "./self.js";
 import { serviceKey } from "./service-key.js";
-import type { Mood } from "./social.js";
 import type { Timestamp } from "./time.js";
 
 // ---- appraisal ------------------------------------------------------------------------------
@@ -52,10 +53,10 @@ export interface AppraisalEvent {
 }
 
 /** Who produced an affect input. */
-export type AffectSource = "rule" | "appraise" | "reflect" | "drive" | "panel";
+export type AffectSource = "rule" | "appraise" | "feel" | "reflect" | "drive" | "panel";
 
 /**
- * Rule events (cheap, immediate), published by whoever sees them as `AFFECT_EVENT_TOPIC`; the
+ * Rule events (cheap, immediate), published by whoever sees them as `Events.AffectEvent`; the
  * affect module maps each kind to emotions (the §3.6 table).
  */
 export const AFFECT_EVENT_KINDS = [
@@ -85,19 +86,8 @@ export const AFFECT_EVENT_KINDS = [
 
 export type AffectEventKind = (typeof AFFECT_EVENT_KINDS)[number];
 
-/** Payload of `AFFECT_EVENT_TOPIC`. */
-export interface AffectEvent {
-  kind: AffectEventKind;
-  /** Who it involves, when someone. */
-  person: PersonId | null;
-  handle: Handle | null;
-  context: ContextKey | null;
-  /** Short neutral zh-TW detail (the cause she remembers). */
-  detail: string;
-  /** Repeats with the same key within the habituation window count as the same cause. */
-  key: string;
-  at: Timestamp;
-}
+/** A rule event for her emotions (contract: `AffectEventSchema` in @miyoria/contracts/events). */
+export type AffectEvent = AffectEventData;
 
 /** A promise made to her that was kept or broken: it counts toward the person. */
 export interface AppraisedPromise {
@@ -130,50 +120,71 @@ export interface AppliedAppraisal {
 
 // ---- people ---------------------------------------------------------------------------------
 
-export const RELATIONSHIP_LABELS = [
-  "很討厭",
-  "討厭",
-  "陌生人",
-  "認識",
-  "朋友",
-  "好朋友",
-  "摯友",
-] as const;
+/**
+ * The one relationship scale (every prompt, `/me` and the panel use this). The list itself is the
+ * wire contract's (`@miyoria/contracts/wire`, so the API's enum is made from it); this is where
+ * everyone else reads it.
+ */
+export { RELATIONSHIP_LABELS, type RelationshipLabel, TIER_STAGE_NUMERALS, type TierStage };
 
-/** The one relationship scale (every prompt, `/me` and the panel use this). */
-export type RelationshipLabel = (typeof RELATIONSHIP_LABELS)[number];
+/** The tiers past 摯友, highest first: `[lowest bond, label]`. */
+export const BOND_TIERS: readonly (readonly [number, RelationshipLabel])[] = [
+  ...BOND_TIER_FLOORS,
+].reverse();
 
-/** The numbers the label depends on. */
+/** One line naming the whole bond scale, for a prompt that shows levels. */
+export const BOND_SCALE_LINE =
+  "羈絆等級 -100~1000:-50 以下很討厭、-15 以下討厭、15 朋友、45 好朋友、75 摯友(滿 100 後繼續疊加)、" +
+  [...BOND_TIERS]
+    .reverse()
+    .map(([lv, name]) => `${lv} ${name}`)
+    .join("、");
+
+/** What the tier name depends on. */
 export interface RelationshipNumbers {
-  /** -100..100 */
+  /** The bond, -100..1000. */
   affinity: number;
-  /** 0..100 */
-  familiarity: number;
+  /** `false`: she has not met them yet (no row, or nothing done with her): 陌生人. Default `true`. */
+  met?: boolean;
 }
 
-/** The relationship label of `rel` (same thresholds as `social`'s `label()` today). */
+/**
+ * The tier name shown for someone, everywhere (the member page, `/me profile`, the people API, the
+ * prompt, the card): the bond-only ladder (`BOND_LADDER`, `tierProgress`), 討厭 and 很討厭 below
+ * it, 陌生人 for someone she has not met. Familiarity no longer gates a tier: from 知心 up the
+ * anchors do (H4).
+ */
 export function relationshipLabel(rel: RelationshipNumbers): RelationshipLabel {
-  const a = rel.affinity;
-  const f = rel.familiarity;
+  if (rel.met === false) return "陌生人";
+  const a = clampAffinity(rel.affinity);
   if (a <= -50) return "很討厭";
   if (a <= -15) return "討厭";
-  if (a >= 75 && f >= 30) return "摯友";
-  if (a >= 45 && f >= 10) return "好朋友";
-  if (a >= 15) return "朋友";
-  if (f < 3) return "陌生人";
-  return "認識";
+  return tierProgress(a).tier.label;
 }
 
-/** Lowest and highest `affinityLevel()`. */
-export const AFFINITY_LEVEL_MIN = -100;
-export const AFFINITY_LEVEL_MAX = 100;
-/** Levels per step: crossing into another step is when she may re-decide her stance. */
+/** Where plain affinity ends and bond stacking begins. */
+export const AFFINITY_FULL = 100;
+export {
+  AFFINITY_MAX,
+  AFFINITY_MIN,
+  BOND_BAND_WORDS,
+  BOND_BANDS,
+  bondBand,
+  clampAffinity,
+  RING_LAP,
+  RING_LAPS,
+  type RingPosition,
+  ringOf,
+} from "./bond.js";
+export const AFFINITY_LEVEL_MIN = AFFINITY_MIN;
+export const AFFINITY_LEVEL_MAX = AFFINITY_MAX;
+/** Levels per step up to 100: crossing into another step is when she may re-decide her stance. */
 export const AFFINITY_LEVEL_STEP = 5;
 
 /**
- * Her level with someone: the affinity itself as a whole number (truncated toward zero),
- * -100..100, one level per point. A non-finite input is level 0. What a level means is hers to
- * decide (`PersonCard.stance`), nothing here prescribes behaviour.
+ * Her level with someone (her 羈絆 level): the affinity itself as a whole number (truncated
+ * toward zero), -100..1000, one level per point. A non-finite input is level 0. What a level
+ * means is hers to decide (`PersonCard.stance`), nothing here prescribes behaviour.
  */
 export function affinityLevel(affinity: number): number {
   if (!Number.isFinite(affinity)) return 0;
@@ -181,77 +192,142 @@ export function affinityLevel(affinity: number): number {
   return Math.min(Math.max(level, AFFINITY_LEVEL_MIN), AFFINITY_LEVEL_MAX);
 }
 
-/** The step of `level` (every `AFFINITY_LEVEL_STEP` levels: 0..4 is 0, 5..9 is 1, -5..-9 is -1). */
-export function affinityStep(level: number): number {
-  return Math.trunc(level / AFFINITY_LEVEL_STEP) + 0;
-}
+// ---- the ladder, the ring and the bands (docs/design/v5-heart.md §2.7, H1–H4) ---------------
 
-/** Whether the level moved into another step since her stance was written at `written`. */
-export function stanceStale(written: number, level: number): boolean {
-  return affinityStep(written) !== affinityStep(level);
+/** One tier of the bond ladder: the lowest bond in it and its name. */
+export interface BondTier {
+  min: number;
+  label: RelationshipLabel;
 }
 
 /**
- * One card per person: replaces affinity / trust / notes (social), feelings / hearts / romance
- * / emotions toward people (self), the knowledge person card and per-person lessons as the
- * place her feeling about someone lives.
+ * The tiers a bond of 0 or more climbs through, lowest first, by bond alone: the one ladder every
+ * tier name comes from (`relationshipLabel`). From 知心 up they are `BOND_TIERS`.
  */
-export interface PersonCard {
-  person: PersonId;
-  handle: Handle;
-  /** How she addresses them (`null`: by handle). */
-  call_name: string | null;
-  /** -100..100 */
-  affinity: number;
-  /** 0..100 */
-  trust: number;
-  /** 0..100, from how much and how deeply they interact (not +1 a day). */
-  familiarity: number;
-  /** 0..1, how much she cares (a crush grows from here; Reflect moves it in small steps). */
-  attachment: number;
-  /** Active emotions toward them (0..1, decayed to now; absent = none). */
-  emotions: Partial<Record<PersonEmotionName, number>>;
-  /** Her feeling about them in her own words, using names (Appraise edits, Reflect rewrites). */
-  feeling: string;
+export const BOND_LADDER: readonly BondTier[] = [
+  { min: 0, label: "認識" },
+  { min: 15, label: "朋友" },
+  { min: 45, label: "好朋友" },
+  { min: 75, label: "摯友" },
+  ...[...BOND_TIERS].reverse().map(([min, label]) => ({ min, label })),
+];
+
+/** From this tier up, entering a tier needs a shared memory as its anchor (H4). */
+export const ANCHORED_TIER_MIN = 120;
+
+/** Where a bond sits on the ladder. */
+export interface TierProgress {
+  tier: BondTier;
+  /** Its place in `BOND_LADDER`. */
+  index: number;
+  /** The tier above; `null` at the top. */
+  next: BondTier | null;
+  /** 0..1 of the way from this tier's lowest bond to the next one's (1 at the top, 0 below 0). */
+  progress: number;
   /**
-   * One line for that person's own eyes, written by Reflect: about them alone, other names
-   * filtered, passed through moderation (§17.1). Only the member page reads it, never a prompt.
-   * `null` or absent: she has none yet, and nothing takes its place.
+   * Which third of the tier's span the bond is in (H10): 1, 2 or 3; `null` at the top, which has
+   * none. A bond below 0 is stage 1 of the first tier. Derived, never stored.
    */
-  public_feeling?: string | null;
-  label: RelationshipLabel;
-  /** `affinityLevel(affinity)`: -100..100, one per affinity point. Prompt-only, never shown to people. */
-  level: number;
-  /**
-   * How she acts with them now, one short line in her own words (dere/tsun, teasing, honesty).
-   * Written by her (Reflect); prompt-only like `feeling`. `null` or absent: none yet.
-   */
-  stance?: string | null;
-  /** The `level` the stance was written at (`null` or absent: no stance). */
-  stance_level?: number | null;
-  owner: boolean;
-  blocked: boolean;
-  last_seen: Timestamp | null;
-  last_together: Timestamp | null;
-  updated_at: Timestamp;
+  stage: TierStage | null;
 }
 
-/** A proposed change to a bond (Appraise: small; Reflect: daily, capped). */
-export interface BondChange {
-  affinity?: number;
-  trust?: number;
-  familiarity?: number;
-  attachment?: number;
-  /** Replaces her feeling text. */
-  feeling?: string;
-  /** Replaces the line shown to the person (`null` clears it); already filtered by the writer. */
-  public_feeling?: string | null;
-  /**
-   * Replaces her stance toward them (one short line; Reflect only). It is stored with the level
-   * the card has at that moment.
-   */
-  stance?: string;
-  why: string;
+/**
+ * The tier of `bond`, how far into it and what comes next. A bond below 0 is not on the ladder:
+ * it reads as the first tier with no progress (the ring shows it with `RingPosition.below`).
+ */
+export function tierProgress(bond: number): TierProgress {
+  const b = clampAffinity(bond);
+  let index = 0;
+  for (let i = 0; i < BOND_LADDER.length; i++) {
+    if (b >= (BOND_LADDER[i] as BondTier).min) index = i;
+  }
+  const tier = BOND_LADDER[index] as BondTier;
+  const next = BOND_LADDER[index + 1] ?? null;
+  const progress =
+    next === null
+      ? 1
+      : b <= 0
+        ? 0
+        : Math.min(Math.max((b - tier.min) / (next.min - tier.min), 0), 1);
+  return { tier, index, next, progress, stage: stageIn(b, tier, next) };
+}
+
+/** The stage of `bond` in `tier` (equal thirds of its span up to `next`); `null` with no next. */
+function stageIn(bond: number, tier: BondTier, next: BondTier | null): TierStage | null {
+  if (next === null) return null;
+  // A hair over: a bond at a third computed in floating point (870 + 2 * 130 / 3) is in the next.
+  const into = Math.max(bond - tier.min, 0) * 3 + 1e-9;
+  const span = next.min - tier.min;
+  if (into < span) return 1;
+  if (into < span * 2) return 2;
+  return 3;
+}
+
+/** The name of a tier with its stage, as people read it: 「知心 II」; the bare name without one. */
+export function tierLabel(tier: RelationshipLabel, stage: TierStage | null): string {
+  return stage === null ? tier : `${tier} ${TIER_STAGE_NUMERALS[stage - 1]}`;
+}
+
+/** Where someone stands, as a person reads it (H10). */
+export interface TierStanding {
+  /** The tier's bare name (what code keys on: tones, her lines, the poses). */
+  tier: RelationshipLabel;
+  /** Its stage; `null` for 陌生人, 討厭, 很討厭 and 永恆羈絆. */
+  stage: TierStage | null;
+  /** Name and stage, 「知心 II」: what a person reads. */
+  label: string;
+  /** The next step: the next stage, or the next tier's first after III; `null`: none. */
+  next_label: string | null;
+}
+
+/**
+ * The tier of `rel` with its stage (`relationshipLabel` plus `tierProgress`): the next step is the
+ * next stage, or after III the next tier (its stage I, or 永恆羈絆, which has none); below the
+ * ladder it is 認識 I, for someone not met yet there is none.
+ */
+export function tierStanding(rel: RelationshipNumbers): TierStanding {
+  const tier = relationshipLabel(rel);
+  if (rel.met === false) return { tier, stage: null, label: tier, next_label: null };
+  const place = tierProgress(rel.affinity);
+  const first = tierLabel(BOND_LADDER[0]?.label ?? "認識", 1);
+  if (tier !== place.tier.label) return { tier, stage: null, label: tier, next_label: first };
+  const stage = place.stage;
+  let next: string | null = null;
+  if (stage !== null && stage < 3) next = tierLabel(tier, (stage + 1) as TierStage);
+  else if (place.next !== null) {
+    const after = tierProgress(place.next.min);
+    next = tierLabel(place.next.label, after.stage === null ? null : 1);
+  }
+  return { tier, stage, label: tierLabel(tier, stage), next_label: next };
+}
+
+/** The lowest bond of the tier `bond` is in (0 for a bond below 0). */
+export function tierFloorOf(bond: number): number {
+  return tierProgress(bond).tier.min;
+}
+
+/** The tiers whose lowest bond lies in `(from, to]`, lowest first: what a rise from `from` to `to` enters. */
+export function tiersEntered(from: number, to: number): BondTier[] {
+  const a = clampAffinity(from);
+  const b = clampAffinity(to);
+  return BOND_LADDER.filter((t) => t.min > a && t.min <= b);
+}
+
+/** The member-facing words for trust (0..100), never the number. */
+export function trustBand(value: number): string {
+  if (value < 15) return "還不信任";
+  if (value < 40) return "有點信任";
+  if (value < 70) return "信任";
+  return "很信任";
+}
+
+/** The member-facing words for familiarity (0..100), never the number. */
+export function familiarityBand(value: number): string {
+  if (value < 3) return "陌生";
+  if (value < 10) return "見過幾次";
+  if (value < 30) return "有點熟";
+  if (value < 60) return "熟";
+  return "很熟";
 }
 
 // ---- snapshot and effects -------------------------------------------------------------------
@@ -276,27 +352,8 @@ export interface AffectBiases {
   }[];
 }
 
-export interface AffectSnapshot {
-  at: Timestamp;
-  drives: Drives;
-  /** 0..1 */
-  boredom: number;
-  /** The strongest 2–3 emotions only (what prompts show). */
-  top: EmotionReading[];
-  /** Derived (never stored on its own). */
-  mood: Mood;
-  /** One line for the prompt (`"心情不錯、有點累"`): the only mood renderer. */
-  mood_line: string;
-  shown: ShownEmotion | null;
-  biases: AffectBiases;
-}
-
-/** Payload of `AFFECT_EVENT_TOPIC`: `AffectEvent`. */
-export const AFFECT_EVENT_TOPIC = "affect.event";
-/** Payload: `AffectSnapshot`, published when it changed noticeably. */
-export const AFFECT_CHANGED_TOPIC = "affect.changed";
-/** Payload: `{valence, arousal, energy, reason}`, published when her mood moved. */
-export const MOOD_CHANGED_TOPIC = "mood.changed";
+/** Her state of feeling (contract: `AffectSnapshotSchema` in @miyoria/contracts/events). */
+export type AffectSnapshot = AffectSnapshotData;
 
 /** Provided by the affect owner (`self`). Reads answer from memory. */
 export interface AffectState {
@@ -304,27 +361,18 @@ export interface AffectState {
   /** What she feels, strongest first, at or above `min`. */
   emotions(min?: number): EmotionReading[];
   /**
-   * The only write path for what an interaction meant: events in, numbers computed here. The one
-   * reader that calls it for a conversation is Appraise (packages/mind/src/appraise.ts).
+   * The only write path for what an interaction meant: events in, numbers computed here. Her
+   * `feel` block is the one that calls it for a conversation (source `feel`).
    */
   appraise(input: AffectInput): AppliedAppraisal[];
   /** A drive was satisfied (`amount` < 0) or frustrated (> 0) by something she did. */
   satisfy(drive: DriveName, amount: number, reason: string): void;
-
-  card(person: PersonId): PersonCard | null;
-  cardByHandle(handle: Handle): PersonCard | null;
-  /** Every card, highest attachment first. */
-  cards(): PersonCard[];
-  /** Applies a bond change within the daily caps; `null` when there is no such person. */
-  adjustBond(person: PersonId, change: BondChange, by: AffectSource): Promise<PersonCard | null>;
 
   /**
    * The canonical prompt text of her mood (`renderAffectMood` of the snapshot): the mood line
    * and her strongest 2-3 emotions. Optional so test doubles need not implement it.
    */
   renderMood?(): string;
-  /** One line per person (`renderPersonLine`), in the order of `people` (unknown ones skipped). */
-  renderPeople?(people: readonly PersonId[]): string[];
 }
 
 export const AffectStateKey = serviceKey<AffectState>("AffectState");

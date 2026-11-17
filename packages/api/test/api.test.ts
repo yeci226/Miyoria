@@ -1,21 +1,27 @@
 // End-to-end tests: a real supervisor running the `api` module on a random port, in-memory
-// stores and a persona loaded from a temp profile dir, driven through `ApiClient`
-// (`tests/api.rs`).
+// stores and a persona loaded from a temp profile dir, driven over HTTP.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PersonaHandle, PersonaHandleKey } from "@miyoria/agent";
-import { Supervisor, SupervisorKey } from "@miyoria/kernel";
-import { LlmRouter, LlmRouterKey, MIYORIA_VERSION } from "@miyoria/llm";
-import { Profile } from "@miyoria/profile";
-import { AuditLogKey, DecisionLogKey, PersonaOverrideStoreKey } from "@miyoria/store";
+import { PersonaHandle, PersonaHandleKey } from "@miyoria/brain/agent";
+import type { HealthInfo, PersonaSectionInfo, SetPersonaResponse } from "@miyoria/contracts/api";
+import { LlmRouter, LlmRouterKey, MIYORIA_VERSION } from "@miyoria/llm/llm";
+import { Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
+import { Profile } from "@miyoria/runtime/profile";
+import {
+  AuditLogKey,
+  DecisionLogKey,
+  type PersonaOverride,
+  PersonaOverrideStoreKey,
+} from "@miyoria/store";
 import { type ContextKey, newId, toTimestamp } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
-import { ActiveProfileKey, ApiClient, ApiModule } from "../src/index.js";
+import { ActiveProfileKey, ApiModule } from "../src/index.js";
+import { adminCalls } from "./support/admin.js";
 import { Idle } from "./support/fakes.js";
-import { raw, statusOf, waitFor } from "./support/http.js";
+import { call, nextEvent, openEvents, raw, statusOf, waitFor } from "./support/http.js";
 import { TestStore } from "./support/stores.js";
 
 const TOKEN = "test-token";
@@ -25,7 +31,6 @@ interface Harness {
   sup: Supervisor;
   store: TestStore;
   persona: PersonaHandle;
-  client: ApiClient;
   base: string;
   dir: string;
 }
@@ -70,7 +75,7 @@ async function harness(): Promise<Harness> {
 
   const base = api.url();
   if (!base) throw new Error("api is not running");
-  const h = { sup, store, persona, client: new ApiClient(base, TOKEN), base, dir };
+  const h = { sup, store, persona, base, dir };
   harnesses.push(h);
   return h;
 }
@@ -78,13 +83,12 @@ async function harness(): Promise<Harness> {
 describe("api", () => {
   it("health_and_auth", async () => {
     const h = await harness();
-    const anon = new ApiClient(h.base, "wrong");
 
-    const health = await anon.health();
+    const health = await call<HealthInfo>(h.base, "wrong", "GET", "/api/health");
     expect(health.status).toBe("ok");
     expect(health.version).toBe(MIYORIA_VERSION);
 
-    expect(await statusOf(anon.modules())).toBe(401);
+    expect(await statusOf(call(h.base, "wrong", "GET", "/api/modules"))).toBe(401);
 
     const unauthorized = await raw(h.base, "GET", "/api/modules");
     expect(unauthorized.status).toBe(401);
@@ -96,49 +100,69 @@ describe("api", () => {
     expect(typeof (missing.body as { error: unknown }).error).toBe("string");
   });
 
+  it("a_required_module_cannot_be_disabled", async () => {
+    const h = await harness();
+    const adm = adminCalls(h.base, TOKEN);
+    await h.sup.register(new Idle("vital", "Vital"), null, true, { required: true });
+    await h.sup.enable("vital");
+    expect(await statusOf(adm.moduleAction("vital", "disable"))).toBe(409);
+    expect((await adm.modules()).find((x) => x.id === "vital")?.state).toBe("running");
+    expect((await adm.moduleAction("vital", "restart")).state).toBe("running");
+  });
+
   it("module_lifecycle", async () => {
     const h = await harness();
-    const c = h.client;
+    const adm = adminCalls(h.base, TOKEN);
 
-    const modules = await c.modules();
+    const modules = await adm.modules();
     expect(modules.map((m) => m.id)).toEqual(["api", "dummy"]);
     expect(modules.every((m) => m.state === "running")).toBe(true);
 
-    let m = await c.moduleAction("dummy", "disable");
+    let m = await adm.moduleAction("dummy", "disable");
     expect([m.enabled, m.state]).toEqual([false, "disabled"]);
-    expect(await statusOf(c.moduleAction("dummy", "restart"))).toBe(409);
-    m = await c.moduleAction("dummy", "enable");
+    expect(await statusOf(adm.moduleAction("dummy", "restart"))).toBe(409);
+    m = await adm.moduleAction("dummy", "enable");
     expect([m.enabled, m.state]).toEqual([true, "running"]);
-    m = await c.moduleAction("dummy", "restart");
+    m = await adm.moduleAction("dummy", "restart");
     expect(m.state).toBe("running");
 
     for (const action of ["disable", "restart"]) {
-      expect(await statusOf(c.moduleAction("api", action)), `${action} api`).toBe(409);
+      expect(await statusOf(adm.moduleAction("api", action)), `${action} api`).toBe(409);
     }
-    expect(await statusOf(c.moduleAction("ghost", "enable"))).toBe(404);
-    expect(await statusOf(c.moduleAction("dummy", "explode"))).toBe(404);
+    expect(await statusOf(adm.moduleAction("ghost", "enable"))).toBe(404);
+    expect(await statusOf(adm.moduleAction("dummy", "explode"))).toBe(404);
 
     // Still serving after all of that.
-    expect(await c.modules()).toHaveLength(2);
+    expect(await adm.modules()).toHaveLength(2);
   });
 
   it("persona_edit_and_history", async () => {
     const h = await harness();
-    const c = h.client;
 
-    const sections = await c.persona();
+    const persona = () => call<PersonaSectionInfo[]>(h.base, TOKEN, "GET", "/api/persona");
+    const setPersona = async (key: string, body: string, editedBy?: string) => {
+      const json = editedBy === undefined ? { body } : { body, edited_by: editedBy };
+      const path = `/api/persona/${encodeURIComponent(key)}`;
+      return (await call<SetPersonaResponse>(h.base, TOKEN, "PUT", path, json)).version;
+    };
+    const sections = await persona();
     expect(sections.map((s) => [s.key, s.body])).toEqual([
       ["identity", "I am Test."],
       ["style", "Be brief."],
     ]);
 
-    expect(await c.setPersona("style", "Be very brief.")).toBe(1);
-    expect(await c.setPersonaAs("style", "Be terse.", "panel:owen")).toBe(2);
+    expect(await setPersona("style", "Be very brief.")).toBe(1);
+    expect(await setPersona("style", "Be terse.", "panel:owen")).toBe(2);
     expect(h.persona.personaPrompt()).toContain("Be terse.");
-    const style = (await c.persona()).find((s) => s.key === "style");
+    const style = (await persona()).find((s) => s.key === "style");
     expect(style?.body).toBe("Be terse.");
 
-    const history = await c.personaHistory("style");
+    const history = await call<PersonaOverride[]>(
+      h.base,
+      TOKEN,
+      "GET",
+      "/api/persona/style/history",
+    );
     expect(history.map((o) => [o.version, o.edited_by])).toEqual([
       [1, "api"],
       [2, "panel:owen"],
@@ -153,7 +177,7 @@ describe("api", () => {
     const current = await h.store.personaOverrides.current(PROFILE);
     expect(current.get("style")).toBe("Be terse.");
 
-    expect(await statusOf(c.setPersona("bad key", "x"))).toBe(400);
+    expect(await statusOf(setPersona("bad key", "x"))).toBe(400);
   });
 
   function context(channel: string): ContextKey {
@@ -162,6 +186,7 @@ describe("api", () => {
 
   it("decisions_newest_first", async () => {
     const h = await harness();
+    const adm = adminCalls(h.base, TOKEN);
     for (const [i, channel] of ["a", "b", "a"].entries()) {
       await h.store.decisions.append({
         id: newId(),
@@ -177,11 +202,11 @@ describe("api", () => {
       });
     }
 
-    const all = await h.client.decisions(50);
+    const all = await adm.decisions(50);
     expect(all.map((d) => d.trace.reasons[0])).toEqual(["#2", "#1", "#0"]);
-    expect(await h.client.decisions(1)).toHaveLength(1);
+    expect(await adm.decisions(1)).toHaveLength(1);
 
-    const inA = await h.client.decisionsIn(context("a"), 50);
+    const inA = await adm.decisionsIn(context("a"), 50);
     expect(inA).toHaveLength(2);
     expect(inA.every((d) => d.trace.context.channel === "a")).toBe(true);
 
@@ -191,27 +216,28 @@ describe("api", () => {
 
   it("usage_and_missing_service", async () => {
     const h = await harness();
-    expect((await h.client.usage()).size).toBe(0);
+    const adm = adminCalls(h.base, TOKEN);
+    expect((await adm.usage()).size).toBe(0);
 
     h.sup.services.removeOwnedBy("llm");
-    expect(await statusOf(h.client.usage())).toBe(503);
+    expect(await statusOf(adm.usage())).toBe(503);
   });
 
   it("events_stream_until_stop", async () => {
     const h = await harness();
-    const events = await h.client.events(["system.*"]);
+    const adm = adminCalls(h.base, TOKEN);
+    const events = await openEvents(h.base, TOKEN, "?topics=system.*");
 
-    await h.client.moduleAction("dummy", "disable");
-    const first = await events.next();
-    expect(first.done).toBe(false);
-    expect(first.value?.event).toMatchObject({
-      type: "module_state_changed",
+    await adm.moduleAction("dummy", "disable");
+    expect(await nextEvent(events)).toMatchObject({
+      type: "system.module.state",
+      source: "kernel",
       data: { module: "dummy" },
     });
 
     // Stopping the module ends the stream (and lets the server shut down).
     const drained = (async () => {
-      for await (const _ of events) {
+      while ((await nextEvent(events)) !== null) {
         // drain
       }
       return true;

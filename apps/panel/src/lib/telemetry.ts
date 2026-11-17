@@ -1,7 +1,8 @@
 // Turns `GET /api/telemetry` samples (cumulative counters, one a minute) into what the charts
 // plot: per-bucket deltas, first-token percentiles from histogram deltas, and her state over time.
 
-import type { TelemetryPoint, Thought } from "@/api/types";
+import type { Thought } from "@/api/types";
+import type { TelemetryPoint } from "@miyoria/contracts/api";
 import type { Column } from "@/components/charts/charts";
 
 export type Range = "1h" | "6h" | "24h";

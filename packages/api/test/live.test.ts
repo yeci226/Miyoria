@@ -21,6 +21,7 @@ import {
 } from "../src/live.js";
 import { Monitor } from "../src/monitor.js";
 import { PublicConfigSchema, PublicSide } from "../src/public.js";
+import { rpcRoutes } from "../src/rpc.js";
 import type { SessionRecord } from "../src/session.js";
 import { type ApiEnv, ApiState } from "../src/state.js";
 
@@ -69,6 +70,12 @@ const SESSION: SessionRecord = {
   expires_at: "2026-11-17T00:00:00.000Z",
 };
 
+/** The live page's routes: the stream and the picture, and the pat on the route table. */
+function routesOf(state: ApiState) {
+  const pat = rpcRoutes(state).filter((r) => r.path === "/api/member/live/pat");
+  return [...liveRoutes(state), ...pat];
+}
+
 function rig(feed: LiveFeed | undefined, publicEnabled = true) {
   const ctx = {
     clock: { now: () => 0 },
@@ -89,7 +96,7 @@ function rig(feed: LiveFeed | undefined, publicEnabled = true) {
   );
   const app = new Hono<ApiEnv>();
   // The real router authenticates; here the member is simply who the session says.
-  for (const route of liveRoutes(state)) {
+  for (const route of routesOf(state)) {
     app.on(route.method, route.path, async (c) => {
       if (route.member) c.set("member", SESSION);
       try {
@@ -99,7 +106,7 @@ function rig(feed: LiveFeed | undefined, publicEnabled = true) {
       }
     });
   }
-  return { app, routes: liveRoutes(state) };
+  return { app, routes: routesOf(state) };
 }
 
 /** Reads a stream until `count` SSE messages (comments and `retry:` skipped) arrived. */

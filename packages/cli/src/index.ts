@@ -1,6 +1,6 @@
 // `miyoria` package: the CLI. The library surface is exported for tests and embedding.
 
-export { ApiClient, ClientError, SseParser } from "@miyoria/api";
+export { ClientError } from "@miyoria/api";
 export { COMMANDS, type CommandSpec, checkArgs, helpText, main, parseArgs } from "./cli.js";
 export { EnvFile, isEnvName, quoteEnvValue } from "./env-file.js";
 export {

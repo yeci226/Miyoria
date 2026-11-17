@@ -2,12 +2,21 @@
 // speaking, recent latency) and whether her own speech is playing. Only events seen since the
 // `api` module started count.
 
-import type { Subscription } from "@miyoria/kernel";
+import type {
+  E2eSegmentName,
+  E2eStats,
+  LatencyStats,
+  VoiceE2eLatency,
+  VoiceState,
+} from "@miyoria/contracts/api";
+import type { Subscription } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
   type ContextKey,
   contextKeyEquals,
   type Envelope,
+  Events,
+  is,
   isJsonObject,
   type JsonValue,
   sameAccount,
@@ -16,13 +25,6 @@ import {
   timestampMs,
   type VoiceParticipant,
 } from "@miyoria/types";
-import type {
-  E2eSegmentName,
-  E2eStats,
-  LatencyStats,
-  VoiceE2eLatency,
-  VoiceState,
-} from "./types.js";
 
 /** Topics the monitor follows. */
 export const MONITOR_TOPICS: readonly string[] = ["voice.*", "agent.turn.started"];
@@ -174,67 +176,48 @@ export class Monitor {
   }
 
   handle(env: Envelope): void {
-    const at = env.ts;
-    const event = env.event;
-    switch (event.type) {
-      case "voice_joined": {
-        const { context, participants } = event.data;
-        this.#sessions = this.#sessions.filter((s) => !contextKeyEquals(s.context, context));
-        const session = newSession(context, at);
-        session.participants = [...participants];
+    const at = env.at;
+    if (is(Events.VoiceJoined, env)) {
+      const { context, participants } = env.data;
+      this.#sessions = this.#sessions.filter((s) => !contextKeyEquals(s.context, context));
+      const session = newSession(context, at);
+      session.participants = [...participants];
+      this.#sessions.push(session);
+    } else if (is(Events.VoiceLeft, env)) {
+      const { context } = env.data;
+      this.#sessions = this.#sessions.filter((s) => !contextKeyEquals(s.context, context));
+      this.#playing = this.#playing.filter((c) => !contextKeyEquals(c, context));
+    } else if (is(Events.VoiceParticipants, env)) {
+      const { context, participants } = env.data;
+      let session = this.#session(context);
+      if (!session) {
+        session = newSession(context, at);
         this.#sessions.push(session);
-        break;
       }
-      case "voice_left": {
-        const { context } = event.data;
-        this.#sessions = this.#sessions.filter((s) => !contextKeyEquals(s.context, context));
-        this.#playing = this.#playing.filter((c) => !contextKeyEquals(c, context));
-        break;
+      session.participants = [...participants];
+      session.speaking = session.speaking.filter((a) =>
+        participants.some((p) => sameAccount(p.account, a)),
+      );
+    } else if (is(Events.VoiceSpeaking, env)) {
+      const { context, account, speaking } = env.data;
+      const session = this.#session(context);
+      if (session) {
+        session.speaking = session.speaking.filter((a) => !sameAccount(a, account));
+        if (speaking) session.speaking.push(account);
       }
-      case "voice_participants": {
-        const { context, participants } = event.data;
-        let session = this.#session(context);
-        if (!session) {
-          session = newSession(context, at);
-          this.#sessions.push(session);
-        }
-        session.participants = [...participants];
-        session.speaking = session.speaking.filter((a) =>
-          participants.some((p) => sameAccount(p.account, a)),
-        );
-        break;
-      }
-      case "voice_speaking": {
-        const { context, account, speaking } = event.data;
-        const session = this.#session(context);
-        if (session) {
-          session.speaking = session.speaking.filter((a) => !sameAccount(a, account));
-          if (speaking) session.speaking.push(account);
-        }
-        break;
-      }
-      case "voice_playback": {
-        const { context, turn, state } = event.data;
-        this.#playing = this.#playing.filter((c) => !contextKeyEquals(c, context));
-        if (state === "started") this.#playing.push(context);
-        const session = this.#session(context);
-        if (turn !== null && session) session.lastTurn = turn;
-        break;
-      }
-      case "agent_turn_started": {
-        const { turn, context } = event.data;
-        if (context.kind !== "voice") break;
-        const session = this.#session(context);
-        if (session) session.lastTurn = turn;
-        break;
-      }
-      case "custom": {
-        if (event.data.topic !== "voice.latency") break;
-        this.#latency(event.data.payload, at);
-        break;
-      }
-      default:
-        break;
+    } else if (is(Events.VoicePlaybackEvent, env)) {
+      const { context, turn, state } = env.data;
+      this.#playing = this.#playing.filter((c) => !contextKeyEquals(c, context));
+      if (state === "started") this.#playing.push(context);
+      const session = this.#session(context);
+      if (turn !== null && session) session.lastTurn = turn;
+    } else if (is(Events.AgentTurnStarted, env)) {
+      const { turn, context } = env.data;
+      if (context.kind !== "voice") return;
+      const session = this.#session(context);
+      if (session) session.lastTurn = turn;
+    } else if (env.type === Events.VoiceLatency.type) {
+      this.#latency(env.data as JsonValue, at);
     }
   }
 

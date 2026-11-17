@@ -9,7 +9,7 @@ import type {
   CommandReply,
   Modal,
 } from "@miyoria/commands";
-import { getLogger } from "@miyoria/kernel";
+import { getLogger } from "@miyoria/runtime/kernel";
 import {
   type APIActionRowComponent,
   type APIButtonComponent,

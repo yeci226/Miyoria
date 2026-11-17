@@ -2,7 +2,7 @@
 // giving spares away, and the tools and commands over it.
 
 import { CommandRegistry, Permissions } from "@miyoria/commands";
-import { ServiceRegistry } from "@miyoria/kernel";
+import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import type { AccountRef } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { EconomyCommands } from "../src/commands.js";

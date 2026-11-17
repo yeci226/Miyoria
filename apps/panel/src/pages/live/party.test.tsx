@@ -1,6 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { PartySnapshot } from "@/api/v4-types";
+import type { PartySnapshot } from "@miyoria/contracts/api";
 import { endReason, scoreLine } from "@/lib/party";
 import { mockFetch, renderRoute } from "@/test/render";
 

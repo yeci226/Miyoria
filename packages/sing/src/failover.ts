@@ -1,8 +1,13 @@
-// Several song workers in order of preference (`[modules.sing] url`, then `fallback_urls`), e.g. a
-// friend's GPU over Tailscale first and the worker on this machine when that one does not answer.
+// Several song workers in order of preference (the `sing` endpoints of Core's registry: e.g. a
+// friend's GPU over Tailscale first and the worker on this machine when that one does not answer).
 // New songs go to the first worker that answers; a song stays with the worker that made it (its
 // files live there), and is made again on the next one only when that worker stays unreachable.
 // A job left behind that way is cancelled on its worker once it answers again.
+//
+// The list changes while Core runs (`update`): a worker keeps what it holds as long as it keeps
+// its id (or its URL, when only the id changed), and one that is no longer listed counts as gone,
+// as one unreachable for too long. With a single worker none of the failover rules apply: it is
+// used as it is.
 
 import {
   type GpuContext,
@@ -21,32 +26,104 @@ export interface FailoverOptions {
    */
   retryMs: number;
   now?: () => number;
+  /** Told when a worker is found unreachable (by its id): the registry rests it too. */
+  failed?: (id: string, error: unknown) => void;
+}
+
+/** One worker of the list. */
+export interface FailoverEntry {
+  /** What stays the same when it restarts elsewhere (default `name`). */
+  id?: string;
+  /** For messages (its URL). */
+  name: string;
+  /** Where it is now: a worker listed under a new id at the same URL is the same worker. */
+  url?: string;
+  worker: SingWorker;
 }
 
 interface Endpoint {
+  id: string;
   name: string;
+  url: string | null;
   worker: SingWorker;
   /** Unreachable since (`null`: it answered last time). */
   downSince: number | null;
   /** Last time it was found unreachable. */
   lastFail: number;
+  /** No longer listed: whatever it holds counts as gone. */
+  gone: boolean;
+}
+
+function sameUrl(url: string): string {
+  return url.trim().replace(/\/+$/, "").toLowerCase();
 }
 
 export class FailoverSingWorker implements SingWorker {
-  readonly #all: Endpoint[];
+  #all: Endpoint[] = [];
+  /** Every worker ever listed, by id (the gone ones too: jobs and songs still point at them). */
+  readonly #known = new Map<string, Endpoint>();
   readonly #retryMs: number;
   readonly #now: () => number;
+  readonly #failed: ((id: string, error: unknown) => void) | null;
   /** Which worker took a job / has a song, as answers come in (lost on restart, then searched). */
   readonly #jobs = new Map<string, Endpoint>();
   readonly #songs = new Map<string, Endpoint>();
   /** Jobs given up on (made again elsewhere, or cancelled while unreachable), to cancel later. */
   readonly #abandoned = new Map<string, Endpoint>();
 
-  constructor(workers: { name: string; worker: SingWorker }[], options: FailoverOptions) {
-    if (workers.length === 0) throw new Error("FailoverSingWorker needs at least one worker");
-    this.#all = workers.map((w) => ({ ...w, downSince: null, lastFail: 0 }));
+  constructor(workers: readonly FailoverEntry[], options: FailoverOptions) {
     this.#retryMs = options.retryMs;
     this.#now = options.now ?? Date.now;
+    this.#failed = options.failed ?? null;
+    this.update(workers);
+  }
+
+  /** The workers in order of preference now. */
+  update(workers: readonly FailoverEntry[]): void {
+    const ids = new Set(workers.map((w) => w.id ?? w.name));
+    const next: Endpoint[] = [];
+    for (const w of workers) {
+      const id = w.id ?? w.name;
+      let ep = this.#known.get(id);
+      if (ep === undefined && w.url !== undefined) {
+        // Listed under another id at the same address (a hostd now reports what a static entry
+        // named): the same worker, with what it holds.
+        const url = sameUrl(w.url);
+        ep = [...this.#known.values()].find(
+          (e) => e.url !== null && sameUrl(e.url) === url && !ids.has(e.id),
+        );
+        if (ep !== undefined) {
+          this.#known.delete(ep.id);
+          ep.id = id;
+          this.#known.set(id, ep);
+        }
+      }
+      if (ep === undefined) {
+        ep = {
+          id,
+          name: w.name,
+          url: w.url ?? null,
+          worker: w.worker,
+          downSince: null,
+          lastFail: 0,
+          gone: false,
+        };
+        this.#known.set(id, ep);
+      } else {
+        ep.name = w.name;
+        ep.url = w.url ?? null;
+        ep.worker = w.worker;
+        ep.gone = false;
+      }
+      if (!next.includes(ep)) next.push(ep);
+    }
+    for (const ep of this.#known.values()) if (!next.includes(ep)) ep.gone = true;
+    this.#all = next;
+  }
+
+  /** More than one worker: the failover rules apply. */
+  get #failover(): boolean {
+    return this.#all.length > 1;
   }
 
   /** Where new work goes now: the first worker that answers. */
@@ -68,7 +145,7 @@ export class FailoverSingWorker implements SingWorker {
         last = error;
       }
     }
-    throw last ?? unreachable("no song worker answers");
+    throw last ?? unreachable(this.#all.length === 0 ? NO_WORKER : "no song worker answers");
   }
 
   async job(id: string, signal?: AbortSignal): Promise<WorkerJob> {
@@ -103,7 +180,9 @@ export class FailoverSingWorker implements SingWorker {
       await this.#forJob(id, owner, (w) => w.cancel(id));
     } catch (error) {
       // Its worker is away: the job may still be running there, so cancel it when it is back.
-      if (owner !== undefined && isUnreachable(error)) this.#abandoned.set(id, owner);
+      if (owner !== undefined && isUnreachable(error) && (this.#failover || owner.gone)) {
+        this.#abandoned.set(id, owner);
+      }
       throw error;
     }
   }
@@ -118,9 +197,7 @@ export class FailoverSingWorker implements SingWorker {
       this.#candidates().map((ep) => this.#attempt(ep, (w) => w.context(context, signal))),
     );
     if (results.every((r) => r.status === "rejected")) {
-      throw (
-        (results[0] as PromiseRejectedResult | undefined)?.reason ?? unreachable("no song worker")
-      );
+      throw (results[0] as PromiseRejectedResult | undefined)?.reason ?? unreachable(NO_WORKER);
     }
   }
 
@@ -131,9 +208,7 @@ export class FailoverSingWorker implements SingWorker {
       eps.map((ep) => this.#attempt(ep, (w) => w.songs(signal))),
     );
     if (results.every((r) => r.status === "rejected")) {
-      throw (
-        (results[0] as PromiseRejectedResult | undefined)?.reason ?? unreachable("no song worker")
-      );
+      throw (results[0] as PromiseRejectedResult | undefined)?.reason ?? unreachable(NO_WORKER);
     }
     const seen = new Set<string>();
     const out: SongMeta[] = [];
@@ -160,15 +235,18 @@ export class FailoverSingWorker implements SingWorker {
 
   /** Healthy while any worker is; otherwise why each one is not. */
   async health(signal?: AbortSignal): Promise<string | null> {
-    const whys = await Promise.all(this.#all.map((ep) => ep.worker.health(signal)));
+    const all = this.#all;
+    if (all.length === 0) return NO_WORKER;
+    const whys = await Promise.all(all.map((ep) => ep.worker.health(signal)));
     const now = this.#now();
     whys.forEach((why, i) => {
-      const ep = this.#all[i] as Endpoint;
+      const ep = all[i] as Endpoint;
       if (why === null) this.#up(ep);
-      else this.#down(ep, now);
+      else this.#down(ep, now, new Error(why));
     });
     if (whys.some((why) => why === null)) return null;
-    return this.#all.map((ep, i) => `${ep.name}: ${whys[i]}`).join("; ");
+    if (all.length === 1) return whys[0] ?? null;
+    return all.map((ep, i) => `${ep.name}: ${whys[i]}`).join("; ");
   }
 
   // ----- routing -----
@@ -180,13 +258,17 @@ export class FailoverSingWorker implements SingWorker {
     return up.length > 0 ? up : this.#all;
   }
 
-  /** Found unreachable a moment ago: not asked again until `retryMs` passed. */
+  /** Found unreachable a moment ago: not asked again until `retryMs` passed. Gone: never. */
   #resting(ep: Endpoint, now = this.#now()): boolean {
+    if (ep.gone) return true;
+    if (!this.#failover) return false;
     return ep.downSince !== null && now - ep.lastFail < this.#retryMs;
   }
 
-  /** Unreachable for `retryMs` or longer: whatever it holds counts as gone. */
+  /** Unreachable for `retryMs` or longer, or no longer listed: whatever it holds counts as gone. */
   #dead(ep: Endpoint): boolean {
+    if (ep.gone) return true;
+    if (!this.#failover) return false;
     return ep.downSince !== null && this.#now() - ep.downSince >= this.#retryMs;
   }
 
@@ -200,15 +282,16 @@ export class FailoverSingWorker implements SingWorker {
       this.#up(ep);
       return value;
     } catch (error) {
-      if (isUnreachable(error)) this.#down(ep, this.#now());
+      if (isUnreachable(error)) this.#down(ep, this.#now(), error);
       else if (error instanceof SingWorkerError) this.#up(ep); // it answered, with an error
       throw error;
     }
   }
 
-  #down(ep: Endpoint, now: number): void {
+  #down(ep: Endpoint, now: number, error: unknown): void {
     ep.downSince ??= now;
     ep.lastFail = now;
+    this.#failed?.(ep.id, error);
   }
 
   /** It answers (again): jobs left behind on it are cancelled. */
@@ -228,7 +311,9 @@ export class FailoverSingWorker implements SingWorker {
     this.#jobs.delete(id);
     this.#abandoned.set(id, owner);
     return new SingWorkerError(
-      `the song worker at ${owner.name} has been unreachable for ${this.#downSecs(owner)} s`,
+      owner.gone
+        ? `the song worker at ${owner.name} is gone`
+        : `the song worker at ${owner.name} has been unreachable for ${this.#downSecs(owner)} s`,
       { status: 404, cause },
     );
   }
@@ -238,6 +323,8 @@ export class FailoverSingWorker implements SingWorker {
    * answer might, so the caller waits for it (an unreachable error) unless it counts as gone.
    */
   async #find<T>(order: Endpoint[], use: (w: SingWorker) => Promise<T>): Promise<[Endpoint, T]> {
+    // No worker at all: wait for one, as for a worker that does not answer.
+    if (this.#all.length === 0) throw unreachable(NO_WORKER);
     let waitFor: unknown = null;
     let missing: unknown = null;
     for (const ep of order) {
@@ -288,6 +375,8 @@ export class FailoverSingWorker implements SingWorker {
     if (job.song_id !== null) this.#songs.set(job.song_id, ep);
   }
 }
+
+const NO_WORKER = "no song worker is known";
 
 function isUnreachable(error: unknown): boolean {
   return error instanceof SingWorkerError && error.unreachable;

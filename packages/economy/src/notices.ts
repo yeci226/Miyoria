@@ -10,7 +10,7 @@
 // * No known place, no card: a background sweep posts nothing, and a channel is never guessed.
 
 import { type CardBlock, type CommandReply, cardReply, ReplySinkKey } from "@miyoria/commands";
-import { errorMessage } from "@miyoria/kernel";
+import { errorMessage } from "@miyoria/runtime/kernel";
 import type { AccountRef, ContextKey } from "@miyoria/types";
 import type { EconomyService } from "./economy.js";
 import { someone } from "./receipt.js";

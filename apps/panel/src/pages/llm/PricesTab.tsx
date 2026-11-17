@@ -1,4 +1,4 @@
-import type { CostReport, UsageMap } from "@/api/types";
+import type { CostReport, UsageMap } from "@miyoria/contracts/api";
 import { useCost, useLlmStats, useUsage } from "@/app/queries";
 import { BarList, ChartBlock } from "@/components/charts/charts";
 import { QueryView, SkeletonRows } from "@/components/query-state";

@@ -5,7 +5,7 @@
 // (through the `UserResolver` service) before running them.
 
 import type { ResolvedUser, UserResolver } from "@miyoria/commands";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import type { ContextKey, PlatformId } from "@miyoria/types";
 import {
   displayName,

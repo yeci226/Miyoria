@@ -2,15 +2,28 @@
 // (a game, a song heard to the end, her own judgement) and her tools and `/me quests`.
 
 import { CommandRegistry, Permissions } from "@miyoria/commands";
-import { getLogger, ServiceRegistry } from "@miyoria/kernel";
+import { getLogger, ServiceRegistry } from "@miyoria/runtime/kernel";
 import type { JsonValue } from "@miyoria/types";
-import { customEvent, type Event, SONG_TOPIC } from "@miyoria/types";
+import {
+  type AnyEventDefinition,
+  type EventPayload,
+  Events,
+  eventEnvelope,
+  type PublishMetaArgs,
+} from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { EconomyCommands } from "../src/commands.js";
 import { Earnings } from "../src/earn.js";
 import { v2Capabilities } from "../src/v2-tools.js";
 import { Economy2Key } from "../src/v2-types.js";
 import { ALICE, BOB, balance, rig as baseRig, CAROL, DAVE, DAY, rejects, say, T0 } from "./rig.js";
+
+/** An event of `definition` as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  definition: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+) => eventEnvelope("test", definition, data, ...meta);
 
 /** Achievements pay coins of their own: keep them out of these sums. */
 const rig = (config: Record<string, JsonValue> = {}) => baseRig({ achievement_cap: 0, ...config });
@@ -92,17 +105,14 @@ describe("quests", () => {
       muted: false,
       deafened: false,
     });
-    const joined = (...who: (typeof ALICE)[]): Event =>
-      ({ type: "voice_joined", data: { context: voice, participants: who.map(part) } }) as never;
-    const cue = (state: string, extra = {}): Event =>
-      customEvent(SONG_TOPIC, { state, song: "s1", ...extra });
+    const joined = (...who: (typeof ALICE)[]) =>
+      ev(Events.VoiceJoined, { context: voice, participants: who.map(part) } as never);
+    const cue = (state: string, extra = {}) =>
+      ev(Events.SingCue, { state, song: "s1", ...extra } as never);
     await earnings.onEvent(joined(ALICE), T0);
     await earnings.onEvent(cue("started", { title: "t" }), T0);
     await earnings.onEvent(
-      {
-        type: "voice_participants",
-        data: { context: voice, participants: [part(ALICE), part(BOB)] },
-      } as never,
+      ev(Events.VoiceParticipants, { context: voice, participants: [part(ALICE), part(BOB)] }),
       T0,
     );
     await earnings.onEvent(cue("ended", { outcome: "finished" }), T0);

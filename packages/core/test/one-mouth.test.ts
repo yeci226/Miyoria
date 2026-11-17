@@ -33,100 +33,97 @@ function using(pattern: RegExp): string[] {
 }
 
 describe("only the main line speaks", () => {
-  it("a line is only built by a turn, the mouth and her own DM tool", () => {
-    expect(using(/\btype:\s*"(?:speak|send_message)"/)).toEqual([
-      // `message.dm`: a tool, so only ever an action of a main-line turn; the scheduler checks.
-      "packages/actions/src/builtin.ts",
-      // The mouth (`MainLine.say`).
-      "packages/agent/src/mainline/main.ts",
-      // The turn itself: sentences, text, the fixed line.
-      "packages/agent/src/turn.ts",
-      // The bus shape of `action.settled` in the type's own file.
-      "packages/replay/src/fakes.ts",
-      "packages/types/src/action.ts",
-    ]);
+  it("a line is only built by the mouth and her own DM tool", () => {
+    expect(using(/\btype:\s*"(?:speak|send_message)"/)).toEqual(
+      [
+        // `message.dm`: a tool, so only ever an action of one of her runs; the scheduler checks.
+        "packages/gate/actions/src/builtin.ts",
+        // The mouth (`MainLine.say`): every line of a run, and the fixed lines.
+        "packages/brain/agent/src/mainline/main.ts",
+        // The bus shape of `action.settled` in the type's own file.
+        "packages/types/src/action.ts",
+      ].sort(),
+    );
   });
 
-  it("the voice sink is only called by the scheduler; V2 fallbacks sit behind the mouth", () => {
-    expect(using(/\.speak\(/)).toEqual([
-      // After `MouthKey`: only reached under `pipeline = "v2"`.
-      "packages/actions/src/builtin.ts",
-      "packages/game/src/chat.ts",
-      "packages/scheduler/src/scheduler.ts",
-    ]);
-    for (const file of ["packages/actions/src/builtin.ts", "packages/game/src/chat.ts"]) {
+  it("the voice sink is only called by the scheduler; the others go through the mouth", () => {
+    expect(using(/\.speak\(/)).toEqual(["packages/runtime/scheduler/src/scheduler.ts"]);
+    // The panel's "say" and game chat have no other route: without the mouth they fail.
+    for (const file of ["packages/gate/actions/src/builtin.ts", "packages/play/game/src/chat.ts"]) {
       const text = readFileSync(join(ROOT, file), "utf8");
-      expect(text.indexOf("MouthKey)")).toBeGreaterThan(-1);
-      expect(text.indexOf("MouthKey)"), file).toBeLessThan(text.lastIndexOf(".speak("));
+      expect(text, file).toContain("MouthKey)");
+      expect(text, file).toContain("the agent module is not running");
     }
   });
 
   it("the scheduler refuses what the main line does not own", () => {
-    const text = readFileSync(join(ROOT, "packages/scheduler/src/scheduler.ts"), "utf8");
+    const text = readFileSync(join(ROOT, "packages/runtime/scheduler/src/scheduler.ts"), "utf8");
     expect(text).toContain("mouth.owns(action.turn)");
+    // And with no mouth at all (the agent module is not running) no line goes out.
+    expect(text).toContain("the agent module is not running");
   });
 
-  it("nobody but a turn writes `utterance` lines: the bus handlers stand down under V3", () => {
-    const text = readFileSync(join(ROOT, "packages/facts/src/bus.ts"), "utf8");
-    expect(text).toContain("if (!this.#ownLines) this.#playback(event.data);");
-    expect(text).toContain("if (!this.#ownLines) this.#settled(");
+  it("nobody but a turn writes `utterance` lines: the facts bus has no handler for them", () => {
+    const text = readFileSync(join(ROOT, "packages/memory/facts/src/bus.ts"), "utf8");
+    expect(text).not.toContain("#playback(");
+    expect(text).not.toContain("#settled(");
+    // It is not handed the delivery ledger, so it can neither open nor acknowledge a line.
+    expect(text).not.toMatch(/DeliveryLedger|#ledger|options\.ledger/);
+    expect(text).not.toMatch(/\.(?:open|ack|undelivered)\(/);
   });
 });
 
 describe("only the main line acts", () => {
   it("every caller of the gate is listed", () => {
     expect(using(/\.invoke\(\s*(?:\{|request|$)/m).concat(using(/actuators\.invoke\(/))).toEqual(
-      expect.arrayContaining(["packages/actions/src/tools.ts"]),
+      expect.arrayContaining(["packages/gate/actions/src/tools.ts"]),
     );
     const callers = [...new Set([...using(/(?:registry|actuators|actuatorsFor\(.*\))\.invoke\(/)])];
-    expect(callers.sort()).toEqual([
-      // A tool: runs in the hands of a main-line turn.
-      "packages/actions/src/tools.ts",
-      // Transitions of a request the turn already made.
-      "packages/activity/src/port.ts",
-      // `chat.*` only under V3 (`#propose` runs nothing): the consent check of a line she chose.
-      "packages/agent/src/intents.ts",
-      // A person on the member page asking for a song, as a `user`: a request she may turn down.
-      "packages/api/src/member.ts",
-      // A person at the panel, or a slash command: people, not her.
-      "packages/api/src/ops.ts",
-      // `actThroughGate`: V2 only, `ArbiterEnv.act` is not set under V3.
-      "packages/arbiter/src/module.ts",
-      // An expression a person bought on the member page: `stage.expression`, as the panel.
-      "packages/economy/src/economy.ts",
-      // The game executor: the steps of a session the main line started.
-      "packages/game/src/actions.ts",
-      "packages/game/src/chat.ts",
-      "packages/game/src/commands.ts",
-      "packages/game/src/director.ts",
-      // V2 only: with a proposal board `#submit` is never reached.
-      "packages/mind/src/mind.ts",
-      "packages/sing/src/commands.ts",
-      "packages/stage/src/link/commands.ts",
-      "packages/stage/src/link/module.ts",
-      "packages/voice/src/commands.ts",
-      // `watch.start` brings her to the stream through `voice.join`, as whoever asked.
-      "packages/watch/src/actions.ts",
-    ]);
-  });
-
-  it("under V3 the Arbiter has no hands and her Plan no way but the board", () => {
-    const arbiter = readFileSync(join(ROOT, "packages/arbiter/src/module.ts"), "utf8");
-    expect(arbiter).toContain("floor === null\n        ? { act:");
-    const mind = readFileSync(join(ROOT, "packages/mind/src/mind.ts"), "utf8");
-    const act = mind.slice(mind.indexOf("async #act("));
-    expect(act.indexOf("if (board)")).toBeLessThan(act.indexOf("arbiter.submit"));
-    const intents = readFileSync(join(ROOT, "packages/agent/src/intents.ts"), "utf8");
-    expect(intents).toContain("if (main !== null && !talkOnly) return this.#propose(intent);");
-  });
-
-  it("the old self-starting paths cannot run under V3", () => {
-    const runtime = readFileSync(join(ROOT, "packages/agent/src/runtime.ts"), "utf8");
-    const legacy = runtime.slice(runtime.indexOf("#legacyInitiative(context: ContextKey"));
-    expect(legacy.indexOf("if (this.mainline)")).toBeLessThan(legacy.indexOf("inbox.push"));
-    const director = readFileSync(join(ROOT, "packages/game/src/director.ts"), "utf8");
-    expect(director.indexOf("ProposalBoardKey);")).toBeLessThan(
-      director.indexOf("v2Event(ARBITER_IMPULSE_TOPIC"),
+    expect(callers.sort()).toEqual(
+      [
+        // A tool: runs in the hands of a main-line turn.
+        "packages/gate/actions/src/tools.ts",
+        // Transitions of a request the turn already made.
+        "packages/brain/activity/src/port.ts",
+        // A person on the member page asking for a song, as a `user`: a request she may turn down.
+        "packages/api/src/member.ts",
+        // A person at the panel, or a slash command: people, not her.
+        "packages/api/src/ops.ts",
+        // An expression a person bought on the member page: `stage.expression`, as the panel.
+        "packages/economy/src/economy.ts",
+        // The game executor: the steps of a session the main line started.
+        "packages/play/game/src/actions.ts",
+        "packages/play/game/src/chat.ts",
+        "packages/play/game/src/commands.ts",
+        "packages/play/game/src/director.ts",
+        "packages/sing/src/commands.ts",
+        "packages/stage/src/link/commands.ts",
+        "packages/stage/src/link/module.ts",
+        "packages/voice/voice/src/commands.ts",
+      ].sort(),
     );
+  });
+
+  it("the Arbiter has no hands and her Plan none at all", () => {
+    const arbiter = readFileSync(join(ROOT, "packages/brain/arbiter/src/module.ts"), "utf8");
+    expect(arbiter).not.toContain("actThroughGate");
+    const mind = readFileSync(join(ROOT, "packages/heart/mind/src/mind.ts"), "utf8");
+    const act = mind.slice(mind.indexOf("async #act("));
+    expect(act).not.toContain(".propose(");
+    expect(act).not.toContain("arbiter.submit");
+    expect(act).not.toContain("registry.invoke");
+    // What the Arbiter admits is a run of hers: its host runs no capability itself.
+    const desk = readFileSync(join(ROOT, "packages/brain/selfhost/src/impulses.ts"), "utf8");
+    expect(desk).not.toContain(".invoke(");
+  });
+
+  it("the old self-starting paths are gone: the director's narration only asks the Arbiter", () => {
+    const runtime = readFileSync(join(ROOT, "packages/brain/agent/src/runtime.ts"), "utf8");
+    expect(runtime).not.toContain("legacyInitiative");
+    expect(runtime).not.toContain("onImpulseEvent");
+    expect(runtime).not.toContain("openInitiative");
+    const director = readFileSync(join(ROOT, "packages/play/game/src/director.ts"), "utf8");
+    expect(director).not.toContain("ProposalBoardKey");
+    expect(director).toContain("this.#ctx.publish(Events.ArbiterImpulse, impulse);");
   });
 });

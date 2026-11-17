@@ -182,7 +182,7 @@ Navigation is four levels, each visible at once:
 
 What V4 added, in the same blocks as everything else: `Page`, `Card` with a named section,
 hairline rows, `ChartBlock` for the one chart, no tiles. Every one reads through `ModuleQuery`
-(`app/v4-queries.ts`, `api/v4-endpoints.ts`): loading is a skeleton, a 503 is one `OffLine` row
+(`app/queries.ts`, `api/endpoints.ts`): loading is a skeleton, a 503 is one `OffLine` row
 ("<module>沒有啟動") with 重新檢查, a 404 on the route is "這個 Core 還沒有這項功能", and an empty
 answer is one plain line. Nothing here is invented: a number the Core does not send is not shown.
 
@@ -202,17 +202,46 @@ answer is one plain line. Nothing here is invented: a number the Core does not s
   - No ranking of people. Someone's own quests show in their page under 角色 / 人.
 - 評測 (`/eval`): the participation metrics under 參與度指標, `ChartBlock`s 回合怎麼結束 and
   沒接話的原因 (a `SegmentBar` each, counts in the legend). Words for outcomes, never a score.
+  真模型評測 (`LiveEval`, from `GET /api/eval/live`): the nightly run as a strip of facts, the eight
+  headline numbers of the live suites as `Facets` over the runs (four columns on `xl`), then the
+  ten newest runs as a table. One brain per trend; a `Segmented` picks it when there are two.
 - 派對遊戲 (a card on 直播): from `GET /api/party`. Running games first (a pulsing brand dot, the
   game, the channel, how many are there, when it began, the scores when the game scores), then 最近的結果
   with why it ended and the final standings. "現在沒有人在玩" is an empty snapshot; the module being
   off is the `OffLine` row. It never shows what a game keeps hidden (an answer, the soup's bottom).
   The recent list lives in memory, so a restart empties it.
 
+## People
+
+One list of people, `角色 / 人`, from `GET /api/people`; `內心` has no list of its own (an old
+`/inner?tab=feelings` link lands here). The bond is drawn as the ring (`BondRing`, from
+`@miyoria/card-face`, the same drawing Discord's PNG uses): the lap being filled, ten segments for
+the laps done, a heart in the middle. Primary only, no colour of its own.
+
+- List (`PeopleTab`): the table as before. 關係 is the tier with its stage (「知心 II」), 羈絆 the
+  28 px mark (the lap and the heart, no segments) with the number beside it. Someone she has not met
+  is 陌生人 and a dash. Above it `ChartBlock` 羈絆走勢 from each person's history.
+- Person (`PersonSheet`, `sm:max-w-2xl`), sections in this order:
+  - 關係: the ring with the bond on the heart, beside it `Facts` (分級, 下一步, 到下一級 as a
+    `Meter` and a percentage, 在意). A held tier is one plain line. The eight numbers as rows: a
+    `Meter` for 0..100 and 0..1, a `Bipolar` for 好感 and 敬意 (-1..1). Then 調整羈絆 (the quick
+    steps) and 設定數值 (any number, a `Select` and a field, `POST /api/people/{id}/adjust`), then
+    今天的額度 for the numbers that moved today only.
+  - 最近的變化: a `TimeChart` of 羈絆, 信任 and 熟悉 over the changes loaded, then each change: the
+    number, the signed change, why in words (對話中, 每晚反思, 互動, 隨時間, 手動調整, 舊紀錄), 已達上限
+    when the day's cap took it, her quote. 20 at a time, 載入更多 for older ones.
+  - 證據, 分級的共同記憶 (tier, date, quote; 新增共同記憶 in a `Dialog`, 拿掉 in `RowActions` behind a
+    `ConfirmDialog`), 她怎麼看這個人 (稱呼, 標籤, 印象, 相處方式, 還沒聊完的事, 共同的梗, 不喜歡的地方,
+    會員頁上的話, one 儲存), then 魚幣, 今天的任務 and 帳號 as before.
+  - Sections without anything to show are left out; someone without a row has 還沒有關係紀錄.
+
 ## Public site
 
 What `/` shows to anyone who is not an admin. `App.tsx` picks it after `GET /api/auth/session`
 answers 401 and `GET /api/public/status` answers; the admin shell, its router and its event stream
-are never mounted, so nothing there can call an admin route. Without a public side on the Core
+are never mounted, so nothing there can call an admin route. They are not downloaded either:
+`AdminApp` (shell, router, command palette, queries, event stream) is a chunk `App` loads only for
+an admin, and the pages are chunks of their own. Without a public side on the Core
 (`[modules.api.public] enabled = false`, or an older Core) the login screen shows as before. The
 token form stays at `#/login`, with no link to it from the page.
 
@@ -226,7 +255,10 @@ token form stays at `#/login`, with no link to it from the page.
   person and 登出. No sidebar, no navigation.
 - Content: `Page` straight away. There is no opening on the picture; that stays 總覽's.
 - 現在, 今天 and the bands of 她眼中的你 are strips of facts, label over value, at 14. Never tiles.
-- Words, not numbers, for anything she feels: 好感, 信任 and 熟悉 arrive as bands from the Core.
+- Words, not numbers, for anything she feels: 信任 and 熟悉 arrive as bands from the Core and show
+  as step meters. 羈絆 is the ring with nothing on the heart (the Core sends only the lap and its
+  fill, in twentieths), the tier with its stage, and 離「知心 III」還有一段 while there is a next
+  step. The header says 關係 with the same tier. A Core without the ring keeps the six steps.
 - No ranking of people, anywhere.
 - The logged-in page also holds the keepsakes (`CardSection`, `FortuneSlip`, `HoloCard`): the member
   card and today's fortune slip, the same things `/me card` and `/me fortune` give on Discord,
@@ -303,7 +335,8 @@ Core without it shows one line at the chart's height instead.
 Button (default = primary / secondary / outline = neutral / ghost / link / stop; sizes sm, default,
 icon, icon-sm; `busy` spinner; `writes` disables with the read-only hint). `stop` is the emergency
 stop's alone. Badge (outline, secondary, success, warning, destructive, brand), StatusBadge /
-StateBadge / Dot, Meter / Bipolar, `Segmented` (radio group of short options), Card (a named
+StateBadge / Dot, Meter / Bipolar, `BondRing` (the bond: `ring` with the number on the heart for
+the admin, without it for a member, `mark` at 28 px for table rows), `Segmented` (radio group of short options), Card (a named
 section), Tabs, Table + `DataTable` (TanStack Table; global filter, sortable headers via
 `enableSorting`), `RowActions` (⋯ DropdownMenu at row end), Select, Switch, Checkbox, Slider,
 Input / Textarea, Field (label + control + error), Dialog (forms, persona edit → diff → save),

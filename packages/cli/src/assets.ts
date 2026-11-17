@@ -1,4 +1,4 @@
-// Files shipped with the CLI so `npx miyoria init` works in an empty folder: the config
+// Files shipped with the CLI so `pnpm dlx miyoria init` works in an empty folder: the config
 // templates (`templates/`) and the bundled profiles (`assets/profiles/`, copied from the repo's
 // `profiles/` at build time; from source the repo directory is used directly).
 

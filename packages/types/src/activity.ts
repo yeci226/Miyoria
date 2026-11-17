@@ -11,13 +11,20 @@
 //   the prompt and the planner all read that from the same snapshot.
 // * The scene is a pure function of the snapshot plus her timed override.
 //
-// Bus topics (custom events): `ACTIVITY_CHANGED_TOPIC` (the whole `ActivitySnapshot`, on every
-// change), `ACTIVITY_STARTED_TOPIC` / `ACTIVITY_DONE_TOPIC` / `ACTIVITY_FAILED_TOPIC`
-// (`ActivityTaskEvent`), and `NOTICE_TOPIC` (`Notice`, for her conversation).
+// Bus topics: `Events.ActivityChanged` (the whole `ActivitySnapshot`, on every
+// change), `Events.ActivityStarted` / `Events.ActivityDone` / `Events.ActivityFailed`
+// (`ActivityTaskEvent`), and `Events.AgentNotice` (`Notice`, for her conversation).
 
+import type {
+  ActivityDoneData,
+  ActivityFailedData,
+  ActivityRestoreData,
+  ActivitySnapshotData,
+  ActivityStartedData,
+  NoticeData,
+} from "@miyoria/contracts/events";
 import type { Principal } from "./actuator.js";
 import type { TurnId } from "./ids.js";
-import type { JsonValue } from "./json.js";
 import type { AccountRef, ContextKey } from "./platform.js";
 import { serviceKey } from "./service-key.js";
 import type { TaskFailureCode, TaskId } from "./task.js";
@@ -25,12 +32,6 @@ import type { Timestamp } from "./time.js";
 
 /** The three resources; each has its own mutex. */
 export type ActivityResource = "presence" | "broadcast" | "activity";
-
-export const ACTIVITY_RESOURCES: readonly ActivityResource[] = [
-  "presence",
-  "broadcast",
-  "activity",
-];
 
 // ---- states ---------------------------------------------------------------------------------
 
@@ -66,14 +67,6 @@ export type HerBroadcast =
 
 /** What she is busy with. `idle` has no phase. */
 export type ActivityType = "idle" | "chatting" | "singing" | "game" | "browse";
-
-export const ACTIVITY_TYPES: readonly ActivityType[] = [
-  "idle",
-  "chatting",
-  "singing",
-  "game",
-  "browse",
-];
 
 export type ActivityPhase = "starting" | "running" | "stopping" | "failed";
 
@@ -112,16 +105,7 @@ export interface SceneOverride {
 }
 
 /** The whole body state. `version` increases by one on every change. */
-export interface ActivitySnapshot {
-  version: number;
-  at: Timestamp;
-  presence: HerPresence;
-  broadcast: HerBroadcast;
-  activity: HerActivity;
-  override: SceneOverride | null;
-  /** The scene `f(presence, broadcast, activity, override)` picks; `null`: no OBS / no rule. */
-  scene: string | null;
-}
+export type ActivitySnapshot = ActivitySnapshotData;
 
 // ---- requests -------------------------------------------------------------------------------
 
@@ -227,50 +211,10 @@ export interface ActivityTask {
 
 // ---- events ---------------------------------------------------------------------------------
 
-/** Payload: the whole `ActivitySnapshot`, published on every change. */
-export const ACTIVITY_CHANGED_TOPIC = "activity.changed";
-/** Payload: `ActivityTaskEvent` (`type: "started"`). */
-export const ACTIVITY_STARTED_TOPIC = "activity.started";
-/** Payload: `ActivityTaskEvent` (`type: "done"`). */
-export const ACTIVITY_DONE_TOPIC = "activity.done";
-/** Payload: `ActivityTaskEvent` (`type: "failed"`). */
-export const ACTIVITY_FAILED_TOPIC = "activity.failed";
-
 /** Lifecycle of one transition task (the `TaskEvent` shape plus what it was about). */
-export type ActivityTaskEvent =
-  | {
-      type: "started";
-      task: TaskId;
-      resource: ActivityResource;
-      request: ActivityRequest;
-      turn: TurnId | null;
-      at: Timestamp;
-    }
-  | {
-      type: "done";
-      task: TaskId;
-      resource: ActivityResource;
-      request: ActivityRequest;
-      turn: TurnId | null;
-      detail: string;
-      data: JsonValue;
-      at: Timestamp;
-    }
-  | {
-      type: "failed";
-      task: TaskId;
-      resource: ActivityResource;
-      request: ActivityRequest;
-      turn: TurnId | null;
-      code: TaskFailureCode;
-      detail: string;
-      at: Timestamp;
-    };
+export type ActivityTaskEvent = ActivityStartedData | ActivityDoneData | ActivityFailedData;
 
 // ---- notices --------------------------------------------------------------------------------
-
-/** Payload: `Notice`. The agent consumes it; the ledger records it. */
-export const NOTICE_TOPIC = "agent.notice";
 
 /**
  * Something that happened that she should know about in a conversation, which is *not*
@@ -278,25 +222,7 @@ export const NOTICE_TOPIC = "agent.notice";
  * shows it in her trusted self-state (it is her own state), never as a user message, and may
  * start a turn for it (through the Arbiter once it exists, `ImpulseSource` `notice`).
  */
-export interface Notice {
-  id: string;
-  at: Timestamp;
-  /** The module that reports it (`activity`, `actions`, `game`). */
-  source: string;
-  /** The task it reports on, if any. */
-  task: TaskId | null;
-  /** Her turn that asked for it (`null`: nobody waits for it). */
-  turn: TurnId | null;
-  /** Where to tell her (`null`: wherever she is talking next). */
-  context: ContextKey | null;
-  ok: boolean;
-  /** Set when `ok` is false. */
-  code: TaskFailureCode | null;
-  /** What happened, short zh-TW for her (may contain untrusted names). */
-  text: string;
-  /** It no longer matters after this (dropped unshown). */
-  expires_at: Timestamp;
-}
+export type Notice = NoticeData;
 
 // ---- service --------------------------------------------------------------------------------
 
@@ -349,17 +275,11 @@ export interface GameResume {
 
 export const GameResumeKey = serviceKey<GameResume>("GameResume");
 
-/** Payload: `ActivityRestore`, once a session the last run left open is settled. */
-export const ACTIVITY_RESTORE_TOPIC = "activity.restore";
-
 /**
  * `resumed`: it was still there and runs again. `gone`: it did not come back in time. `dropped`:
  * something else was asked for meanwhile.
  */
-export interface ActivityRestore {
-  game: string;
-  outcome: "resumed" | "gone" | "dropped";
-}
+export type ActivityRestore = ActivityRestoreData;
 
 /** She is in a voice channel (not joining or leaving). */
 export function inVoice(snapshot: ActivitySnapshot): ContextKey | null {

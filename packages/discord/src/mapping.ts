@@ -86,10 +86,18 @@ export interface StickerLike {
   name: string;
 }
 
+/** `EmbedAssetData` (an embed's `image` / `thumbnail`): `url` is the original, `proxyURL` Discord's copy. */
+export interface EmbedAssetLike {
+  url?: string | null;
+  proxyURL?: string | null;
+}
+
 export interface EmbedLike {
   title?: string | null;
   description?: string | null;
   url?: string | null;
+  image?: EmbedAssetLike | null;
+  thumbnail?: EmbedAssetLike | null;
 }
 
 /** Map-like collections as discord.js hands them out (`Collection`) or tests build them. */
@@ -310,15 +318,35 @@ function stickers(list: Values<StickerLike> | null | undefined): Sticker[] {
   return [...(list?.values() ?? [])].map((s) => ({ id: s.id, name: s.name }));
 }
 
+/**
+ * Only Discord's proxy copy of an embed picture is kept: the original is some third party's
+ * server, which she never contacts (the proxy fetched it for everyone already).
+ */
+function proxied(asset: EmbedAssetLike | null | undefined): string | null {
+  return asset?.proxyURL?.trim() || null;
+}
+
 function embeds(list: readonly EmbedLike[] | null | undefined): Embed[] {
   const out: Embed[] = [];
   for (const e of list ?? []) {
+    const image = proxied(e.image);
+    const thumbnail = proxied(e.thumbnail);
     const embed: Embed = {
       title: e.title?.trim() || null,
       description: e.description?.trim() || null,
       url: e.url?.trim() || null,
+      ...(image === null ? {} : { image }),
+      ...(thumbnail === null ? {} : { thumbnail }),
     };
-    if (embed.title !== null || embed.description !== null || embed.url !== null) out.push(embed);
+    if (
+      embed.title !== null ||
+      embed.description !== null ||
+      embed.url !== null ||
+      image !== null ||
+      thumbnail !== null
+    ) {
+      out.push(embed);
+    }
   }
   return out;
 }
@@ -517,7 +545,7 @@ export interface OptionLike {
   options?: readonly OptionLike[];
 }
 
-/** An argument value: strings, integers and booleans, like the commands crate's `ArgValue`. */
+/** An argument value: strings, integers and booleans, like `ArgValue` in the commands package. */
 export type ArgValueLike = string | number | boolean;
 
 /** Flattens an interaction into a command path and argument values. */

@@ -14,7 +14,7 @@
 // global mode the guild sets of every guild the bot is in.
 
 import type { CommandRegistry } from "@miyoria/commands";
-import { errorMessage, getLogger, sleep } from "@miyoria/kernel";
+import { errorMessage, getLogger, sleep } from "@miyoria/runtime/kernel";
 import { Routes } from "discord.js";
 import {
   buildTree,

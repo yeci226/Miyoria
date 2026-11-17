@@ -10,18 +10,28 @@
 // relative to `import.meta.url` keeps working:
 //   - `src/assets.ts`: `new URL("..", import.meta.url)` -> package root (`templates/`,
 //     `assets/profiles/`, `package.json`)
-//   - `@miyoria/store`: `../migrations/{sqlite,postgres}/` -> `<package>/migrations/`
+// Database migrations are TypeScript strings inside the bundle; no files are copied for them.
 //
 // Copied next to the bundle:
 //   - `assets/profiles/`  <- repo `profiles/` (without local-only third-party assets)
-//   - `migrations/`       <- `packages/store/migrations/`
 //   - `dist/panel/`       <- `apps/panel/dist/` (build it first: `pnpm --filter @miyoria/panel build`)
 //   - `dist/overlay/`     <- `apps/overlay/dist/` (`pnpm --filter @miyoria/overlay build`)
+//   - the service catalog <- `workers/`, `services/`, `packages/core`, `packages/stage` of the repo,
+//     at the same relative paths (see `copyCatalog` below; hostd reads descriptors from the package)
 
-import { chmodSync, cpSync, existsSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { parse as parseToml } from "smol-toml";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repo = join(root, "..", "..");
@@ -111,11 +121,8 @@ cpSync(profiles, join(root, "assets", "profiles"), {
   filter: (src) => !localOnly(src),
 });
 
-// Store migrations, read at runtime from `<bundle dir>/../migrations/`.
+// Left over from builds that copied the store's `.sql` migrations next to the bundle.
 rmSync(join(root, "migrations"), { recursive: true, force: true });
-cpSync(join(repo, "packages", "store", "migrations"), join(root, "migrations"), {
-  recursive: true,
-});
 
 // Admin panel and stream overlay (optional: `miyoria core` / `miyoria stage` run without them).
 for (const [app, what, pkg] of [
@@ -133,5 +140,104 @@ for (const [app, what, pkg] of [
   }
 }
 
+// The service catalog: what `miyoria add` and hostd need on a machine that has no repository.
+// Descriptors, and for the Python workers their sources and the locked project; never models,
+// voices, environments, tests, caches, Dockerfiles or requirement files. The folders are the
+// catalog roots of packages/hostd/src/catalog.ts, at the same relative paths. The voice node
+// (apps/voice-node) runs from source and is not packaged yet.
+// These three folders of the package only ever hold what is copied here.
+for (const dir of ["workers", "services", "packages"]) {
+  rmSync(join(root, dir), { recursive: true, force: true });
+}
+
+const SKIP_DIRS = new Set(["__pycache__", "tests", "node_modules", ".pytest_cache", ".tmp-test"]);
+const skipDir = (name) =>
+  SKIP_DIRS.has(name) || name.startsWith(".venv") || name.startsWith(".tmp");
+
+/** Every `.py` below `dir`, as paths relative to `dir`. */
+function pythonSources(dir, base = dir) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!skipDir(entry.name)) out.push(...pythonSources(full, base));
+    } else if (entry.name.endsWith(".py")) out.push(relative(base, full));
+  }
+  return out;
+}
+
+/** The names a Python file imports (`import a`, `from a import b`, `from a.b import c`): `a`. */
+function importedModules(file) {
+  const names = new Set();
+  for (const m of readFileSync(file, "utf8").matchAll(
+    /^[ \t]*(?:from|import)[ \t]+([A-Za-z_]\w*)/gm,
+  )) {
+    names.add(m[1]);
+  }
+  return names;
+}
+
+function copyCatalog() {
+  const copied = [];
+  const copy = (from, to) => {
+    mkdirSync(dirname(join(root, to)), { recursive: true });
+    cpSync(join(repo, from), join(root, to));
+    copied.push(to.replaceAll("\\", "/"));
+  };
+
+  // Descriptors that run from the package: core, stage and every `services/*`.
+  for (const dir of [join("packages", "core"), join("packages", "stage")]) {
+    copy(join(dir, "service.toml"), join(dir, "service.toml"));
+  }
+  for (const entry of readdirSync(join(repo, "services"), { withFileTypes: true })) {
+    const file = join("services", entry.name, "service.toml");
+    if (entry.isDirectory() && existsSync(join(repo, file))) copy(file, file);
+  }
+
+  // Workers: the Python ones with sources and the locked project, the others with their config.
+  const workersDir = join(repo, "workers");
+  // The Core image is built without `workers/` in its context (.dockerignore): it runs Core only
+  // and needs no worker catalog. The packed npm package is checked for these files in CI.
+  if (!existsSync(workersDir)) {
+    console.warn("build: no workers/ folder here; the package will not carry the worker catalog");
+    return copied;
+  }
+  const shared = readdirSync(workersDir)
+    .filter((f) => f.endsWith(".py") && f !== "gen_contracts.py")
+    .map((f) => f.slice(0, -3));
+  const needed = new Set();
+  const scan = (file) => {
+    for (const name of importedModules(file)) if (shared.includes(name)) needed.add(name);
+  };
+  for (const entry of readdirSync(workersDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || skipDir(entry.name) || entry.name === "fake") continue;
+    const dir = join("workers", entry.name);
+    const descriptor = join(dir, "service.toml");
+    if (!existsSync(join(repo, descriptor))) continue;
+    copy(descriptor, descriptor);
+    const runtime = parseToml(readFileSync(join(repo, descriptor), "utf8")).install?.runtime;
+    if (runtime === "python") {
+      for (const file of ["pyproject.toml", "uv.lock"]) copy(join(dir, file), join(dir, file));
+      for (const py of pythonSources(join(repo, dir))) {
+        copy(join(dir, py), join(dir, py));
+        scan(join(repo, dir, py));
+      }
+    } else {
+      // A binary the user downloads (MediaMTX): its config only.
+      for (const f of readdirSync(join(repo, dir))) {
+        if (/\.ya?ml$/.test(f)) copy(join(dir, f), join(dir, f));
+      }
+    }
+  }
+  // The shared modules the workers import, and the ones those import.
+  for (const name of [...needed]) scan(join(workersDir, `${name}.py`));
+  for (const name of [...needed].sort())
+    copy(join("workers", `${name}.py`), join("workers", `${name}.py`));
+  return copied;
+}
+const catalogFiles = copyCatalog();
+
 const files = Object.keys(result.metafile.outputs).filter((f) => f.endsWith(".js"));
-console.log(`build: ${files.length} bundle files in dist/, assets/profiles, migrations`);
+console.log(
+  `build: ${files.length} bundle files in dist/, assets/profiles, ${catalogFiles.length} catalog files`,
+);

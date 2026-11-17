@@ -5,8 +5,8 @@
 // * Hers to decide (opening a prediction, resolving it, delivering what she was commissioned): the
 //   `economy.agency` permission, nobody has it by default, so she calls them with `on_own`.
 
-import { type Capability, defineCapability } from "@miyoria/actions";
 import { typedCommand } from "@miyoria/commands";
+import { type Capability, defineCapability } from "@miyoria/gate/actions";
 import type { JsonObject } from "@miyoria/types";
 import { z } from "zod";
 import type { EconomyService } from "./economy.js";
@@ -49,6 +49,7 @@ export function questsCapability(economy: EconomyService): Capability {
     permission: null,
     tool: {
       name: "check_quests",
+      meta: { effect: "read", speed: "instant", group: "economy" },
       readOnly: true,
       description:
         `有人問今天的任務、還能賺什麼${cur}的時候用:每天三個小任務(跟你聊一件新的事、參加一場遊戲、` +
@@ -92,6 +93,7 @@ export function completeQuestCapability(economy: EconomyService): Capability {
     limits: { per_day: 1_000, per_person_per_day: 10, cooldown_ms: 0 },
     tool: {
       name: "complete_quest",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
         "正在跟你說話的人這次真的跟你聊了一件你還不知道、或最近沒聊過的新的事" +
         `(他的事、一個想法、一件剛發生的事),才用這個完成「${QUESTS[0]?.label}」。` +
@@ -153,6 +155,7 @@ export function collectionCapability(economy: EconomyService): Capability {
     permission: null,
     tool: {
       name: "check_collection",
+      meta: { effect: "read", speed: "instant", group: "economy" },
       description:
         `有人問他集到了什麼、收藏冊、稀有度和機率、抽收藏要多少${cur}、有什麼稱號和成就的時候用這個,` +
         "不要自己猜。只看正在跟你說話的人自己的。稀有度只是一個標籤,不代表你比較喜歡他。" +
@@ -204,6 +207,7 @@ export function drawCapability(economy: EconomyService): Capability {
     limits: { per_day: 1_000, per_person_per_day: 20, cooldown_ms: 0 },
     tool: {
       name: "draw_collectible",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
         `對方明確要抽一次收藏(花 ${economy.config.draw_price} ${cur})的時候用。只有文字頻道裡對方本人說了才用,` +
         "不要自己提議、不要勸他抽。結果是機率決定的,稀有度不代表你比較喜歡他。" +
@@ -283,6 +287,7 @@ export function predictionsCapability(economy: EconomyService): Capability {
     permission: null,
     tool: {
       name: "check_predictions",
+      meta: { effect: "read", speed: "instant", group: "economy" },
       readOnly: true,
       description:
         `有人問現在有什麼預測、能押什麼的時候用。預測是押${cur}猜一件事的結果,猜中的人平分大家押的,` +
@@ -329,6 +334,7 @@ export function placeBetCapability(economy: EconomyService): Capability {
     limits: { per_day: 1_000, per_person_per_day: 20, cooldown_ms: 0 },
     tool: {
       name: "place_bet",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
         `對方明確說要押某個預測的某個選項、押多少${cur}時用(每個預測一人一注,最多 ${c.bet_max},` +
         "一天最多 " +
@@ -393,6 +399,7 @@ export function openPredictionCapability(economy: EconomyService): Capability {
     limits: { per_day: 10, per_person_per_day: 10, cooldown_ms: 0 },
     tool: {
       name: "open_prediction",
+      meta: { effect: "act", speed: "instant", group: "economy" },
       description:
         `開一個預測讓大家押${cur}猜:你這場遊戲會怎麼樣、一件之後一定看得出結果的事。` +
         `猜中的人平分大家押的${cur}(不是你出錢),沒人猜中就全部退回。題目最多 80 字,` +
@@ -447,6 +454,7 @@ export function resolvePredictionCapability(economy: EconomyService): Capability
     limits: { per_day: 30, per_person_per_day: 30, cooldown_ms: 0 },
     tool: {
       name: "resolve_prediction",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
         `預測的結果已經看得出來時公布:option 是贏的選項的號碼或名字。猜中的人平分大家押的${cur},` +
         `沒人猜中全部退回。要誠實:這是結果,不是你想讓誰贏。${OWN}`,
@@ -490,6 +498,7 @@ export function cancelPredictionCapability(economy: EconomyService): Capability 
     limits: { per_day: 30, per_person_per_day: 30, cooldown_ms: 0 },
     tool: {
       name: "cancel_prediction",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description: `預測辦不下去(結果看不出來、題目有問題)時取消,大家押的全部退回。${OWN}`,
       properties: { prediction: { type: "string", description: "預測的代號" } },
       required: ["prediction"],
@@ -526,6 +535,7 @@ export function commissionCapability(economy: EconomyService): Capability {
     limits: { per_day: 100, per_person_per_day: 10, cooldown_ms: 0 },
     tool: {
       name: "commission_her",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
         `對方明確說要付${cur}委託你做某件事時用:kind 是 poem(寫一首詩)、name(取名字)、` +
         "tool(寫個小工具)、song(唱指定的歌)、voice(錄一句語音);brief 是他想要的。" +
@@ -581,6 +591,7 @@ export function listCommissionsCapability(economy: EconomyService): Capability {
     limits: { per_day: 200, per_person_per_day: 200, cooldown_ms: 0 },
     tool: {
       name: "list_commissions",
+      meta: { effect: "read", speed: "instant", group: "economy" },
       readOnly: true,
       description: `看有哪些人付了錢、在等你做的委託。${OWN}`,
       properties: {},
@@ -616,6 +627,7 @@ export function deliverCommissionCapability(economy: EconomyService): Capability
     limits: { per_day: 50, per_person_per_day: 50, cooldown_ms: 0 },
     tool: {
       name: "deliver_commission",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
         "委託做完了,把成品(文字)交出去:commission 是委託的代號,text 是成品,最多 1500 字。" +
         `一部分${cur}會進你的錢包。${OWN}`,
@@ -655,6 +667,7 @@ export function declineCommissionCapability(economy: EconomyService): Capability
     limits: { per_day: 50, per_person_per_day: 50, cooldown_ms: 0 },
     tool: {
       name: "decline_commission",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description: `不想做、做不到的委託,婉拒並把錢全額退回。why 是一句理由(可不寫)。${OWN}`,
       properties: {
         commission: { type: "string", description: "委託的代號" },
@@ -688,6 +701,7 @@ export function roomCapability(economy: EconomyService): Capability {
     limits: { per_day: 500, per_person_per_day: 30, cooldown_ms: 0 },
     tool: {
       name: "check_room",
+      meta: { effect: "read", speed: "instant", group: "economy" },
       readOnly: true,
       description:
         `對方問你的房間、家具、衣服、背景,或想湊錢幫你佈置時用:列出每樣東西湊了多少${cur}。` +
@@ -739,6 +753,7 @@ export function fundRoomCapability(economy: EconomyService): Capability {
     limits: { per_day: 500, per_person_per_day: 20, cooldown_ms: 0 },
     tool: {
       name: "fund_room",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
         `對方明確說要出${cur}幫你佈置房間時用:item 是東西的代號或名字(check_room 看),` +
         `amount 是出多少(一次最多 ${c.room_pledge_max}),花掉就不退。只有文字頻道裡對方本人說了才用,` +
@@ -802,6 +817,7 @@ export function shopCapability(economy: EconomyService): Capability {
     limits: { per_day: 500, per_person_per_day: 30, cooldown_ms: 0 },
     tool: {
       name: "check_shop",
+      meta: { effect: "read", speed: "instant", group: "economy" },
       readOnly: true,
       description:
         `對方問你的小店、有什麼能買的時用:這個禮拜上架的稱號和收藏,各幾${cur}。` +
@@ -843,6 +859,7 @@ export function buyFromShopCapability(economy: EconomyService): Capability {
     limits: { per_day: 500, per_person_per_day: 20, cooldown_ms: 0 },
     tool: {
       name: "buy_from_shop",
+      meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
         "對方明確說要買小店上架的某樣東西時用:item 是東西的代號或名字(check_shop 看)。" +
         `只有文字頻道裡對方本人說了才用,不要勸他買。${NOT_ON_OWN}`,

@@ -14,6 +14,13 @@
 // Everything here may be derived from what other people said: prompts show it as untrusted
 // data blocks, never in the system role.
 
+import {
+  type ConversationFoldedData,
+  ConversationFolded as ConversationFoldedEvent,
+  type KnowledgeDocData,
+  type PlatformReactionData,
+  type ReflectionRunData,
+} from "@miyoria/contracts/events";
 import type { PersonId, PlatformId } from "./ids.js";
 import type { JsonObject, JsonValue } from "./json.js";
 import type { AccountRef, ContextKey } from "./platform.js";
@@ -22,8 +29,8 @@ import type { Timestamp } from "./time.js";
 
 // ---- conversation state -------------------------------------------------------------------
 
-/** Published after a stretch of a conversation was folded into its state. */
-export const CONVERSATION_FOLDED_TOPIC = "conversation.folded";
+/** `Events.ConversationFolded.type`, for the memory module that still names it this way. */
+export const CONVERSATION_FOLDED_TOPIC = ConversationFoldedEvent.type;
 
 /** The last message-log line folded into a state. */
 export interface FoldMark {
@@ -53,15 +60,8 @@ export interface ConversationState {
   touched?: Record<string, Timestamp>;
 }
 
-/** `conversation.folded` payload. */
-export interface ConversationFolded {
-  context: ContextKey;
-  folded_up_to: FoldMark;
-  /** Lines folded this time. */
-  lines: number;
-  /** Total lines folded since the context went quiet last (a long session). */
-  session_lines: number;
-}
+/** `conversation.folded` payload (contract: `ConversationFoldedSchema` in @miyoria/contracts/events). */
+export type ConversationFolded = ConversationFoldedData;
 
 /** Provided by the `conversation` module; answers from memory (safe on the voice hot path). */
 export interface ConversationStates {
@@ -132,23 +132,8 @@ export interface KnowledgeVersion {
   ops: string[];
 }
 
-/** One of her documents. */
-export interface KnowledgeDoc {
-  /** ULID. */
-  id: string;
-  subject: KnowledgeSubject;
-  /** Her own label of the kind of document ("人物卡", "內梗", "建築計畫", ...). */
-  kind: string;
-  title: string;
-  /** Schema-free: whatever structure she chose. */
-  content: JsonObject;
-  /** JSON pointer (`""` = the document, `/likes/0`) → its source. */
-  sources: Record<string, FieldSource>;
-  created_at: Timestamp;
-  updated_at: Timestamp;
-  version: number;
-  history: KnowledgeVersion[];
-}
+/** One of her documents (contract: `KnowledgeDocSchema` in @miyoria/contracts/events). */
+export type KnowledgeDoc = KnowledgeDocData;
 
 /** JSON-patch-like operations (RFC 6902 subset; paths are JSON pointers, `-` appends). */
 export type PatchOp =
@@ -206,6 +191,18 @@ export interface KnowledgeBase {
 }
 
 export const KnowledgeKey = serviceKey<KnowledgeBase>("KnowledgeBase");
+
+/**
+ * Her document about herself, whole, for the prompt's pinned block. Provided by the `knowledge`
+ * module where her documents live in the notes. The text is the same until the document is
+ * rewritten.
+ */
+export interface SelfDocument {
+  /** The document within `budget` characters (the seed lines before she has written it). */
+  read(budget: number): string;
+}
+
+export const SelfDocumentKey = serviceKey<SelfDocument>("SelfDocument");
 
 // ---- lessons ------------------------------------------------------------------------------
 
@@ -266,26 +263,8 @@ export interface FeedbackTally {
   examples: string[];
 }
 
-/** One of her reflections. */
-export interface ReflectionRun {
-  id: string;
-  at: Timestamp;
-  /** `daily` (the day) or `light` (after a long session). */
-  kind: "daily" | "light";
-  context: ContextKey | null;
-  /** Her summary, in her words. */
-  summary: string;
-  insights: number;
-  superseded: number;
-  lessons: string[];
-  goals: string[];
-  /** Documents changed (titles). */
-  documents: string[];
-  feelings: string[];
-  error: string | null;
-  tokens: number | null;
-  ms: number;
-}
+/** One of her reflections (contract: `ReflectionRunSchema` in @miyoria/contracts/events). */
+export type ReflectionRun = ReflectionRunData;
 
 export interface ReflectionStats {
   calls_today: number;
@@ -305,6 +284,22 @@ export interface Reflection {
 }
 
 export const ReflectionKey = serviceKey<Reflection>("Reflection");
+
+/**
+ * What the new text runner puts around her daily reflection when sub-agents are on (`selfhost`
+ * `runReflect`): the reflection runs under the nightly figure's accounting. Provided by the host;
+ * the `reflect` module looks it up each time it is due, and runs the reflection itself when it is
+ * not there.
+ */
+export interface ReflectGuard {
+  /** Runs `run`; `ran` is `false` when nothing ran, with `why` (the nightly figure is used up). */
+  run<T>(
+    run: (signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<{ ran: boolean; result: T | null; why: string | null }>;
+}
+
+export const ReflectGuardKey = serviceKey<ReflectGuard>("ReflectGuard");
 
 // ---- memory curation ----------------------------------------------------------------------
 
@@ -347,15 +342,5 @@ export interface MemoryCurator {
 
 export const MemoryCuratorKey = serviceKey<MemoryCurator>("MemoryCurator");
 
-/** Published for reactions on messages (`platform.reaction`). */
-export const REACTION_TOPIC = "platform.reaction";
-
 /** `platform.reaction` payload. */
-export interface ReactionEvent {
-  message: { context: ContextKey; id: string };
-  account: AccountRef;
-  display_name: string | null;
-  emoji: string;
-  added: boolean;
-  at: Timestamp;
-}
+export type ReactionEvent = PlatformReactionData;

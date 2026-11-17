@@ -1,7 +1,7 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { Pencil, Plus, Trash2, UserPlus, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { AuthScope, RoleAssignment, RoleDefinition, RoleMapping } from "@/api/types";
+import type { AuthScope, RoleAssignment, RoleDefinition, RoleMapping } from "@miyoria/contracts/api";
 import { useAccessMutations, useAssignments, useMappings, useRoles } from "@/app/queries";
 import { ConfirmDialog } from "@/components/confirm";
 import { RowActions } from "@/components/controls";

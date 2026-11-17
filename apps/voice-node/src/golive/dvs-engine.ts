@@ -6,8 +6,8 @@
 // creates with STREAM_CREATE; all it needs from the voice session is the voice session id. So the
 // @discordjs/voice connection keeps owning the voice channel (receive + TTS playback), and the Streamer
 // is handed a never-started VoiceConnection "shell" that only carries that session id - the same trick
-// the Phase 0 spike proved out (spikes/voice-node, GOLIVE_VOICE=hybrid). It pokes one private field of
-// the Streamer, hence the experimental label in the docs.
+// the Phase 0 spike proved out (GOLIVE_VOICE=hybrid; the spike is in git history). It pokes one
+// private field of the Streamer, hence the experimental label in the docs.
 //
 // "exclusive" fallback: the library's own joinVoice() (always self-deafened, no receive) owns the voice
 // channel while streaming.

@@ -4,7 +4,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { configuredModules } from "@miyoria/core/light";
-import { Config } from "@miyoria/kernel";
+import { Config } from "@miyoria/runtime/kernel";
 import {
   isCancelled,
   isInteractive,
@@ -53,22 +53,38 @@ export function changeLines(ws: Workspace, changes: readonly Change[]): string[]
   return lines;
 }
 
+/** A file besides the workspace's own (`init` writes `host.toml`): shown, confirmed and written with it. */
+export interface ExtraWrite {
+  /** Lines of the summary; none = nothing to write. */
+  lines: string[];
+  /** Writes it; returns what to report as written. */
+  save(): string[];
+}
+
 /**
  * Shows what will change, asks (unless `yes`) and writes. `null` when nothing was written.
+ * `ws` is `null` when only `extra` is written.
  */
-export async function commit(p: Prompter, yes: boolean, ws: Workspace): Promise<Change[] | null> {
-  for (const w of ws.warnings.splice(0)) p.warn(w);
-  const changes = ws.changes();
-  if (changes.length === 0 && ws.missingFiles().length === 0) {
+export async function commit(
+  p: Prompter,
+  yes: boolean,
+  ws: Workspace | null,
+  extra?: ExtraWrite,
+): Promise<Change[] | null> {
+  for (const w of ws?.warnings.splice(0) ?? []) p.warn(w);
+  const changes = ws?.changes() ?? [];
+  const extraLines = extra?.lines ?? [];
+  if (changes.length === 0 && (ws?.missingFiles().length ?? 0) === 0 && extraLines.length === 0) {
     p.note("沒有變更");
     return null;
   }
-  p.box("將變更", changeLines(ws, changes));
+  p.box("將變更", [...(ws ? changeLines(ws, changes) : []), ...extraLines]);
   if (!yes && !(await p.confirm("寫入這些變更?", true))) {
     p.warn("沒有寫入任何檔案");
     return null;
   }
-  for (const path of ws.save()) p.ok(`已寫入 ${ws.shown(path)}`);
+  for (const path of ws?.save() ?? []) p.ok(`已寫入 ${ws?.shown(path)}`);
+  for (const path of extra?.save() ?? []) p.ok(`已寫入 ${path}`);
   return changes;
 }
 
@@ -349,6 +365,8 @@ export async function runArea(area: Area, p: Prompter, ws: Workspace): Promise<v
 export async function menu(configPath: string, p: Prompter, yes: boolean): Promise<void> {
   let ws = Workspace.open(configPath);
   if (!isInteractive()) throw new NotTtyError();
+  // The answers are checked by the root schema, which loads every module package: start now.
+  void validate.configSchema();
   p.intro("Miyoria 設定");
   p.note("選一個項目修改,只會動到你選的欄位。Esc 返回,選「完成」離開。");
   let cursor = 0;
@@ -524,7 +542,8 @@ export async function set(
       r.note(`密碼類的值放在 .env 的 ${variable},miyoria.toml 引用它`);
     } else {
       const parsed = parseValue(value);
-      const err = validate.valueForKey(path, parsed);
+      const ctx = await validate.schemaContext(ws.doc.data);
+      const err = validate.valueForKey(path, parsed, ctx);
       if (err) throw new ConfigCommandError(`\`${shown}\`:${err}`);
       ws.doc.set(path, parsed);
     }

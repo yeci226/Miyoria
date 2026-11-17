@@ -115,7 +115,7 @@ export function actWorker(adapter: GameAdapter, info: GameInfo): TaskWorker {
 }
 
 /**
- * The goals and the guide as the decision loop's prompt shows them (`@miyoria/game` builds the
+ * The goals and the guide as the decision loop's prompt shows them (`@miyoria/play/game` builds the
  * same text from the registered executor).
  */
 export function describeActions(info: GameInfo): string {

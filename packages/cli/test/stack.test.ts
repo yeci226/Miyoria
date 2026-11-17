@@ -10,28 +10,20 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Config } from "@miyoria/kernel";
+import { workerBaseEnv } from "@miyoria/hostd";
+import { Config } from "@miyoria/runtime/kernel";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseArgs } from "../src/cli.js";
-import * as up from "../src/commands/up.js";
 import * as update from "../src/commands/update.js";
 import { freshness, parseJavaMajor } from "../src/stack/builds.js";
-import {
-  buildChecks,
-  type DeepDeps,
-  type DeepInput,
-  healthChecks,
-  legacyConfigNotes,
-  portChecks,
-  workerChecks,
-} from "../src/stack/checks.js";
+import { buildChecks, type DeepDeps, type DeepInput, portChecks } from "../src/stack/checks.js";
 import { offloadUrls, repoRoot, stackConfig, startOrder } from "../src/stack/config.js";
+import { buildPlan } from "../src/stack/plan.js";
 import {
   parseDynamicPort,
   parseExcludedRanges,
   type Runner,
   type RunResult,
-  workerBaseEnv,
 } from "../src/stack/system.js";
 import { type Output, setOutput } from "../src/ui.js";
 
@@ -99,7 +91,7 @@ function fakeDeps(over: Partial<DeepDeps> = {}): DeepDeps {
 
 function input(toml: string, deps: DeepDeps = fakeDeps(), root: string | null = dir): DeepInput {
   const config = Config.fromToml(toml, NOENV);
-  return { config, configDir: dir, root, stack: stackConfig(config), deps };
+  return { config, configDir: dir, root, deps };
 }
 
 describe("stack config", () => {
@@ -197,22 +189,20 @@ describe("freshness", () => {
 });
 
 describe("doctor --deep: ports", () => {
+  const api = { label: "core", host: "127.0.0.1", port: 7878 };
+  const link = { label: "stage", host: "127.0.0.1", port: 7882 };
+
   it("reports_a_windows_reserved_port_and_the_low_dynamic_range_with_fixes", async () => {
     const run: Runner = async (_c, args) =>
       args.includes("excludedportrange")
         ? { ...NONE, stdout: "Start Port    End Port\r\n      7870        7890\r\n" }
         : { ...NONE, stdout: "Start Port : 1024\r\nNumber of Ports : 64511\r\n" };
     const probe = async (port: number) => (port === 7878 ? ("denied" as const) : ("free" as const));
-    const f = await portChecks(
-      input(
-        '[modules.api]\nbind = "127.0.0.1:7878"\n[modules."stage.link"]\nbind = "127.0.0.1:7882"',
-        fakeDeps({ run, probe }),
-      ),
-    );
-    const api = f.find((x) => x.what.includes("7878"));
-    expect(api?.level).toBe("fail");
-    expect(api?.detail).toContain("7870-7890");
-    expect(api?.fix?.join("\n")).toContain("winnat");
+    const f = await portChecks(input("", fakeDeps({ run, probe })), [api, link]);
+    const found = f.find((x) => x.what.includes("7878"));
+    expect(found?.level).toBe("fail");
+    expect(found?.detail).toContain("7870-7890");
+    expect(found?.fix?.join("\n")).toContain("winnat");
     expect(f.find((x) => x.what === "動態埠範圍")?.level).toBe("warn");
     // 7882 is inside the reserved range in the netsh text, and nothing listens on it.
     expect(f.find((x) => x.what.includes("7882"))?.level).toBe("fail");
@@ -221,118 +211,20 @@ describe("doctor --deep: ports", () => {
   it("treats_a_healthy_miyoria_service_on_the_port_as_fine", async () => {
     const fetchImpl = (async () => new Response("{}", { status: 200 })) as typeof fetch;
     const f = await portChecks(
-      input(
-        '[modules.api]\nbind = "127.0.0.1:7878"',
-        fakeDeps({ probe: async () => "in-use", fetchImpl, platform: "linux" }),
-      ),
+      input("", fakeDeps({ probe: async () => "in-use", fetchImpl, platform: "linux" })),
+      [{ ...api, health: "http://127.0.0.1:7878/api/health" }],
     );
     expect(f[0]).toMatchObject({ level: "ok", detail: "已有 Miyoria 服務在聽" });
   });
-});
 
-describe("doctor --deep: workers", () => {
-  it("fails_when_sing_has_no_offload_next_to_gpu_workers", () => {
-    const toml = `
-[stack.workers]
-asr = { port = 8003 }
-tts = { port = 8002 }
-sing = { port = 8005 }
-`;
-    const f = workerChecks(input(toml, fakeDeps(), null));
-    const sing = f.find((x) => x.what === "worker sing");
-    expect(sing?.level).toBe("fail");
-    expect(sing?.detail).toContain("顯存");
-    expect(sing?.fix?.[0]).toContain('offload = ["asr", "tts"]');
-  });
-
-  it("accepts_the_documented_stack_and_catches_url_and_env_mismatches", () => {
-    expect(workerChecks(input(WORKERS_TOML, fakeDeps(), null)).every((f) => f.level === "ok")).toBe(
-      true,
-    );
-    const toml = `${WORKERS_TOML}
-[speech.asr.local]
-kind = "http-worker"
-url = "http://127.0.0.1:8001"
-`;
-    const f = workerChecks(input(toml, fakeDeps(), null));
-    const bad = f.find((x) => x.what.startsWith("設定不一致"));
-    expect(bad?.detail).toContain("8003");
-    expect(bad?.fix?.[0]).toContain("speech.asr.local.url http://127.0.0.1:8003");
-    const stale = workerChecks(
-      input(
-        "[stack.workers]\nasr = { port = 8003, env = { ASR_BACKEND = 'qwen3', ASR_MODEL = '/m/sensevoice' } }",
-        fakeDeps(),
-        null,
-      ),
-    );
-    expect(stale.some((x) => x.level === "fail" && x.detail.includes("ASR_MODEL"))).toBe(true);
-  });
-
-  it("warns_about_missing_turn_models_and_checks_turn_url_against_the_worker", () => {
-    write("workers/turn/server.py");
-    write("workers/.venv-turn/Scripts/python.exe");
-    const toml = "[stack.workers]\nturn = { port = 8006 }";
-    const f = workerChecks(input(toml, fakeDeps(), dir));
-    // The worker runs without its models and Core falls back: a warning, never a failure.
-    const models = f.filter((x) => x.what === "worker turn");
-    expect(models.map((x) => x.level)).toEqual(["warn", "warn"]);
-    expect(models.map((x) => x.detail).join("")).toContain("Smart Turn");
-    expect(models.map((x) => x.detail).join("")).toContain("Silero");
-    write("workers/models/smart-turn/smart-turn-v3.2-cpu.onnx");
-    write("workers/models/silero-vad/silero_vad.onnx");
-    expect(workerChecks(input(toml, fakeDeps(), dir)).every((x) => x.level === "ok")).toBe(true);
-
-    // `turn_url` counts only while the voice module uses the worker.
-    const pointing = `${toml}
-[modules.voice]
-turn_url = "http://127.0.0.1:9000"`;
-    expect(workerChecks(input(pointing, fakeDeps(), dir)).every((x) => x.level === "ok")).toBe(
-      true,
-    );
-    const active = `${pointing}
-turn_engine = "smart-turn"`;
-    const bad = workerChecks(input(active, fakeDeps(), dir)).find((x) =>
-      x.what.startsWith("設定不一致"),
-    );
-    expect(bad?.level).toBe("fail");
-    expect(bad?.detail).toContain("9000");
-  });
-
-  it("fails_on_missing_venv_and_duplicate_ports", () => {
-    write("workers/asr/server.py");
-    const f = workerChecks(
-      input("[stack.workers]\nasr = { port = 8003 }\ntts = { port = 8003 }", fakeDeps(), dir),
-    );
-    expect(f.some((x) => x.what === "worker 埠")).toBe(true);
-    expect(f.some((x) => x.detail.includes("找不到 venv"))).toBe(true);
-  });
-});
-
-describe("doctor --deep: health", () => {
-  it("warns_when_the_turn_worker_answers_without_its_models", async () => {
-    const answer = (body: object) =>
-      (async () => new Response(JSON.stringify(body), { status: 200 })) as typeof fetch;
-    const toml = "[stack.workers]\nturn = { port = 8006 }";
-    const loaded = await healthChecks(
-      input(
-        toml,
-        fakeDeps({ fetchImpl: answer({ status: "ok", smart_turn: true, silero: true }) }),
-      ),
-    );
-    expect(loaded.map((x) => x.level)).toEqual(["ok"]);
-    const bare = await healthChecks(
-      input(
-        toml,
-        fakeDeps({ fetchImpl: answer({ status: "ok", smart_turn: false, silero: true }) }),
-      ),
-    );
-    expect(bare).toHaveLength(1);
-    expect(bare[0]?.level).toBe("warn");
-    expect(bare[0]?.detail).toContain("smart_turn");
-    expect(bare[0]?.what).toBe("服務 worker turn");
-    // Nobody listening is a warning as well: the worker is optional.
-    const down = await healthChecks(input(toml));
-    expect(down[0]?.level).toBe("warn");
+  it("calls_a_busy_port_ours_when_hostd_runs_it_and_foreign_when_hostd_does_not", async () => {
+    const probe = async () => "in-use" as const;
+    const deps = fakeDeps({ probe, platform: "linux" });
+    const ours = await portChecks(input("", deps), [{ ...api, ours: true }]);
+    expect(ours[0]?.level).toBe("ok");
+    const foreign = await portChecks(input("", deps), [{ ...api, ours: false }]);
+    expect(foreign[0]?.level).toBe("warn");
+    expect(foreign[0]?.fix?.join("\n")).toContain("netstat");
   });
 });
 
@@ -342,6 +234,23 @@ describe("doctor --deep: builds", () => {
     write("packages/sdk/src/index.ts", "x", 400);
     write("packages/sdk/dist/index.js", "x", 300);
   };
+
+  it("builds_the_contracts_before_the_sdk_and_the_sdk_again_when_they_changed", async () => {
+    sdkFiles();
+    write("packages/contracts/package.json", "{}", 900);
+    write("packages/contracts/tsconfig.build.json", "{}", 900);
+    // Changed after both builds: the checkout moved to a newer commit.
+    write("packages/contracts/events/src/index.ts", "x", 10);
+    write("packages/contracts/dist/events/src/index.js", "x", 300);
+    const f = await buildChecks(input("", fakeDeps()));
+    const contracts = f.findIndex((x) => x.what.includes("契約"));
+    const sdk = f.findIndex((x) => x.what.includes("SDK"));
+    expect(f[contracts]?.level).toBe("fail");
+    // The SDK's own sources are older than its output; the contracts it compiles against are not.
+    expect(f[sdk]?.level).toBe("fail");
+    expect(contracts).toBeGreaterThanOrEqual(0);
+    expect(contracts).toBeLessThan(sdk);
+  });
 
   it("flags_a_stale_extension_dist_and_a_stale_mod_jar_with_the_update_fix", async () => {
     sdkFiles();
@@ -378,27 +287,14 @@ describe("doctor --deep: builds", () => {
   });
 });
 
-describe("legacy config", () => {
-  it("lists_v2_leftovers_by_key_only", () => {
-    const notes = legacyConfigNotes(
-      Config.fromToml(
-        '[modules.agent]\ndefault_mode = "ambient"\n[modules.agent.voice]\ncooldown_ms = 5\ninterrupt_scale = 2',
-        NOENV,
-      ),
-    );
-    expect(notes).toHaveLength(3);
-    expect(notes.join("\n")).not.toContain("= 5");
-  });
-});
+// ---- the old plan (kept for host migrate and the descriptor pin test) -----------------------
 
-// ---- up ------------------------------------------------------------------------------------
-
-describe("up", () => {
+describe("plan", () => {
   function plan(toml: string, env: Record<string, string> = {}) {
     write("pnpm-workspace.yaml", "packages: []");
     mkdirSync(join(dir, "workers"), { recursive: true });
     const config = Config.fromToml(toml, NOENV);
-    return up.buildPlan({
+    return buildPlan({
       config,
       configPath: join(dir, "miyoria.toml"),
       stack: stackConfig(config),
@@ -440,16 +336,6 @@ describe("up", () => {
     ]);
   });
 
-  it("selects_with_only_and_skip_and_rejects_unknown_names", () => {
-    const specs = plan(WORKERS_TOML);
-    expect(up.selectServices(specs, ["asr", "core"], undefined).map((s) => s.name)).toEqual([
-      "asr",
-      "core",
-    ]);
-    expect(up.selectServices(specs, undefined, ["sing"]).map((s) => s.name)).not.toContain("sing");
-    expect(() => up.selectServices(specs, ["nope"], undefined)).toThrow(/nope/);
-  });
-
   it("plans_the_optional_turn_worker_on_its_own_port_with_a_health_check", () => {
     const specs = plan('[stack.workers]\nturn = { venv = "workers/.venv-turn" }', { PATH: "/bin" });
     const turn = specs.find((s) => s.name === "turn");
@@ -460,111 +346,6 @@ describe("up", () => {
 
   it("without_a_stack_section_plans_only_the_core", () => {
     expect(plan("").map((s) => s.name)).toEqual(["core"]);
-  });
-
-  // A fake clock: sleeping advances time, so timeouts take no real time.
-  function harness(opts: {
-    healthy?: (url: string, started: Set<string>) => boolean;
-    exitAfter?: Record<string, number>;
-    probe?: up.UpDeps["probe"];
-  }) {
-    let clock = 0;
-    const started = new Set<string>();
-    const stopped: string[] = [];
-    const spawned: string[] = [];
-    const deps: up.UpDeps = {
-      spawnService: (spec) => {
-        spawned.push(spec.name);
-        started.add(spec.name);
-        const born = clock;
-        return {
-          pid: 1,
-          exitCode: () =>
-            opts.exitAfter?.[spec.name] !== undefined &&
-            clock - born >= (opts.exitAfter[spec.name] as number)
-              ? 1
-              : null,
-          stop: async () => {
-            stopped.push(spec.name);
-          },
-        };
-      },
-      fetchImpl: (async (url: string) => {
-        const name = [...started].find((n) => url.includes(`:${portOf(n)}/`));
-        return new Response("{}", {
-          status: opts.healthy?.(url, started) && name !== undefined ? 200 : 503,
-        });
-      }) as unknown as typeof fetch,
-      probe: opts.probe ?? (async () => "free"),
-      sleep: async (ms) => {
-        clock += ms;
-      },
-      now: () => clock,
-      readLog: () => "boom: CUDA out of memory\n",
-      waitForStop: async () => {},
-      deep: fakeDeps(),
-      aliveMs: 100,
-      pollMs: 100,
-    };
-    return { deps, spawned, stopped };
-  }
-  const portOf = (name: string) => ({ asr: 8003, tts: 8002, sing: 8005, core: 7878 })[name];
-
-  it("starts_in_order_and_waits_for_each_health_check", async () => {
-    const specs = plan(WORKERS_TOML);
-    const h = harness({ healthy: () => true });
-    const started = await up.startStack(specs, h.deps);
-    expect(h.spawned).toEqual(specs.map((s) => s.name));
-    expect(started).toHaveLength(specs.length);
-    expect(out.join("")).toContain("sing");
-  });
-
-  it("reuses_a_service_that_already_answers", async () => {
-    const specs = up.selectServices(plan(WORKERS_TOML), ["tts"], undefined);
-    const h = harness({ healthy: () => true });
-    h.deps.fetchImpl = (async () => new Response("{}", { status: 200 })) as typeof fetch;
-    expect(await up.startStack(specs, h.deps)).toHaveLength(0);
-    expect(h.spawned).toEqual([]);
-    expect(out.join("")).toContain("已在執行");
-  });
-
-  it("stops_what_it_started_and_shows_the_log_tail_when_a_worker_dies", async () => {
-    const specs = plan(WORKERS_TOML);
-    const h = harness({ healthy: (_u, s) => !s.has("sing"), exitAfter: { sing: 300 } });
-    await expect(up.startStack(specs, h.deps)).rejects.toThrow(
-      /sing 啟動後結束了[\s\S]*CUDA out of memory/,
-    );
-    expect(h.stopped).toEqual(["sing", "tts", "asr"]);
-  });
-
-  it("times_out_without_a_health_answer", async () => {
-    const specs = up.selectServices(plan(WORKERS_TOML), ["asr"], undefined);
-    for (const s of specs) s.timeoutMs = 1000;
-    const h = harness({ healthy: () => false });
-    await expect(up.startStack(specs, h.deps)).rejects.toThrow(/沒有通過健康檢查/);
-    expect(h.stopped).toEqual(["asr"]);
-  });
-
-  it("refuses_a_reserved_port_and_never_takes_over_an_occupied_one", async () => {
-    const specs = up.selectServices(plan(WORKERS_TOML), ["asr"], undefined);
-    const denied = harness({ probe: async () => "denied" });
-    await expect(up.startStack(specs, denied.deps)).rejects.toThrow(/被 Windows 保留[\s\S]*winnat/);
-    expect(denied.spawned).toEqual([]);
-    const busy = harness({ probe: async () => "in-use" });
-    await expect(up.startStack(specs, busy.deps)).rejects.toThrow(/不會替你結束別人的程式/);
-    expect(busy.spawned).toEqual([]);
-  });
-
-  it("dry_run_prints_the_plan_without_starting", async () => {
-    write("miyoria.toml", WORKERS_TOML);
-    write("pnpm-workspace.yaml", "packages: []");
-    mkdirSync(join(dir, "workers"), { recursive: true });
-    const h = harness({});
-    await up.run(join(dir, "miyoria.toml"), { dryRun: true }, h.deps);
-    expect(h.spawned).toEqual([]);
-    const text = out.join("");
-    expect(text).toContain("sing");
-    expect(text).toContain("SING_OFFLOAD_URLS");
   });
 });
 
@@ -770,14 +551,15 @@ describe("update", () => {
     expect(out.join("")).toContain("JDK 21");
   });
 
-  it("refuses_outside_a_source_checkout", async () => {
+  it("points_a_packaged_install_at_the_package_manager_and_still_runs_the_services_part", async () => {
     const lone = mkdtempSync(join(tmpdir(), "miyoria-lone-"));
     try {
       writeFileSync(join(lone, "miyoria.toml"), "");
       noSource.add(join(lone, "miyoria.toml"));
-      await expect(
-        update.run(join(lone, "miyoria.toml"), {}, deps(() => undefined).d),
-      ).rejects.toThrow(/原始碼資料夾/);
+      await update.run(join(lone, "miyoria.toml"), {}, deps(() => undefined).d);
+      const text = out.join("");
+      expect(text).toContain("npm update -g miyoria");
+      expect(text).toContain("host.toml");
     } finally {
       rmSync(lone, { recursive: true, force: true });
     }
@@ -786,13 +568,10 @@ describe("update", () => {
 
 describe("command line", () => {
   it("parses_up_update_and_doctor_options", () => {
-    expect(
-      parseArgs(["up", "--only", "asr,core", "--dry-run", "--timeout", "30"]).ctx.options,
-    ).toMatchObject({
-      only: "asr,core",
-      "dry-run": true,
-      timeout: "30",
-    });
+    const upArgs = parseArgs(["up", "asr", "core", "--foreground", "--timeout", "30"]);
+    expect(upArgs.ctx.args).toEqual(["asr", "core"]);
+    expect(upArgs.ctx.options).toMatchObject({ foreground: true, timeout: "30" });
+    expect(parseArgs(["up", "--no-wait"]).ctx.options["no-wait"]).toBe(true);
     expect(parseArgs(["update", "--no-pull", "--force", "--skip-mod"]).ctx.options).toMatchObject({
       "no-pull": true,
       force: true,

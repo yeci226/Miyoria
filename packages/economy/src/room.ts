@@ -10,12 +10,12 @@
 // * One document per item (docs.ts) with the ledger entries already counted, so a crash between the
 //   charge and the count is finished by the same key, once, and a refund is never needed.
 
-import { type AccountRef, customEvent, toTimestamp } from "@miyoria/types";
+import { type AccountRef, Events, toTimestamp } from "@miyoria/types";
 import type { RoomItem } from "./config.js";
 import type { EconomyDoc } from "./docs.js";
 import { type EconomyService, type Member, STRANGER } from "./economy.js";
 import { EconomyError } from "./types.js";
-import { ROOM_TOPIC, type RoomFundResult, type RoomView } from "./v2-types.js";
+import type { RoomFundResult, RoomView } from "./v2-types.js";
 
 const KIND = "room";
 /** The entries kept per item to recognise a pledge that was charged but not yet counted. */
@@ -56,7 +56,6 @@ export class RoomDesk {
     const at = toTimestamp(this.e.now());
     const doc: EconomyDoc = {
       id,
-      profile: this.e.profile,
       kind: KIND,
       owner: null,
       status: "funding",
@@ -171,7 +170,7 @@ export class RoomDesk {
   }
 
   #placed(item: RoomItem): void {
-    this.e.publish(customEvent(ROOM_TOPIC, { item: item.id, label: item.label, kind: item.kind }));
+    this.e.publish(Events.EconomyRoomPlaced, { item: item.id, label: item.label, kind: item.kind });
     this.e.purse.news(`room:${item.id}`, `大家湊錢把「${item.label}」放進了你的房間`);
   }
 }

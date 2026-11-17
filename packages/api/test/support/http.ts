@@ -1,6 +1,6 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { ClientError, FETCH_BLOCKED_PORTS } from "../../src/index.js";
+import { ClientError, FETCH_BLOCKED_PORTS, responseError } from "../../src/index.js";
 
 /** Listens on a random 127.0.0.1 port that `fetch` may connect to; returns the port. */
 export async function listenFetchable(server: Server): Promise<number> {
@@ -51,6 +51,34 @@ export async function raw(
   return { status: response.status, headers: response.headers, body: parsed, text };
 }
 
+/**
+ * A route of the route table called the way the CLI's client calls it: the bearer token, JSON in
+ * and out, a `ClientError` when the call fails.
+ */
+export async function call<T>(
+  base: string,
+  token: string,
+  method: string,
+  path: string,
+  json?: unknown,
+): Promise<T> {
+  const headers: Record<string, string> = { authorization: `Bearer ${token}` };
+  if (json !== undefined) headers["content-type"] = "application/json";
+  let response: Response;
+  try {
+    response = await fetch(`${base}${path}`, {
+      method,
+      headers,
+      body: json === undefined ? undefined : JSON.stringify(json),
+    });
+  } catch (error) {
+    throw ClientError.transport(error);
+  }
+  if (!response.ok) throw await responseError(response);
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
+}
+
 /** The HTTP status of a rejected client call. */
 export async function statusOf(promise: Promise<unknown>): Promise<number> {
   try {
@@ -71,6 +99,42 @@ export async function errorOf(promise: Promise<unknown>): Promise<ClientError> {
     throw error;
   }
   throw new Error("expected an API error, got success");
+}
+
+/** `GET /api/events` with the token: the body's reader, once the headers are in. */
+export async function openEvents(
+  base: string,
+  token: string,
+  query = "",
+  signal?: AbortSignal,
+): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+  const res = await fetch(`${base}/api/events${query}`, {
+    headers: { authorization: `Bearer ${token}` },
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok || res.body === null) throw new Error(`no event stream: ${res.status}`);
+  return res.body.getReader();
+}
+
+/** The `data:` of the next event on an event stream, parsed; `null` once the stream ends. */
+export async function nextEvent(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  buffer: { text: string } = { text: "" },
+): Promise<unknown> {
+  const decoder = new TextDecoder();
+  for (;;) {
+    const end = buffer.text.indexOf("\n\n");
+    if (end >= 0) {
+      const frame = buffer.text.slice(0, end);
+      buffer.text = buffer.text.slice(end + 2);
+      const data = frame.split("\n").find((line) => line.startsWith("data: "));
+      if (data !== undefined) return JSON.parse(data.slice("data: ".length));
+      continue;
+    }
+    const { value, done } = await reader.read();
+    if (done) return null;
+    buffer.text += decoder.decode(value, { stream: true });
+  }
 }
 
 /** Polls `check` every 20 ms until it returns a value, for up to 2 s. */

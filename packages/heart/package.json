@@ -1,0 +1,49 @@
+{
+  "name": "@miyoria/heart",
+  "version": "0.1.0",
+  "description": "mind: Her goals, thought journal, life log and reminders (module `mind`); self: Her inner state (module `self`): drives, boredom, emotions, her own policy and agenda; person: Her numbers and words for each person (module `heart`): the rules that move them (steps, daily caps, tier anchors, decay), evidence, who people are (accounts, `/me link`, `/me` and `/admin person`) and the migration from the old records",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    "./mind": {
+      "@miyoria/source": "./mind/src/index.ts",
+      "types": "./dist/mind/src/index.d.ts",
+      "default": "./dist/mind/src/index.js"
+    },
+    "./self": {
+      "@miyoria/source": "./self/src/index.ts",
+      "types": "./dist/self/src/index.d.ts",
+      "default": "./dist/self/src/index.js"
+    },
+    "./person": {
+      "@miyoria/source": "./person/src/index.ts",
+      "types": "./dist/person/src/index.d.ts",
+      "default": "./dist/person/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miyoria/commands": "workspace:*",
+    "@miyoria/gate": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
+    "@miyoria/store": "workspace:*",
+    "@miyoria/types": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.5",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

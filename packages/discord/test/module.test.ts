@@ -1,5 +1,6 @@
 import { CommandsModule } from "@miyoria/commands";
-import { EventBus, manifestJson, ServiceRegistry, Supervisor } from "@miyoria/kernel";
+import { EventBus, manifestJson, ServiceRegistry, Supervisor } from "@miyoria/runtime/kernel";
+import { Events, is } from "@miyoria/types";
 import { GatewayIntentBits } from "discord.js";
 import { describe, expect, test } from "vitest";
 import { DiscordBotModule, intents } from "../src/index.js";
@@ -48,8 +49,8 @@ describe("DiscordBotModule", () => {
     try {
       for (;;) {
         const env = await states.recv();
-        if (env?.event.type === "module_state_changed" && env.event.data.state === "failed") {
-          return env.event.data.reason ?? "";
+        if (env !== null && is(Events.SystemModuleState, env) && env.data.state === "failed") {
+          return env.data.reason ?? "";
         }
       }
     } finally {

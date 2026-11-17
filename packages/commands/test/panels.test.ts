@@ -1,4 +1,4 @@
-import { ServiceRegistry } from "@miyoria/kernel";
+import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import { type AuditEntry, AuditLogKey } from "@miyoria/store";
 import { AuthorizerKey, BaseAuthorizer, type Subject } from "@miyoria/types";
 import { describe, expect, it } from "vitest";

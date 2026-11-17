@@ -79,7 +79,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               >
                 <UserRound />
                 {p.person.display_name}
-                {p.label && <span className="text-muted-foreground">{p.label}</span>}
+                <span className="text-muted-foreground">{p.tier_label || p.tier}</span>
                 <CommandShortcut>
                   <CornerDownLeft className="size-3" />
                 </CommandShortcut>

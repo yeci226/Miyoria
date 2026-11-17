@@ -1,7 +1,7 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { Pencil, Trash2 } from "lucide-react";
 import { useDeferredValue, useId, useMemo, useState } from "react";
-import type { MemoryItem, MemoryKind, MemoryRecordView, MemoryScope } from "@/api/types";
+import type { MemoryItem, MemoryKind, MemoryRecordView, MemoryScope } from "@miyoria/contracts/api";
 import { useDeleteMemory, useMemory, useUpdateMemory } from "@/app/queries";
 import { ConfirmDialog } from "@/components/confirm";
 import { RowActions, SearchInput } from "@/components/controls";

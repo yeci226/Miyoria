@@ -7,7 +7,7 @@
 // the picture they download is the card without the light.
 
 import { useEffect, useRef } from "react";
-import type { IssuedCard } from "@/api/types";
+import type { IssuedCard } from "@miyoria/contracts/api";
 import { cn } from "@/lib/utils";
 import { InlinedCard, poseUrl } from "./card";
 

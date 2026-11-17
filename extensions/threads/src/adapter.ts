@@ -22,7 +22,6 @@ export interface Browser {
   launch(): Promise<void>;
   loggedIn(): Promise<boolean>;
   onPostPage(): boolean;
-  url(): string;
   viewportHeight(): number;
   posts(): Promise<RawPost[]>;
   focus(index: number): Promise<void>;

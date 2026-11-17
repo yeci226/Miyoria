@@ -22,7 +22,7 @@ import {
   type Invocation,
   notice,
 } from "@miyoria/commands";
-import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/kernel";
+import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import { newId } from "@miyoria/types";
 import { registerV2, unregisterV2 } from "./commands-v2.js";
 import { MAX_LETTER_CHARS, STRANGER, WALLET_NODE } from "./economy.js";

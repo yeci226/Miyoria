@@ -1,10 +1,11 @@
-// Several song workers in order (`url`, then `fallback_urls`): new songs go to the first that
-// answers, a song stays with the worker that made it, and a song whose worker stays unreachable
-// is reported gone (404) so the singer makes it again on the next one.
+// Several song workers in order (the registry's `sing` endpoints, e.g. `url`, then
+// `fallback_urls`): new songs go to the first that answers, a song stays with the worker that made
+// it, and a song whose worker stays unreachable (or disappears from the registry) is reported gone
+// (404) so the singer makes it again on the next one.
 
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { Supervisor } from "@miyoria/kernel";
+import { Supervisor } from "@miyoria/runtime/kernel";
 import { describe, expect, it } from "vitest";
 import {
   type GpuContext,
@@ -18,6 +19,7 @@ import {
 import { SingConfigSchema } from "../src/config.js";
 import { FailoverSingWorker } from "../src/failover.js";
 import { SingModule, workerUrls } from "../src/module.js";
+import { FakeEndpoints } from "./endpoints.js";
 
 const RETRY = 30_000;
 
@@ -388,6 +390,12 @@ describe("FailoverSingWorker", () => {
   });
 });
 
+/** The client of the one worker at `url`, as the module makes it from the registry. */
+function client(url: string, timeoutMs: number, headers: Record<string, string> = {}) {
+  const source = new FakeEndpoints([{ name: "sing", url, headers }]);
+  return new HttpSingWorker(source.candidates("sing")[0] as never, timeoutMs, source);
+}
+
 describe("HttpSingWorker errors", () => {
   async function listen(server: Server): Promise<string> {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -398,7 +406,7 @@ describe("HttpSingWorker errors", () => {
     const server = createServer();
     const url = await listen(server);
     await new Promise((resolve) => server.close(resolve));
-    const error = await rejection(new HttpSingWorker(url, 2000).submit({ query: "a" }));
+    const error = await rejection(client(url, 2000).submit({ query: "a" }));
     expect(error.unreachable).toBe(true);
     expect(error.maybeReceived).toBe(false);
   });
@@ -409,7 +417,7 @@ describe("HttpSingWorker errors", () => {
     });
     const url = await listen(server);
     try {
-      const error = await rejection(new HttpSingWorker(url, 300).submit({ query: "a" }));
+      const error = await rejection(client(url, 300).submit({ query: "a" }));
       expect(error.unreachable).toBe(true);
       expect(error.maybeReceived).toBe(true);
     } finally {
@@ -440,44 +448,211 @@ describe("fallback_urls config", () => {
   });
 });
 
-describe("SingModule with fallback_urls", () => {
-  it("asks for one worker per url, the url first", async () => {
+describe("SingModule and the registry's sing endpoints", () => {
+  /** Starts the module on `endpoints`; the clients it makes, by URL. */
+  async function start(endpoints: FakeEndpoints) {
     const made = new Map<string, FakeWorker>();
     const sup = new Supervisor();
-    const sing = new SingModule((url) => {
-      const w = new FakeWorker(url);
-      made.set(url, w);
-      return w;
-    });
-    await sup.register(
-      sing,
-      { url: "http://100.83.26.41:8005", fallback_urls: ["http://127.0.0.1:8005"], clips: false },
-      true,
+    const sing = new SingModule(
+      (endpoint) => {
+        const w = new FakeWorker(endpoint.url);
+        made.set(endpoint.url, w);
+        return w;
+      },
+      { endpoints: () => endpoints },
     );
+    await sup.register(sing, { clips: false }, true);
     await sup.startAll();
+    return { sup, sing, made };
+  }
+
+  it("asks for one worker per endpoint, in the registry's order (`url` first)", async () => {
+    const endpoints = new FakeEndpoints([
+      { name: "sing", url: "http://100.83.26.41:8005" },
+      { name: "sing.fallback.1", url: "http://127.0.0.1:8005" },
+    ]);
+    const { sup, sing, made } = await start(endpoints);
     expect([...made.keys()]).toEqual(["http://100.83.26.41:8005", "http://127.0.0.1:8005"]);
     // The friend's computer is off: still healthy, this machine's worker sings.
     (made.get("http://100.83.26.41:8005") as FakeWorker).up = false;
     expect(await sing.health()).toEqual({ status: "healthy" });
+    // The failover rested it: the registry hears about it too.
+    expect(endpoints.failures.map((f) => f.endpoint.host)).toEqual(["sing"]);
     (made.get("http://127.0.0.1:8005") as FakeWorker).up = false;
     expect((await sing.health()).status).toBe("degraded");
     await sup.stopAll();
+    expect(endpoints.watching).toBe(0);
   });
 
-  it("uses a single worker when the fallbacks only repeat the url", async () => {
-    const made: string[] = [];
-    const sup = new Supervisor();
-    const sing = new SingModule((url) => {
-      made.push(url);
-      return new FakeWorker(url);
+  it("follows endpoints that appear and disappear", async () => {
+    const endpoints = new FakeEndpoints();
+    const { sup, sing, made } = await start(endpoints);
+    expect(await sing.health()).toEqual({
+      status: "degraded",
+      reason: "no song worker is known",
     });
-    await sup.register(
-      sing,
-      { url: "http://127.0.0.1:8005", fallback_urls: ["http://127.0.0.1:8005/"], clips: false },
-      true,
-    );
-    await sup.startAll();
-    expect(made).toEqual(["http://127.0.0.1:8005"]);
+    endpoints.set([{ name: "main-pc", service: "sing", url: "http://127.0.0.1:8005" }]);
+    expect([...made.keys()]).toEqual(["http://127.0.0.1:8005"]);
+    expect(await sing.health()).toEqual({ status: "healthy" });
+    endpoints.set([]);
+    expect((await sing.health()).status).toBe("degraded");
     await sup.stopAll();
+  });
+});
+
+describe("FailoverSingWorker with a changing list", () => {
+  it("has no worker at first: a request waits, as for one that does not answer", async () => {
+    const worker = new FailoverSingWorker([], { retryMs: RETRY });
+    let error = await rejection(worker.submit({ query: "a" }));
+    expect([error.unreachable, error.message]).toEqual([true, "no song worker is known"]);
+    error = await rejection(worker.job("j"));
+    expect(error.unreachable).toBe(true);
+    expect(await worker.health()).toBe("no song worker is known");
+    const local = new FakeWorker("local");
+    worker.update([{ id: "pc/sing", name: "http://pc:8005", worker: local }]);
+    expect((await worker.submit({ query: "a" })).id).toBe("local-j1");
+  });
+
+  it("reports the songs of a worker that left the list gone, and makes them on the next", async () => {
+    const remote = new FakeWorker("remote");
+    const local = new FakeWorker("local");
+    const worker = new FailoverSingWorker(
+      [
+        { id: "friend/sing", name: "http://friend:8005", worker: remote },
+        { id: "pc/sing", name: "http://pc:8005", worker: local },
+      ],
+      { retryMs: RETRY },
+    );
+    const job = await worker.submit({ query: "a" });
+    expect(job.id).toBe("remote-j1");
+    worker.update([{ id: "pc/sing", name: "http://pc:8005", worker: local }]);
+    const error = await rejection(worker.job(job.id));
+    expect([error.status, error.message]).toEqual([
+      404,
+      "the song worker at http://friend:8005 is gone",
+    ]);
+    expect((await worker.submit({ query: "a" })).id).toBe("local-j1");
+    expect(remote.calls).toEqual(["submit"]);
+    // It comes back: the job left behind is cancelled there.
+    worker.update([
+      { id: "friend/sing", name: "http://friend:8005", worker: remote },
+      { id: "pc/sing", name: "http://pc:8005", worker: local },
+    ]);
+    expect(await worker.health()).toBe(null);
+    await settle();
+    expect(remote.calls).toContain(`cancel ${job.id}`);
+  });
+
+  it("keeps a worker's jobs and songs when its address changes (same id) or its id does (same address)", async () => {
+    const first = new FakeWorker("w");
+    const worker = new FailoverSingWorker(
+      [{ id: "sing", name: "http://127.0.0.1:8005", url: "http://127.0.0.1:8005", worker: first }],
+      { retryMs: RETRY },
+    );
+    const job = await worker.submit({ query: "a" });
+    first.finish(job.id, "yt-1");
+    await worker.job(job.id);
+
+    // The worker restarted on another port: the same id, a new client that knows the same jobs.
+    const moved = new FakeWorker("w");
+    moved.jobs.set(job.id, structuredClone(first.jobs.get(job.id) as WorkerJob));
+    moved.cached.add("yt-1");
+    worker.update([
+      { id: "sing", name: "http://127.0.0.1:9005", url: "http://127.0.0.1:9005", worker: moved },
+    ]);
+    expect((await worker.job(job.id)).song_id).toBe("yt-1");
+    expect(moved.calls).toEqual([`job ${job.id}`]);
+
+    // A hostd now reports the worker the static entry named: another id, the same address.
+    const reported = new FakeWorker("w");
+    reported.cached.add("yt-1");
+    worker.update([
+      {
+        id: "elsewhere/sing",
+        name: "http://10.0.0.9:8005",
+        url: "http://10.0.0.9:8005",
+        worker: new FakeWorker("x"),
+      },
+      {
+        id: "main-pc/sing",
+        name: "http://127.0.0.1:9005/",
+        url: "http://127.0.0.1:9005/",
+        worker: reported,
+      },
+    ]);
+    expect(await worker.audio("yt-1", "play_mix.pcm")).toEqual(new Int16Array([1]));
+    expect(reported.calls).toEqual(["audio yt-1"]);
+  });
+
+  it("uses a single worker as it is: no resting, no songs reported gone", async () => {
+    const only = new FakeWorker("only");
+    const clock = { t: 0 };
+    const failed: string[] = [];
+    const worker = new FailoverSingWorker([{ id: "sing", name: "http://pc:8005", worker: only }], {
+      retryMs: RETRY,
+      now: () => clock.t,
+      failed: (id) => failed.push(id),
+    });
+    const job = await worker.submit({ query: "a" });
+    only.up = false;
+    expect((await rejection(worker.job(job.id))).unreachable).toBe(true);
+    clock.t += RETRY * 2;
+    // Asked every time, and still only unreachable (a lone worker's songs are not remade).
+    const error = await rejection(worker.job(job.id));
+    expect([error.unreachable, error.status]).toEqual([true, null]);
+    expect(only.calls.filter((c) => c.startsWith("job"))).toHaveLength(2);
+    expect(failed).toEqual(["sing", "sing"]);
+    only.up = false;
+    expect(await worker.health()).toBe("unreachable at only");
+  });
+});
+
+describe("HttpSingWorker through the registry", () => {
+  let server: Server | null = null;
+
+  it("sends the endpoint's token on every call", async () => {
+    const seen: IncomingHttpHeaders[] = [];
+    server = createServer((req, res) => {
+      seen.push(req.headers);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+    });
+    await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      expect(await client(url, 2000, { authorization: "Bearer sing-token" }).health()).toBe(null);
+      expect(seen[0]?.authorization).toBe("Bearer sing-token");
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server?.close(resolve));
+    }
+  });
+
+  it("takes the relay's error as the answer for a link endpoint (no connection probe)", async () => {
+    const source = new FakeEndpoints([
+      { name: "far", service: "sing", url: "link://far/sing", via: "link" },
+    ]);
+    const worker = new HttpSingWorker(source.candidates("sing")[0] as never, 2000, source);
+    const error = await rejection(worker.submit({ query: "a" }));
+    expect(error.unreachable).toBe(true);
+    expect(error.maybeReceived).toBe(false);
+    expect(error.message).toMatch(
+      /^song worker unreachable at sing on far \(over its control link\)/,
+    );
+  });
+
+  it("knows a relay error that sent nothing from one that may have reached the worker", async () => {
+    const source = new FakeEndpoints([
+      { name: "far", service: "sing", url: "link://far/sing", via: "link" },
+    ]);
+    const worker = new HttpSingWorker(source.candidates("sing")[0] as never, 2000, source);
+    const relayError = (sent: boolean) =>
+      Object.assign(new Error("host `far` is not connected"), { name: "RelayError", sent });
+
+    source.linkError = relayError(false);
+    expect((await rejection(worker.submit({ query: "a" }))).maybeReceived).toBe(false);
+
+    source.linkError = relayError(true);
+    expect((await rejection(worker.submit({ query: "a" }))).maybeReceived).toBe(true);
   });
 });

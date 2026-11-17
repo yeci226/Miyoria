@@ -29,7 +29,7 @@
 // panel is focused on (`-` for none).
 
 import { createHash } from "node:crypto";
-import { errorMessage, getLogger, type ServiceLookup, withTimeout } from "@miyoria/kernel";
+import { errorMessage, getLogger, type ServiceLookup, withTimeout } from "@miyoria/runtime/kernel";
 import {
   type AnyComponentRoute,
   ComponentInvocation,

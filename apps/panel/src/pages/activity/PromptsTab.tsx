@@ -1,6 +1,6 @@
 import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import type { PromptSummary, TurnOutcomeKind, TurnOutcomeRecord } from "@/api/types";
+import type { PromptSummary, TurnOutcomeKind, TurnOutcomeRecord } from "@miyoria/contracts/api";
 import { useDecisions, usePrompts, useTurnOutcomes } from "@/app/queries";
 import { Toolbar } from "@/components/page";
 import { EmptyLine, QueryView } from "@/components/query-state";

@@ -1,0 +1,11 @@
+# VTube Studio: the avatar program Stage drives through its public API; run by hand.
+name = "vtube-studio"
+kind = "external"
+summary = "VTube Studio(虛擬形象,Stage 用它的公開 API 驅動)"
+
+[probe]
+port = 8001                      # the public API (`[vts] url` of Stage)
+
+# It uses video memory hostd must leave free.
+[gpu]
+policy = "reserve"

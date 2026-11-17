@@ -1,7 +1,5 @@
 // The main line of V3 (docs/design/v3-architecture.md §4, §7, §10): the one foreground decider.
 //
-// * `Pipeline`: which of the two brains runs (`[core] pipeline`). `v2` keeps every old path; one
-//   setting rolls back.
 // * `TurnOutput`: what one call of the main line produces. What she says and what she does are the
 //   same decision (§10), so they come out of the same response.
 // * `Floor` (§7): whether she may take the mic now, what her budget is, how hard a claim may
@@ -17,32 +15,8 @@ import type { Handle } from "./handle.js";
 import type { TurnId } from "./ids.js";
 import type { JsonValue } from "./json.js";
 import type { AccountRef, ContextKey } from "./platform.js";
-import { type ServiceKey, serviceKey } from "./service-key.js";
+import { serviceKey } from "./service-key.js";
 import type { Timestamp } from "./time.js";
-
-// ---- the switch -----------------------------------------------------------------------------
-
-export const PIPELINES = ["v3", "v2"] as const;
-
-export type Pipeline = (typeof PIPELINES)[number];
-
-/** What `[core] pipeline` means when the config says nothing. */
-export const DEFAULT_PIPELINE: Pipeline = "v3";
-
-export function isPipeline(value: unknown): value is Pipeline {
-  return typeof value === "string" && (PIPELINES as readonly string[]).includes(value);
-}
-
-export const PipelineKey = serviceKey<{ pipeline: Pipeline }>("Pipeline");
-
-/**
- * The pipeline in use. The core always provides it (`DEFAULT_PIPELINE` unless the config says
- * otherwise); only a module wired up by hand, as in a package's own tests, runs without one, and
- * that module then keeps its V2 behaviour.
- */
-export function pipelineOf(services: { get<T>(key: ServiceKey<T>): T | undefined }): Pipeline {
-  return services.get(PipelineKey)?.pipeline ?? "v2";
-}
 
 // ---- one turn of the main line ----------------------------------------------------------------
 
@@ -182,7 +156,7 @@ export interface FloorBudget {
   performing: boolean;
 }
 
-/** Provided by the `arbiter` module under `pipeline = "v3"`. Answers from memory. */
+/** Provided by the `arbiter` module. Answers from memory. */
 export interface Floor {
   /** Takes the mic for `turn`. A context may have more than one: an old line can still be playing. */
   hold(turn: TurnId, context: ContextKey, kind: FloorClaimKind): void;
@@ -230,6 +204,31 @@ export interface Commitment {
 export interface CommitmentBody {
   commitment: Commitment;
 }
+
+/**
+ * Her promises as a writer outside the main line sees them (the memory's segment pass records what
+ * she promised in a conversation and closes what she did). Provided by the agent (its
+ * `CommitmentBook`); the `commitment` opportunity reads the same book.
+ */
+export interface PromiseBook {
+  /** What she still owes, oldest first (`context`: made there). */
+  open(context?: ContextKey): Commitment[];
+  /**
+   * A new promise. `person`: whom it is to, when it is one to ask or tell someone something.
+   * `null`: not made.
+   */
+  add(
+    draft: CommitmentDraft,
+    context: ContextKey,
+    turn: TurnId | null,
+    cause: string | null,
+    person?: Handle | null,
+  ): Commitment | null;
+  /** `commitment` is kept. */
+  said(commitment: Commitment, cause: string | null): void;
+}
+
+export const PromiseBookKey = serviceKey<PromiseBook>("PromiseBook");
 
 // ---- proposals --------------------------------------------------------------------------------
 
@@ -281,19 +280,6 @@ export interface ProposalResultBody {
   turn: TurnId | null;
 }
 
-/** Provided by the agent under `pipeline = "v3"`: the only door the background has. */
-export interface ProposalBoard {
-  /**
-   * Writes `proposal` to the log and asks for the floor for it. Resolves when the Floor said
-   * whether the main line takes it up now; it stays on the board until it expires either way.
-   */
-  propose(proposal: NewProposal, signal?: AbortSignal): Promise<ProposalOutcome>;
-  /** What is waiting (`context`: there, or anywhere). */
-  open(context?: ContextKey | null): Proposal[];
-}
-
-export const ProposalBoardKey = serviceKey<ProposalBoard>("ProposalBoard");
-
 // ---- the mouth --------------------------------------------------------------------------------
 
 /** A line that needs no model: what the owner typed in the panel, a reply she already wrote. */
@@ -306,9 +292,11 @@ export interface FixedLine {
   source: string;
   /** `text` is the filtered line already (`safeOutgoing`'s `blocked`). */
   blocked?: string | null;
+  /** Who the line is for, as the delivery ledger records it. Unset: the people in the voice channel. */
+  audience?: readonly Handle[];
 }
 
-/** Provided by the agent under `pipeline = "v3"`. */
+/** Provided by the agent. */
 export interface Mouth {
   /** Whether `turn` is one of the main line's: what the scheduler checks before it sends a line. */
   owns(turn: TurnId | null): boolean;
@@ -320,6 +308,3 @@ export const MouthKey = serviceKey<Mouth>("Mouth");
 
 /** The error of a line the scheduler refused for going around the main line. */
 export const NOT_MAIN_LINE = "not the main line";
-
-/** Bus topic: one `MainResultBody`, for whoever follows actions without reading the log. */
-export const MAIN_RESULT_TOPIC = "mainline.result";

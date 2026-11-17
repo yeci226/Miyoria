@@ -1,0 +1,59 @@
+# Sing worker: covers songs (separation, RVC voice conversion, mixing, lyrics), workers/sing/server.py.
+name = "sing"
+kind = "worker"
+provides = ["sing"]
+summary = "翻唱(人聲分離、RVC 轉換、混音、歌詞)"
+
+[install]
+runtime = "python"
+python = ">=3.11,<3.14"
+system = ["ffmpeg"]
+# pyproject.toml and uv.lock here; torch and torchaudio 2.11.0 come from the CUDA 12.8 index.
+project = "."
+check_imports = ["torch", "demucs", "librosa"]
+
+# The first song downloads about 2 GB of models by itself; their repositories are not pinned yet.
+[[install.manual]]
+path = "workers/models/applio"
+what = "她的 RVC 歌聲模型(Applio 訓練出來的;只用 SING_VOICE=seedvc 時可略過)"
+
+[[install.manual]]
+path = "workers/models/lead-split"
+what = "主唱與伴唱分離模型(BS-RoFormer karaoke,放在 becruily-bs/;沒有就不切主唱)"
+
+[[install.manual]]
+path = "workers/models/vocal-split"
+what = "人聲分離模型(MelBandRoformer.ckpt 和 .yaml;沒有就退回 Demucs)"
+
+# The worker refuses to start without these two, whichever voice chain is used
+# (workers/sing/engine.py).
+[[install.manual]]
+path = "workers/models/seed-vc"
+what = "Seed-VC 原始碼(啟動時一定要有;換位置設 SING_SEEDVC_DIR)"
+
+[[install.manual]]
+path = "workers/voices/deepseek-chan/ref.wav"
+what = "翻唱用的參考聲音(啟動時一定要有;換成別的檔案、清單或資料夾設 SING_REF)"
+
+[run]
+command = ["{python}", "server.py"]
+cwd = "."
+port = 8005
+host_env = "HOST"
+port_env = "PORT"
+# It starts after asr and tts. Who shares the card is host.toml's [gpu] arbiter:
+# - "worker" (the default): it gets their addresses as SING_OFFLOAD_URLS ({offload_urls}: this
+#   host's evictable services, tts then asr; left out when there are none) and decides by itself.
+# - "hostd": hostd decides; it starts the worker with SING_GPU_ARBITER=hostd and without
+#   SING_OFFLOAD_URLS, and reads the SING_* tuning below and in host.toml from here.
+after = ["asr", "tts"]
+env = { SING_OFFLOAD_URLS = "{offload_urls}" }
+
+[run.health]
+http = "/health"
+
+# The worker has no offload endpoint of its own: it holds the card by the job and asks others
+# to make room.
+[gpu]
+policy = "on_demand"
+vram_mb = { resident = 7500, peak = 7500 }

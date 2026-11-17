@@ -71,10 +71,10 @@ describe("navigation", () => {
     expect(NAV_GROUPS.map((g) => [g.label, g.items.map((i) => i.label)])).toEqual([
       ["現場", ["總覽", "直播", "動態"]],
       ["她", ["內心", "角色", "生活", "規則"]],
-      ["運作", ["LLM", "系統", "經濟", "評測"]],
+      ["運作", ["LLM", "系統", "電腦", "經濟", "評測"]],
       ["管理", ["權限", "資料", "設定"]],
     ]);
-    expect(NAV).toHaveLength(14);
+    expect(NAV).toHaveLength(15);
     expect(groupFor("/inner")).toBe("她");
     expect(titleFor("/inner")).toBe("內心");
     expect(groupFor("/nowhere")).toBeNull();

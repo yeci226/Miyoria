@@ -1,16 +1,21 @@
 {
   "name": "@miyoria/llm",
   "version": "0.1.0",
-  "description": "LLM provider interface, purpose routing, cost and budget, and the OpenAI-compatible provider",
+  "description": "llm: LLM provider interface, purpose routing, cost and budget, and the OpenAI-compatible provider; tools: Tools the model may call during a turn, and their registry",
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "exports": {
-    ".": {
-      "@miyoria/source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+    "./llm": {
+      "@miyoria/source": "./llm/src/index.ts",
+      "types": "./dist/llm/src/index.d.ts",
+      "default": "./dist/llm/src/index.js"
+    },
+    "./tools": {
+      "@miyoria/source": "./tools/src/index.ts",
+      "types": "./dist/tools/src/index.d.ts",
+      "default": "./dist/tools/src/index.js"
     }
   },
   "files": [
@@ -22,9 +27,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@miyoria/kernel": "workspace:*",
+    "@ai-sdk/deepseek": "3.0.87",
+    "@ai-sdk/openai-compatible": "3.0.92",
+    "@miyoria/runtime": "workspace:*",
     "@miyoria/store": "workspace:*",
     "@miyoria/types": "workspace:*",
+    "ai": "7.0.173",
     "zod": "^4.6.7"
   },
   "devDependencies": {

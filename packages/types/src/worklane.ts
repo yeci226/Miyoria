@@ -44,10 +44,6 @@ export type WorkEnd = (typeof WORK_ENDS)[number];
 
 export type WorkState = "queued" | "running" | WorkEnd;
 
-export function isWorkEnd(value: unknown): value is WorkEnd {
-  return typeof value === "string" && (WORK_ENDS as readonly string[]).includes(value);
-}
-
 /** One task as the main line, the panel and her state see it. */
 export interface WorkTaskView {
   id: string;

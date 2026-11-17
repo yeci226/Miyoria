@@ -1,8 +1,8 @@
 // The sponsor board (docs/design/economy.md §13): everyone she knows who spent coins on her lately,
-// ranked by how much. On by default, and anyone can leave; never a balance. A person's linked
-// accounts are one wallet and one line, and any account of theirs that left takes the person off.
+// ranked by how much. On by default, and anyone can leave; never a balance. A person is one wallet
+// and one line (their linked accounts, and whoever they absorbed), and leaving takes them off.
 
-import { type AccountRef, accountRefString, safeName, toTimestamp } from "@miyoria/types";
+import { type AccountRef, safeName, toTimestamp } from "@miyoria/types";
 import type { EconomyService } from "./economy.js";
 import { type BoardLine, PAID_ITEMS } from "./types.js";
 
@@ -40,19 +40,16 @@ export async function sponsorBoard(e: EconomyService, limit = DEFAULT_BOARD): Pr
   const since = toTimestamp(e.now() - e.config.board_days * DAY_MS);
   const spent = await ledger.spent(e.profile, BOARD_REASONS, since, MAX_SPENDERS);
   if (spent.length === 0) return [];
-  const left = new Set(
-    (await ledger.offBoardAccounts(e.profile, MAX_LEFT)).map((a) => accountRefString(a)),
-  );
-  const by = new Map(spent.map((s) => [accountRefString(s.account), s.spent]));
+  const left = new Set(await ledger.offBoard(e.profile, MAX_LEFT));
   const seen = new Set<string>();
   const people: { name: string; spent: number }[] = [];
-  for (const { account } of spent) {
-    // Known and not blocked, like anywhere else: a blocked person is off the board.
-    const who = await e.member(account);
+  for (const { account, spent: total } of spent) {
+    // Known and not blocked, like anywhere else: a blocked person is off the board. Who they are
+    // to her is asked through their first account.
+    const who = account === null ? null : await e.member(account);
     if (!who || seen.has(who.person.id)) continue;
     seen.add(who.person.id);
-    if (who.wallet.some((a) => left.has(accountRefString(a)))) continue;
-    const total = who.wallet.reduce((n, a) => n + (by.get(accountRefString(a)) ?? 0), 0);
+    if (left.has(who.wallet)) continue;
     if (total > 0) people.push({ name: safeName(who.name), spent: total });
   }
   people.sort((a, b) => b.spent - a.spent || a.name.localeCompare(b.name));

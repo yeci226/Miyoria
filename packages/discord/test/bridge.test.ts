@@ -9,8 +9,8 @@ import {
   type ModuleContext,
   type Subscription,
   Supervisor,
-} from "@miyoria/kernel";
-import { PlatformHistories, PlatformSinks } from "@miyoria/types";
+} from "@miyoria/runtime/kernel";
+import { Events as BusEvents, is, PlatformHistories, PlatformSinks } from "@miyoria/types";
 import { ChannelType, type Client, Events, MessageType } from "discord.js";
 import { afterEach, describe, expect, test } from "vitest";
 import { DiscordConfigSchema } from "../src/config.js";
@@ -128,7 +128,7 @@ function guildMessage(overrides: Record<string, unknown> = {}) {
 async function next(r: Rig) {
   const env = await r.events.recv();
   if (!env) throw new Error("subscription closed");
-  return env.event;
+  return env;
 }
 
 describe("GatewayBridge", () => {
@@ -140,8 +140,8 @@ describe("GatewayBridge", () => {
     const ids: string[] = [];
     for (let i = 0; i < 3; i++) {
       const event = await next(r);
-      expect(event.type).toBe("platform_ready");
-      if (event.type === "platform_ready") {
+      expect(event.type).toBe("platform.ready");
+      if (is(BusEvents.PlatformReady, event)) {
         expect(event.data.platform).toBe("discord");
         ids.push(event.data.self_account.id);
       }
@@ -178,8 +178,8 @@ describe("GatewayBridge", () => {
       guildMessage({ mentions: { users: new Map([["100", {}]]) } }),
     );
     const event = await next(r);
-    expect(event.type).toBe("platform_message_created");
-    if (event.type !== "platform_message_created") return;
+    expect(event.type).toBe("platform.message.created");
+    if (!is(BusEvents.PlatformMessageCreated, event)) return;
     expect(event.data).toMatchObject({
       id: {
         id: "1000",
@@ -204,7 +204,7 @@ describe("GatewayBridge", () => {
       }),
     );
     const event = await next(r);
-    expect(event.type === "platform_message_created" && event.data.reply_to_self).toBe(true);
+    expect(is(BusEvents.PlatformMessageCreated, event) && event.data.reply_to_self).toBe(true);
     // The cache is preferred over REST, and a failed fetch means "not a reply to her".
     const cached = guildMessage({
       type: MessageType.Reply,
@@ -219,7 +219,7 @@ describe("GatewayBridge", () => {
     });
     r.fake.client.emit(Events.MessageCreate, cached);
     const second = await next(r);
-    expect(second.type === "platform_message_created" && second.data.reply_to_self).toBe(true);
+    expect(is(BusEvents.PlatformMessageCreated, second) && second.data.reply_to_self).toBe(true);
     r.fake.client.emit(
       Events.MessageCreate,
       guildMessage({
@@ -231,7 +231,7 @@ describe("GatewayBridge", () => {
       }),
     );
     const third = await next(r);
-    expect(third.type === "platform_message_created" && third.data.reply_to_self).toBe(false);
+    expect(is(BusEvents.PlatformMessageCreated, third) && third.data.reply_to_self).toBe(false);
   });
 
   test("replies_carry_the_parent_reference_and_its_text", async () => {
@@ -253,7 +253,7 @@ describe("GatewayBridge", () => {
       }),
     );
     const event = await next(r);
-    if (event.type !== "platform_message_created") throw new Error("expected a message");
+    if (!is(BusEvents.PlatformMessageCreated, event)) throw new Error("expected a message");
     expect(event.data.reply_to?.id).toBe("999");
     expect(event.data.referenced).toEqual({
       author: { platform: "discord", id: "55" },
@@ -291,7 +291,7 @@ describe("GatewayBridge", () => {
     const ids: string[] = [];
     for (let i = 0; i < 3; i++) {
       const event = await next(r);
-      if (event.type === "platform_message_created") ids.push(event.data.id.id);
+      if (is(BusEvents.PlatformMessageCreated, event)) ids.push(event.data.id.id);
     }
     expect(ids).toEqual(["s", "e", "f"]);
   });
@@ -302,7 +302,7 @@ describe("GatewayBridge", () => {
     r.fake.client.emit(Events.MessageCreate, guildMessage({ content: "" }));
     r.fake.client.emit(Events.MessageCreate, guildMessage({ id: "1001", content: "real" }));
     const event = await next(r);
-    expect(event.type === "platform_message_created" && event.data.id.id).toBe("1001");
+    expect(is(BusEvents.PlatformMessageCreated, event) && event.data.id.id).toBe("1001");
   });
 
   test("attachment_only_messages_are_kept", async () => {
@@ -312,7 +312,7 @@ describe("GatewayBridge", () => {
     ]);
     r.fake.client.emit(Events.MessageCreate, guildMessage({ content: "", attachments }));
     const event = await next(r);
-    expect(event.type === "platform_message_created" && event.data.attachments).toHaveLength(1);
+    expect(is(BusEvents.PlatformMessageCreated, event) && event.data.attachments).toHaveLength(1);
   });
 
   test("dm_messages_are_dm_contexts", async () => {
@@ -325,7 +325,7 @@ describe("GatewayBridge", () => {
       }),
     );
     const event = await next(r);
-    expect(event.type === "platform_message_created" && event.data.id.context).toEqual({
+    expect(is(BusEvents.PlatformMessageCreated, event) && event.data.id.context).toEqual({
       platform: "discord",
       scope: null,
       channel: "200",
@@ -338,7 +338,9 @@ describe("GatewayBridge", () => {
     r.fake.client.emit(Events.ThreadCreate, { id: "t9", type: ChannelType.PrivateThread }, true);
     r.fake.client.emit(Events.MessageCreate, guildMessage({ channelId: "t9", channel: undefined }));
     let event = await next(r);
-    expect(event.type === "platform_message_created" && event.data.id.context.kind).toBe("thread");
+    expect(is(BusEvents.PlatformMessageCreated, event) && event.data.id.context.kind).toBe(
+      "thread",
+    );
 
     // Unknown channel: one REST lookup, then remembered.
     for (let i = 0; i < 2; i++) {
@@ -347,7 +349,7 @@ describe("GatewayBridge", () => {
         guildMessage({ id: `m${i}`, channelId: "thread-1", channel: undefined }),
       );
       event = await next(r);
-      expect(event.type === "platform_message_created" && event.data.id.context.kind).toBe(
+      expect(is(BusEvents.PlatformMessageCreated, event) && event.data.id.context.kind).toBe(
         "thread",
       );
     }
@@ -362,8 +364,8 @@ describe("GatewayBridge", () => {
       user: { id: "42" },
     });
     const event = await next(r);
-    expect(event).toEqual({
-      type: "platform_typing",
+    expect({ type: event.type, data: event.data }).toEqual({
+      type: "platform.typing",
       data: {
         context: { platform: "discord", scope: "300", channel: "200", kind: "channel" },
         account: { platform: "discord", id: "42" },
@@ -390,7 +392,7 @@ describe("GatewayBridge", () => {
     const seen: string[] = [];
     for (let i = 0; i < 3; i++) {
       const event = await next(r);
-      if (event.type === "platform_message_created") seen.push(event.data.id.id);
+      if (is(BusEvents.PlatformMessageCreated, event)) seen.push(event.data.id.id);
     }
     // `ambient` never arrives; the other three do, in order.
     expect(seen).toEqual(["listed", "mention", "dm"]);
@@ -409,7 +411,7 @@ describe("GatewayBridge", () => {
       user: { id: "42" },
     });
     const event = await next(r);
-    expect(event.type === "platform_typing" && event.data.context.channel).toBe("201");
+    expect(is(BusEvents.PlatformTyping, event) && event.data.context.channel).toBe("201");
   });
 
   test("chat_input_interactions_run_commands", async () => {
@@ -475,7 +477,7 @@ describe("GatewayBridge", () => {
     r.fake.client.emit(Events.MessageCreate, guildMessage({ author: undefined }));
     r.fake.client.emit(Events.MessageCreate, guildMessage({ id: "ok" }));
     const event = await next(r);
-    expect(event.type === "platform_message_created" && event.data.id.id).toBe("ok");
+    expect(is(BusEvents.PlatformMessageCreated, event) && event.data.id.id).toBe("ok");
   });
 });
 

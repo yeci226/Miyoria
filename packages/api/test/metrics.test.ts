@@ -1,6 +1,6 @@
 // `GET /metrics`: auth (`metrics_public`), the text format and the scrape-time families.
 
-import { metrics, Supervisor, SupervisorKey } from "@miyoria/kernel";
+import { metrics, Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
 import type { JsonValue } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import { ApiModule, METRICS_PATH } from "../src/index.js";

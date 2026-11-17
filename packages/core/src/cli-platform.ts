@@ -2,10 +2,11 @@
 // typed is a DM from "you"; her replies are printed.
 
 import { createInterface } from "node:readline";
-import { defineManifest, type Module, type ModuleContext } from "@miyoria/kernel";
+import { defineManifest, type Module, type ModuleContext } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
   type ContextKey,
+  Events,
   type MessageRef,
   newId,
   type OutgoingMessage,
@@ -74,10 +75,7 @@ export class CliPlatform implements Module {
     const sinks = ctx.services.require(PlatformSinksKey);
     sinks.register(new Sink(this.#herName, this.#output));
     this.#sinks = sinks;
-    ctx.publish({
-      type: "platform_ready",
-      data: { platform: CLI_PLATFORM, self_account: account("her") },
-    });
+    ctx.publish(Events.PlatformReady, { platform: CLI_PLATFORM, self_account: account("her") });
 
     const userName = this.#userName;
     const input = this.#input;
@@ -95,17 +93,14 @@ export class CliPlatform implements Module {
             out.write("> ");
             continue;
           }
-          ctx.publish({
-            type: "platform_message_created",
-            data: {
-              id: { context: context(), id: newId() },
-              author: { account: account("you"), display_name: userName, is_bot: false },
-              text,
-              mentions_self: false,
-              reply_to_self: false,
-              attachments: [],
-              ts: toTimestamp(ctx.clock.now()),
-            },
+          ctx.publish(Events.PlatformMessageCreated, {
+            id: { context: context(), id: newId() },
+            author: { account: account("you"), display_name: userName, is_bot: false },
+            text,
+            mentions_self: false,
+            reply_to_self: false,
+            attachments: [],
+            ts: toTimestamp(ctx.clock.now()),
           });
         }
       } finally {

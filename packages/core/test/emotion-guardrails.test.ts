@@ -1,6 +1,6 @@
 // §12, the other way round: emotions change how she speaks and what she wants, never the rules.
 // The code that decides what she may do does not read how she feels, so no feeling can get past it.
-// The behaviour is tested where the rules live (packages/arbiter/test/floor.test.ts); this keeps a
+// The behaviour is tested where the rules live (packages/brain/arbiter/test/floor.test.ts); this keeps a
 // way around them from appearing. A new reader in a rule fails here until someone says why.
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -31,15 +31,15 @@ const file = (path: string) => [join(ROOT, path)];
 
 describe("no rule reads how she feels", () => {
   it("Directive", () => {
-    expect(readers(inside("packages/directive/src"))).toEqual([]);
+    expect(readers(inside("packages/brain/directive/src"))).toEqual([]);
   });
 
-  it("the claim gate and the main line's checks", () => {
+  it("the main line's commitments and the runner's guards", () => {
     expect(
       readers([
-        ...file("packages/agent/src/claims.ts"),
-        ...file("packages/agent/src/mainline/gate.ts"),
-        ...file("packages/agent/src/mainline/commitments.ts"),
+        ...file("packages/brain/agent/src/mainline/commitments.ts"),
+        ...file("packages/brain/self/src/guard.ts"),
+        ...file("packages/brain/self/src/service-guard.ts"),
       ]),
     ).toEqual([]);
   });
@@ -47,19 +47,19 @@ describe("no rule reads how she feels", () => {
   it("the action gate", () => {
     expect(
       readers([
-        ...file("packages/actions/src/capability.ts"),
-        ...file("packages/actions/src/gated.ts"),
-        ...file("packages/actions/src/registry.ts"),
+        ...file("packages/gate/actions/src/capability.ts"),
+        ...file("packages/gate/actions/src/gated.ts"),
+        ...file("packages/gate/actions/src/registry.ts"),
       ]),
     ).toEqual([]);
   });
 
   it("the scheduler", () => {
-    expect(readers(inside("packages/scheduler/src"))).toEqual([]);
+    expect(readers(inside("packages/runtime/scheduler/src"))).toEqual([]);
   });
 
   it("the Floor: one number comes in through its budget, and nothing else", () => {
-    const path = join(ROOT, "packages/arbiter/src/floor.ts");
+    const path = join(ROOT, "packages/brain/arbiter/src/floor.ts");
     expect(readers([path])).toEqual([]);
     const code = readFileSync(path, "utf8");
     // `#ownLines` is the only reader, and only `budget` calls it.

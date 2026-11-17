@@ -6,17 +6,17 @@ describe("MemorySettingsStore", () => {
   it("get / set / delete / list by prefix, per profile", async () => {
     const store = new MemorySettingsStore();
     expect(await store.get("p", "a")).toBeNull();
-    await store.set("p", "llm_usage:2026-03-10", { models: {} });
-    await store.set("p", "llm_usage:2026-03", { models: {} });
+    await store.set("p", "feedback:day:2026-03-10", { n: 1 });
+    await store.set("p", "feedback:day:2026-03", { n: 1 });
     await store.set("p", "mode:c1", "ambient");
-    await store.set("q", "llm_usage:2026-03", 1);
-    expect([...(await store.list("p", "llm_usage:")).keys()]).toEqual([
-      "llm_usage:2026-03",
-      "llm_usage:2026-03-10",
+    await store.set("q", "feedback:day:2026-03", 1);
+    expect([...(await store.list("p", "feedback:day:")).keys()]).toEqual([
+      "feedback:day:2026-03",
+      "feedback:day:2026-03-10",
     ]);
     await store.set("p", "mode:c1", null);
     expect(await store.get("p", "mode:c1")).toBeNull();
-    expect(await store.get("q", "llm_usage:2026-03")).toBe(1);
+    expect(await store.get("q", "feedback:day:2026-03")).toBe(1);
   });
 
   it("copies values in and out", async () => {
@@ -54,7 +54,7 @@ describe("records", () => {
     expect(entry.id).toHaveLength(26);
   });
 
-  it("scopes are internally tagged like serde", () => {
+  it("scopes are internally tagged", () => {
     const scope: MemoryScope = { type: "guild", platform: "discord", guild: "g" };
     expect(JSON.stringify(scope)).toBe('{"type":"guild","platform":"discord","guild":"g"}');
   });

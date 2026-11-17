@@ -4,7 +4,7 @@
 // Cues from Core (emotion, speaking) are applied `latency_ms` late, like the lip-sync levels,
 // so the face changes when viewers hear the sentence rather than when the player takes it.
 
-import { errorMessage, getLogger, SerialQueue } from "@miyoria/kernel";
+import { errorMessage, getLogger, SerialQueue } from "@miyoria/runtime/kernel";
 import type { Clock } from "@miyoria/types";
 import type { AvatarProfile } from "./avatar.js";
 import { type BlinkConfig, BlinkScheduler } from "./blink.js";

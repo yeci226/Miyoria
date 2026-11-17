@@ -1,7 +1,7 @@
 // `GET /api/facts/*` against a real EventLog.
 
-import { DeliveryLedgerView, EventLogService, WorkingContextView } from "@miyoria/facts";
-import { Supervisor, SupervisorKey } from "@miyoria/kernel";
+import { DeliveryLedgerView, EventLogService, WorkingContextView } from "@miyoria/memory/facts";
+import { Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
 import {
   type ContextKey,
   DeliveryLedgerKey,
@@ -173,16 +173,12 @@ describe("fact routes", () => {
     expect(effects.map((e) => e.kind)).toEqual(["decision", "utterance", "delivered"]);
   });
 
-  it("show what she knows and what reached someone", async () => {
+  it("show what reached someone, and the removed routes are gone", async () => {
     const h = await harness();
     await withFacts(h);
-    const buckets = (await h.get("/api/facts/context")).body as { writer: string }[];
-    expect(buckets.map((b) => b.writer)).toEqual(["voice.asr"]);
-    const elsewhere = await h.get("/api/facts/context?context=discord%3Ag1%3Ac1");
-    expect(elsewhere.body).toEqual([]);
     const deliveries = (await h.get("/api/facts/deliveries")).body as { said: string }[];
     expect(deliveries.map((d) => d.said)).toEqual(["在喔"]);
-    const retry = (await h.get("/api/facts/retryable")).body as { said: string; state: string }[];
-    expect(retry).toMatchObject([{ said: "被打斷", state: "interrupted" }]);
+    expect((await h.get("/api/facts/context")).status).toBe(404);
+    expect((await h.get("/api/facts/retryable")).status).toBe(404);
   });
 });

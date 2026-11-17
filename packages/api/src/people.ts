@@ -1,10 +1,41 @@
-// `/api/people*`: people the active profile knows and how she feels about them. Reads come from
-// the stores (with the social engine's cached numbers when it runs); every change goes through
-// the social engine. Everyone in the people store is listed; people she has no relationship with
-// yet have `relationship: null` and the label of a neutral relationship.
+// `/api/people*`: the one admin source for who she knows and how she feels about them, read from
+// the heart's rows (`heart_person`; docs/design/v5-heart.md §2.11). A row of the list carries the
+// bond, its ring, the eight values and how much she cares; the person page adds her words, the
+// tier and its anchors, the newest changes, today's caps and the evidence. Everyone in the people
+// store is listed; someone without a row yet is every number at where a newcomer starts
+// (`has_row: false`). Every change goes to the row.
 
-import { MemoryEngineKey } from "@miyoria/memory";
-import { attitude, BLOCKED_TAG, label, type Social, SocialKey } from "@miyoria/social";
+import type {
+  AdjustPersonRequest,
+  FieldLedger,
+  HeartHistoryEntry,
+  HeartHistoryPage,
+  PersonAnchor,
+  PersonEvidence,
+  PersonPage,
+  PersonProfile,
+  PersonRow,
+  SetAnchorRequest,
+  UpdatePersonRequest,
+} from "@miyoria/contracts/api";
+import {
+  ANCHORED_TIERS,
+  BLOCKED_TAG,
+  bondPlace,
+  cares,
+  dailyCap,
+  HEART_FIELDS,
+  type HeartPerson,
+  type HeartStore,
+  type HeartHistoryEntry as HistoryEntry,
+  hasTag,
+  heldTier,
+  labelOf,
+  newPerson,
+  OWNER_TAG,
+  type TierAnchor,
+} from "@miyoria/heart/person";
+import { MemoryEngineKey } from "@miyoria/memory/memory";
 import {
   type IdentityStore,
   IdentityStoreKey,
@@ -13,26 +44,36 @@ import {
   type PeopleStore,
   PeopleStoreKey,
   type Person,
-  type Relationship,
-  type RelationshipDelta,
-  type RelationshipStore,
-  RelationshipStoreKey,
+  StoreError,
 } from "@miyoria/store";
-import { isUlid, type PersonId, type ProfileId, toTimestamp } from "@miyoria/types";
-import { z } from "zod";
+import {
+  BOND_LADDER,
+  isUlid,
+  type PersonId,
+  type ProfileId,
+  type RelationshipLabel,
+  toTimestamp,
+} from "@miyoria/types";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { readJson, readQuery, usizeParam } from "./extract.js";
-import { json, param, type Route } from "./route.js";
+import { heartRows } from "./heart-rows.js";
 import { type ApiContext, type ApiState, actorOf, toJson } from "./state.js";
-import type { Page, PersonDetail, PersonSummary, UpdatePersonRequest } from "./types.js";
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
+const DEFAULT_HISTORY = 50;
 const MAX_HISTORY = 500;
+/** Newest evidence on the person page. */
+const EVIDENCE_SHOWN = 30;
 const MAX_TAGS = 32;
 const MAX_TAG_CHARS = 32;
-const MAX_NOTES_CHARS = 2000;
+const MAX_TEXT_CHARS = 2000;
 const MAX_CALL_NAME_CHARS = 64;
+const MAX_PUBLIC_FEELING_CHARS = 500;
+const MAX_ANCHOR_CHARS = 500;
+const MAX_NOTE_REF_CHARS = 64;
+/** The largest number an owner's adjustment may name (the bond's whole span, with room). */
+const MAX_ADJUST = 1100;
 
 function chars(s: string): number {
   return [...s].length;
@@ -52,42 +93,70 @@ function ms(ts: string | null): number {
   return ts === null ? Number.NEGATIVE_INFINITY : Date.parse(ts);
 }
 
-/** The label of someone she has no relationship with yet (all levels at zero: 陌生人). */
-const NEUTRAL_LABEL = label({
-  profile: "",
-  person: "",
-  affinity: 0,
-  trust: 0,
-  familiarity: 0,
-  tags: [],
-  notes: "",
-  call_name: null,
-  interactions: 0,
-  last_interaction: null,
-  updated_at: toTimestamp(0),
-});
+/** The tier of someone without a row yet. */
+const NEUTRAL_TIER = labelOf(null);
+
+/** The numbers of a person's row as the contract names them. */
+function numbersOf(p: HeartPerson) {
+  return {
+    bond: p.bond,
+    trust: p.trust,
+    familiarity: p.familiarity,
+    warmth: p.warmth,
+    respect: p.respect,
+    ease: p.ease,
+    grudge: p.grudge,
+    longing: p.longing,
+    rapport: p.rapport,
+  };
+}
+
+/** One list row: `row` is `null` for someone she has not met (a newcomer's numbers). */
+export function rowOf(person: Person, row: HeartPerson | null): PersonRow {
+  const p = row ?? newPerson(person.id, person.created_at);
+  const place = bondPlace(p.bond);
+  return {
+    person,
+    has_row: row !== null,
+    blocked: hasTag(p, BLOCKED_TAG),
+    owner: hasTag(p, OWNER_TAG),
+    tier: row === null ? NEUTRAL_TIER : place.tier,
+    stage: row === null ? null : place.stage,
+    tier_label: row === null ? NEUTRAL_TIER : place.tier_label,
+    ...numbersOf(p),
+    ring: place.ring,
+    cares: cares(p),
+    stance: p.stance,
+    impression: p.impression,
+    public_feeling: p.public_feeling,
+    call_name: p.call_name,
+    tags: [...p.tags],
+    interactions: p.interactions,
+    last_interaction: p.last_interaction,
+    last_seen: p.last_seen,
+    last_together: p.last_together,
+    updated_at: row === null ? null : p.updated_at,
+  };
+}
 
 /** The services people routes read from. */
 class PeopleCtx {
   readonly profile: ProfileId;
-  readonly relationships: RelationshipStore;
   readonly identity: IdentityStore;
   readonly people: PeopleStore | undefined;
-  readonly social: Social | undefined;
+  readonly heart: HeartStore;
 
   constructor(state: ApiState) {
-    this.social = state.optional(SocialKey);
-    this.profile = this.social ? this.social.profile : state.profile();
-    this.relationships = state.service(RelationshipStoreKey, "relationship store");
+    this.profile = state.profile();
     this.identity = state.service(IdentityStoreKey, "identity store");
     this.people = state.optional(PeopleStoreKey);
+    const heart = heartRows(state);
+    if (heart === null) throw ApiError.unavailable("the heart's rows are not available");
+    this.heart = heart;
   }
 
-  /** The social engine's cached relationship, else the stored one. */
-  async relationship(person: PersonId): Promise<Relationship | null> {
-    const cached = this.social?.relationship(person) ?? null;
-    if (cached) return cached;
-    return this.relationships.get(this.profile, person);
+  row(person: PersonId): HeartPerson | null {
+    return this.heart.get(person);
   }
 
   /** The person with their accounts; `null` when nobody has this id. */
@@ -106,22 +175,11 @@ class PeopleCtx {
     return { id, display_name: first.display_name, created_at: created, accounts };
   }
 
-  async summary(id: PersonId, relationship: Relationship | null): Promise<PersonSummary | null> {
+  async requireRow(id: PersonId): Promise<PersonRow> {
     const person = await this.person(id);
-    return person ? summarize(person, relationship) : null;
+    if (!person) throw unknownPerson(id);
+    return rowOf(person, this.row(id));
   }
-
-  async requireSummary(id: PersonId): Promise<PersonSummary> {
-    const relationship = await this.relationship(id);
-    const summary = await this.summary(id, relationship);
-    if (!summary) throw unknownPerson(id);
-    return summary;
-  }
-}
-
-function summarize(person: Person, relationship: Relationship | null): PersonSummary {
-  const a = relationship ? attitude(relationship) : null;
-  return { person, relationship, label: a?.label ?? NEUTRAL_LABEL, blocked: a?.blocked ?? false };
 }
 
 /** When one of the person's accounts was last seen. */
@@ -132,42 +190,48 @@ function lastSeen(person: Person): number {
 }
 
 /**
- * Most recent interaction first, then the most recently changed relationship, then whoever was
- * seen last (people without a relationship sort after those with one of the same recency).
+ * Most recent interaction first, then the most recently changed row, then whoever was seen last
+ * (people without a row sort after those with one of the same recency).
  */
-function byRecency(a: PersonSummary, b: PersonSummary): number {
-  const ra = a.relationship;
-  const rb = b.relationship;
+function byRecency(a: PersonRow, b: PersonRow): number {
   return (
-    ms(rb?.last_interaction ?? null) - ms(ra?.last_interaction ?? null) ||
-    ms(rb?.updated_at ?? null) - ms(ra?.updated_at ?? null) ||
+    ms(b.last_interaction) - ms(a.last_interaction) ||
+    ms(b.updated_at) - ms(a.updated_at) ||
     lastSeen(b.person) - lastSeen(a.person) ||
     0
   );
 }
 
-function matches(summary: PersonSummary, needle: string): boolean {
+function matches(row: PersonRow, needle: string): boolean {
   const has = (s: string) => s.toLowerCase().includes(needle);
   return (
-    has(summary.person.display_name) ||
-    summary.person.id.toLowerCase() === needle ||
-    summary.person.accounts.some((a) => has(a.display_name) || has(a.account.id)) ||
-    (summary.relationship?.call_name != null && has(summary.relationship.call_name))
+    has(row.person.display_name) ||
+    row.person.id.toLowerCase() === needle ||
+    row.person.accounts.some((a) => has(a.display_name) || has(a.account.id)) ||
+    (row.call_name !== null && has(row.call_name))
   );
 }
 
-const ListQuerySchema = z.object({
-  q: z.string().optional(),
-  limit: usizeParam.optional(),
-  cursor: z.string().optional(),
-});
+/** Every heart row (the list is paged in the store). */
+function allRows(heart: HeartStore): HeartPerson[] {
+  const out: HeartPerson[] = [];
+  let offset: number | null = 0;
+  while (offset !== null) {
+    const page = heart.list({ offset, limit: 200 });
+    for (const e of page.entries) out.push(e.person);
+    offset = page.next;
+  }
+  return out;
+}
 
 /**
  * `GET /api/people?q=&limit=&cursor=`: every known person, most recent interaction first. Without
- * a people store only people with a relationship are known.
+ * a people store only people with a row are known.
  */
-async function list(state: ApiState, c: ApiContext): Promise<Response> {
-  const q = readQuery(c, ListQuerySchema);
+async function list(
+  state: ApiState,
+  q: { q?: string | undefined; limit?: number | undefined; cursor?: string | undefined },
+): Promise<PersonPage> {
   const ctx = new PeopleCtx(state);
   let offset = 0;
   const cursor = q.cursor?.trim() ?? "";
@@ -178,54 +242,94 @@ async function list(state: ApiState, c: ApiContext): Promise<Response> {
   const limit = Math.min(Math.max(q.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const needle = q.q?.trim().toLowerCase() || null;
 
-  const social = ctx.social;
-  const rels = new Map<PersonId, Relationship>();
-  for (const r of await ctx.relationships.list(ctx.profile)) {
-    rels.set(r.person, social?.relationship(r.person) ?? r);
-  }
-  const all: PersonSummary[] = [];
+  const rows = new Map<PersonId, HeartPerson>();
+  for (const r of allRows(ctx.heart)) rows.set(r.person_id, r);
+  const all: PersonRow[] = [];
   if (ctx.people) {
     for (const person of await ctx.people.all()) {
-      // The engine may hold a relationship it has not written yet.
-      const relationship = rels.get(person.id) ?? social?.relationship(person.id) ?? null;
-      all.push(summarize(person, relationship));
+      all.push(rowOf(person, rows.get(person.id) ?? null));
     }
   } else {
-    for (const r of rels.values()) {
-      const summary = await ctx.summary(r.person, r);
-      if (summary) all.push(summary);
+    for (const r of rows.values()) {
+      const person = await ctx.person(r.person_id);
+      if (person) all.push(rowOf(person, r));
     }
   }
-  const items = all
-    .filter((summary) => needle === null || matches(summary, needle))
-    .sort(byRecency);
-  const page: Page<PersonSummary> = {
+  const items = all.filter((row) => needle === null || matches(row, needle)).sort(byRecency);
+  return {
     items: items.slice(offset, offset + limit),
     next_cursor: items.length > offset + limit ? String(offset + limit) : null,
   };
-  return json(page);
 }
 
-/**
- * Turns stored deltas (oldest first) into the absolute levels after each one, walking back
- * from the current values.
- */
-export function absoluteHistory(
-  deltas: readonly RelationshipDelta[],
-  current: Relationship | null,
-): RelationshipDelta[] {
-  let a = current?.affinity ?? 0;
-  let t = current?.trust ?? 0;
-  let f = current?.familiarity ?? 0;
-  const out: RelationshipDelta[] = [];
-  for (let i = deltas.length - 1; i >= 0; i--) {
-    const d = deltas[i] as RelationshipDelta;
-    out.push({ at: d.at, affinity: a, trust: t, familiarity: f, reason: d.reason });
-    a -= d.affinity;
-    t -= d.trust;
-    f -= d.familiarity;
+function historyEntry({ id, at, change }: HistoryEntry): HeartHistoryEntry {
+  return {
+    id,
+    at,
+    field: change.field,
+    delta: change.delta,
+    value_after: change.value_after,
+    proposed: change.proposed,
+    cause: change.cause,
+    reason_quote: change.reason_quote,
+  };
+}
+
+/** The changes of `person` after `before`, newest first, `limit` at a time. */
+function historyPage(
+  heart: HeartStore,
+  person: PersonId,
+  before: string | undefined,
+  limit: number | undefined,
+): HeartHistoryPage {
+  const size = Math.min(Math.max(limit ?? DEFAULT_HISTORY, 1), MAX_HISTORY);
+  // One more than the page shows tells whether another page follows.
+  const entries = heart.log.history(person, {
+    limit: size + 1,
+    ...(before === undefined ? {} : { before }),
+  });
+  const items = entries.slice(0, size).map(historyEntry);
+  const more = entries.length > size;
+  return { items, next_before: more ? (items[items.length - 1]?.id ?? null) : null };
+}
+
+/** The name of the tier that starts at `min` on the ladder. */
+function tierName(min: number): string {
+  return BOND_LADDER.find((t) => t.min === min)?.label ?? String(min);
+}
+
+function anchorOf(a: TierAnchor): PersonAnchor {
+  return {
+    tier: a.tier,
+    tier_name: tierName(a.tier),
+    note_ref: a.note_ref,
+    quote: a.quote,
+    at: a.at,
+    by: a.by,
+  };
+}
+
+/** How much of today's caps `person` has used, for each number that has caps. */
+function ledgerOf(heart: HeartStore, p: HeartPerson, now: number): FieldLedger[] {
+  const ledger = heart.log.dayLedger(p.person_id, now);
+  const rules = heart.rules;
+  const out: FieldLedger[] = [];
+  for (const field of HEART_FIELDS) {
+    const capUp = dailyCap(field, "up", rules, p.bond);
+    const capDown = dailyCap(field, "down", rules, p.bond);
+    if (!Number.isFinite(capUp) || !Number.isFinite(capDown)) continue;
+    const l = ledger.fields[field];
+    out.push({
+      field,
+      used_up: l.up,
+      used_down: l.down,
+      cap_up: capUp,
+      cap_down: capDown,
+      proposed_up: l.proposed_up,
+      proposed_down: l.proposed_down,
+    });
   }
-  return out.reverse();
+  return out;
 }
 
 async function memoryCount(state: ApiState, profile: ProfileId, person: PersonId): Promise<number> {
@@ -247,19 +351,56 @@ async function memoryCount(state: ApiState, profile: ProfileId, person: PersonId
   }
 }
 
-/** `GET /api/people/{id}`. */
-async function detail(state: ApiState, c: ApiContext): Promise<Response> {
-  const person = parsePerson(param(c, "id"));
+/** `GET /api/people/{id}?limit=`. */
+async function detail(
+  state: ApiState,
+  id: string,
+  q: { limit?: number | undefined },
+): Promise<PersonProfile> {
+  const person = parsePerson(id);
   const ctx = new PeopleCtx(state);
-  const summary = await ctx.requireSummary(person);
-  let deltas = await ctx.relationships.deltasSince(ctx.profile, person, toTimestamp(0));
-  if (deltas.length > MAX_HISTORY) deltas = deltas.slice(deltas.length - MAX_HISTORY);
-  const body: PersonDetail = {
-    ...summary,
-    history: absoluteHistory(deltas, summary.relationship),
+  const row = await ctx.requireRow(person);
+  const stored = ctx.row(person);
+  const p = stored ?? newPerson(person, row.person.created_at);
+  const place = bondPlace(p.bond);
+  const held = stored === null ? null : heldTier(stored, ctx.heart.rules);
+  const evidence: PersonEvidence[] = ctx.heart.log
+    .recentEvidence(person, EVIDENCE_SHOWN)
+    .map(({ id: eid, evidence: e }) => ({
+      id: eid,
+      at: e.at,
+      kind: e.kind,
+      detail: e.detail,
+      weight: e.weight,
+    }));
+  return {
+    ...row,
+    next_tier: place.next_tier,
+    next_label: row.has_row ? place.next_label : null,
+    tier_progress: place.tier_progress,
+    tier_floor: p.tier_floor,
+    held: held === null ? null : { tier: held.tier, label: held.label as RelationshipLabel },
+    anchors: p.anchors.map(anchorOf),
+    unfinished: p.unfinished,
+    jokes: p.jokes,
+    dislikes: p.dislikes,
+    history: historyPage(ctx.heart, person, undefined, q.limit),
+    ledger: ledgerOf(ctx.heart, p, state.now()),
+    evidence,
     memory_count: await memoryCount(state, ctx.profile, person),
   };
-  return json(body);
+}
+
+/** `GET /api/people/{id}/history?before=&limit=`. */
+async function history(
+  state: ApiState,
+  id: string,
+  q: { before?: string | undefined; limit?: number | undefined },
+): Promise<HeartHistoryPage> {
+  const person = parsePerson(id);
+  const ctx = new PeopleCtx(state);
+  if (!(await ctx.person(person))) throw unknownPerson(id);
+  return historyPage(ctx.heart, person, q.before?.trim() || undefined, q.limit);
 }
 
 function cleanTags(tags: readonly string[]): string[] {
@@ -276,9 +417,46 @@ function cleanTags(tags: readonly string[]): string[] {
   return out;
 }
 
-function validate(request: UpdatePersonRequest): void {
-  if (request.notes !== undefined && chars(request.notes) > MAX_NOTES_CHARS) {
-    throw ApiError.badRequest(`notes are longer than ${MAX_NOTES_CHARS} characters`);
+/** Her words a `PATCH` may set. */
+const TEXT_FIELDS = ["impression", "stance", "unfinished", "jokes", "dislikes"] as const;
+type TextField = (typeof TEXT_FIELDS)[number];
+
+/** What a `PATCH` changes: the fields it sent, a `null` meaning "not sent" (except two). */
+interface PersonChange {
+  tags?: string[];
+  texts: Partial<Record<TextField, string>>;
+  public_feeling?: string | null;
+  call_name?: string | null;
+  blocked?: boolean;
+}
+
+function changeOf(r: UpdatePersonRequest): PersonChange {
+  const out: PersonChange = { texts: {} };
+  if (r.tags != null) out.tags = r.tags;
+  for (const field of TEXT_FIELDS) {
+    const value = r[field];
+    if (value != null) out.texts[field] = value;
+  }
+  if (r.public_feeling !== undefined) out.public_feeling = r.public_feeling;
+  if (r.call_name !== undefined) out.call_name = r.call_name;
+  if (r.blocked != null) out.blocked = r.blocked;
+  return out;
+}
+
+function validate(request: PersonChange): void {
+  for (const field of TEXT_FIELDS) {
+    const text = request.texts[field];
+    if (text !== undefined && chars(text) > MAX_TEXT_CHARS) {
+      throw ApiError.badRequest(`${field} is longer than ${MAX_TEXT_CHARS} characters`);
+    }
+  }
+  if (
+    typeof request.public_feeling === "string" &&
+    chars(request.public_feeling.trim()) > MAX_PUBLIC_FEELING_CHARS
+  ) {
+    throw ApiError.badRequest(
+      `public_feeling is longer than ${MAX_PUBLIC_FEELING_CHARS} characters`,
+    );
   }
   if (
     typeof request.call_name === "string" &&
@@ -288,124 +466,195 @@ function validate(request: UpdatePersonRequest): void {
   }
 }
 
-/** Tags to add and remove so the non-`blocked` tags become `wanted`. */
-function tagChanges(current: readonly string[], wanted: readonly string[]) {
-  return {
-    add: wanted.filter((t) => !current.includes(t)),
-    remove: current.filter((t) => t !== BLOCKED_TAG && !wanted.includes(t)),
-  };
-}
-
-const UpdatePersonSchema = z
-  .object({
-    tags: z.array(z.string()).nullish(),
-    notes: z.string().nullish(),
-    call_name: z.string().nullable().optional(),
-    blocked: z.boolean().nullish(),
-  })
-  .transform((r): UpdatePersonRequest => {
-    const out: UpdatePersonRequest = {};
-    if (r.tags != null) out.tags = r.tags;
-    if (r.notes != null) out.notes = r.notes;
-    if (r.call_name !== undefined) out.call_name = r.call_name;
-    if (r.blocked != null) out.blocked = r.blocked;
-    return out;
-  });
-
-async function applyUpdate(
+function applyUpdate(
   ctx: PeopleCtx,
-  social: Social,
   person: PersonId,
-  request: UpdatePersonRequest,
-  tags: { add: string[]; remove: string[] } | null,
-  actor: string,
+  request: PersonChange,
+  wanted: string[] | null,
   now: number,
-): Promise<void> {
-  if (tags) {
-    for (const tag of tags.remove) await social.setTag(person, tag, false, actor, now);
-    for (const tag of tags.add) await social.setTag(person, tag, true, actor, now);
+): void {
+  const heart = ctx.heart;
+  if (wanted !== null) {
+    const current = heart.get(person)?.tags ?? [];
+    const kept = current.filter((t) => t === BLOCKED_TAG);
+    heart.edit(person, { tags: [...kept, ...wanted] }, { now });
   }
-  if (request.blocked !== undefined) {
-    await social.setTag(person, BLOCKED_TAG, request.blocked, actor, now);
-  }
+  if (request.blocked !== undefined) heart.setTag(person, BLOCKED_TAG, request.blocked, { now });
   if (request.call_name !== undefined) {
-    const name = request.call_name?.trim() || null;
-    await social.setCallName(person, name, now);
+    heart.edit(person, { call_name: request.call_name?.trim() || null }, { now });
   }
-  if (request.notes !== undefined) {
-    // The engine has no notes setter: write the stored row and reload its cache (after flushing
-    // its pending counters).
-    await social.flush();
-    const rel =
-      (await ctx.relationships.get(ctx.profile, person)) ??
-      (await social.adjust(person, 0, actor, now));
-    await ctx.relationships.upsert({
-      ...rel,
-      notes: request.notes.trim(),
-      updated_at: toTimestamp(now),
-    });
-    await social.load();
+  if (request.public_feeling !== undefined) {
+    heart.edit(person, { public_feeling: request.public_feeling?.trim() || null }, { now });
   }
+  const texts: Partial<Record<TextField, string>> = {};
+  for (const field of TEXT_FIELDS) {
+    const text = request.texts[field];
+    if (text !== undefined) texts[field] = text.trim();
+  }
+  if (Object.keys(texts).length > 0) heart.edit(person, texts, { now });
 }
 
 /** `PATCH /api/people/{id}`. */
-async function update(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, UpdatePersonSchema);
-  const id = param(c, "id");
+async function update(
+  state: ApiState,
+  c: ApiContext,
+  id: string,
+  body: UpdatePersonRequest,
+): Promise<PersonRow> {
+  const request = changeOf(body);
   const person = parsePerson(id);
   validate(request);
   const wanted = request.tags ? cleanTags(request.tags) : null;
-  const social = state.service(SocialKey, "social module");
   const ctx = new PeopleCtx(state);
   if (!(await ctx.person(person))) throw unknownPerson(id);
-  let tags: { add: string[]; remove: string[] } | null = null;
-  if (wanted) {
-    const current = (await ctx.relationship(person))?.tags ?? [];
-    tags = tagChanges(current, wanted);
-  }
-  const actor = actorOf(c);
   let failure: unknown = null;
   try {
-    await applyUpdate(ctx, social, person, request, tags, actor, state.now());
+    applyUpdate(ctx, person, request, wanted, state.now());
   } catch (error) {
     failure = error;
   }
-  const detailJson = toJson(request) as Record<string, unknown>;
+  const detailJson = toJson(body) as Record<string, unknown>;
   if (failure !== null) detailJson.error = ApiError.internal(failure).message;
   await state.audit(c, "person.update", person, toJson(detailJson), failure === null);
   if (failure !== null) throw ApiError.internal(failure);
-  return json(await ctx.requireSummary(person));
+  return ctx.requireRow(person);
 }
 
-const AdjustSchema = z.object({ affinity: z.number() });
-
-/** `POST /api/people/{id}/adjust`: adds to the affinity, ignoring caps. */
-async function adjust(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, AdjustSchema);
-  const id = param(c, "id");
+/** `POST /api/people/{id}/adjust`: sets or moves any number, ignoring caps (cause `admin`). */
+async function adjust(
+  state: ApiState,
+  c: ApiContext,
+  id: string,
+  request: AdjustPersonRequest,
+): Promise<PersonRow> {
   const person = parsePerson(id);
-  if (!Number.isFinite(request.affinity) || Math.abs(request.affinity) > 200) {
-    throw ApiError.badRequest("`affinity` must be a number between -200 and 200");
+  const { field, value, delta } = request;
+  if ((value === undefined) === (delta === undefined)) {
+    throw ApiError.badRequest("send exactly one of `value` and `delta`");
   }
-  const social = state.service(SocialKey, "social module");
+  const asked = value ?? delta ?? 0;
+  if (!Number.isFinite(asked) || Math.abs(asked) > MAX_ADJUST) {
+    throw ApiError.badRequest(
+      `\`${value === undefined ? "delta" : "value"}\` must be a number between -${MAX_ADJUST} and ${MAX_ADJUST}`,
+    );
+  }
   const ctx = new PeopleCtx(state);
   if (!(await ctx.person(person))) throw unknownPerson(id);
   let failure: unknown = null;
   try {
-    await social.adjust(person, request.affinity, actorOf(c), state.now());
+    const base = ctx.row(person) ?? newPerson(person, toTimestamp(state.now()));
+    ctx.heart.adminSet(person, field, value ?? base[field] + (delta ?? 0), {
+      now: state.now(),
+      quote: `adjust by ${actorOf(c)}`,
+    });
   } catch (error) {
     failure = error;
   }
-  await state.audit(c, "person.adjust", person, { affinity: request.affinity }, failure === null);
+  await state.audit(
+    c,
+    "person.adjust",
+    person,
+    value === undefined ? { field, delta: asked } : { field, value: asked },
+    failure === null,
+  );
   if (failure !== null) throw ApiError.internal(failure);
-  return json(await ctx.requireSummary(person));
+  return ctx.requireRow(person);
 }
 
-export function peopleRoutes(state: ApiState): Route[] {
-  return [
-    { method: "GET", path: "/api/people", handler: (c) => list(state, c) },
-    { method: "GET", path: "/api/people/:id", handler: (c) => detail(state, c) },
-    { method: "PATCH", path: "/api/people/:id", handler: (c) => update(state, c) },
-    { method: "POST", path: "/api/people/:id/adjust", handler: (c) => adjust(state, c) },
-  ];
+/** The tier of an anchor route's path: a lowest bond of a tier that takes an anchor. */
+function anchoredTier(tier: number): number {
+  if (!ANCHORED_TIERS.includes(tier)) {
+    throw ApiError.badRequest(
+      `tier \`${tier}\` takes no anchor (one of ${ANCHORED_TIERS.join(", ")})`,
+    );
+  }
+  return tier;
 }
+
+/** `PUT /api/people/{id}/anchors/{tier}`: the shared memory a tier rests on (`by: admin`). */
+async function setAnchor(
+  state: ApiState,
+  c: ApiContext,
+  id: string,
+  tierValue: number,
+  body: SetAnchorRequest,
+): Promise<PersonAnchor[]> {
+  const person = parsePerson(id);
+  const tier = anchoredTier(tierValue);
+  const quote = body.quote.trim();
+  if (quote === "" || chars(quote) > MAX_ANCHOR_CHARS) {
+    throw ApiError.badRequest(`\`quote\` must be 1 to ${MAX_ANCHOR_CHARS} characters`);
+  }
+  const noteRef = body.note_ref?.trim() || null;
+  if (noteRef !== null && chars(noteRef) > MAX_NOTE_REF_CHARS) {
+    throw ApiError.badRequest(`\`note_ref\` is longer than ${MAX_NOTE_REF_CHARS} characters`);
+  }
+  const ctx = new PeopleCtx(state);
+  if (!(await ctx.person(person))) throw unknownPerson(id);
+  if (ctx.row(person) === null) throw ApiError.notFound("she has no row for this person yet");
+  const now = state.now();
+  let failure: unknown = null;
+  let anchors: TierAnchor[] = [];
+  try {
+    anchors = ctx.heart.setAnchor(
+      person,
+      { tier, note_ref: noteRef, quote, at: toTimestamp(now), by: "admin" },
+      { now },
+    ).anchors;
+  } catch (error) {
+    failure = error;
+  }
+  await state.audit(c, "person.anchor.set", person, { tier }, failure === null);
+  if (failure !== null) {
+    throw failure instanceof StoreError
+      ? ApiError.badRequest(failure.message)
+      : ApiError.internal(failure);
+  }
+  return anchors.map(anchorOf);
+}
+
+/** `DELETE /api/people/{id}/anchors/{tier}`: the bond stays where it is. */
+async function removeAnchor(
+  state: ApiState,
+  c: ApiContext,
+  id: string,
+  tierValue: number,
+): Promise<PersonAnchor[]> {
+  const person = parsePerson(id);
+  const tier = anchoredTier(tierValue);
+  const ctx = new PeopleCtx(state);
+  if (!(await ctx.person(person))) throw unknownPerson(id);
+  let failure: unknown = null;
+  let left: TierAnchor[] = [];
+  try {
+    left = ctx.heart.removeAnchor(person, tier, { now: state.now() })?.anchors ?? [];
+  } catch (error) {
+    failure = error;
+  }
+  await state.audit(c, "person.anchor.remove", person, { tier }, failure === null);
+  if (failure !== null) throw ApiError.internal(failure);
+  return left.map(anchorOf);
+}
+
+/** The people routes on the route table (`@miyoria/contracts/api`). */
+export const peopleRpc = {
+  list: os.people.list.handler(({ input, context }) => list(context.state, input.query)),
+  get: os.people.get.handler(({ input, context }) =>
+    detail(context.state, input.params.id, input.query),
+  ),
+  history: os.people.history.handler(({ input, context }) =>
+    history(context.state, input.params.id, input.query),
+  ),
+  update: os.people.update.handler(({ input, context }) =>
+    update(context.state, context.c, input.params.id, input.body),
+  ),
+  adjust: os.people.adjust.handler(({ input, context }) =>
+    adjust(context.state, context.c, input.params.id, input.body),
+  ),
+  setAnchor: os.people.setAnchor.handler(({ input, context }) =>
+    setAnchor(context.state, context.c, input.params.id, input.params.tier, input.body),
+  ),
+  removeAnchor: os.people.removeAnchor.handler(({ input, context }) =>
+    removeAnchor(context.state, context.c, input.params.id, input.params.tier),
+  ),
+};

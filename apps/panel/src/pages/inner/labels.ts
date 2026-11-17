@@ -1,11 +1,5 @@
-import type {
-  AgendaStatus,
-  DriveName,
-  IntentStatus,
-  PresenceActivity,
-  PresenceStatus,
-  ThoughtTriggerKind,
-} from "@/api/types";
+import type { DriveName } from "@/api/types";
+import type { AgendaStatus, IntentStatus, PresenceActivity, PresenceStatus, ThoughtTriggerKind } from "@miyoria/contracts/api";
 import type { Tone } from "@/components/status";
 
 export const DRIVE_LABEL: Record<DriveName, string> = {

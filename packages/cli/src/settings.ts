@@ -1,17 +1,24 @@
 // Settings shared by `miyoria init` and `miyoria config`: field specs, asking for one field
 // (Enter keeps the current value), and the steps that touch several keys at once (LLM,
-// database, OAuth, tokens).
+// database, OAuth, tokens). What a field's value may be is checked by the root schema where it
+// describes the key (`validate.ts`); the labels, choices and defaults here are the prompts'.
 
 import { randomBytes } from "node:crypto";
 import type { Prompter } from "./prompt.js";
 import { maskUrl, singleRef } from "./refs.js";
-import { formatKey, isTable, plainValue, type TomlDocument, type TomlValue } from "./toml-patch.js";
-import type { Check } from "./validate.js";
+import {
+  formatKey,
+  isTable,
+  parseKey,
+  plainValue,
+  type TomlDocument,
+  type TomlValue,
+} from "./toml-patch.js";
+import type { Check, SchemaContext } from "./validate.js";
 import * as validate from "./validate.js";
 import type { Workspace } from "./workspace.js";
 
 export const DEFAULT_REDIRECT_URI = "http://127.0.0.1:7878/api/auth/oauth/callback";
-export const DEFAULT_POSTGRES_URL = "postgres://miyoria:miyoria@127.0.0.1:5432/miyoria";
 export const DEFAULT_SQLITE_URL = "sqlite:data/miyoria.db";
 export const LLM_KINDS = ["deepseek", "openai", "openai-compatible", "opencode"] as const;
 
@@ -54,7 +61,12 @@ const TEXT: Kind = { type: "text" };
 const URL_KIND: Kind = { type: "url" };
 const SECRET: Kind = { type: "secret" };
 
-function checkOf(kind: Kind): Check | undefined {
+/**
+ * The CLI's own check of a kind of field. `described`: the root schema describes the key, so
+ * the range of a port and what a list of ids may hold are its to say; the formats it does not
+ * say (a URL, `host:port`, one Discord id) are checked either way.
+ */
+function formatCheck(kind: Kind, described: boolean): Check | undefined {
   switch (kind.type) {
     case "url":
       return validate.httpUrl;
@@ -63,14 +75,26 @@ function checkOf(kind: Kind): Check | undefined {
     case "bind":
       return validate.bind;
     case "port":
-      return validate.port;
+      return described ? undefined : validate.port;
     case "id":
       return validate.optionalDiscordId;
     case "ids":
-      return validate.discordIds;
+      return described ? undefined : validate.discordIds;
     default:
       return undefined;
   }
+}
+
+/** The prompt's check of a field: the root schema where it describes the key, then the format. */
+export function checkOf(field: Field, ctx: SchemaContext | null): Check | undefined {
+  const path = field.key === null ? null : parseKey(field.key);
+  const described = path !== null && validate.described(ctx, path);
+  const format = formatCheck(field.kind, described);
+  if (path === null || !described) return format;
+  return (s) => {
+    if (field.kind.type === "port" && !/^\d+$/.test(s.trim())) return "port 要是整數";
+    return validate.schemaCheck(ctx, path, typed(field.kind, s)) ?? format?.(s) ?? null;
+  };
 }
 
 /**
@@ -170,9 +194,10 @@ export const VOICE: readonly Field[] = [
   tomlField(
     "有人插話時",
     "modules.voice.barge_in",
-    { type: "choice", options: ["stop", "ignore"] },
+    // `[modules.voice] barge_in`'s own values and default (`selective`).
+    { type: "choice", options: ["selective", "stop", "ignore"] },
     {
-      default: "stop",
+      default: "selective",
     },
   ),
 ];
@@ -289,7 +314,8 @@ export async function ask(p: Prompter, ws: Workspace, field: Field): Promise<boo
     next = String(await p.confirm(field.label, initial));
   } else {
     const initial = cur.present && cur.value !== "" ? cur.value : field.default;
-    next = (await p.text(field.label, initial, checkOf(kind))).trim();
+    const ctx = field.key === null ? null : await validate.schemaContext(ws.doc.data);
+    next = (await p.text(field.label, initial, checkOf(field, ctx))).trim();
   }
   const unchanged = cur.present ? next === cur.value : next === "" || next === field.default;
   if (unchanged) return false;
@@ -325,7 +351,8 @@ function typed(kind: Kind, s: string): TomlValue {
     case "bool":
       return s === "true";
     case "port": {
-      if (validate.port(s) !== null) throw new Error(validate.port(s) ?? "");
+      // The range is checked before (the schema's, or `validate.port`); this is the parse.
+      if (!/^\d+$/.test(s.trim())) throw new Error("port 要是整數");
       return BigInt(s.trim());
     }
     case "ids":
@@ -532,20 +559,9 @@ export async function llmStep(p: Prompter, ws: Workspace, pick: boolean): Promis
 
 export async function databaseStep(p: Prompter, ws: Workspace): Promise<void> {
   const cur = current(ws, DATABASE).value;
-  const options = [
-    "SQLite(推薦,存在 data/miyoria.db)",
-    "memory://(不保存,先試用)",
-    "PostgreSQL(用 deploy/docker-compose.yml)",
-  ];
-  const start = cur.startsWith("postgres") ? 2 : cur === "memory://" ? 1 : 0;
-  const pick = await p.select("資料庫", options, start);
-  let next: string;
-  if (pick === 0) next = cur.startsWith("sqlite:") ? cur : DEFAULT_SQLITE_URL;
-  else if (pick === 1) next = "memory://";
-  else {
-    const def = cur.startsWith("postgres") ? cur : DEFAULT_POSTGRES_URL;
-    next = (await p.text("DATABASE_URL", def, validate.databaseUrl)).trim();
-  }
+  const options = ["SQLite(推薦,存在 data/miyoria.db)", "memory://(不保存,先試用)"];
+  const pick = await p.select("資料庫", options, cur === "memory://" ? 1 : 0);
+  const next = pick === 1 ? "memory://" : cur.startsWith("sqlite:") ? cur : DEFAULT_SQLITE_URL;
   if (next !== cur) apply(ws, DATABASE, next);
 }
 

@@ -38,12 +38,23 @@ from typing import AsyncIterator
 from fastapi import FastAPI, File, Form, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # Reuse the real worker's sentence splitter so streaming behaves the same.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tts"))
 from text_split import split_sentences  # noqa: E402
+
+# The request models every worker shares, generated from the JSON Schema (gen_contracts.py).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from contracts import WorkersTtsRequest as TtsRequest  # noqa: E402
+
+try:
+    import service_auth
+except ImportError:  # never run open: with a token set, no check means no service
+    if os.environ.get("MIYORIA_SERVICE_TOKEN") or os.environ.get("MIYORIA_HOST_TOKEN"):
+        raise SystemExit("MIYORIA_SERVICE_TOKEN or MIYORIA_HOST_TOKEN is set but service_auth.py cannot be "
+                         "imported: refusing to start without the token check")
+    service_auth = None
 
 SAMPLE_RATE = 24_000
 MS_PER_CHAR = 60
@@ -54,6 +65,8 @@ _PENTATONIC = (0, 2, 4, 7, 9)
 _EMOTION_PITCH = {"happy": 1.2, "smug": 1.1, "annoyed": 0.95, "angry": 1.15, "embarrassed": 1.3, "sad": 0.8}
 
 app = FastAPI(title="Miyoria fake worker")
+if service_auth is not None:
+    service_auth.install(app)  # every route needs the bearer token when hostd set one
 
 
 def _env_voices() -> list[str]:
@@ -105,15 +118,6 @@ async def asr(
 
 
 # ── TTS ──────────────────────────────────────────────────────────────────────
-
-
-class TtsRequest(BaseModel):
-    text: str
-    language: str | None = None
-    emotion: str | None = None
-    instruct: str | None = None
-    voice: str | None = None
-    priority: str | None = None
 
 
 def _freq(ch: str, pitch: float) -> float:

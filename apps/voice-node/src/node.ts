@@ -1,7 +1,7 @@
 // The voice node proper: translates Voice Link commands from Core into Discord voice sessions
 // and Discord voice events back into Voice Link messages.
 import type { Client, VoiceState } from "@lng2004/discord.js-selfbot-v13";
-import { CapturePipeline, createOpusDecoder, StreamIdAllocator } from "./capture.js";
+import { StreamIdAllocator } from "./capture.js";
 import type { Config } from "./config.js";
 import { findUserVoiceChannel, resolveVoiceChannel } from "./discord.js";
 import { DvsEngine } from "./golive/dvs-engine.js";
@@ -13,18 +13,13 @@ import type { LevelPublisher } from "./levels/publisher.js";
 import type { CoreLink } from "./link.js";
 import type { Logger } from "./log.js";
 import type { PlaybackEvent } from "./playback/queue.js";
-import { type CoreMessage, encodeSnapshotFrame, encodeWatchAudioFrame, type NodeMessage } from "./protocol.js";
-import { DiscordWatchEngine } from "./watch/connection.js";
-import { type WatchEngine, type WatchHost, WatchManager, type WatchPlan } from "./watch/manager.js";
-import { keyframeToJpeg } from "./watch/snapshot.js";
+import type { CoreMessage, NodeMessage } from "./protocol.js";
 
 export interface VoiceNodeDeps {
   /** Lip-sync level output (needs `STAGE_LEVELS_URL`). */
   levels?: LevelPublisher;
   /** Replaces the discord-video-stream engine (tests). */
   goLiveEngine?: StreamEngine;
-  /** Replaces the Go Live receiving engine (tests). */
-  watchEngine?: WatchEngine;
   /** Replaces the NVENC probe (tests). */
   probeNvenc?: () => Promise<boolean>;
 }
@@ -39,7 +34,6 @@ export class VoiceNode {
   /** Exclusive Go Live: guild -> channel to rejoin once the stream is over. */
   private readonly resumeAfterGoLive = new Map<string, string>();
   private readonly goLive: GoLiveManager;
-  private readonly watch: WatchManager;
   private shuttingDown = false;
 
   constructor(
@@ -62,34 +56,6 @@ export class VoiceNode {
       },
       log,
     });
-    // These callbacks only talk to the link; none of them may call back into the manager.
-    this.watch = new WatchManager({
-      engine: deps.watchEngine ?? new DiscordWatchEngine(client, log),
-      host: this.watchHost(),
-      emit: (ev) => {
-        const msg: Extract<NodeMessage, { type: "watch" }> = {
-          type: "watch",
-          guild: ev.guild,
-          user_id: ev.userId,
-          state: ev.state,
-        };
-        if (ev.error !== undefined) msg.error = ev.error;
-        if (ev.reason !== undefined) msg.reason = ev.reason;
-        this.link.send(msg);
-      },
-      snapshotDone: (id, jpeg) => {
-        this.link.sendAudio(encodeSnapshotFrame(id, jpeg));
-      },
-      snapshotFailed: (id, error) => {
-        this.link.send({ type: "watch_snapshot_failed", id, error });
-      },
-      audio: (frame) => {
-        this.link.sendAudio(encodeWatchAudioFrame(frame));
-      },
-      toJpeg: keyframeToJpeg,
-      pipeline: () => new CapturePipeline(createOpusDecoder()),
-      log,
-    });
   }
 
   start(): void {
@@ -106,7 +72,6 @@ export class VoiceNode {
   /** Leaves every channel, telling Core. Call before closing the link. */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
-    await this.watch.stopAll("shutdown");
     await this.goLive.stopAll("shutdown");
     for (const session of [...this.sessions.values()]) this.dropSession(session, "shutdown");
     this.plays.clear();
@@ -130,8 +95,6 @@ export class VoiceNode {
     // Nobody is driving playback any more, and Core has forgotten every play id.
     this.plays.clear();
     for (const s of this.sessions.values()) s.onLinkDown();
-    // Nobody is left to hear or read what she sees.
-    void this.watch.stopAll("core disconnected");
   }
 
   private onCoreMessage(msg: CoreMessage): void {
@@ -145,18 +108,7 @@ export class VoiceNode {
       case "play_start":
         this.doPlayStart(msg.play, msg.guild, msg.sample_rate, msg.levels === true);
         break;
-      case "watch_start":
-        this.watch.start(msg);
-        break;
-      case "watch_stop":
-        this.watch.stop(msg.guild, "stop requested");
-        break;
-      case "watch_snapshot":
-        this.watch.snapshot(msg.id);
-        break;
       case "golive_start":
-        // Her own Go Live and watching someone else's are exclusive.
-        this.watch.stop(msg.guild, "go live");
         this.goLive.start(msg);
         break;
       case "golive_stop":
@@ -331,7 +283,6 @@ export class VoiceNode {
   /** Tears a session down and tells Core. */
   private dropSession(session: GuildVoice, reason: string): void {
     if (this.sessions.get(session.guildId) === session) this.sessions.delete(session.guildId);
-    this.watch.stop(session.guildId, "left voice");
     // A hybrid Go Live rides on this voice session; without it the stream cannot go on.
     if (reason !== "golive" && this.goLive.isActive(session.guildId)) {
       this.goLive.stop(session.guildId, `voice session ended (${reason})`);
@@ -382,14 +333,9 @@ export class VoiceNode {
       }
     }
     if (signal.aborted) throw new Error("aborted");
-    return { kind: "hybrid", guildId, channelId, sessionId: this.voiceSessionIdOf(session) };
-  }
-
-  /** The id of the session's live voice connection, which a stream connection borrows. */
-  private voiceSessionIdOf(session: GuildVoice): string {
     const sessionId = session.voiceSessionId();
     if (!sessionId) throw new Error("the voice connection is not ready yet");
-    return sessionId;
+    return { kind: "hybrid", guildId, channelId, sessionId };
   }
 
   private async detachGoLive(guild: string, attach: Attach): Promise<void> {
@@ -399,26 +345,6 @@ export class VoiceNode {
     if (!channel || this.shuttingDown || this.sessions.has(guild)) return;
     this.log.info(`Go Live over; rejoining voice channel ${channel} in guild ${guild}`);
     await this.enqueue(guild, () => this.doJoin(guild, channel, undefined));
-  }
-
-  // ── Watch: the voice-channel side ────────────────────────────────────────
-
-  private watchHost(): WatchHost {
-    return {
-      attach: async (guild, userId) => this.attachWatch(guild, userId),
-      goLiveActive: () => this.goLive.snapshot() !== undefined,
-    };
-  }
-
-  /** Watching needs her to be in voice, in the same channel as a friend who is streaming. */
-  private attachWatch(guild: string, userId: string): WatchPlan {
-    const session = this.sessions.get(guild);
-    if (!session || session.isClosed) throw new Error("she is not in a voice channel in this guild");
-    const sessionId = this.voiceSessionIdOf(session);
-    const state = this.client.guilds.cache.get(guild)?.voiceStates.cache.get(userId);
-    if (!state || state.channelId !== session.channelId) throw new Error("that person is not in her voice channel");
-    if (!state.streaming) throw new Error("that person is not streaming");
-    return { guild, channel: session.channelId, userId, sessionId };
   }
 
   private onVoiceStateUpdate(oldState: VoiceState, newState: VoiceState): void {

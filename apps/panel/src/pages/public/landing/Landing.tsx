@@ -1,6 +1,6 @@
 import { Check, Copy } from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
-import type { PublicSong, PublicSongs, PublicStatus } from "@/api/types";
+import type { PublicSong, PublicSongs, PublicStatus } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { loginNext } from "@/app/session";
 import { LIVE_PAGE } from "../live/path";

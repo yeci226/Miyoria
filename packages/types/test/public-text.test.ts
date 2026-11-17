@@ -1,13 +1,7 @@
 // The check that keeps one person's name off another person's page.
 
 import { describe, expect, it } from "vitest";
-import {
-  type KnownName,
-  mentionsAnother,
-  type PersonCard,
-  renderPeople,
-  splitNames,
-} from "../src/index.js";
+import { type KnownName, mentionsAnother, splitNames } from "../src/index.js";
 
 const names = { own: ["Alice", "小愛"], others: ["Bob", "鈴木", "Owen#2"] };
 
@@ -67,30 +61,5 @@ describe("splitNames", () => {
 
   it("gives someone unknown no names of their own", () => {
     expect(splitNames(known, null, []).own).toEqual([]);
-  });
-});
-
-describe("prompts", () => {
-  it("never carry the line written for the page", () => {
-    const card: PersonCard = {
-      person: "p1",
-      handle: "Alice",
-      call_name: null,
-      affinity: 30,
-      trust: 40,
-      familiarity: 40,
-      attachment: 0.4,
-      emotions: {},
-      feeling: "有點在意",
-      public_feeling: "PUBLIC-LINE",
-      label: "朋友",
-      level: 6,
-      owner: false,
-      blocked: false,
-      last_seen: null,
-      last_together: null,
-      updated_at: "",
-    };
-    expect(renderPeople([card]).join("\n")).not.toContain("PUBLIC-LINE");
   });
 });

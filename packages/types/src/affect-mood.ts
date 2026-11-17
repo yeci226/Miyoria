@@ -1,30 +1,15 @@
 // Pure helpers of the affect layer that more than one package needs (docs/design/v2-architecture.md
 // §3.6): the time-of-day energy curve, the mood derived from drives + emotions + that curve,
-// and the one renderer of mood and of people for prompts.
+// and the one renderer of mood for prompts.
 //
 // Mood is not stored: `deriveMood` is its only definition. The renderers are the canonical ones:
 // the prompt compiler (`agent`) and the legacy `mood` contributor use them instead of keeping
 // their own thresholds.
 
-import type { AffectSnapshot, PersonCard } from "./affect.js";
+import type { AffectSnapshot } from "./affect.js";
 import type { Affect, Drives, EmotionReading } from "./self.js";
 import { EMOTION_LABELS } from "./self.js";
 import type { Mood } from "./social.js";
-
-/**
- * Bus topic of a bond change the affect module applied to the numbers the social module owns
- * (`AffectBondPayload`); the social module applies it (capped, small) to the relationship.
- */
-export const AFFECT_BOND_TOPIC = "affect.bond";
-
-/** Payload of `AFFECT_BOND_TOPIC`. */
-export interface AffectBondPayload {
-  person: string;
-  affinity: number;
-  trust: number;
-  familiarity: number;
-  why: string;
-}
 
 /** Sleepiness per local hour (0 = awake, 1 = deepest night), interpolated. */
 const NIGHT_SHAPE = [
@@ -163,29 +148,4 @@ export function renderAffectMood(snapshot: Pick<AffectSnapshot, "mood_line" | "t
     lines.push(`心裡比較明顯的感受:${emotionsLine(snapshot.top)}${why}。`);
   }
   return lines.join("\n");
-}
-
-const MAX_FEELING_LINE = 80;
-
-function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  const chars = [...flat];
-  return chars.length > max ? `${chars.slice(0, max).join("")}…` : flat;
-}
-
-/**
- * One line for a person: `- Owen:好朋友;她覺得他很可靠、有點在意`. The handle, the one-word
- * label of the shared scale and her feeling sentence (when she has one). The feeling is her
- * own text but about someone else's data: prompts put it in the data section.
- */
-export function renderPersonLine(card: Pick<PersonCard, "handle" | "label" | "feeling">): string {
-  const feeling = clip(card.feeling, MAX_FEELING_LINE);
-  return feeling === ""
-    ? `- ${card.handle}:${card.label}`
-    : `- ${card.handle}:${card.label};${feeling}`;
-}
-
-/** One line per person, in the order given. */
-export function renderPeople(cards: readonly Pick<PersonCard, "handle" | "label" | "feeling">[]) {
-  return cards.map(renderPersonLine);
 }

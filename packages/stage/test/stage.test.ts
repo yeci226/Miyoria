@@ -4,8 +4,8 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
-import { EventBus, ServiceRegistry, Supervisor } from "@miyoria/kernel";
-import { type ContextKey, customEvent, newId, SONG_PREPARE_TOPIC } from "@miyoria/types";
+import { EventBus, ServiceRegistry, Supervisor } from "@miyoria/runtime/kernel";
+import { type ContextKey, Events, newId } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import {
@@ -13,7 +13,6 @@ import {
   type BoundAddress,
   defaultLipSyncConfig,
   defaultStageStatus,
-  EMOTION_TOPIC,
   formatAddress,
   Levels,
   OverlayHub,
@@ -94,6 +93,13 @@ function expressionRequests(vts: FakeVts): [string, boolean][] {
     .map((r: Json) => [r.data.expressionFile, r.data.active]);
 }
 
+const textCtx = (): ContextKey => ({
+  platform: "discord",
+  scope: "g",
+  channel: "c",
+  kind: "channel",
+});
+
 const voiceCtx = (): ContextKey => ({
   platform: "discord",
   scope: "g",
@@ -164,7 +170,11 @@ describe("stage", () => {
     ).toBe(true);
     await expect(link.hotkey("Dance")).rejects.toThrow("Dance");
 
-    bus.publish("agent", customEvent(EMOTION_TOPIC, { emotion: "happy" }));
+    bus.publish("agent", Events.AgentEmotion, {
+      turn: newId(),
+      context: textCtx(),
+      emotion: "happy",
+    });
     const t0 = Date.now();
     await waitUntil(() => {
       const e = expressionRequests(vts);
@@ -204,11 +214,9 @@ describe("stage", () => {
     const turn = newId();
     bus.publish(
       "agent",
-      {
-        type: "voice_playback",
-        data: { context: voiceCtx(), turn, state: "started", text: "早安。" },
-      },
-      { correlation: turn },
+      Events.VoicePlaybackEvent,
+      { context: voiceCtx(), turn, state: "started", text: "早安。" },
+      { turn },
     );
     await waitUntil(() => obs.state.texts.some(([s, t]) => s === "Subtitle" && t === "早安。"));
 
@@ -219,16 +227,13 @@ describe("stage", () => {
     cleanup.push(() => early.terminate());
     early.on("message", (data) => seen.push(JSON.parse(data.toString())));
     await new Promise<void>((r, j) => early.once("open", () => r()).once("error", j));
-    bus.publish(
-      "sing",
-      customEvent(SONG_PREPARE_TOPIC, {
-        no: 1,
-        title: "夜に駆ける",
-        stage: "download",
-        progress: 0.25,
-        exclusive: null,
-      }),
-    );
+    bus.publish("sing", Events.SingPrepare, {
+      no: 1,
+      title: "夜に駆ける",
+      stage: "download",
+      progress: 0.25,
+      exclusive: null,
+    });
     const activity = {
       type: "activity",
       kind: "song_prepare",

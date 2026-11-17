@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { isApiError } from "@/api/http";
-import type { SelfView, TelemetryPoint } from "@/api/types";
+import type { SelfView, TelemetryPoint } from "@miyoria/contracts/api";
 import { useCost, useThoughtHistory, useTelemetry } from "@/app/queries";
 import { Segmented } from "@/components/ui/segmented";
 import { fmtCompact, fmtInt, fmtUsd } from "@/lib/format";

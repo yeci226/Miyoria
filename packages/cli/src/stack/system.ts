@@ -1,8 +1,8 @@
-// Side-effect seams of the stack commands: running a program, probing a port, reading Windows port
-// reservations. Tests replace them; nothing here changes system settings.
+// Side-effect seams of the stack commands: running a program and reading Windows port
+// reservations. Tests replace them; nothing here changes system settings. Probing a port and the
+// environment of a worker are hostd's (`@miyoria/hostd`).
 
 import { type SpawnOptions, spawn } from "node:child_process";
-import { createConnection, createServer } from "node:net";
 
 export interface RunResult {
   code: number | null;
@@ -87,25 +87,6 @@ export const defaultRunner: Runner = (command, args, options = {}) =>
 
 // ---- ports -------------------------------------------------------------------------------
 
-/** `denied` is Windows refusing the bind although nothing listens: a reserved port range. */
-export type PortState = "free" | "in-use" | "denied" | "error";
-
-export type PortProbe = (port: number, host?: string) => Promise<PortState>;
-
-/** Tries to bind the port briefly. No data is sent. */
-export const probePort: PortProbe = (port, host = "127.0.0.1") =>
-  new Promise((resolve) => {
-    const server = createServer();
-    server.once("error", (error: NodeJS.ErrnoException) => {
-      if (error.code === "EADDRINUSE") resolve("in-use");
-      else if (error.code === "EACCES" || error.code === "EPERM") resolve("denied");
-      else resolve("error");
-    });
-    server.listen({ port, host, exclusive: true }, () => {
-      server.close(() => resolve("free"));
-    });
-  });
-
 export interface PortRange {
   start: number;
   end: number;
@@ -139,43 +120,10 @@ export function inRanges(port: number, ranges: readonly PortRange[]): PortRange 
   return ranges.find((r) => port >= r.start && port <= r.end);
 }
 
-// ---- environment for child processes -----------------------------------------------------
-
-const ENV_ALLOW =
-  /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|TMPDIR|HOME|USERPROFILE|USERNAME|APPDATA|LOCALAPPDATA|PROGRAMDATA|PROGRAMFILES|PROGRAMFILES\(X86\)|COMPUTERNAME|NUMBER_OF_PROCESSORS|PROCESSOR_\w+|OS|LANG|LC_\w+|TZ|CUDA_\w+|NVIDIA_\w+|HF_\w+|HUGGINGFACE_\w+|TRANSFORMERS_\w+|TORCH\w*|XDG_\w+|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|LOG_LEVEL)$/i;
-
-/**
- * What a worker inherits: the system basics, CUDA and model-cache variables, proxies. Not the rest
- * of the shell (API keys, tokens), and not a stale `ASR_MODEL` left from an older setup.
- */
-export function workerBaseEnv(
-  source: Record<string, string | undefined> = process.env,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (value !== undefined && ENV_ALLOW.test(key)) out[key] = value;
-  }
-  return out;
-}
-
 /** Last lines of a log text, for a failed start. */
 export function tailLines(text: string, count: number): string[] {
   return text
     .split(/\r?\n/)
     .filter((l) => l.trim() !== "")
     .slice(-count);
-}
-
-/** Whether a TCP connection to host:port succeeds within the timeout. */
-export function tcpConnect(host: string, port: number, timeoutMs = 3000): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = createConnection({ host, port });
-    const done = (result: boolean) => {
-      socket.destroy();
-      resolve(result);
-    };
-    socket.setTimeout(timeoutMs, () => done(false));
-    socket.once("connect", () => done(true));
-    socket.once("error", () => done(false));
-  });
 }

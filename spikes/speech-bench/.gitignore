@@ -1,7 +1,0 @@
-.venv*/
-__pycache__/
-# 測試錄音、模型、輸出都只放本機(語音隱私 + 檔案很大)
-data/
-models/
-results/
-out/

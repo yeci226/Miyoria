@@ -22,10 +22,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@miyoria/actions": "workspace:*",
     "@miyoria/commands": "workspace:*",
-    "@miyoria/kernel": "workspace:*",
+    "@miyoria/contracts": "workspace:*",
+    "@miyoria/gate": "workspace:*",
     "@miyoria/llm": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
     "@miyoria/store": "workspace:*",
     "@miyoria/types": "workspace:*",
     "obs-websocket-js": "^5.0.6",
@@ -34,7 +35,6 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@miyoria/tools": "workspace:*",
     "@types/node": "^24.19.2",
     "@types/ws": "^8.18.1",
     "typescript": "~5.9.3",

@@ -1,4 +1,4 @@
-import type { AccountRef, ContextKey } from "../api/types";
+import type { AccountRef, ContextKey } from "@miyoria/contracts/wire";
 
 const intFmt = new Intl.NumberFormat("zh-TW");
 const compactFmt = new Intl.NumberFormat("zh-TW", { notation: "compact", maximumFractionDigits: 1 });

@@ -1,6 +1,5 @@
 import { Eraser, Pause, Play } from "lucide-react";
 import { memo, useMemo, useState } from "react";
-import type { Envelope } from "@/api/types";
 import { useEventStore, useEvents } from "@/app/events-store";
 import { Toolbar } from "@/components/page";
 import { EmptyLine } from "@/components/query-state";
@@ -11,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { matchesAny, parseTopics, summarize, type Tone as EventTone, topicGroup, topicOf } from "@/lib/events";
+import { type BusEnvelope, matchesAny, parseTopics, summarize, type Tone as EventTone, topicGroup } from "@/lib/events";
 import { fmtDateTime, fmtInt, fmtTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -27,8 +26,8 @@ export const TEXT_TONE: Record<EventTone, string> = {
   danger: "text-primary",
 };
 
-const EventRow = memo(function EventRow({ env, onSelect }: { env: Envelope; onSelect: (env: Envelope) => void }) {
-  const topic = topicOf(env.event);
+const EventRow = memo(function EventRow({ env, onSelect }: { env: BusEnvelope; onSelect: (env: BusEnvelope) => void }) {
+  const topic = env.type;
   const { text, tone } = summarize(env);
   return (
     <li>
@@ -37,8 +36,8 @@ const EventRow = memo(function EventRow({ env, onSelect }: { env: Envelope; onSe
         onClick={() => onSelect(env)}
         className="grid w-full grid-cols-[4.5rem_minmax(0,11rem)_minmax(0,1fr)] items-baseline gap-3 py-(--row-y) text-left text-sm outline-none hover:bg-hover focus-visible:bg-hover max-sm:grid-cols-[4rem_minmax(0,1fr)] max-sm:[&>*:last-child]:col-span-2"
       >
-        <time dateTime={env.ts} className="font-mono text-xs text-muted-foreground tabular-nums">
-          {fmtTime(env.ts)}
+        <time dateTime={env.at} className="font-mono text-xs text-muted-foreground tabular-nums">
+          {fmtTime(env.at)}
         </time>
         <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted-foreground">
           <Dot tone={GROUP_TONE[topicGroup(topic)] ?? "neutral"} className="size-1.5 [&>span]:size-1.5" />
@@ -50,24 +49,24 @@ const EventRow = memo(function EventRow({ env, onSelect }: { env: Envelope; onSe
   );
 });
 
-export function EventSheet({ env, onClose }: { env: Envelope | null; onClose: () => void }) {
+export function EventSheet({ env, onClose }: { env: BusEnvelope | null; onClose: () => void }) {
   return (
     <Sheet open={env !== null} onOpenChange={(o) => !o && onClose()}>
       <SheetContent>
         {env && (
           <>
             <SheetHeader>
-              <SheetTitle className="font-mono text-sm">{topicOf(env.event)}</SheetTitle>
+              <SheetTitle className="font-mono text-sm">{env.type}</SheetTitle>
             </SheetHeader>
             <SheetBody className="grid content-start gap-5">
               {summarize(env).text && <p className="text-sm">{summarize(env).text}</p>}
               <Facts
                 items={{
-                  "時間": fmtDateTime(env.ts),
+                  "時間": fmtDateTime(env.at),
                   "來源": <span className="font-mono">{env.source}</span>,
                   "事件": <span className="font-mono text-xs">{env.id}</span>,
-                  "回合": <span className="font-mono text-xs">{env.correlation ?? "—"}</span>,
-                  "起因": <span className="font-mono text-xs">{env.causation ?? "—"}</span>,
+                  "回合": <span className="font-mono text-xs">{env.turn ?? "—"}</span>,
+                  "起因": <span className="font-mono text-xs">{env.parent ?? "—"}</span>,
                 }}
               />
               <JsonView value={env} label="Envelope" />
@@ -83,12 +82,12 @@ export function EventsTab() {
   const store = useEventStore();
   const { events, status, received } = useEvents();
   const [raw, setRaw] = useState("");
-  const [paused, setPaused] = useState<{ events: Envelope[]; received: number } | null>(null);
-  const [selected, setSelected] = useState<Envelope | null>(null);
+  const [paused, setPaused] = useState<{ events: BusEnvelope[]; received: number } | null>(null);
+  const [selected, setSelected] = useState<BusEnvelope | null>(null);
 
   const topics = useMemo(() => parseTopics(raw), [raw]);
   const source = paused?.events ?? events;
-  const visible = useMemo(() => source.filter((e) => matchesAny(topics, topicOf(e.event))), [source, topics]);
+  const visible = useMemo(() => source.filter((e) => matchesAny(topics, e.type)), [source, topics]);
   const missed = paused ? received - paused.received : 0;
 
   const togglePreset = (p: string) => {

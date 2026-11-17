@@ -99,33 +99,6 @@ export class SetListError extends Error {
 
 const OPEN: readonly SongState[] = ["preparing", "ready", "playing"];
 
-export const LINK = /https?:\/\/[^\s<>"'「」]+/i;
-
-/** The name people asked for a song by; a link or a library path is none. */
-export function askedName(query: string): string {
-  const q = query.trim();
-  return LINK.test(q) || q.toLowerCase().startsWith("library:") ? "" : q;
-}
-
-/** A song name to compare: no case, no surrounding spaces or title marks (`《》「」`, quotes). */
-function plainName(name: string): string {
-  return name
-    .replace(/[《》「」『』〈〉"'“”‘’]/g, "")
-    .trim()
-    .toLowerCase();
-}
-
-/**
- * What to call a song: the worker's title, unless people asked for it by words that title is not
- * in (a video title can name something else, like the show the song is from).
- */
-function songName(e: SongEntry): string {
-  const title = e.song?.title?.trim() ?? "";
-  const asked = askedName(e.query);
-  if (asked === "") return title || e.query;
-  return title !== "" && asked.toLowerCase().includes(title.toLowerCase()) ? title : asked;
-}
-
 /** ` 獻詞:「…」` for a paid dedication, else nothing (the words are short and screened). */
 export function dedicationNote(e: SongEntry): string {
   return e.dedication ? `;獻詞:「${safeName(e.dedication, 60)}」` : "";
@@ -133,7 +106,7 @@ export function dedicationNote(e: SongEntry): string {
 
 /** One line naming a song for her or for a card: `「title」- artist`, escaped and short. */
 export function songLabel(e: SongEntry): string {
-  const title = songName(e);
+  const title = e.song?.title?.trim() || e.query;
   const artist = e.song?.artist?.trim();
   const mode =
     e.backing === "keep" || e.backing === undefined ? "" : `(${BACKING_LABELS[e.backing]})`;
@@ -271,16 +244,6 @@ export class SetList {
 
   #byUser(who: AccountRef): number {
     return this.open().filter((e) => e.requester !== null && sameAccount(e.requester, who)).length;
-  }
-
-  /** The song `name` names (what was asked for, or its title): a ready one, else the newest. */
-  named(name: string): SongEntry | null {
-    const wanted = plainName(name);
-    if (wanted === "") return null;
-    const hits = this.#entries.filter(
-      (e) => plainName(askedName(e.query)) === wanted || plainName(e.song?.title ?? "") === wanted,
-    );
-    return hits.find((e) => e.state === "ready") ?? hits.at(-1) ?? null;
   }
 
   add(song: NewSong, now: Timestamp): SongEntry {

@@ -1,21 +1,14 @@
-// Her mind loop (docs/design/autonomy.md §5): the thoughts the `mind` module has, the intents
-// they produce and how those reach the agent.
-//
-// * The `mind` module provides `MindKey`: its journal (thoughts, intents, outcomes) and an
-//   inbox for suggestions from other modules (initiative's idle channels, greetings, voice
-//   joins, followups), which become reasons to think instead of direct `agent.initiative`
-//   turns.
-// * The agent provides `IntentSinkKey`: an intent opens a turn she starts herself (principal
-//   `self`, with tools) in the right context, after the action it names passed the gate.
+// Her mind (docs/design/autonomy.md §5, docs/design/v5-heart.md §2.6): the `mind` module provides
+// `MindKey`, her thought journal. Since phase 4 step 5 it records her `feel` applications and her
+// reflections in a line each (`note`); older entries (Plan's thoughts and intents) keep their
+// shape. Nothing here thinks on its own any more.
 
+import type { ThoughtData } from "@miyoria/contracts/events";
 import type { TurnId } from "./ids.js";
 import type { JsonObject, JsonValue } from "./json.js";
 import type { AccountRef, ContextKey } from "./platform.js";
 import { serviceKey } from "./service-key.js";
 import type { Timestamp } from "./time.js";
-
-/** Published for every new or updated journal entry (`Thought`). */
-export const MIND_THOUGHT_TOPIC = "mind.thought";
 
 /** The capability of an intent that only means "start talking there". */
 export const CHAT_START = "chat.start";
@@ -55,28 +48,6 @@ export interface IntentOutcome {
   /** The turn she opened (or that the action ran in), when there is one. */
   turn: TurnId | null;
 }
-
-/**
- * The owner's level for a text channel, the ceiling on her talking there
- * (docs/design/autonomy.md §21).
- */
-export interface TalkCeiling {
-  /** `off`, `mention-only`, `quiet`, `normal`, `lively` or `always`. */
-  mode: string;
-  /** In words (`安靜`). */
-  label: string;
-  /** Why she may not start a conversation there on her own now (`null`: she may). */
-  blocked: string | null;
-}
-
-/** Provided by the agent: runs her intents (gate first, then her own turn). */
-export interface IntentSink {
-  submit(intent: Intent, signal?: AbortSignal): Promise<IntentOutcome>;
-  /** The level of the text channel `context` (`null` for voice channels and DMs). */
-  ceiling?(context: ContextKey): TalkCeiling | null;
-}
-
-export const IntentSinkKey = serviceKey<IntentSink>("IntentSink");
 
 // ---- journal --------------------------------------------------------------------------------
 
@@ -220,38 +191,8 @@ export interface DirectorThoughtBody {
 /** What a `thought` line says; `source` tells which. */
 export type ThoughtBody = MindThoughtBody | DirectorThoughtBody;
 
-/** One entry of her thought journal. */
-export interface Thought {
-  id: string;
-  at: Timestamp;
-  triggers: ThoughtTrigger[];
-  /** Her inner monologue (first person, in her voice). */
-  thought: string;
-  /** What she changed in her inner state, in words (`多話程度 語音 0.8`, ...). */
-  changes: string[];
-  intents: ThoughtIntent[];
-  /** Prompt + completion tokens of the call, when reported. */
-  tokens: number | null;
-  /** The call or the reply failed; `thought` is empty then. */
-  error: string | null;
-  /** Latency of the call. */
-  ms: number;
-  /** The suggestions that woke her (newer journals only). */
-  suggestions?: MindSuggestion[];
-  /** What she saw (only the newest thoughts keep it). */
-  input?: ThoughtInput | null;
-  /** The model's reasoning, when it thought out loud (only the newest thoughts keep it). */
-  reasoning?: string | null;
-  effects?: ThoughtEffects | null;
-  /** Ids of her LLM calls for this thought (the call inspector's). */
-  calls?: string[];
-  /** Cost of those calls in USD (`[llm.pricing]`). */
-  cost_usd?: number | null;
-  /** Calls made (2 = one repair). */
-  attempts?: number;
-  /** Thoughts in a row that did nothing before this one, and for how long. */
-  idle?: { thoughts: number; minutes: number } | null;
-}
+/** One entry of her thought journal (contract: `ThoughtSchema` in @miyoria/contracts/events). */
+export type Thought = ThoughtData;
 
 /** Older journal entries condensed into one record (the journal keeps a bounded number raw). */
 export interface ThoughtDigest {
@@ -281,17 +222,23 @@ export interface MindSuggestion {
   about: AccountRef[];
 }
 
-/** Calls of her mind loop. */
+/** How her journal is going. */
 export interface MindStats {
-  /** Calls in the last hour. */
-  calls_last_hour: number;
-  max_calls_per_hour: number;
-  calls_total: number;
-  tokens_total: number;
+  /** Her newest journal entry. */
   last_at: Timestamp | null;
-  next_heartbeat_at: Timestamp | null;
-  /** Why she is not thinking right now, if she is not (`paused`, `budget exhausted`, ...). */
+  /** Why the module is not looking at her goals right now, if it is not. */
   idle_reason: string | null;
+}
+
+/** A line of what went on inside her, for her journal (`Mind.note`). */
+export interface MindNote {
+  /** `feel`: her `feel` block applied; `reflect`: one of her reflections. */
+  kind: "feel" | "reflect";
+  /** What she felt or concluded, short (her words; may name people). */
+  text: string;
+  /** What changed, one line each. */
+  changes?: string[];
+  context?: ContextKey | null;
 }
 
 /**
@@ -308,10 +255,6 @@ export interface RaisedTopic {
 
 /** Provided by the `mind` module. */
 export interface Mind {
-  /** She takes suggestions (running, not paused). */
-  readonly accepting: boolean;
-  /** Offers a reason to think; `false` when not accepted. */
-  suggest(suggestion: MindSuggestion): boolean;
   /** Newest first. */
   thoughts(limit?: number): Thought[];
   /** One journal entry, with what it saw while it still keeps that. */
@@ -319,11 +262,8 @@ export interface Mind {
   /** Digests of older thoughts, newest first. */
   digests?(limit?: number): ThoughtDigest[];
   stats(): MindStats;
-  /**
-   * Topics she raised on her own in `context` recently that nobody picked up, newest first
-   * (her own state: turn prompts tell her not to bring them up again for a while).
-   */
-  unanswered?(context: ContextKey | null): RaisedTopic[];
+  /** Records a line of what went on inside her (optional so test doubles need not). */
+  note?(entry: MindNote): void;
 }
 
 export const MindKey = serviceKey<Mind>("Mind");

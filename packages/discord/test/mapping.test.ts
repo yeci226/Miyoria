@@ -108,7 +108,7 @@ describe("mapping", () => {
     expect(displayName(user("1", "bob", null))).toBe("bob");
     expect(displayName(user("1", "bob", null), "Bobby")).toBe("Bobby");
     expect(displayName(user("1", "bob", "Bob!"))).toBe("Bob!");
-    // A blank nickname does not fall through to the global name (like the legacy filter).
+    // A blank nickname does not fall through to the global name.
     expect(displayName(user("1", "bob", "Bob!"), " ")).toBe("bob");
   });
 
@@ -277,6 +277,39 @@ describe("mapping", () => {
       "[貼圖: 鯨魚揮手] [嵌入: 新聞 - 內容 https://example.com/x] [圖片: cat.png(一隻橘貓)] [轉傳: 轉傳的 @Alice]",
     );
     expect(hasContent(msg)).toBe(true);
+  });
+
+  test("keeps_only_the_proxy_copy_of_an_embed_picture", () => {
+    const proxy = "https://images-ext-1.discordapp.net/external/k/https/example.com/a.png";
+    const msg = message({
+      content: "",
+      embeds: [
+        {
+          title: "新聞",
+          url: "https://example.com/x",
+          image: { url: "https://example.com/a.png", proxyURL: proxy },
+          thumbnail: { url: "https://example.com/t.png" },
+        },
+        // A picture alone is an embed worth keeping; its original URL is never carried.
+        { thumbnail: { url: "https://example.com/o.png", proxyURL: `${proxy}?width=1` } },
+      ],
+      messageSnapshots: new Map([
+        ["f1", { content: "", embeds: [{ image: { proxyURL: proxy } }] }],
+      ]),
+    });
+    const m = incomingMessage(msg, "channel", selves());
+    expect(m.embeds).toEqual([
+      { title: "新聞", description: null, url: "https://example.com/x", image: proxy },
+      { title: null, description: null, url: null, thumbnail: `${proxy}?width=1` },
+    ]);
+    expect(JSON.stringify(m)).not.toContain("https://example.com/a.png");
+    expect(m.forwarded?.[0]?.embeds).toEqual([
+      { title: null, description: null, url: null, image: proxy },
+    ]);
+    expect(incomingText(m)).toContain("[嵌入: 新聞 https://example.com/x] [圖片: 連結預覽]");
+    expect(hasContent(message({ content: "", embeds: [{ image: { proxyURL: proxy } }] }))).toBe(
+      true,
+    );
   });
 
   test("forwards_are_not_replies_and_empty_messages_have_no_content", () => {

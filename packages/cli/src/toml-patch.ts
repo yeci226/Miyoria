@@ -5,7 +5,7 @@
 // with smol-toml so an edit can never produce an invalid file. Comments, blank lines, key order
 // and the layout of untouched lines stay exactly as they were.
 //
-// Rules (same as the legacy `toml_edit` based editor):
+// Rules:
 // * replacing a value keeps the key text, the spacing and the trailing comment;
 // * a new key goes after the last entry of its table;
 // * a new table goes right after the last table sharing its longest existing prefix

@@ -21,10 +21,14 @@ export type SingPermissions = z.output<typeof SingPermissionsSchema>;
  * url = "http://127.0.0.1:8005"
  * start = "decide"
  * ```
+ *
+ * `url` and `fallback_urls` are read by Core's wiring, not by the module: they become the static
+ * entries `sing`, `sing.fallback.1`, ... of the endpoint registry, in this order, and the module
+ * uses the registry's `sing` endpoints. Neither has a default address any more.
  */
 export const SingConfigSchema = z.object({
-  /** Song worker base URL. */
-  url: z.string().default("http://127.0.0.1:8005"),
+  /** Song worker base URL (a static registry entry). Not set: the workers come from hostd. */
+  url: z.string().optional(),
   /**
    * More song workers, tried in this order when `url` does not answer (its computer is off, or
    * off the tailnet): new songs go to the first one that answers, and a song stays with the
@@ -53,12 +57,6 @@ export const SingConfigSchema = z.object({
    * Without a running mind module, `decide` behaves like `auto`.
    */
   start: z.enum(["decide", "auto"]).default("decide"),
-  /**
-   * She sings only what someone asks for: she cannot pick or start a song herself, a requested
-   * song starts as soon as it is ready and she is free, her prompt shows no set list (only the
-   * song she is singing), and the list is not kept across restarts.
-   */
-  only_on_request: z.boolean().default(false),
   /** A ready song she has not started is brought up to her again after this long. */
   remind_secs: z.number().nonnegative().default(60),
   /** After this many reminders (while she is in voice) the song starts on its own. */
@@ -82,6 +80,12 @@ export const SingConfigSchema = z.object({
    */
   announce_max_secs: z.number().nonnegative().default(20),
   quiet_ms: z.number().int().nonnegative().default(700),
+  /**
+   * A song that starts on its own waits this long for the Arbiter's word on her opening line (the
+   * turn that says it, which it then waits for, or a refusal); past it the line is expired, the
+   * song starts and nothing is said late.
+   */
+  opening_window_ms: z.number().int().positive().default(6000),
   /** How far ahead of real time the song is streamed to the voice node (it buffers a minute). */
   lead_ms: z.number().int().positive().default(2000),
   /**
@@ -97,11 +101,6 @@ export const SingConfigSchema = z.object({
   fade_ms: z.number().int().nonnegative().default(1500),
   /** Lyrics lines (when the worker found synced lyrics) become overlay subtitles. */
   lyrics: z.boolean().default(true),
-  /**
-   * While she sings a song with synced lyrics, one card shows the current line: in the channel
-   * she last typed in on that server, else her voice channel's text chat.
-   */
-  lyrics_card: z.boolean().default(false),
   /**
    * The song's original video (when the worker has one) is shown, muted, on the stream while
    * she sings: the start cue carries its path for the Stage node, which plays it in OBS.
@@ -135,7 +134,3 @@ export const SingConfigSchema = z.object({
   permissions: SingPermissionsSchema.prefault({}),
 });
 export type SingConfig = z.output<typeof SingConfigSchema>;
-
-export function defaultSingConfig(): SingConfig {
-  return SingConfigSchema.parse({});
-}

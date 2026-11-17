@@ -1,17 +1,11 @@
 // What she wants to do, read-only (docs/design/v2-architecture.md §3.7): `GET
 // /api/mind/goals?closed=false` (her structured agenda, soonest trigger first; `closed=true`
-// adds the ones that are done or dropped when the agenda keeps them) and `GET /api/mind/plan`
-// (today's plan in her words). The agenda service and the mind loop are looked up for the
-// optional getters `all()` and `dayPlan()` that their contract does not list.
+// adds the ones that are done or dropped when the agenda keeps them). The agenda service is
+// looked up for the optional getter `all()` that its contract does not list.
 
-import { type Goal, GoalAgendaKey, MindKey } from "@miyoria/types";
-import { z } from "zod";
-import { boolParam, readQuery } from "./extract.js";
-import { json, type Route } from "./route.js";
-import type { ApiState } from "./state.js";
-import type { DayPlanView, GoalsView } from "./types.js";
-
-const GoalsQuerySchema = z.object({ closed: boolParam.optional() });
+import type { GoalsView } from "@miyoria/contracts/api";
+import { type Goal, GoalAgendaKey } from "@miyoria/types";
+import { os } from "./contract.js";
 
 /** `GoalBook.all()`, when the agenda is one. */
 function allGoals(agenda: object): (() => Goal[]) | null {
@@ -19,36 +13,16 @@ function allGoals(agenda: object): (() => Goal[]) | null {
   return typeof all === "function" ? (all as () => Goal[]).bind(agenda) : null;
 }
 
-export function planRoutes(state: ApiState): Route[] {
-  return [
-    {
-      method: "GET",
-      path: "/api/mind/goals",
-      handler: (c) => {
-        const q = readQuery(c, GoalsQuerySchema);
-        const agenda = state.service(GoalAgendaKey, "goal agenda");
-        const all = allGoals(agenda);
-        const open = agenda.goals();
-        if (!q.closed || all === null) {
-          const body: GoalsView = { goals: open, closed_included: false };
-          return json(body);
-        }
-        const openIds = new Set(open.map((g) => g.id));
-        const closed = all().filter((g) => !openIds.has(g.id));
-        const body: GoalsView = { goals: [...open, ...closed], closed_included: true };
-        return json(body);
-      },
-    },
-    {
-      method: "GET",
-      path: "/api/mind/plan",
-      handler: () => {
-        const mind = state.service(MindKey, "mind module") as { dayPlan?: () => string | null };
-        const body: DayPlanView = {
-          day_plan: typeof mind.dayPlan === "function" ? mind.dayPlan() : null,
-        };
-        return json(body);
-      },
-    },
-  ];
-}
+/** The plan routes, which join the `mind` group of the route table. */
+export const planRpc = {
+  goals: os.mind.goals.handler(({ input, context }): GoalsView => {
+    const closed = input.query.closed === "true";
+    const agenda = context.state.service(GoalAgendaKey, "goal agenda");
+    const all = allGoals(agenda);
+    const open = agenda.goals();
+    if (!closed || all === null) return { goals: open, closed_included: false };
+    const openIds = new Set(open.map((g) => g.id));
+    const shut = all().filter((g) => !openIds.has(g.id));
+    return { goals: [...open, ...shut], closed_included: true };
+  }),
+};

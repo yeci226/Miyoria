@@ -1,0 +1,606 @@
+{
+  "name": "recall.example",
+  "description": "Synthetic example: two servers (g_tea, g_arcade), one DM, five invented people. Shows the format and covers exact-word hits, paraphrases, scopes and a superseded fact. Not a measure of real recall.",
+  "memories": [
+    {
+      "id": "m_amei_peanut",
+      "kind": "fact",
+      "content": "阿梅對花生過敏,吃到會起疹子",
+      "scope": { "type": "person", "person": "p_amei" },
+      "subjects": ["p_amei"],
+      "at": "2026-09-20T12:00:00Z",
+      "importance": 0.9,
+      "confidence": 0.9
+    },
+    {
+      "id": "m_haoran_dog",
+      "kind": "fact",
+      "content": "浩然養了一隻叫麻糬的柴犬",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_haoran"],
+      "at": "2026-09-21T13:00:00Z",
+      "importance": 0.5
+    },
+    {
+      "id": "m_yuki_song",
+      "kind": "fact",
+      "content": "Yuki 最喜歡的歌是 YOASOBI 的「夜に駆ける」",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_yuki"],
+      "at": "2026-09-22T14:00:00Z",
+      "importance": 0.5
+    },
+    {
+      "id": "m_gunjou_night",
+      "kind": "episode",
+      "content": "大家在語音一起唱「群青」,大偉唱到破音被笑了整晚",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_dawei"],
+      "at": "2026-10-10T15:00:00Z",
+      "importance": 0.5
+    },
+    {
+      "id": "m_dawei_job",
+      "kind": "fact",
+      "content": "大偉在台中的遊戲公司當 backend engineer,主要寫 Rust",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_dawei"],
+      "at": "2026-09-23T12:30:00Z",
+      "importance": 0.6
+    },
+    {
+      "id": "m_self_boba",
+      "kind": "self_note",
+      "content": "我覺得珍珠奶茶要半糖少冰才好喝",
+      "scope": { "type": "global" },
+      "at": "2026-09-24T09:00:00Z",
+      "importance": 0.3
+    },
+    {
+      "id": "m_xiaolu_kyoto",
+      "kind": "fact",
+      "content": "小鹿下個月要去京都自由行,想去看楓葉",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_xiaolu"],
+      "at": "2026-10-20T11:00:00Z",
+      "importance": 0.6
+    },
+    {
+      "id": "m_amei_quit_dm",
+      "kind": "fact",
+      "content": "阿梅私下說她打算年底離職,還沒跟同事講",
+      "scope": { "type": "dm", "account": { "platform": "discord", "id": "1001" } },
+      "subjects": ["p_amei"],
+      "at": "2026-10-18T16:00:00Z",
+      "importance": 0.8
+    },
+    {
+      "id": "m_amei_horror_dm",
+      "kind": "fact",
+      "content": "阿梅說她其實很怕恐怖片,每次都是硬撐著看完",
+      "scope": { "type": "dm", "account": { "platform": "discord", "id": "1001" } },
+      "subjects": ["p_amei"],
+      "at": "2026-10-05T16:00:00Z",
+      "importance": 0.4
+    },
+    {
+      "id": "m_haoran_exam_dm",
+      "kind": "fact",
+      "content": "浩然私下說他在準備轉職考試,還不想讓大家知道",
+      "scope": { "type": "dm", "account": { "platform": "discord", "id": "1002" } },
+      "subjects": ["p_haoran"],
+      "at": "2026-10-12T16:00:00Z",
+      "importance": 0.7
+    },
+    {
+      "id": "m_haoran_maimai",
+      "kind": "fact",
+      "content": "浩然在街機廳的音遊 maimai 打到了彩框段位",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_arcade" },
+      "subjects": ["p_haoran"],
+      "at": "2026-10-02T10:00:00Z",
+      "importance": 0.5
+    },
+    {
+      "id": "m_arcade_tournament",
+      "kind": "episode",
+      "content": "街機群辦了格鬥遊戲比賽,最後由綽號阿凱的人拿下冠軍",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_arcade" },
+      "at": "2026-10-25T13:00:00Z",
+      "importance": 0.6
+    },
+    {
+      "id": "m_yuki_home_old",
+      "kind": "fact",
+      "content": "Yuki 住在高雄",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_yuki"],
+      "at": "2026-09-01T08:00:00Z",
+      "importance": 0.5,
+      "superseded_by": "m_yuki_home_new"
+    },
+    {
+      "id": "m_yuki_home_new",
+      "kind": "fact",
+      "content": "Yuki 上個月從高雄搬到台北,住在內湖",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_yuki"],
+      "at": "2026-10-15T08:00:00Z",
+      "importance": 0.6
+    },
+    {
+      "id": "m_music_rule",
+      "kind": "fact",
+      "content": "音樂頻道的規矩是點歌前要先貼歌名和原唱",
+      "scope": {
+        "type": "channel",
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_music",
+          "kind": "channel"
+        }
+      },
+      "at": "2026-09-15T10:00:00Z",
+      "importance": 0.5
+    },
+    {
+      "id": "m_amei_coffee",
+      "kind": "fact",
+      "content": "阿梅每天早上都要喝一杯黑咖啡才醒得過來",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_amei"],
+      "at": "2026-09-26T01:00:00Z",
+      "importance": 0.4
+    },
+    {
+      "id": "m_haoran_cilantro",
+      "kind": "fact",
+      "content": "浩然不敢吃香菜,火鍋都要另外點一鍋",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_haoran"],
+      "at": "2026-09-27T11:00:00Z",
+      "importance": 0.4
+    },
+    {
+      "id": "m_self_practice",
+      "kind": "self_note",
+      "content": "我答應過自己每週要練一首新歌",
+      "scope": { "type": "global" },
+      "at": "2026-09-28T12:00:00Z",
+      "importance": 0.5
+    },
+    {
+      "id": "m_minecraft_creeper",
+      "kind": "episode",
+      "content": "上週六的 Minecraft 伺服器被苦力怕炸掉了半個村莊,小鹿修了三個小時",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_xiaolu"],
+      "at": "2026-10-26T14:00:00Z",
+      "importance": 0.7
+    },
+    {
+      "id": "m_dawei_birthday",
+      "kind": "fact",
+      "content": "大偉的生日是十二月三日",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_dawei"],
+      "at": "2026-09-29T12:00:00Z",
+      "importance": 0.6
+    },
+    {
+      "id": "m_yuki_guitar",
+      "kind": "fact",
+      "content": "Yuki 會彈吉他,學了五年,最近在練 fingerstyle",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_yuki"],
+      "at": "2026-09-30T12:00:00Z",
+      "importance": 0.4
+    },
+    {
+      "id": "m_xiaolu_major",
+      "kind": "fact",
+      "content": "小鹿是大學生,主修日文,明年要考 JLPT N1",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_xiaolu"],
+      "at": "2026-10-01T12:00:00Z",
+      "importance": 0.5
+    },
+    {
+      "id": "m_amei_tiramisu",
+      "kind": "episode",
+      "content": "阿梅分享了她做的提拉米蘇照片,大家都說想吃",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_amei"],
+      "at": "2026-10-22T12:00:00Z",
+      "importance": 0.3
+    },
+    {
+      "id": "m_karaoke_friday",
+      "kind": "fact",
+      "content": "這個伺服器每週五晚上固定辦歌回",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "at": "2026-09-18T12:00:00Z",
+      "importance": 0.5
+    },
+    {
+      "id": "m_self_autumn",
+      "kind": "self_note",
+      "content": "我最喜歡的季節是秋天,因為涼爽又適合散步",
+      "scope": { "type": "global" },
+      "at": "2026-10-03T12:00:00Z",
+      "importance": 0.3
+    },
+    {
+      "id": "m_haoran_nurse",
+      "kind": "fact",
+      "content": "浩然的工作是護理師,常常要輪大夜班",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_haoran"],
+      "at": "2026-10-04T12:00:00Z",
+      "importance": 0.6
+    },
+    {
+      "id": "m_amei_frieren",
+      "kind": "fact",
+      "content": "阿梅推薦過「葬送的芙莉蓮」,說是近年最好看的動畫",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_amei"],
+      "at": "2026-10-06T12:00:00Z",
+      "importance": 0.4
+    },
+    {
+      "id": "m_dawei_grinder",
+      "kind": "fact",
+      "content": "大偉最近迷上手沖,買了一台磨豆機",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_dawei"],
+      "at": "2026-10-08T12:00:00Z",
+      "importance": 0.3
+    },
+    {
+      "id": "m_yuki_ussewa",
+      "kind": "episode",
+      "content": "Yuki 在歌回唱了 Ado 的「うっせぇわ」,高音全部唱上去了",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_yuki"],
+      "at": "2026-10-24T14:00:00Z",
+      "importance": 0.5
+    },
+    {
+      "id": "m_yuki_nickname",
+      "kind": "fact",
+      "content": "Yuki 希望被叫做「小雪」",
+      "scope": { "type": "person", "person": "p_yuki" },
+      "subjects": ["p_yuki"],
+      "at": "2026-09-19T12:00:00Z",
+      "importance": 0.8,
+      "confidence": 0.9
+    },
+    {
+      "id": "m_xiaolu_cats",
+      "kind": "fact",
+      "content": "小鹿養了兩隻貓,一隻叫可樂一隻叫雪碧",
+      "scope": { "type": "guild", "platform": "discord", "guild": "g_tea" },
+      "subjects": ["p_xiaolu"],
+      "at": "2026-10-09T12:00:00Z",
+      "importance": 0.4
+    }
+  ],
+  "queries": [
+    {
+      "id": "q_exact_dog",
+      "text": "麻糬最近有乖嗎",
+      "people": ["p_haoran"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [{ "platform": "discord", "id": "1002" }]
+      },
+      "at": "2026-11-01T12:00:00Z",
+      "relevant": ["m_haoran_dog"],
+      "note": "exact word: the dog's name"
+    },
+    {
+      "id": "q_exact_song",
+      "text": "有人要一起唱夜に駆ける嗎",
+      "people": ["p_yuki", "p_amei"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [
+          { "platform": "discord", "id": "1003" },
+          { "platform": "discord", "id": "1001" }
+        ]
+      },
+      "at": "2026-11-01T12:01:00Z",
+      "relevant": ["m_yuki_song"],
+      "note": "exact word: a Japanese song title"
+    },
+    {
+      "id": "q_exact_rust",
+      "text": "Rust 的 borrow checker 好難",
+      "people": ["p_dawei"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [{ "platform": "discord", "id": "1004" }]
+      },
+      "at": "2026-11-01T12:02:00Z",
+      "relevant": ["m_dawei_job"],
+      "note": "exact word: English"
+    },
+    {
+      "id": "q_exact_minecraft",
+      "text": "下次 Minecraft 伺服器什麼時候開",
+      "people": ["p_xiaolu"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [{ "platform": "discord", "id": "1005" }]
+      },
+      "at": "2026-11-01T12:03:00Z",
+      "relevant": ["m_minecraft_creeper"],
+      "note": "exact word: an episode a week old"
+    },
+    {
+      "id": "q_para_cilantro",
+      "text": "這裡有誰討厭芫荽",
+      "people": ["p_haoran", "p_dawei"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [
+          { "platform": "discord", "id": "1002" },
+          { "platform": "discord", "id": "1004" }
+        ]
+      },
+      "at": "2026-11-01T12:04:00Z",
+      "relevant": ["m_haoran_cilantro"],
+      "note": "paraphrase: 芫荽 for 香菜, no shared word"
+    },
+    {
+      "id": "q_para_caffeine",
+      "text": "誰沒有 caffeine 就起不來",
+      "people": ["p_amei"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [{ "platform": "discord", "id": "1001" }]
+      },
+      "at": "2026-11-01T12:05:00Z",
+      "relevant": ["m_amei_coffee"],
+      "note": "paraphrase: English for 咖啡, no shared word"
+    },
+    {
+      "id": "q_para_major",
+      "text": "她念的是哪個科系",
+      "people": ["p_xiaolu"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [{ "platform": "discord", "id": "1005" }]
+      },
+      "at": "2026-11-01T12:06:00Z",
+      "relevant": ["m_xiaolu_major"],
+      "note": "paraphrase: 科系 for 主修, no shared word"
+    },
+    {
+      "id": "q_para_nickname",
+      "text": "要怎麼稱呼你比較好",
+      "people": ["p_yuki"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_arcade",
+          "channel": "c_general",
+          "kind": "channel"
+        },
+        "accounts": [{ "platform": "discord", "id": "1003" }]
+      },
+      "at": "2026-11-01T12:07:00Z",
+      "relevant": ["m_yuki_nickname"],
+      "note": "paraphrase, and a person-scoped fact seen in another server because she is there"
+    },
+    {
+      "id": "q_person_peanut_present",
+      "text": "點心有加花生喔,大家可以吃嗎",
+      "people": ["p_amei", "p_dawei"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [
+          { "platform": "discord", "id": "1001" },
+          { "platform": "discord", "id": "1004" }
+        ]
+      },
+      "at": "2026-11-01T12:08:00Z",
+      "relevant": ["m_amei_peanut"],
+      "note": "person-scoped fact, the person is present"
+    },
+    {
+      "id": "q_person_peanut_absent",
+      "text": "點心有加花生喔",
+      "people": [],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_arcade",
+          "channel": "c_general",
+          "kind": "channel"
+        },
+        "accounts": []
+      },
+      "at": "2026-11-01T12:09:00Z",
+      "relevant": [],
+      "note": "nothing to recall: the same word, but the person the fact is scoped to is not here"
+    },
+    {
+      "id": "q_dm_quit_in_dm",
+      "text": "年底離職的事跟同事講了嗎",
+      "people": ["p_amei"],
+      "place": {
+        "context": { "platform": "discord", "scope": null, "channel": "dm_1001", "kind": "dm" },
+        "accounts": [{ "platform": "discord", "id": "1001" }]
+      },
+      "at": "2026-11-01T12:10:00Z",
+      "relevant": ["m_amei_quit_dm"],
+      "note": "a DM memory, asked in that DM"
+    },
+    {
+      "id": "q_dm_quit_in_channel",
+      "text": "年底離職的事跟同事講了嗎",
+      "people": ["p_amei", "p_haoran"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [
+          { "platform": "discord", "id": "1001" },
+          { "platform": "discord", "id": "1002" }
+        ]
+      },
+      "at": "2026-11-01T12:11:00Z",
+      "relevant": [],
+      "note": "nothing to recall: the same line in a channel, where the DM memory must not come back"
+    },
+    {
+      "id": "q_guild_maimai",
+      "text": "maimai 新曲出了",
+      "people": ["p_haoran"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_arcade",
+          "channel": "c_general",
+          "kind": "channel"
+        },
+        "accounts": [{ "platform": "discord", "id": "1002" }]
+      },
+      "at": "2026-11-01T12:12:00Z",
+      "relevant": ["m_haoran_maimai"],
+      "note": "exact word, in the other server"
+    },
+    {
+      "id": "q_guild_tournament_elsewhere",
+      "text": "上次格鬥遊戲比賽是誰拿冠軍",
+      "people": [],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": []
+      },
+      "at": "2026-11-01T12:13:00Z",
+      "relevant": [],
+      "note": "nothing to recall: the tournament is the other server's"
+    },
+    {
+      "id": "q_nothing_chatter",
+      "text": "哈哈哈哈",
+      "people": [],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": []
+      },
+      "at": "2026-11-01T12:14:00Z",
+      "relevant": [],
+      "note": "nothing to recall: chatter"
+    },
+    {
+      "id": "q_superseded_home",
+      "text": "Yuki 住在哪裡",
+      "people": ["p_yuki"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [{ "platform": "discord", "id": "1003" }]
+      },
+      "at": "2026-11-01T12:15:00Z",
+      "relevant": ["m_yuki_home_new"],
+      "note": "old and new fact: the superseded one must not come back"
+    },
+    {
+      "id": "q_context_kyoto",
+      "text": "好啊",
+      "context": ["小鹿:我下個月要去京都", "小鹿:要不要幫你們帶伴手禮"],
+      "people": ["p_xiaolu"],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_lobby",
+          "kind": "channel"
+        },
+        "accounts": [{ "platform": "discord", "id": "1005" }]
+      },
+      "at": "2026-11-01T12:16:00Z",
+      "relevant": ["m_xiaolu_kyoto"],
+      "note": "the line shares nothing, the lines before it do"
+    },
+    {
+      "id": "q_channel_rule",
+      "text": "點歌有什麼規矩嗎",
+      "people": [],
+      "place": {
+        "context": {
+          "platform": "discord",
+          "scope": "g_tea",
+          "channel": "c_music",
+          "kind": "channel"
+        },
+        "accounts": []
+      },
+      "at": "2026-11-01T12:17:00Z",
+      "relevant": ["m_music_rule"],
+      "note": "exact word: a channel-scoped fact, asked in that channel"
+    }
+  ]
+}

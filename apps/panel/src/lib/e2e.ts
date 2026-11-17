@@ -1,7 +1,8 @@
 // Voice response latency as `latency.e2e` of `GET /api/voice` and the `voice.latency` bus events
 // (stage `e2e`) report it: speech end to first audio, in six consecutive segments.
 
-import type { E2eRecord, E2eSegmentName, LogEvent } from "@/api/types";
+import type { E2eRecord, LogEvent } from "@/api/types";
+import type { E2eSegmentName } from "@miyoria/contracts/api";
 
 /** In the order a listener hears them. */
 export const E2E_SEGMENTS: { name: E2eSegmentName; label: string }[] = [

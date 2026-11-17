@@ -10,7 +10,7 @@
 // (or is a status line), and the `admin` panel lists any command that does not, so a command
 // added later is reachable before someone adds a control for it.
 
-import type { ServiceLookup } from "@miyoria/kernel";
+import type { ServiceLookup } from "@miyoria/runtime/kernel";
 import {
   type FieldAsk,
   mappedPaths,
@@ -808,7 +808,7 @@ function adminPages(): PanelPage[] {
     {
       id: "people",
       label: "她認識的人",
-      description: "好感、標籤、封鎖",
+      description: "羈絆、標籤、封鎖",
       focusable: true,
       intro: ["也可以直接用 `/admin i user:@某人` 開啟並指定對象。"],
       actions: [
@@ -841,11 +841,11 @@ function adminPages(): PanelPage[] {
         },
         {
           id: "adjust",
-          label: "調整好感",
+          label: "調整羈絆",
           path: "admin person adjust",
           ask: {
-            title: "調整好感",
-            fields: [USER_FIELD, field("affinity", "好感變化", { placeholder: "-100 到 100" })],
+            title: "調整羈絆",
+            fields: [USER_FIELD, field("affinity", "羈絆變化", { placeholder: "-1000 到 1000" })],
           },
           ...person(),
         },
@@ -871,9 +871,6 @@ export interface PanelsOptions {
   /** The privacy policy link shown on `/me`. */
   policyUrl?: string | null;
 }
-
-/** Slash commands of the four panels, in display order. */
-export const PANEL_COMMANDS = ["miyo", "song", "me", "admin"] as const;
 
 /** The four panels (see the page tables above). */
 export function panelDefs(options: PanelsOptions = {}): PanelDef[] {
@@ -918,7 +915,7 @@ export function panelDefs(options: PanelsOptions = {}): PanelDef[] {
   ];
 }
 
-/** Registers the four panels. Undo with `unregisterPanels`. */
+/** Registers the four panels. */
 export function registerPanels(registry: CommandRegistry, options: PanelsOptions = {}): void {
   const defs = panelDefs(options);
   const mapped = mappedPaths(defs);
@@ -927,10 +924,6 @@ export function registerPanels(registry: CommandRegistry, options: PanelsOptions
   for (const def of defs) {
     registerPanelCommand(registry, def, { services: options.services ?? null, mapped });
   }
-}
-
-export function unregisterPanels(registry: CommandRegistry): void {
-  for (const command of PANEL_COMMANDS) registry.unregisterPanel(command);
 }
 
 /** The commands the panels run (their paths), for tests and docs. */

@@ -8,10 +8,17 @@
 // may read) and her mood, never her private feeling. One slip per person per local day, kept so
 // they can look at it again, export it and have it forgotten with their cards.
 
-import { PersonaHandleKey } from "@miyoria/agent";
-import { errorMessage, getLogger } from "@miyoria/kernel";
-import { completeJson, LlmRouterKey, systemMessage, userMessage, withLlmTag } from "@miyoria/llm";
-import { type FortuneRecord, FortuneStoreKey } from "@miyoria/store";
+import { PersonaHandleKey } from "@miyoria/brain/agent";
+import type { FortuneField, IssuedFortune, MemberCard } from "@miyoria/contracts/api";
+import { type FortuneRecord, FortuneStoreKey } from "@miyoria/economy";
+import {
+  completeJson,
+  LlmRouterKey,
+  systemMessage,
+  userMessage,
+  withLlmTag,
+} from "@miyoria/llm/llm";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
   AffectStateKey,
@@ -26,7 +33,6 @@ import {
 import { z } from "zod";
 import { dateOf } from "./public.js";
 import type { ApiState } from "./state.js";
-import type { FortuneField, IssuedFortune, MemberCard } from "./types.js";
 
 const log = getLogger("api.fortune");
 
@@ -109,7 +115,7 @@ function about(c: FortuneContext, mood: string | null): string {
     `今天:${c.date}`,
     `他:${c.name}${v.call_name ? `(你叫他 ${v.call_name})` : ""}`,
     `你們的關係:${v.relationship ?? "還不認識"}`,
-    `好感 ${v.affinity ?? "—"}、信任 ${v.trust ?? "—"}、熟悉 ${v.familiarity ?? "—"}`,
+    `羈絆 ${v.affinity ?? "—"}、信任 ${v.trust ?? "—"}、熟悉 ${v.familiarity ?? "—"}`,
   ];
   if (v.public_feeling) lines.push(`你之前寫給他的話:${v.public_feeling}`);
   if (c.memories.length > 0) {
@@ -306,7 +312,6 @@ export async function keepFortune(
   if (!store) return null;
   const record: FortuneRecord = {
     id: newId(),
-    profile: state.profile(),
     account: holder.account,
     person: holder.person,
     day,

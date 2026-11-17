@@ -158,7 +158,7 @@ export class Collection {
 
   async #held(who: Member): Promise<EconomyDoc[]> {
     return this.e.docs().list(this.e.profile, KIND, {
-      owners: who.wallet,
+      owners: who.accounts,
       statuses: ["held"],
       limit: MAX_ITEMS,
     });
@@ -190,7 +190,6 @@ export class Collection {
     const data: ItemData = { item: id, rarity: found.item.rarity, source };
     return this.e.docs().create({
       id: docId,
-      profile: this.e.profile,
       kind: KIND,
       owner: who.account,
       status: "held",
@@ -247,7 +246,7 @@ export class Collection {
   /** Draws since the last SR or better one (draws only: a gift or her shop does not count). */
   async #sinceBest(who: Member): Promise<number> {
     const docs = await this.e.docs().list(this.e.profile, KIND, {
-      owners: who.wallet,
+      owners: who.accounts,
       limit: PITY_LOOKBACK,
     });
     // Items that left (given away) keep counting for their drawer, so look at every status.
@@ -367,7 +366,7 @@ export class Collection {
   async #giftsToday(who: Member, dir: "out" | "in"): Promise<number> {
     const since = this.e.todayStart();
     const docs = await this.e.docs().list(this.e.profile, GIFT, {
-      owners: who.wallet,
+      owners: who.accounts,
       limit: MAX_GIFT_ROWS,
     });
     return docs.filter((d) => d.created_at >= since && (d.data as { dir?: unknown }).dir === dir)
@@ -392,7 +391,7 @@ export class Collection {
     if (!receiver) throw new EconomyError(403, NO_RECEIVER);
     if (
       receiver.person.id === sender.person.id ||
-      sender.wallet.some((a) => sameAccount(a, receiver.account))
+      sender.accounts.some((a) => sameAccount(a, receiver.account))
     ) {
       throw new EconomyError(400, OWN_ACCOUNT);
     }
@@ -429,7 +428,6 @@ export class Collection {
       const note = (owner: AccountRef, dir: "out" | "in", id2: string) =>
         docs.create({
           id: id2,
-          profile: this.e.profile,
           kind: GIFT,
           owner,
           status: "done",

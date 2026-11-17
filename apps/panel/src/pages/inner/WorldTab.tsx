@@ -1,5 +1,5 @@
 import { MicOff, MonitorUp, Video, VolumeX } from "lucide-react";
-import type { WorldView } from "@/api/types";
+import type { WorldView } from "@miyoria/contracts/api";
 import { EmptyLine } from "@/components/query-state";
 import { Dot } from "@/components/status";
 import { Badge } from "@/components/ui/badge";

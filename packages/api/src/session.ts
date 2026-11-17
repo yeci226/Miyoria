@@ -7,7 +7,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { PANEL_ACCESS, PANEL_WRITE } from "@miyoria/auth";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import type { SettingsStore } from "@miyoria/store";
 import {
   type AccountRef,

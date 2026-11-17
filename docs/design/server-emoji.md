@@ -1,6 +1,6 @@
 # 伺服器 emoji 表
 
-狀態:**已實作**(2026-11-10)。程式在 `packages/discord/src/emoji.ts`(表、送出轉換、頻率限制、提示詞區塊)、`emoji-describe.ts`(看圖寫意思)、`packages/voice/src/text.ts` 的 `stripEmoji`(語音不念)。設定見 `miyoria.example.toml` 的 `[modules."platform.discord.bot".emoji]`。和下面原設計的差別:清單不放在固定提示詞(主線固定提示詞已貼著 4000 token 上限),也沒有用 `message_log` 排最常用的,改成有意思的排前面、最多 `max_listed` 個。還沒在真的 Discord 跑過。
+狀態:**已實作**(2026-11-10)。程式在 `packages/discord/src/emoji.ts`(表、送出轉換、頻率限制、提示詞區塊)、`emoji-describe.ts`(看圖寫意思)、`packages/voice/voice/src/text.ts` 的 `stripEmoji`(語音不念)。設定見 `miyoria.example.toml` 的 `[modules."platform.discord.bot".emoji]`。和下面原設計的差別:清單不放在固定提示詞(主線固定提示詞已貼著 4000 token 上限),也沒有用 `message_log` 排最常用的,改成有意思的排前面、最多 `max_listed` 個。還沒在真的 Discord 跑過。
 
 合進 `v4-int` 之後(V4 §4.1):主線把清單放在對話紀錄前面那段變動慢的資料裡,排在技能之後、筆記本索引之前(`turn.ts` 的 `SLOW_ORDER`,字數上限 `[modules.agent.mainline] emoji_chars`),表沒變時前綴留在快取;V2 管線照舊是每回合的資料。文字頻道「看一眼」的回應階梯最輕的一階是按表情(`react`,有 `[modules.agent.rhythm]` 的反應上限),`react` 也接受 `:名字:`,提示詞和工具說明都寫了。訊息裡的頻率限制(一則一個、最近 3 則最多 1 則、不連用)照舊在 Discord 送出時做。
 
@@ -10,7 +10,7 @@
 
 - 一般 emoji(🍚、🍙、🍰)原樣送到她那裡,模型認得。🍚 會被理解成白飯,所以「直接跟她講就能餵她」的工具(`accept_food`)也吃得到;單獨一個 emoji 意思模糊,她可能先問再收。
 - 伺服器自訂 emoji 只剩名字:`<:fanfan:123>` 變成 `:fanfan:`(`packages/discord/src/mapping.ts:180`)。名字直白她猜得到,名字隱晦就認不出來。
-- 她自己:只能用 `react` 按反應(`packages/agent/src/tools.ts`,接受一般 emoji 或 `name:id`),但不知道伺服器有哪些自訂 emoji。語音的規則寫明不要 emoji(`packages/agent/src/prompt.ts:74`、`mainline/prompt.ts:53`);文字沒有限制,但她只會用一般 emoji。
+- 她自己:只能用 `react` 按反應(`packages/brain/agent/src/tools.ts`,接受一般 emoji 或 `name:id`),但不知道伺服器有哪些自訂 emoji。語音的規則寫明不要 emoji(`packages/brain/agent/src/prompt.ts:74`、`mainline/prompt.ts:53`);文字沒有限制,但她只會用一般 emoji。
 
 ## 想做的樣子
 
@@ -23,4 +23,4 @@
 
 ## 動到的地方(預估)
 
-`packages/discord`(讀表、送出時轉換、更新事件)、`packages/agent`(提示詞區塊、`react` 接受名字、輸出前的頻率限制)、TTS 前的文字清理、設定(`[platforms.discord.emoji]` 或類似)、說明的快取(settings store)。
+`packages/discord`(讀表、送出時轉換、更新事件)、`packages/brain/agent`(提示詞區塊、`react` 接受名字、輸出前的頻率限制)、TTS 前的文字清理、設定(`[platforms.discord.emoji]` 或類似)、說明的快取(settings store)。

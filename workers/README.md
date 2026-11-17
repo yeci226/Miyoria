@@ -1,73 +1,115 @@
 # Miyoria 推論 Worker(ASR / TTS / 唱歌)
 
-`@miyoria/speech` 的 `http-worker` provider 對應的 GPU 推論服務。協定在 [`docs/protocols/voice-link.md`](../docs/protocols/voice-link.md)「推論 Worker HTTP 介面」,這裡的三個服務都照那份契約實作。
+`@miyoria/voice/speech` 的 `http-worker` provider 對應的 GPU 推論服務。協定在 [`docs/protocols/voice-link.md`](../docs/protocols/voice-link.md)「推論 Worker HTTP 介面」,這裡的三個服務都照那份契約實作。
 
-| 目錄 | 服務 | 預設埠 | 說明 |
+| 目錄 | 服務 | 手動跑的預設埠 | 說明 |
 |---|---|---|---|
 | `asr/` | `POST /asr`、`GET /health`、`GET /busy` | 8001 | `ASR_BACKEND=sensevoice`(sherpa-onnx,CPU,附情緒 / 事件標記)或 `qwen3`(Qwen3-ASR,GPU) |
 | `tts/` | `POST /tts`、`GET /health`、`GET /busy`、`GET /voices`、`POST /voices/reload` | 8002 | Qwen3-TTS,聲音由 `VOICES_DIR` 註冊;後端 `faster-qwen3-tts`(真串流,推薦)或官方 `qwen-tts`(句子級,備案) |
 | `sing/` | `POST /jobs`、`GET /jobs/{id}`、`GET /songs`、`GET /songs/{id}/files/{name}`、`POST /songs/{id}/lyrics`、`GET /library`、`GET /health` | 8005 | 點歌翻唱:yt-dlp / 本機歌庫 → RoFormer 人聲分離 → BS-RoFormer 切主唱 → 她的 RVC 模型轉主唱(可選先過 YingMusic / Seed-VC)→ 依伴唱模式混音 + 同步歌詞(lrclib / 網易雲,找不到再問 LLM);見第 9 節 |
-| `lyrics/` | `POST /lyrics`、`GET /health` | 8007 | 給「翻唱 worker 在別台電腦」用:幫它找同步歌詞(重用 `sing/lyrics.py`:lrclib / 網易雲 / Core 的 LLM / ASR 抽查),跑在 Core 那台。翻唱 worker 設 `SING_LYRICS_URL=http://<這台>:8007`;沒設就像以前在 worker 內找。啟動:`cd workers/lyrics && ../.venv-lyrics/Scripts/python server.py`(`pip install -r lyrics/requirements.txt`),沒有認證,只綁私有位址 |
+| `lyrics/` | `POST /lyrics`、`GET /health` | 8007 | 只給「翻唱 worker 在**沒有加入** Core 的電腦」用:幫它找同步歌詞(重用 `sing/lyrics.py`:lrclib / 網易雲 / LLM / ASR 抽查),跑在 Core 那台。翻唱 worker 設 `SING_LYRICS_URL=http://<這台>:8007`;沒設就在 worker 內找。LLM 和 ASR 的來源見第 9 節「歌詞怎麼找」 |
 | `turn/` | `POST /turn`、`WS /vad`、`GET /health` | 8006 | 判斷講完:Smart Turn v3 + Silero VAD,CPU、不需要 PyTorch;見第 10 節 |
 | `fake/` | 兩個端點都有 | 8000 | 不需要 GPU 的假 worker(固定文字 / 正弦波「聲音」),用來做端對端測試 |
 | `tests/` | pytest | | 契約測試(預設打 fake,也可以打真的 worker) |
 
 ```
 workers/
-├── asr/   server.py  tags.py  compare_names.py  requirements*.txt  Dockerfile
-├── tts/   server.py  text_split.py  design_voice.py  requirements.txt  requirements-faster.txt  Dockerfile
-├── sing/  server.py  engine.py  exclusive.py  yielding.py  seedvc_runtime.py  songs.py  lyrics.py  lyricsllm.py  requirements.txt
-├── turn/  server.py  models.py  features.py  calibrate.py  requirements.txt
+├── asr/   server.py  tags.py  compare_names.py  service.toml  pyproject.toml  uv.lock  requirements*.txt  Dockerfile
+├── tts/   server.py  text_split.py  design_voice.py  service.toml  pyproject.toml  uv.lock  requirements*.txt  Dockerfile
+├── sing/  server.py  engine.py  exclusive.py  yielding.py  seedvc_runtime.py  songs.py  lyrics.py  lyricsllm.py  service.toml  pyproject.toml  uv.lock  requirements.txt
+├── turn/  server.py  models.py  features.py  calibrate.py  service.toml  pyproject.toml  uv.lock  requirements.txt
+├── lyrics/ server.py  service.toml  pyproject.toml  uv.lock  requirements.txt
 ├── fake/  fake_server.py  requirements.txt
-├── tests/ conftest.py  test_contract.py  test_text_split.py  test_asr_tags.py  test_tts_backends.py  test_sing.py
+├── tests/ conftest.py  test_contract.py  response_contract.py  test_text_split.py  test_asr_tags.py  test_tts_backends.py  test_sing.py  test_projects.py  test_service_auth.py ...
+├── service_auth.py  hostd_client.py   # 每個 worker 都 import:token 檢查、跟 hostd 說話(見「hostd 啟動的 worker」)
+├── contracts.py  gen_contracts.py  requirements-contracts.txt   # 請求 / 回應的 pydantic 模型(產生的,見第 0 節)
 ├── voices/   # 你的聲音:<name>/ref.wav + ref.txt(不進 git)
-├── models/   # SenseVoice 模型目錄、seed-vc/ 原始碼與權重、smart-turn/、silero-vad/(不進 git)
+├── models/   # 手動放的:SenseVoice 模型目錄、applio/、lead-split/、vocal-split/、seed-vc/(不進 git)
 └── docker-compose.yml
 ```
+
+每個服務資料夾的 `service.toml` 是 hostd 讀的說明書(預設埠、健康檢查、要裝什麼、顯示卡估計),`pyproject.toml` + `uv.lock` 是它的 Python 環境。`requirements*.txt` 還在,是給 Docker 映像用的(第 1b 節),`tests/test_projects.py` 檢查兩邊一致。
+
+hostd 啟動的服務用 `service.toml` 的埠(asr `8003`、tts `8002`、sing `8005`、turn `8006`、lyrics `8007`);上表是手動執行 `server.py` 時 Python 檔自己的預設,asr 不同(`8001`)。
 
 ASR / TTS 的輸出入都是「原始模型文字」:繁簡轉換(OpenCC `s2tw`)由 Core 端(`opencc-js`)負責,worker 不做。
 
 ---
 
-## 快速安裝:`miyoria install` 和 `miyoria start`
+## 快速安裝:`miyoria add` 和 `miyoria up`
 
-在 Miyoria 的原始碼資料夾裡,先用 `miyoria init` 選這台電腦跑哪些服務(`[machine]`,見根目錄 README「多台電腦」),再:
+在 Miyoria 的原始碼資料夾裡。需要 [uv](https://docs.astral.sh/uv/)(CLI 不會替你裝它)和 NVIDIA 驅動(ASR、TTS、翻唱);步驟見 [docs/SETUP.md](../docs/SETUP.md) 和 [docs/OPERATIONS.md](../docs/OPERATIONS.md) §4。
 
 ```bash
-miyoria install --dry-run     # 先看會做什麼
-miyoria install               # 只裝這台電腦需要的:每個 worker 建 venv、先裝 CUDA 版 torch、再裝 requirements
+miyoria init                  # 第一題選這台電腦做什麼;寫 host.toml
+miyoria add asr tts turn      # 建環境、下載小檔案,最後列出還要你自己放的東西
 miyoria doctor                # 缺什麼會一項一項列出來
-miyoria start                 # 每個 worker 開一個 Windows Terminal 分頁;asr、tts 先,sing 後
+miyoria up                    # 背景啟動 hostd,由它依序啟動 host.toml 啟用的服務
+miyoria status                # 每個服務的狀態、健康、埠
+miyoria logs asr -f           # 看一個服務的 log
 ```
 
-`install` 會先列出「缺什麼、各約多大」,**問一次**(`--yes` 直接做,給無人值守用),再動手。它會裝:
+`miyoria add <服務>` 做這些事:
 
-- pnpm(用 corepack)、node 套件、需要的 build;
-- Python 3.11–3.13(Windows 用 winget、macOS 用 brew)、ffmpeg(sing 要用);
-- 每個 worker 的 venv:先裝 CUDA 版 torch、再裝 requirements(等於下面各節手動的步驟);
-- turn 的兩個小模型(smart-turn 約 9 MB、silero-vad 約 2 MB),只從官方來源(huggingface.co、raw.githubusercontent.com),可續傳,已存在的檔不會覆蓋。
+- 在 `host.toml` 加 `[services.<名稱>]`;
+- 把服務資料夾的 `pyproject.toml` 和 `uv.lock` 用 `uv sync --frozen` 裝進 `<狀態資料夾>/envs/<名稱>`(狀態資料夾預設 `data/host`),版本全部照 lock 檔,CUDA 版 torch 也在裡面;
+- 下載 `service.toml` 的 `[install.files]`(turn 的兩個小模型:smart-turn 約 9 MB、silero-vad 約 2 MB,放到 `<狀態資料夾>/models/`);
+- 檢查 `[install] system` 的程式在不在 PATH 上(sing 要 ffmpeg),**不會替你裝**。
 
-已經有的 venv、模型和設定值一律跳過、不覆蓋;第二次執行什麼都不會裝。Linux 上 `install` **不會跑 sudo**,只印出 `sudo apt install …` / `dnf` 指令給你貼。
+`add` 不會裝 NVIDIA 驅動 / CUDA、Docker Desktop、OBS、VTube Studio、Minecraft(要管理員權限或授權條款),也不會替你放下面這些,`add` 的輸出和 `doctor` 都會列出缺哪些:
 
-`install` 只檢查、說明,**不會**裝:NVIDIA 驅動 / CUDA、Docker Desktop、OBS、VTube Studio、Minecraft / Prism(要管理員權限或授權條款)。也不會下載或放置下面這些,要自己處理(`install` 和 `doctor` 都會列出缺哪些):
-
-| 服務 | 要自己放的 | 說明 |
+| 服務 | 要自己放的(從 repository 根目錄算起) | 說明 |
 |---|---|---|
-| tts | `workers/voices/<聲音>/ref.wav` + `ref.txt` | 你的聲音參考音,不進 git(第 4 節) |
-| sing | `workers/models/applio/`(她的 RVC 模型)、`models/lead-split/becruily-bs/`、`models/vocal-split/`、`models/seed-vc/` | 第 9 節;沒有的部分會退回或略過,`doctor` 以警告列出 |
+| tts | `workers/voices/<聲音>/ref.wav` + `ref.txt` | 你的聲音參考音,不進 git(第 4 節);`<聲音>` 預設 `deepseek-chan` |
+| sing | `workers/models/applio/`(她的 RVC 模型)、`workers/models/lead-split/`(`becruily-bs/`)、`workers/models/vocal-split/`、`workers/models/seed-vc/` | 第 9 節;沒有的部分會退回或略過,`doctor` 以警告列出 |
 
-第一次啟動時會自動下載、不用處理:Qwen3-ASR(約 2 GB,asr)、Qwen3-TTS(約 4–5 GB,tts,並捕捉 CUDA graph,要等幾分鐘)、sing 的第一首歌(約 2 GB)。
+Hugging Face 上的大模型 `add` 不下載:第一次啟動時服務自己下載,或先 `miyoria models pull <服務>`,放在 `<狀態資料夾>/models/hf`(hostd 把 `HF_HUB_CACHE` 指到那裡)。Qwen3-ASR 約 2 GB、Qwen3-TTS 約 4–5 GB(tts 還會捕捉 CUDA graph,要等幾分鐘)、sing 的第一首歌約 2 GB。
 
-`miyoria start` 在 `[machine]` 底下用的設定(都可以用 `[stack.workers.<名稱>]` 逐欄位覆蓋):
+換掉預設的後端:
 
-| worker | venv | 埠 | 環境變數 |
-|---|---|---|---|
-| asr | `workers/.venv-asr-qwen` | 8003 | `ASR_BACKEND=qwen3`、`ASR_QWEN_SIZE=0.6B`(不設 `ASR_MODEL`) |
-| tts | `workers/.venv-tts-faster` | 8002 | `VOICES_DIR`=`workers/voices` 的絕對路徑、`TTS_DEFAULT_VOICE=deepseek-chan` |
-| sing | `workers/.venv-sing` | 8005 | `SING_OFFLOAD_URLS`=tts 和 asr 的網址(由 `offload = ["tts", "asr"]` 自動產生) |
-| turn | `workers/.venv-turn` | 8006 | |
+```bash
+miyoria add asr --extra sensevoice     # ASR 改用 SenseVoice(CPU,不裝 torch)
+```
 
-(上面「環境」一節表格裡 asr 的預設埠 8001 是 `asr/server.py` 自己的預設;`start` 一律用 `PORT` 指定成 8003。)asr、tts、sing 要在同一台電腦,因為 sing 做歌時會請 tts、asr 讓出顯卡。推論機在別台電腦時,把 `[machine.hosts] inference` 設成它的區網位址:worker 會綁在那個位址(不再是 127.0.0.1),Core 那台的 `ASR_URL` / `TTS_URL` / `[modules.sing] url` 由 `miyoria init` 寫好。worker 沒有認證,請用防火牆只放行 Core 那台。
+`--extra` 只能用在一個服務,把 `extras` 寫進 `host.toml`,**取代** `service.toml` 預設的 extra。還要自己在 `host.toml` 設環境變數,告訴 worker 用哪個後端(SenseVoice 的模型照第 1a 節下載,`ASR_MODEL` 指到它的資料夾):
+
+```toml
+[services.asr]
+extras = ["sensevoice"]
+env = { ASR_BACKEND = "sensevoice", ASR_MODEL = "C:/.../workers/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17" }
+```
+
+(TTS 的 `qwen-tts` 後端同理:`--extra qwen-tts`,`env = { TTS_BACKEND = "qwen-tts" }`。`faster` 和 `qwen-tts` 互相衝突,一個環境只能有一個。)已經有自己的 Python 環境就在 `[services.<名稱>]` 寫 `python = "<路徑>"`,hostd 不會動它。
+
+**每個服務的預設值都在它資料夾的 `service.toml`**,要改的值寫在 `host.toml` 的 `[services.<名稱>]`(`port`、`env`、`extras`、`python`、`gpu.policy`),不用改 `service.toml`。hostd 啟動的設定,和手動跑的差別:
+
+| worker | 埠 | 環境變數(`service.toml` 設的) |
+|---|---|---|
+| asr | 8003 | `ASR_BACKEND=qwen3`、`ASR_QWEN_SIZE=0.6B` |
+| tts | 8002 | `TTS_DEFAULT_VOICE=deepseek-chan`、`VOICES_DIR`=`workers/voices` |
+| sing | 8005 | `SING_OFFLOAD_URLS`=這台電腦上 tts 和 asr 的網址(sing 在它們之後啟動) |
+| turn | 8006 | `TURN_SMART_MODEL`、`TURN_SILERO_MODEL` 指到 `<狀態資料夾>/models/` 裡的兩個檔 |
+| lyrics | 8007 | |
+
+asr、tts、sing 要在同一台電腦,因為 sing 做歌時會請 tts、asr 讓出顯卡。推論機在別台電腦時,那台電腦要先加入 Core(`miyoria host join`,見 [docs/sing-remote-host.md](../docs/sing-remote-host.md) 和 OPERATIONS 的「多台電腦」),worker 不用開埠,是那台電腦的 hostd 主動連 Core。
+
+### hostd 啟動的 worker:token 和 `MIYORIA_*` 變數
+
+hostd 啟動一個 worker 時,環境裡多這幾個變數:
+
+| 變數 | 是什麼 |
+|---|---|
+| `MIYORIA_SERVICE_TOKEN` | 這個服務自己的 token。Core 和 CLI 從 hostd 拿到它 |
+| `MIYORIA_HOST_TOKEN` | 這台電腦所有服務共用的 token,hostd 每次啟動重新產生。worker 對同一台電腦上的鄰居(翻唱 worker 找 TTS、ASR)用它 |
+| `MIYORIA_HOSTD_URL` | hostd 的本機 API,`http://127.0.0.1:<埠>`。worker 靠它向 Core 要東西(見下) |
+| `HOST` / `PORT` | 綁哪個位址、哪個埠(位址是 `host.toml` 的 `[network] bind`,預設 `127.0.0.1`) |
+| `HF_HUB_CACHE` | `<狀態資料夾>/models/hf` |
+
+`MIYORIA_SERVICE_TOKEN` 或 `MIYORIA_HOST_TOKEN` 有設時,worker 的**每一條路由**都要帶 `Authorization: Bearer <其中一個 token>`,包括 `/health` 和不存在的路徑,否則回 401 `{"error":"unauthorized"}`(WebSocket 在接受之前就拒絕)。檢查在 `service_auth.py`,每個 worker 都載入它;載入失敗時 worker 直接結束,不會不檢查就開始服務。**兩個都沒設(手動跑 `server.py`)就什麼都不檢查**,和以前一樣,所以手動跑的 worker 不要對外開。
+
+這代表對 hostd 啟動的 worker,第 6 節的 `curl` 要帶 token:`miyoria status` 看狀態,不用 curl。要自己打的話 token 在 hostd 的環境裡,不是設定檔裡的固定值;測 worker 的最簡單做法是手動跑一份(不設這兩個變數)或用 fake。
+
+翻唱 worker 和歌詞服務還會用 `MIYORIA_HOSTD_URL` + `MIYORIA_SERVICE_TOKEN` 呼叫 hostd(`hostd_client.py`),請 Core 代跑 LLM(`cluster.llm`)和取 ASR 的結果(`cluster.fetch`);兩個變數沒設時這條路就不存在。
 
 ## 0. 先用 fake worker 跑通整條線(不需要 GPU)
 
@@ -89,10 +131,25 @@ python -m venv .venv
 cd workers
 .venv/Scripts/python -m pytest                     # 全部打 in-process 的 fake 和替身模型,不需要 GPU
 
-# 用同一份契約測試檢查「真的」worker:
+# 用同一份契約測試檢查「真的」worker(手動跑的,不設 token;hostd 啟動的 worker 會回 401):
 WORKER_ASR_URL=http://127.0.0.1:8001 WORKER_TTS_URL=http://127.0.0.1:8002 \
   .venv/Scripts/python -m pytest tests/test_contract.py
 ```
+
+### `contracts.py`:產生的請求 / 回應模型
+
+worker 收發的 JSON(`/tts` 和 `/offload` 的本體、唱歌的 `/jobs` 等,以及各端點的回應)只寫一次:`packages/contracts/workers/src/` 的 zod schema,根目錄 `pnpm contracts:gen` 輸出成 `packages/contracts/schema/workers.json`(進 git)。`contracts.py` 是從這份 JSON Schema 產生的 pydantic 模型,各 worker 和 fake 都 import 它,**不要手改**。重新產生(不需要 Node,讀進 git 的 JSON):
+
+```bash
+cd workers
+.venv/Scripts/pip install -r requirements-contracts.txt     # 鎖版本的 datamodel-code-generator
+.venv/Scripts/python gen_contracts.py                       # 重寫 contracts.py
+.venv/Scripts/python gen_contracts.py --check               # 過期就失敗並印出差異
+```
+
+改一個欄位:改 zod → `pnpm contracts:gen` → `python workers/gen_contracts.py`,一起 commit。CI 的 `workers-python` 會重新產生並在 `contracts.py` 有差異時失敗;裝了產生器時 `pytest` 也會檢查(`tests/test_contracts_module.py`)。測試裡 fake 和每個 worker 回的 JSON 都會拿去對 `contracts.py` 的回應模型檢查(`tests/response_contract.py`)。
+
+ASR / TTS 的 Docker 映像因此要從 `workers/` build(`docker build -f asr/Dockerfile .`;`docker-compose.yml` 已經這樣設)。
 
 ---
 
@@ -110,51 +167,49 @@ WORKER_ASR_URL=http://127.0.0.1:8001 WORKER_TTS_URL=http://127.0.0.1:8002 \
 
 WSL2 的 CUDA 用 Windows 的 NVIDIA 驅動,**WSL 裡不要另外裝顯卡驅動**。模型和聲音檔請放在 WSL 的 Linux 檔案系統(`~/miyoria/...`),不要從 `/mnt/c/...` 讀(I/O 很慢)。
 
-### 1a. 原生(Windows 或 WSL2 都適用)
+### 1a. 原生(Windows 或 WSL2 都適用):自己用 uv 跑
 
-Python 3.11+(`tts/design_voice.py` 用到 `tomllib`)。Windows 把 `bin` 換成 `Scripts`。
+一般情況用上面的 `miyoria add` 和 `miyoria up`。想自己在終端機跑一個 worker(除錯、不要 hostd)時,每個服務資料夾都是 uv 專案:`uv sync --frozen` 照 `uv.lock` 裝出 `.venv`,`uv run` 在裡面執行。這是 `workers/<服務>/.venv`,和 hostd 用的 `<狀態資料夾>/envs/<服務>` 是兩份獨立的環境。Python 要 3.11–3.13(`requires-python = ">=3.11,<3.14"`;uv 找不到會自己下載)。torch 一律是 CUDA 12.8 版(從 `download.pytorch.org/whl/cu128` 裝,`pyproject.toml` 已經設好,不用先手動裝),驅動要支援 CUDA 12.8。
+
+後端是 extra,一次只同步一個(`--extra <名稱>`):asr 有 `qwen3`(預設)和 `sensevoice`;tts 有 `faster`(預設)和 `qwen-tts`,兩個互相衝突;sing、turn、lyrics 沒有 extra。手動跑時 `uv run` 也要帶同一個 `--extra`。
+
+手動跑的 worker 沒有 hostd,所以**不檢查 token**(見上面「hostd 啟動的 worker」),也沒有 `MIYORIA_*` 變數;預設綁 `127.0.0.1`,不要對外開。
 
 **ASR — SenseVoice(CPU)**
 
 ```bash
-cd workers
-python -m venv .venv-asr && .venv-asr/bin/pip install -r asr/requirements-sensevoice.txt
-
 # 下載模型(約 1 GB 壓縮檔,內含 fp32 + int8;int8 約 230 MB)
+cd workers
 mkdir -p models && cd models
 curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2
 tar xf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2 && cd ..
 
 cd asr
+uv sync --frozen --extra sensevoice
 ASR_BACKEND=sensevoice \
 ASR_MODEL=../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17 \
-  ../.venv-asr/bin/python server.py                     # http://127.0.0.1:8001
+  uv run --frozen --extra sensevoice python server.py     # http://127.0.0.1:8001
 ```
 
 **ASR — Qwen3-ASR(GPU)**
 
 ```bash
-python -m venv .venv-asr-qwen
-.venv-asr-qwen/bin/pip install torch --index-url https://download.pytorch.org/whl/cu128   # 一定要先裝 CUDA 版
-.venv-asr-qwen/bin/pip install -r asr/requirements-qwen3.txt
-# WSL2 可選:  pip install -U flash-attn --no-build-isolation   /   pip install -U "qwen-asr[vllm]"
-
-cd asr
-ASR_BACKEND=qwen3 ASR_QWEN_SIZE=0.6B ../.venv-asr-qwen/bin/python server.py   # 第一次會自動下載約 2 GB
-# 本機模型:ASR_MODEL=/path/to/Qwen3-ASR-0.6B ;vLLM:ASR_QWEN_BACKEND=vllm ASR_VLLM_GPU_MEM=0.25
+cd workers/asr
+uv sync --frozen --extra qwen3
+ASR_BACKEND=qwen3 ASR_QWEN_SIZE=0.6B uv run --frozen --extra qwen3 python server.py   # 第一次會自動下載約 2 GB
+# 本機模型:ASR_MODEL=/path/to/Qwen3-ASR-0.6B
 ```
+
+FlashAttention 2 和 vLLM 後端(`ASR_QWEN_BACKEND=vllm ASR_VLLM_GPU_MEM=0.25`)不在 lock 裡:`uv sync` 預設會移除 lock 沒有的套件,所以要用它們請走 Docker(1b)或自己的環境。
 
 **TTS — Qwen3-TTS(faster-qwen3-tts,推薦,真串流)**
 
-原生 Windows 的完整步驟(PowerShell)見第 3 節;Linux / WSL2 / Git Bash 版:
+原生 Windows 的完整說明見第 3 節;Linux / WSL2 / Git Bash 版:
 
 ```bash
-python -m venv .venv-tts-faster          # 獨立 venv:faster-qwen3-tts 的 qwen-tts-hf 會和官方 qwen-tts 衝突
-.venv-tts-faster/bin/pip install torch --index-url https://download.pytorch.org/whl/cu128   # 先裝 CUDA 版(Windows 用 Scripts)
-.venv-tts-faster/bin/pip install -r tts/requirements-faster.txt
-
-cd tts
-VOICES_DIR=../voices TTS_DEFAULT_VOICE=deepseek-chan ../.venv-tts-faster/bin/python server.py   # http://127.0.0.1:8002
+cd workers/tts
+uv sync --frozen --extra faster
+VOICES_DIR=../voices TTS_DEFAULT_VOICE=deepseek-chan uv run --frozen --extra faster python server.py   # http://127.0.0.1:8002
 # 第一次會自動下載 Qwen/Qwen3-TTS-12Hz-1.7B-Base(約 4–5 GB);小一點:TTS_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-Base
 # 首包延遲 / 斷音的取捨:TTS_CHUNK_SIZE(預設 4 ≈ 333 ms,8 ≈ 667 ms),見第 3 節
 ```
@@ -162,20 +217,18 @@ VOICES_DIR=../voices TTS_DEFAULT_VOICE=deepseek-chan ../.venv-tts-faster/bin/pyt
 **TTS — Qwen3-TTS(官方 `qwen-tts`,句子級串流,最後備案)**
 
 ```bash
-python -m venv .venv-tts                 # 不要和 .venv-tts-faster 共用
-.venv-tts/bin/pip install torch --index-url https://download.pytorch.org/whl/cu128
-.venv-tts/bin/pip install -r tts/requirements.txt
-# WSL2 可選:  MAX_JOBS=4 pip install -U flash-attn --no-build-isolation
-
-cd tts
-TTS_BACKEND=qwen-tts VOICES_DIR=../voices TTS_DEFAULT_VOICE=deepseek-chan ../.venv-tts/bin/python server.py   # http://127.0.0.1:8002
+cd workers/tts
+uv sync --frozen --extra qwen-tts          # faster 和 qwen-tts 不能在同一個環境
+TTS_BACKEND=qwen-tts VOICES_DIR=../voices TTS_DEFAULT_VOICE=deepseek-chan uv run --frozen --extra qwen-tts python server.py   # http://127.0.0.1:8002
 ```
+
+兩個 extra 都用 `workers/tts/.venv`;換後端時重新 `uv sync --frozen --extra <另一個>`,uv 會把前一個換掉。
 
 啟動時會一次載入模型(faster:另外捕捉 CUDA graph)、把 `VOICES_DIR` 底下每個聲音建好 clone prompt、再暖機合成一句(同時確定輸出取樣率)。Log 看到 `TTS backend: …` 和 `voices: deepseek-chan` 才算就緒;`/health` 的 `backend` / `streaming` 也會告訴你實際用的是哪個後端。
 
 ### 1b. Docker Compose
 
-需要 Docker Desktop(WSL2 backend)+ NVIDIA 驅動。
+需要 Docker Desktop(WSL2 backend)+ NVIDIA 驅動。這條路不經 hostd:映像用 `requirements*.txt`(不是 uv 專案)、埠是 8001 / 8002,`miyoria status` 看不到它們,要在 `miyoria.toml` 的 `[speech.*]` 寫 `url`(第 5 節)。
 
 ```bash
 cd workers
@@ -196,7 +249,7 @@ ASR_BACKEND=qwen3 docker compose up --build            # 換成 Qwen3-ASR(也可
 
 ## 2. VRAM 預期(4070 SUPER 12 GB)
 
-> **這些是依模型大小估的數字,還沒實測。**實測請用 `spikes/speech-bench`(在開著遊戲 + OBS 的狀態下量),worker 的 `/health` 也會回報 `vram_allocated_mb`(僅 PyTorch 配置的部分)。
+> **這些是依模型大小估的數字,還沒實測。**實測請在開著遊戲 + OBS 的狀態下量,worker 的 `/health` 也會回報 `vram_allocated_mb`(僅 PyTorch 配置的部分)。
 
 | 元件 | 權重 | 實際約佔 | 備註 |
 |---|---|---|---|
@@ -219,23 +272,21 @@ DECISIONS 的預算:遊戲 + OBS baseline + ASR + TTS ≤ 約 11 GB。1.7B TTS +
 
 官方 `qwen-tts` 套件沒有串流 API,所以另一個社群套件 **[faster-qwen3-tts](https://pypi.org/project/faster-qwen3-tts/)**(CUDA graph 加速,`generate_voice_clone_streaming()` 每產生 `chunk_size` 個 codec step 就吐一段音訊)是目前**原生 Windows 上最簡單的真串流路線**:不需要 WSL2 / Docker / vLLM。`tts/server.py` 在偵測到它可以 import 時就自動用它(`TTS_BACKEND=auto`,預設);HTTP 介面(`POST /tts` 串流 PCM)完全不變,Miyoria 端照第 5 節設定 `kind = "http-worker"` 即可。
 
-**安裝(原生 Windows,獨立 venv)**
+**安裝(原生 Windows)**
 
-> faster-qwen3-tts 依賴 `qwen-tts-hf`,它和官方 `qwen-tts` 提供**同名的 `qwen_tts` 模組**,兩個裝在一起會互相覆蓋。所以一定要用**自己的 venv**、**不要**裝 `tts/requirements.txt`。
+`miyoria add tts` 就是這一步(`faster` 是預設 extra)。自己跑(PowerShell):
+
+> faster-qwen3-tts 依賴 `qwen-tts-hf`,它和官方 `qwen-tts` 提供**同名的 `qwen_tts` 模組**,兩個裝在一起會互相覆蓋,所以它們是互相衝突的 extra:一個環境只同步其中一個,**不要**混裝。
 
 ```powershell
-cd workers
-python -m venv .venv-tts-faster
-# 先裝 CUDA 版 PyTorch(版本對照你的驅動,cu124 / cu126 / cu128 …;不先裝的話 pip 會抓到 CPU 版)
-.venv-tts-faster\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu124
-.venv-tts-faster\Scripts\pip install -r tts\requirements-faster.txt
+cd workers	ts
+uv sync --frozen --extra faster          # CUDA 12.8 版 torch 從 lock 裝,不用先手動裝
 
-cd tts
-$env:VOICES_DIR = "..\voices"; $env:TTS_DEFAULT_VOICE = "deepseek-chan"
-..\.venv-tts-faster\Scripts\python server.py          # http://127.0.0.1:8002
+$env:VOICES_DIR = "..oices"; $env:TTS_DEFAULT_VOICE = "deepseek-chan"
+uv run --frozen --extra faster python server.py          # http://127.0.0.1:8002
 ```
 
-(Git Bash:`.venv-tts-faster/Scripts/pip …`,環境變數用 `VOICES_DIR=../voices … python server.py`。)第一次啟動會下載 `Qwen/Qwen3-TTS-12Hz-1.7B-Base`(約 4–5 GB)、捕捉 CUDA graph、替每個聲音各跑一次短合成(建立 clone prompt 快取並確定取樣率),所以啟動比較久;log 出現 `TTS backend: faster`、`voices: deepseek-chan` 才算就緒。`/health` 會回 `"backend":"faster","streaming":true,"chunk_size":4`。
+(Git Bash:`VOICES_DIR=../voices … uv run --frozen --extra faster python server.py`。)第一次啟動會下載 `Qwen/Qwen3-TTS-12Hz-1.7B-Base`(約 4–5 GB)、捕捉 CUDA graph、替每個聲音各跑一次短合成(建立 clone prompt 快取並確定取樣率),所以啟動比較久;log 出現 `TTS backend: faster`、`voices: deepseek-chan` 才算就緒。`/health` 會回 `"backend":"faster","streaming":true,"chunk_size":4`。
 
 **環境變數**(其餘共通的見 `tts/server.py` 開頭)
 
@@ -248,6 +299,7 @@ $env:VOICES_DIR = "..\voices"; $env:TTS_DEFAULT_VOICE = "deepseek-chan"
 | `TTS_ATTN` | `auto` | 有 `flash_attn` 就用,否則 `sdpa`(Windows 上就是 SDPA,不用裝 flash-attn) |
 | `TTS_CLONE_MODE` | `auto` | `auto` = 有 `ref.txt` 用 ICL,否則 x-vector(今天的行為);`icl` = 也讀 `ref.<語言>.txt`;`xvec` = 一律 x-vector。見下面「ICL 與情緒音庫」 |
 | `TTS_VOICE_BANK` | `0` | `1` = 依語言和情緒選參考音 |
+| `TTS_AHEAD_MAX_SENTENCE_CHARS` | `40` | `priority: "ahead"`(預先合成)的句子最多切成這麼長一段(在逗號處切)。GPU 鎖以段為單位,所以馬上要講的句子最多只等一小段;`0` = 跟其他句子一樣用 `TTS_MAX_SENTENCE_CHARS` |
 | `TTS_POOL_SIZE` | `4` | 合成用的執行緒。要比同時預先合成的句數多,馬上要講的句子才不會排在等 GPU 鎖的句子後面 |
 | `TTS_OFFLOAD_DRAIN_S` | `15` | `/offload` 等正在合成的句子講完的上限;`0` = 下一個 chunk 就停(舊行為) |
 
@@ -300,7 +352,7 @@ voice = "deepseek-chan"                  # 該伺服器怎麼註冊聲音,以它
 
 ### 最後備案:官方 `qwen-tts` 後端的串流是**句子級**(不是真串流)
 
-faster-qwen3-tts 裝不起來、或不想用社群套件時,`tts/requirements.txt`(官方 `qwen-tts`;**另開 venv,別和 faster 混裝**)會讓 worker 自動退回這個後端(也可以 `TTS_BACKEND=qwen-tts` 強制)。`qwen-tts` 套件(2026-11-01 查)**沒有文件化的串流 API**,只有整段的 `generate_*`。所以 worker 這樣做:
+faster-qwen3-tts 裝不起來、或不想用社群套件時,同步 `qwen-tts` extra(`miyoria add tts --extra qwen-tts`,或 1a 的指令;**別和 faster 混裝**)。環境裡只有官方 `qwen-tts` 時 worker 自動用這個後端,也可以 `TTS_BACKEND=qwen-tts` 強制。`qwen-tts` 套件(2026-11-01 查)**沒有文件化的串流 API**,只有整段的 `generate_*`。所以 worker 這樣做:
 
 1. 用 `。！？!?…` 和換行把文字切句(`tts/text_split.py`;太短的合併、超過 80 字的在逗號處切;`TTS_MIN_SENTENCE_CHARS` / `TTS_MAX_SENTENCE_CHARS` 可調)。
 2. 第一句合成完就開始回傳 PCM;回傳的同時已經在合成下一句,所以只要 RTF < 1,後面的句子不會斷。
@@ -311,7 +363,9 @@ faster-qwen3-tts 裝不起來、或不想用社群套件時,`tts/requirements.tx
 
 ### 排隊:`priority` 與 `X-Tts-Queue-Ms`
 
-一次只有一句在 GPU 上。Core 的 `/tts` 帶 `priority`:`now`(她接下來要講的)排在 `ahead`(先合成起來的後面幾句)前面,同一級先來先做;舊的 client 不帶,等於 `now`。回應標頭 `X-Tts-Queue-Ms` 是等 GPU 鎖的時間,`X-Tts-First-Audio-Ms` 是排隊加合成。Core 把排隊算進六段指標的 `tts_queue`、`tts_first` 只剩合成,所以 `voice.latency` 看得出是排隊還是 GPU 慢(§13.1 第 4 項)。
+一次只有一句在 GPU 上。Core 的 `/tts` 帶 `priority`:`now`(她接下來要講的)排在 `ahead`(先合成起來的後面幾句)前面,同一級先來先做;舊的 client 不帶,等於 `now`。回應標頭 `X-Tts-Queue-Ms` 是等 GPU 鎖的時間,`X-Tts-First-Audio-Ms` 是排隊加合成。Core 把排隊算進六段指標的 `tts_queue`、`tts_first` 只剩合成,所以 `voice.latency` 看得出是排隊還是 GPU 慢(§13.1 第 4 項)。`ahead` 的句子會切成最多 `TTS_AHEAD_MAX_SENTENCE_CHARS`(預設 40)字一段,鎖一段一段拿,`now` 最多等正在合成的那一段。
+
+ASR worker 的 `/asr` 也收 `priority`(multipart 欄位):Core 在對方還沒確定講完前先辨識的(`turn_early_asr`)帶 `ahead`,排在已經講完的句子後面;同一級先來先做。
 
 ### ICL 與情緒音庫
 
@@ -324,11 +378,11 @@ faster-qwen3-tts 裝不起來、或不想用社群套件時,`tts/requirements.tx
 音庫用 VoiceDesign 離線產生(跑之前先停 TTS worker;台詞和語氣在 `profiles/deepseek-chan/voice.toml` 的 `[design.bank.<語言>]` 和 `[emotion.instruct]`):
 
 ```bash
-cd workers/tts          # 用 .venv-tts 或 .venv-tts-faster
-../.venv-tts/bin/python design_voice.py bank deepseek-chan --n 3
+cd workers/tts          # 用 `uv run --frozen --extra faster`(或 `--extra qwen-tts`;見 1a)
+uv run --frozen --extra faster python design_voice.py bank deepseek-chan --n 3
 #   → workers/voices/deepseek-chan-candidates/bank/ja/happy/cand_00_seed1000.wav … + .txt
 #   同一個編號的候選在每種情緒都用同一個 seed,音色比較一致
-../.venv-tts/bin/python design_voice.py bank-pick deepseek-chan ja happy 1
+uv run --frozen --extra faster python design_voice.py bank-pick deepseek-chan ja happy 1
 #   → workers/voices/deepseek-chan/bank/ja/happy.wav + happy.txt
 curl -X POST http://127.0.0.1:8002/voices/reload
 ```
@@ -356,14 +410,14 @@ curl -X POST http://127.0.0.1:8002/voices/reload
 流程:VoiceDesign 依文字描述生出幾個候選 → 你聽、挑一個 → 固定成 clone 的參考音(`VOICES_DIR/deepseek-chan/ref.wav` + `ref.txt`)→ TTS worker 用 Base 模型複製它。描述寫在 `profiles/deepseek-chan/voice.toml` 的 `[design]`(`instruct`、`sample_text`、`language`),想調音色就改那裡。
 
 ```bash
-cd workers/tts          # 用 .venv-tts 或 .venv-tts-faster(後者的 qwen_tts 來自 qwen-tts-hf,未實測);跑之前先停 TTS worker(VRAM)
-../.venv-tts/bin/python design_voice.py generate deepseek-chan --n 8
+cd workers/tts          # faster 環境的 qwen_tts 來自 qwen-tts-hf,VoiceDesign 沒用它實測過;跑之前先停 TTS worker(VRAM)
+uv run --frozen --extra faster python design_voice.py generate deepseek-chan --n 8
 #   → workers/voices/deepseek-chan-candidates/cand_00_seed1000.wav … + 同名 .txt(= sample_text)+ manifest.json
 #   8 個聽起來一樣?加  --gen-kwargs '{"do_sample": true, "temperature": 0.9, "top_p": 0.95}'
 #   想換 seed 範圍:--seed 2000;臨時改描述:--instruct "..." --text "..."
 
 # 聽完挑第 3 個(複製成 voices/deepseek-chan/ref.wav + ref.txt)
-../.venv-tts/bin/python design_voice.py pick deepseek-chan 3
+uv run --frozen --extra faster python design_voice.py pick deepseek-chan 3
 # 也可以自己複製兩個檔案(ref.txt 必須是 ref.wav 實際說的內容,pick 會用候選的 .txt)
 
 curl -X POST http://127.0.0.1:8002/voices/reload        # 已在跑的 worker 不用重啟
@@ -378,17 +432,15 @@ curl -X POST http://127.0.0.1:8002/voices/reload        # 已在跑的 worker �
 
 ## 5. 接上 Miyoria
 
-在 Miyoria 設定檔的 `[speech]` 區段:
+hostd 管的 worker(這台電腦的,或已加入 Core 的別台電腦的)Core 自己找得到,`miyoria.toml` 的 `[speech]` 區段不用寫位址:
 
 ```toml
 [speech.asr.local]
 kind = "http-worker"
-url = "http://127.0.0.1:8001"
 # timeout_secs = 20            # 選填
 
 [speech.tts.local]
 kind = "http-worker"
-url = "http://127.0.0.1:8002"
 voice = "deepseek-chan"        # 預設聲音;請求沒指定 voice 時用
 # timeout_secs = 30            # 串流的閒置逾時;冷啟動的第一句可能要幾秒,別設太小
 
@@ -397,11 +449,13 @@ asr_chain = ["local"]
 tts_chain = ["local"]
 ```
 
-沒有 GPU 時,把兩個 `url` 都改成 `http://127.0.0.1:8000` 指向 fake worker。
+沒有 hostd 管的 worker(手動跑的、Docker、fake)時,在那一段加 `url` 釘在固定位址:手動跑的 asr 是 `http://127.0.0.1:8001`,tts 是 `http://127.0.0.1:8002`;沒有 GPU 時兩個都指到 fake worker 的 `http://127.0.0.1:8000`。有 `url` 就不找 hostd。
 
 ---
 
 ## 6. curl 冒煙測試
+
+> 下面的埠是手動跑的預設(asr `8001`)。hostd 啟動的 worker 有 token 檢查(見前面「hostd 啟動的 worker」),直接 `curl` 會得到 401;這一節用在手動跑的 worker 和 fake。
 
 > Windows 的 Git Bash / PowerShell 用 `curl` 直接塞中文 JSON 可能因為編碼出錯(`There was an error parsing the body`)。**在 Windows 上請把 JSON 寫進 UTF-8 檔案,用 `--data-binary @req.json`**;WSL / Linux 可以直接內嵌。
 
@@ -457,9 +511,9 @@ curl -sS -X POST http://127.0.0.1:8001/asr -F "audio=@out.wav" -F "language=zh"
 | 症狀 | 原因 / 處理 |
 |---|---|
 | 啟動就 `missing .../model.int8.onnx` | `ASR_MODEL` 要指到解壓後的 SenseVoice 資料夾(內含 `model.int8.onnx` + `tokens.txt`) |
-| Windows 裝到 CPU 版 torch | 先 `pip install torch --index-url https://download.pytorch.org/whl/cu128`(或 cu124 / cu126,對照驅動)再裝 `qwen-asr` / `qwen-tts` / `faster-qwen3-tts` |
+| 裝到 CPU 版 torch | 用 `uv sync --frozen`(`miyoria add` 就是這樣)裝,不要手動 `pip install torch`:lock 檔把 torch 固定在 CUDA 12.8 的 index。`import torch` 後 `torch.cuda.is_available()` 是 `False` 時先看驅動是否支援 CUDA 12.8 |
 | TTS 啟動說 `CUDA graphs require CUDA device` | torch 是 CPU 版或 `TTS_DEVICE` 不是 `cuda…`;faster 後端一定要 CUDA |
-| log 警告 `both qwen-tts and … qwen-tts-hf are installed` | 同一個 venv 混裝了兩個套件(同名 `qwen_tts` 模組);faster 請用獨立 venv 只裝 `requirements-faster.txt` |
+| log 警告 `both qwen-tts and … qwen-tts-hf are installed` | 同一個環境混裝了兩個套件(同名 `qwen_tts` 模組)。重新 `uv sync --frozen --extra faster`(或 `--extra qwen-tts`),一次只同步一個 |
 | `/health` 的 `backend` 不是你想要的 | `TTS_BACKEND=faster` / `qwen-tts` 強制;`auto` 看 `faster_qwen3_tts` 能不能 import |
 | faster 後端聽到斷音 / 每個 chunk 之間有空檔 | 把 `TTS_CHUNK_SIZE` 從 4 調到 8;GPU 被遊戲吃滿也會這樣(RTF 掉到 1 以下) |
 | `flash_attn` 裝不起來 | 不用裝;`*_ATTN=auto` 找不到就用 SDPA。要強制:`TTS_ATTN=sdpa` / `ASR_ATTN=sdpa` |
@@ -489,8 +543,8 @@ curl -sS -X POST http://127.0.0.1:8001/asr -F "audio=@out.wav" -F "language=zh"
 
 1. **直接找**:先用影片自己的音樂資訊(yt-dlp 的 `track` / `artist` / `alt_title`,YouTube Music 的上傳才有),再用標題的各種讀法:去掉 `【】`、`「」`、`(Official Video)`、`MV`、`歌ってみた`、`cover`、`中字`、`feat.`、`by …`、OP / ED 標記,依 ` - ` / ` / ` / `｜` 拆成「歌手 - 歌名」**兩種順序都試**(標題常把歌手和歌名放反),`「歌名」` 括號裡的字、頻道名當歌手。每個讀法分別問 lrclib 的搜尋(歌名 + 歌手,再用自由文字)和網易雲的搜尋。
 2. **算信心**:每個候選依歌名相似度(0.4,正規化:全形半形、大小寫、片假名 / 平假名、標點不算)、歌手相似度(0.2,沒歌手時不算)、長度差(0.4,3 秒內滿分、20 秒歸零)打分;歌名相似度低於 0.5、信心低於 0.6、或長度差超過 15 秒的不要。有同步 LRC 的優先於純文字(純文字信心上限 0.7)。
-3. **問 LLM**:沒有候選、或最好的信心還不到 0.72 時,把影片標題、頻道、描述、tags、長度丟給模型,請它說這首**原曲**的歌名、歌手、語言和別的寫法(羅馬拼音、簡繁、英文名),再拿這些重找;翻唱、卡拉 OK 版、字幕版都能對回原曲。最多問 2 次(第二次會告訴它哪些已經找過沒有),答案依來源 key 快取在 `data/songs/_lyrics/<key>.json`。LLM 用 Core 設定的那一個:`miyoria.toml` 的 `[llm]`,先看目前 profile 的 `[llm.purposes]`、再看全域的,用途 `fast`、沒有就 `chat` 的第一個 `provider:model`;OpenCode 的 session header 和 DeepSeek 的 `thinking: disabled` 跟 Core 一樣處理。也可以用 `SING_LYRICS_LLM_*` 給歌詞專用的模型。模型說不知道就不找,不會硬編歌名。
-4. **確認對得上**:同步 LRC 的最後一句要落在歌長的 55%~103%(否則是別的版本,拒絕);信心不到 0.85 的,再從**主唱音軌**(`lead.wav`,轉換前的原唱)切 3 句丟給 ASR(Qwen3-ASR,`:8003`)聽,對不上歌詞(字元涵蓋率 < 0.35)就拒絕,對得上(≥ 0.6)信心 +0.1;ASR 不在或離線就沒有這一步。實測(2026-11-09):對的歌詞 1.00,別首歌的歌詞 0.28。
+3. **問 LLM**:沒有候選、或最好的信心還不到 0.72 時,把影片標題、頻道、描述、tags、長度丟給模型,請它說這首**原曲**的歌名、歌手、語言和別的寫法(羅馬拼音、簡繁、英文名),再拿這些重找;翻唱、卡拉 OK 版、字幕版都能對回原曲。最多問 2 次(第二次會告訴它哪些已經找過沒有),答案依來源 key 快取在 `data/songs/_lyrics/<key>.json`。LLM 從哪來,依序:(1)hostd 啟動的 worker:請 Core 代跑(`cluster.llm`,用途 `fast`),用 Core 自己的模型和金鑰,金鑰不離開 Core,每次呼叫照樣記進 Core 的每日預算和呼叫紀錄,worker 這邊什麼都不用設;(2)`SING_LYRICS_LLM_URL` / `_KEY` / `_MODEL` 三項給的模型(任何 OpenAI 相容的 `/chat/completions`,URL 和 MODEL 都有才用),hostd 沒有連到 Core 時也用它;(3)都沒有就不問 LLM,只用規則找。worker 不再讀 `miyoria.toml`。模型說不知道就不找,不會硬編歌名。
+4. **確認對得上**:同步 LRC 的最後一句要落在歌長的 55%~103%(否則是別的版本,拒絕);信心不到 0.85 的,再從**主唱音軌**(`lead.wav`,轉換前的原唱)切 3 句丟給 ASR(hostd 啟動的 worker 經 hostd 請 Core 轉給 ASR;其他用 `SING_LYRICS_ASR_URL`,預設 `http://127.0.0.1:8003`)聽,對不上歌詞(字元涵蓋率 < 0.35)就拒絕,對得上(≥ 0.6)信心 +0.1;ASR 不在或離線就沒有這一步。實測(2026-11-09):對的歌詞 1.00,別首歌的歌詞 0.28。
 
 結果寫進歌的 `meta.json`:`lyrics` 除了播放用的 `synced` / `lines` / `plain`,還有 `provider`(`lrclib` / `netease`)、`how`(怎麼找到的:`metadata` / `title` / `llm`)、`track` / `artist`(對到的歌)、`confidence`(0..1)、`checks`(歌名 / 歌手相似度、長度差、LRC 涵蓋、ASR 抽查、被拒絕的原因)、`llm`(模型說的歌)、`tried`(試了幾個讀法)、`fetched_at`;`lyrics_input` 是當時用的輸入(原標題、描述、頻道、音樂資訊),重找時要用。
 
@@ -525,33 +579,35 @@ curl -s -X POST "http://127.0.0.1:8005/cache/prune?dry_run=true"      # 只列�
 curl -s -X POST http://127.0.0.1:8005/cache/prune                     # 現在清
 ```
 
-**安裝(原生 Windows,Git Bash)**
+**安裝**
+
+`miyoria add sing` 建環境(`workers/sing/pyproject.toml`,torch 和 torchaudio 2.11.0 的 CUDA 12.8 版,`ffmpeg` 要在 PATH 上),再列出要自己放的東西:`workers/models/` 底下的 `applio/`(她的 RVC 模型)、`lead-split/`(`becruily-bs/`)、`vocal-split/`(`MelBandRoformer.ckpt` + `.yaml`)、`seed-vc/`(Seed-VC 原始碼)。後三個沒有的話會退回或略過(沒有 lead-split 就不切主唱、沒有 vocal-split 就退回 Demucs);`applio/` 只在 `SING_VOICE=seedvc` 時可以略過。第一首歌會先下載約 2 GB 的模型。
+
+自己用 uv 跑(Git Bash):
 
 ```bash
-cd workers
-python -m venv .venv-sing
-.venv-sing/Scripts/pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128   # 先裝 CUDA 版
-.venv-sing/Scripts/pip install -r sing/requirements.txt
+cd workers/sing
+uv sync --frozen
 
-# Seed-VC 不是 pip 套件:把原始碼放到 models/seed-vc(GPL-3.0,只放本機)
-mkdir -p models/seed-vc
-curl -L https://codeload.github.com/Plachtaa/seed-vc/tar.gz/refs/heads/main | tar -xz -C models/seed-vc --strip-components=1
+# Seed-VC 不是 pip 套件:把原始碼放到 workers/models/seed-vc(GPL-3.0,只放本機)
+mkdir -p ../models/seed-vc
+curl -L https://codeload.github.com/Plachtaa/seed-vc/tar.gz/refs/heads/main | tar -xz -C ../models/seed-vc --strip-components=1
 
-cd sing
-../.venv-sing/Scripts/python server.py      # http://127.0.0.1:8005;第一首歌會先下載約 2 GB 的模型
+uv run --frozen python server.py      # http://127.0.0.1:8005;第一首歌會先下載約 2 GB 的模型
 ```
 
-YouTube 需要 JavaScript runtime 解 player challenge:yt-dlp 會用 Node(Miyoria 本來就要裝)或 deno(`SING_JS_RUNTIMES`);requirements 已經帶 `yt-dlp[default]`(含 `yt-dlp-ejs`)。ffmpeg 要在 PATH 上。
+YouTube 需要 JavaScript runtime 解 player challenge:yt-dlp 會用 Node(Miyoria 本來就要裝)或 deno(`SING_JS_RUNTIMES`);環境已經帶 `yt-dlp[default]`(含 `yt-dlp-ejs`)。ffmpeg 要在 PATH 上。
 
 **接上 Miyoria**
 
 ```toml
 [modules.sing]
-url = "http://127.0.0.1:8005"
+# 不寫 url:Core 找這台(或已加入的別台)電腦上 hostd 管的 sing。手動跑的 worker 才寫位址:
+# url = "http://127.0.0.1:8005"
 # start = "decide"         # 她決定什麼時候唱;"auto" = 好了就唱
 ```
 
-**冒煙測試**
+**冒煙測試**(手動跑的 worker;hostd 啟動的要帶 token,見前面「hostd 啟動的 worker」)
 
 ```bash
 curl -s -X POST http://127.0.0.1:8005/jobs -H 'content-type: application/json' -d '{"query":"Cartoon On & On NCS"}'
@@ -574,20 +630,23 @@ curl -s http://127.0.0.1:8005/jobs/<id>          # state / stage / progress;done
 | `SING_MAX_NOTE` / `SING_CEILING_OFFSET` | — / 16 | 她的最高音(`A5` 或 Hz);沒設就是說話中位數 + 16 半音 |
 | `SING_KEY_MIN` / `SING_KEY_MAX` | -5 / 3 | 自動整首轉調的範圍(都設 0 = 只挑八度) |
 | `SING_F0_CLEAN` | 1 | 轉換前清理 F0 |
-| `SING_OFFLOAD_URLS` | (空) | 做歌時請它們放掉 GPU 的 worker,例如 `http://127.0.0.1:8002,http://127.0.0.1:8003` |
+| `SING_OFFLOAD_URLS` | (空) | 做歌時請它們放掉 GPU 的 worker,例如 `http://127.0.0.1:8002,http://127.0.0.1:8003`。hostd 啟動 sing 時自動填這台電腦上的 tts 和 asr(sing 在它們之後啟動),呼叫它們時帶 `MIYORIA_HOST_TOKEN`;手動跑要自己設 |
 | `SING_EXCLUSIVE_WAIT_S` / `SING_RELOAD_TIMEOUT_S` | 30 / 300 | 等 Core 說可以開始(她先說一句)/ 等 worker 載回來 |
 | `SING_RESOLVE_TIMEOUT_S` | 60 | 找歌(`resolve`)最多等這麼久;超過這首失敗,後面的歌繼續,不會整條隊伍卡住 |
+| `SING_PREFETCH` | 1 | 做一首歌時,先把排在下一首的找好、下載好(網路和 CPU 這時閒著),輪到它時直接從切主唱開始;0 = 關 |
+| `SING_RVC_SERVER` | 1 | RVC 用一個常駐的 Applio 程序轉(`rvcserve.py`),不再每次重開 `core.py infer`(每次約 8 秒啟動)。要下載的歌在下載時就先暖機;後面還有歌排隊時留著給下一首,排隊的歌被取消就放掉;0 = 每次重開(舊行為)。自動挑 key 時直接用 Applio 轉換時量的音高(`rvcserve.hook_pitch`,掛在 Applio 內部的 `Pipeline.get_f0` 上,測過的是 Applio `6d5d951`);別的版本掛不上時,改由 worker 自己量音高,程序照樣常駐 |
+| `SING_INFO_REUSE_S` | 3600 | 下載音訊和影片時沿用找歌那一次 yt-dlp 的結果(串流網址幾小時內有效),不再重讀網頁和播放器;超過這麼久就重讀 |
 | `SING_YTDLP_CACHE` | `<資料夾>/_ytdlp-cache` | yt-dlp 的快取。預設的 `~/.cache/yt-dlp` 寫不進去時,Windows 上找歌會永遠卡住 |
 | `SING_TARGET_LUFS` | -16 | 混音響度 |
 | `SING_MAX_SECONDS` | 480 | 最長的歌 |
 | `SING_URL_HOSTS` | YouTube、SoundCloud、Bilibili、Niconico | 連結允許的網域(逗號分隔,子網域也算) |
 | `SING_LIBRARY_FIRST` / `SING_LYRICS` / `SING_KEEP_MODELS` | 1 / 1 / 0 | 先比對本機歌庫 / 抓歌詞 / 模型留在 VRAM |
-| `SING_LYRICS_LLM` | 1 | 規則找不到時問 LLM 這是哪首歌(0 = 關);用 Core 設定的模型,見「歌詞怎麼找」 |
-| `SING_LYRICS_LLM_URL` / `_KEY` / `_MODEL` | (空) | 歌詞專用的 LLM(OpenAI 相容的 base url、金鑰、模型 id;URL 和 MODEL 都有才用),沒設就讀 `miyoria.toml` |
+| `SING_LYRICS_LLM` | 1 | 規則找不到時問 LLM 這是哪首歌(0 = 關);LLM 的來源見「歌詞怎麼找」第 3 點 |
+| `SING_LYRICS_LLM_URL` / `_KEY` / `_MODEL` | (空) | 歌詞專用的 LLM(OpenAI 相容的 base url、金鑰、模型 id;URL 和 MODEL 都有才用)。hostd 啟動且已加入 Core 時不需要;沒有 hostd 的 worker 想問 LLM 就要設 |
 | `SING_LYRICS_LLM_TIMEOUT_S` / `SING_LYRICS_BUDGET_S` | 20 / 45 | 一次 LLM 呼叫最久 / 一首歌找歌詞最久(超過就用手上最好的,沒有就沒有) |
 | `SING_LYRICS_NETEASE` | 1 | 也查網易雲音樂的公開歌詞介面(0 = 只用 lrclib) |
-| `SING_LYRICS_URL` | (空) | 歌詞服務(`workers/lyrics`)的網址:翻唱 worker 跟 Core 不在同一台時,找歌詞(含 LLM、ASR 抽查)交給它,主唱音軌以 16 kHz 單聲道傳過去;對齊仍在 worker。服務不通就沒有歌詞 |
-| `SING_LYRICS_ASR` / `SING_LYRICS_ASR_URL` | auto / `http://127.0.0.1:8003` | 用 ASR 聽主唱抽查歌詞:`auto` = 只查信心不到 0.85 的、`1` = 都查、`0` = 不查;ASR 離線(offload)時略過 |
+| `SING_LYRICS_URL` | (空) | 歌詞服務(`workers/lyrics`)的網址,只給**沒有加入** Core 的電腦用:找歌詞(含 LLM、ASR 抽查)交給它,主唱音軌以 16 kHz 單聲道傳過去;對齊仍在 worker。服務不通就沒有歌詞。加入 Core 的電腦留空,worker 自己找 |
+| `SING_LYRICS_ASR` / `SING_LYRICS_ASR_URL` | auto / (見說明) | 用 ASR 聽主唱抽查歌詞:`auto` = 只查信心不到 0.85 的、`1` = 都查、`0` = 不查;ASR 離線(offload)時略過。`_URL` 有設就用它(設成空 = 不查);沒設時,hostd 啟動的 worker 經 hostd 請 Core 轉給 ASR,否則用 `http://127.0.0.1:8003` |
 | `SING_VIDEO` / `SING_VIDEO_MAX_HEIGHT` / `SING_VIDEO_MAX_MB` / `SING_VIDEO_WAIT_S` | 1 / 1080 / 300 / 120 | 抓原曲影片 / 最高解析度 / 最大檔案 / 音訊好了之後最多再等幾秒 |
 | `HOST` / `PORT` | `127.0.0.1` / `8005` | 只聽本機 |
 
@@ -630,24 +689,27 @@ Discord 在人不講話時不送封包,voice node 又在 400 ms 沒封包(`SILEN
 
 Silero 是另一個獨立開關(`vad_engine = "silero"`):每 32 ms 一幀送到 worker 的 `/vad`,比能量判斷準,尤其是背景有聲音的時候。連不上或沒回應就用能量偵測器,它一直在旁邊跑。
 
-**安裝(原生 Windows,PowerShell)**
+**安裝**
+
+`miyoria add turn` 建環境,並把兩個模型下載到狀態資料夾(預設 `data/host/models/`):`smart-turn/smart-turn-v3.2-cpu.onnx`(BSD-2-Clause,約 9 MB,來自 huggingface.co/pipecat-ai/smart-turn-v3)和 `silero-vad/silero_vad.onnx`(MIT,約 2 MB,來自 raw.githubusercontent.com/snakers4/silero-vad)。檔案已經存在就不覆蓋,可以續傳。hostd 啟動 worker 時用 `TURN_SMART_MODEL` 和 `TURN_SILERO_MODEL` 指到那兩個檔,不用自己設。
+
+沒有這兩個檔 worker 也會啟動,Core 退回「安靜多久就算講完」;`/health` 的 `smart_turn` 或 `silero` 會是 `false`,`errors` 寫原因。
+
+自己用 uv 跑(PowerShell;模型要自己放,路徑照下面的預設值,或用上面兩個變數指):
 
 ```powershell
 cd workers
-python -m venv .venv-turn
-.venv-turn\Scripts\pip install -r turn\requirements.txt
-
-# 模型(BSD-2-Clause 8.7 MB、MIT 約 2 MB)
-New-Item -ItemType Directory -Force models\smart-turn, models\silero-vad
-curl.exe -L -o models\smart-turn\smart-turn-v3.2-cpu.onnx "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx?download=true"
-curl.exe -L -o models\silero-vad\silero_vad.onnx "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx"
+New-Item -ItemType Directory -Force modelssmart-turn, modelssilero-vad
+curl.exe -L -o modelssmart-turnsmart-turn-v3.2-cpu.onnx "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx?download=true"
+curl.exe -L -o modelssilero-vadsilero_vad.onnx "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx"
 
 cd turn
-..\.venv-turn\Scripts\python server.py      # http://127.0.0.1:8006
+uv sync --frozen
+uv run --frozen python server.py      # http://127.0.0.1:8006
 curl.exe -s http://127.0.0.1:8006/health      # smart_turn 和 silero 都要是 true
 ```
 
-(Git Bash:`.venv-turn/Scripts/pip …`、`curl -L -o models/smart-turn/… "…"`。用 `miyoria up` 的話在 `[stack.workers]` 加 `turn = { venv = "workers/.venv-turn", port = 8006 }`。)
+(Git Bash:`curl -L -o models/smart-turn/… "…"`。)
 
 **接上 Miyoria**
 
@@ -661,7 +723,7 @@ vad_engine = "silero"
 
 ```powershell
 cd workers\turn
-..\.venv-turn\Scripts\python calibrate.py ..\..\data\voice-clips\turn --complete ended --incomplete resumed
+uv run --frozen python calibrate.py ..\..\data\voice-clips\turn --complete ended --incomplete resumed
 # 印出每個閾值抓到多少講完的、切掉多少沒講完的,以及建議的 TURN_THRESHOLD
 ```
 
@@ -669,8 +731,8 @@ cd workers\turn
 
 | 環境變數 | 預設 | 說明 |
 |---|---|---|
-| `TURN_SMART_MODEL` | `../models/smart-turn/smart-turn-v3.2-cpu.onnx` | Smart Turn |
-| `TURN_SILERO_MODEL` | `../models/silero-vad/silero_vad.onnx` | Silero VAD |
+| `TURN_SMART_MODEL` | `../models/smart-turn/smart-turn-v3.2-cpu.onnx`(hostd 啟動時是 `<狀態資料夾>/models/smart-turn/…`) | Smart Turn |
+| `TURN_SILERO_MODEL` | `../models/silero-vad/silero_vad.onnx`(hostd 啟動時是 `<狀態資料夾>/models/silero-vad/…`) | Silero VAD |
 | `TURN_THRESHOLD` | 0.5 | 機率多少算講完 |
 | `TURN_THREADS` / `TURN_POOL_SIZE` | 2 / 2 | ONNX Runtime 執行緒 / 同時處理幾個請求 |
 | `HOST` / `PORT` | `127.0.0.1` / `8006` | 只聽本機 |

@@ -3,14 +3,26 @@
 // fall back to the store.
 
 import { type AuthService, AuthServiceKey } from "@miyoria/auth";
-import { AuthStoreKey, type RoleAssignment, type RoleDefinition } from "@miyoria/store";
-import { z } from "zod";
+import type { RemoveMappingRequest, UpsertRoleRequest } from "@miyoria/contracts/api";
+import {
+  type AuthScope,
+  AuthStoreKey,
+  type RoleAssignment,
+  type RoleDefinition,
+  type RoleMapping,
+} from "@miyoria/store";
+import type { AccountRef } from "@miyoria/types";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { readJson, readQuery } from "./extract.js";
-import { json, noContent, param, type Route } from "./route.js";
-import { AccountRefSchema, AuthScopeSchema, scopeEquals } from "./schemas.js";
+import { scopeEquals } from "./schemas.js";
 import { type ApiContext, type ApiState, actorOf } from "./state.js";
-import type { AssignRoleRequest } from "./types.js";
+
+/** An assignment as the handler gets it: the scope's context has its `scope` (a DM: `null`). */
+interface Assignment {
+  account: AccountRef;
+  role: string;
+  scope: AuthScope;
+}
 
 function auth(state: ApiState): AuthService {
   return state.service(AuthServiceKey, "auth module");
@@ -29,26 +41,18 @@ async function allRoles(state: ApiState): Promise<RoleDefinition[]> {
   return roles.sort((a, b) => b.rank - a.rank || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
-async function roles(state: ApiState): Promise<Response> {
-  return json(await allRoles(state));
-}
-
-async function role(state: ApiState, c: ApiContext): Promise<Response> {
-  const name = param(c, "name");
+async function role(state: ApiState, name: string): Promise<RoleDefinition> {
   const found = (await allRoles(state)).find((r) => r.name === name);
   if (!found) throw unknownRole(name);
-  return json(found);
+  return found;
 }
 
-const UpsertRoleSchema = z.object({
-  rank: z.number().int(),
-  grants: z.array(z.string()).default([]),
-  denies: z.array(z.string()).default([]),
-});
-
-async function upsertRole(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, UpsertRoleSchema);
-  const name = param(c, "name");
+async function upsertRole(
+  state: ApiState,
+  c: ApiContext,
+  name: string,
+  request: Required<UpsertRoleRequest>,
+): Promise<RoleDefinition> {
   const service = auth(state);
   const definition: RoleDefinition = {
     name,
@@ -64,11 +68,10 @@ async function upsertRole(state: ApiState, c: ApiContext): Promise<Response> {
   }
   const stored = service.role(name);
   if (!stored) throw unknownRole(name);
-  return json(stored);
+  return stored;
 }
 
-async function deleteRole(state: ApiState, c: ApiContext): Promise<Response> {
-  const name = param(c, "name");
+async function deleteRole(state: ApiState, c: ApiContext, name: string): Promise<void> {
   const service = auth(state);
   if (!service.role(name)) throw unknownRole(name);
   let deleted: boolean;
@@ -78,33 +81,29 @@ async function deleteRole(state: ApiState, c: ApiContext): Promise<Response> {
     throw ApiError.conflict(ApiError.internal(error).message);
   }
   if (!deleted) throw unknownRole(name);
-  return noContent();
 }
 
-async function assignments(state: ApiState): Promise<Response> {
+async function assignments(state: ApiState): Promise<RoleAssignment[]> {
   const store = state.service(AuthStoreKey, "auth store");
   const all = await store.allAssignments();
   all.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  return json(all);
+  return all;
 }
-
-const AssignRoleSchema = z.object({
-  account: AccountRefSchema,
-  role: z.string(),
-  scope: AuthScopeSchema,
-});
 
 async function findAssignment(
   state: ApiState,
-  request: AssignRoleRequest,
+  request: Assignment,
 ): Promise<RoleAssignment | undefined> {
   const store = state.service(AuthStoreKey, "auth store");
   const all = await store.assignmentsFor(request.account);
   return all.find((a) => a.role === request.role && scopeEquals(a.scope, request.scope));
 }
 
-async function assign(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, AssignRoleSchema);
+async function assign(
+  state: ApiState,
+  c: ApiContext,
+  request: Assignment,
+): Promise<RoleAssignment> {
   const service = auth(state);
   if (!service.role(request.role)) throw unknownRole(request.role);
   if (await findAssignment(state, request)) {
@@ -119,11 +118,10 @@ async function assign(state: ApiState, c: ApiContext): Promise<Response> {
   }
   const stored = await findAssignment(state, request);
   if (!stored) throw new ApiError(500, "the assignment was not stored");
-  return json(stored);
+  return stored;
 }
 
-async function revoke(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, AssignRoleSchema);
+async function revoke(state: ApiState, c: ApiContext, request: Assignment): Promise<void> {
   const service = auth(state);
   let removed: boolean;
   try {
@@ -132,33 +130,25 @@ async function revoke(state: ApiState, c: ApiContext): Promise<Response> {
     throw ApiError.internal(error);
   }
   if (!removed) throw ApiError.notFound("no such role assignment");
-  return noContent();
 }
 
-const MappingsQuerySchema = z.object({
-  platform: z.string({ error: "missing field `platform`" }),
-  guild: z.string({ error: "missing field `guild`" }),
-});
-
-async function mappings(state: ApiState, c: ApiContext): Promise<Response> {
-  const q = readQuery(c, MappingsQuerySchema);
+async function mappings(
+  state: ApiState,
+  q: { platform: string; guild: string },
+): Promise<RoleMapping[]> {
   const platform = q.platform.trim();
   const guild = q.guild.trim();
   const service = state.optional(AuthServiceKey);
-  if (service) return json(await service.mappings(platform, guild));
+  if (service) return service.mappings(platform, guild);
   const store = state.service(AuthStoreKey, "auth store");
-  return json(await store.mappings(platform, guild));
+  return store.mappings(platform, guild);
 }
 
-const RoleMappingSchema = z.object({
-  platform: z.string(),
-  guild: z.string(),
-  platform_role: z.string(),
-  role: z.string(),
-});
-
-async function setMapping(state: ApiState, c: ApiContext): Promise<Response> {
-  const mapping = await readJson(c, RoleMappingSchema);
+async function setMapping(
+  state: ApiState,
+  c: ApiContext,
+  mapping: RoleMapping,
+): Promise<RoleMapping> {
   if (mapping.guild.trim() === "" || mapping.platform_role.trim() === "") {
     throw ApiError.badRequest("`guild` and `platform_role` must not be empty");
   }
@@ -169,17 +159,14 @@ async function setMapping(state: ApiState, c: ApiContext): Promise<Response> {
   } catch (error) {
     throw ApiError.internal(error);
   }
-  return json(mapping);
+  return mapping;
 }
 
-const RemoveMappingSchema = z.object({
-  platform: z.string(),
-  guild: z.string(),
-  platform_role: z.string(),
-});
-
-async function removeMapping(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, RemoveMappingSchema);
+async function removeMapping(
+  state: ApiState,
+  c: ApiContext,
+  request: RemoveMappingRequest,
+): Promise<void> {
   const service = auth(state);
   let removed: boolean;
   try {
@@ -193,20 +180,30 @@ async function removeMapping(state: ApiState, c: ApiContext): Promise<Response> 
     throw ApiError.internal(error);
   }
   if (!removed) throw ApiError.notFound("no such role mapping");
-  return noContent();
 }
 
-export function roleRoutes(state: ApiState): Route[] {
-  return [
-    { method: "GET", path: "/api/auth/roles", handler: () => roles(state) },
-    { method: "GET", path: "/api/auth/roles/:name", handler: (c) => role(state, c) },
-    { method: "PUT", path: "/api/auth/roles/:name", handler: (c) => upsertRole(state, c) },
-    { method: "DELETE", path: "/api/auth/roles/:name", handler: (c) => deleteRole(state, c) },
-    { method: "GET", path: "/api/auth/assignments", handler: () => assignments(state) },
-    { method: "POST", path: "/api/auth/assignments", handler: (c) => assign(state, c) },
-    { method: "DELETE", path: "/api/auth/assignments", handler: (c) => revoke(state, c) },
-    { method: "GET", path: "/api/auth/mappings", handler: (c) => mappings(state, c) },
-    { method: "PUT", path: "/api/auth/mappings", handler: (c) => setMapping(state, c) },
-    { method: "DELETE", path: "/api/auth/mappings", handler: (c) => removeMapping(state, c) },
-  ];
-}
+/** The role routes on the route table (`@miyoria/contracts/api`). */
+export const roleRpc = {
+  list: os.roles.list.handler(({ context }) => allRoles(context.state)),
+  get: os.roles.get.handler(({ input, context }) => role(context.state, input.params.name)),
+  upsert: os.roles.upsert.handler(({ input, context }) =>
+    upsertRole(context.state, context.c, input.params.name, input.body),
+  ),
+  remove: os.roles.remove.handler(({ input, context }) =>
+    deleteRole(context.state, context.c, input.params.name),
+  ),
+  assignments: os.roles.assignments.handler(({ context }) => assignments(context.state)),
+  assign: os.roles.assign.handler(({ input, context }) =>
+    assign(context.state, context.c, input.body),
+  ),
+  revoke: os.roles.revoke.handler(({ input, context }) =>
+    revoke(context.state, context.c, input.body),
+  ),
+  mappings: os.roles.mappings.handler(({ input, context }) => mappings(context.state, input.query)),
+  setMapping: os.roles.setMapping.handler(({ input, context }) =>
+    setMapping(context.state, context.c, input.body),
+  ),
+  removeMapping: os.roles.removeMapping.handler(({ input, context }) =>
+    removeMapping(context.state, context.c, input.body),
+  ),
+};

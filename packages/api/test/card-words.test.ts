@@ -1,7 +1,7 @@
 // What she writes on a card: cut to size, passed field by field, a pose only from the band's, and
 // a card without her words when she cannot write.
 
-import { LlmRouterKey } from "@miyoria/llm";
+import { LlmRouterKey } from "@miyoria/llm/llm";
 import { describe, expect, it } from "vitest";
 import { type CardContext, checked, MAX_FIELDS, MAX_LINE, writeCard } from "../src/card-words.js";
 import type { ApiState } from "../src/state.js";

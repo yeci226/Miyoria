@@ -21,7 +21,7 @@ import {
   type Invocation,
   notice,
 } from "@miyoria/commands";
-import { getLogger, type ServiceLookup } from "@miyoria/kernel";
+import { getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import type { AuthScope, NodeOverride, RoleDefinition, RoleMapping } from "@miyoria/store";
 import { type AccountRef, accountSubject, type Subject, sameAccount } from "@miyoria/types";
 import { isValidPattern } from "./node.js";
@@ -195,7 +195,7 @@ const PERM_OPS: Record<PermOp, { path: string; description: string }> = {
   clear: { path: "admin perm clear", description: "移除某個範圍的權限節點覆寫" },
 };
 
-/** An early exit with the reply to send (Rust `Err(CommandReply)`). */
+/** An early exit with the reply to send. */
 class Refusal extends Error {
   override readonly name = "Refusal";
 

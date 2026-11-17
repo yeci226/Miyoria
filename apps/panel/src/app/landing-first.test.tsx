@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionInfo } from "@/api/types";
+import type { SessionInfo } from "@miyoria/contracts/api";
 import { readStorage, writeStorage } from "@/lib/storage";
 import { STORAGE_TOKEN } from "./connection";
 import { LandingFirst } from "./LandingFirst";

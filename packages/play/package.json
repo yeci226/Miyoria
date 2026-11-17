@@ -1,0 +1,50 @@
+{
+  "name": "@miyoria/play",
+  "version": "0.1.0",
+  "description": "party: Voice party games she hosts and plays: turtle soup, song guessing, word chains and quizzes; game: Game director: picks goals, acts through game adapter tools, comments live; queue: User request queue: fair ordering, voting mode, persistence and commands",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    "./party": {
+      "@miyoria/source": "./party/src/index.ts",
+      "types": "./dist/party/src/index.d.ts",
+      "default": "./dist/party/src/index.js"
+    },
+    "./game": {
+      "@miyoria/source": "./game/src/index.ts",
+      "types": "./dist/game/src/index.d.ts",
+      "default": "./dist/game/src/index.js"
+    },
+    "./queue": {
+      "@miyoria/source": "./queue/src/index.ts",
+      "types": "./dist/queue/src/index.d.ts",
+      "default": "./dist/queue/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miyoria/commands": "workspace:*",
+    "@miyoria/gate": "workspace:*",
+    "@miyoria/heart": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
+    "@miyoria/store": "workspace:*",
+    "@miyoria/types": "workspace:*",
+    "opencc-js": "^1.4.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

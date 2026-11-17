@@ -7,7 +7,7 @@ export class CommandError extends Error {
 }
 
 /**
- * The argument type. Serialized like Rust `#[serde(tag = "type", content = "choices")]`:
+ * The argument type. Serialized as a tagged object with `choices` for a choice:
  * `{ type: "string" }`, `{ type: "choice", choices: [...] }`.
  */
 export type ArgKind =
@@ -27,7 +27,7 @@ export type ArgKind =
    */
   | { type: "role" };
 
-/** Constructors for `ArgKind` (Rust `ArgKind::String`, `ArgKind::Choice(..)`, ...). */
+/** Constructors for `ArgKind` (`ArgKind.string`, `ArgKind.choice(..)`, ...). */
 export const ArgKind = {
   string: { type: "string" },
   integer: { type: "integer" },
@@ -121,7 +121,7 @@ export function splitPath(path: string): string[] {
   return path.split(/\s+/u).filter((word) => word !== "");
 }
 
-/** Untagged like the Rust serde enum: a JSON string, integer or boolean. */
+/** Untagged: a JSON string, integer or boolean. */
 export type ArgValue = string | number | boolean;
 
 /** Guild membership details of a user passed as an argument. */
@@ -159,7 +159,7 @@ export type NodeCheck = (node: string) => Promise<boolean>;
 /** Sends an extra message while a handler runs (bound by the platform, where supported). */
 export type FollowUp = (reply: CommandReply) => Promise<void>;
 
-/** An `InvocationData` with defaults applied and the Rust helper methods. */
+/** An `InvocationData` with defaults applied and helper methods. */
 export class Invocation implements InvocationData {
   path: string[];
   args: Record<string, ArgValue>;

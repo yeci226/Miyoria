@@ -7,7 +7,7 @@ import {
   redirect,
   type RouterHistory,
 } from "@tanstack/react-router";
-import type { LlmCallKind } from "@/api/types";
+import type { LlmCallKind } from "@miyoria/contracts/api";
 import { NotFoundPage } from "@/pages/NotFound";
 import {
   ACTIVITY_TABS,
@@ -41,6 +41,7 @@ const LifePage = lazyRouteComponent(() => import("@/pages/life/LifePage"), "Life
 const EconomyPage = lazyRouteComponent(() => import("@/pages/economy/EconomyPage"), "EconomyPage");
 const LlmPage = lazyRouteComponent(() => import("@/pages/llm/LlmPage"), "LlmPage");
 const SystemPage = lazyRouteComponent(() => import("@/pages/system/SystemPage"), "SystemPage");
+const MachinesPage = lazyRouteComponent(() => import("@/pages/machines/MachinesPage"), "MachinesPage");
 const RulesPage = lazyRouteComponent(() => import("@/pages/rules/RulesPage"), "RulesPage");
 const EvalPage = lazyRouteComponent(() => import("@/pages/eval/EvalPage"), "EvalPage");
 const AccessPage = lazyRouteComponent(() => import("@/pages/access/AccessPage"), "AccessPage");
@@ -72,10 +73,15 @@ export const characterRoute = createRoute({
 export const innerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/inner",
-  validateSearch: (s: Record<string, unknown>): { tab?: InnerTab; thought?: string } => ({
+  validateSearch: (s: Record<string, unknown>): { tab?: InnerTab; thought?: string; feelings?: true } => ({
     tab: oneOf(INNER_TABS, s.tab),
     thought: str(s.thought),
+    // 感情 was a second list of people: an old link to it goes to 角色 / 人.
+    ...(s.tab === "feelings" ? { feelings: true as const } : {}),
   }),
+  beforeLoad: ({ search }) => {
+    if (search.feelings) throw redirect({ to: "/character", search: { tab: "people" } });
+  },
   component: InnerPage,
 });
 
@@ -161,6 +167,7 @@ const routeTree = rootRoute.addChildren([
   economyRoute,
   llmRoute,
   systemRoute,
+  createRoute({ getParentRoute: () => rootRoute, path: "/machines", component: MachinesPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/rules", component: RulesPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/eval", component: EvalPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/access", component: AccessPage }),

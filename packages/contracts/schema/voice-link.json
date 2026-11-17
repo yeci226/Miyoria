@@ -1,0 +1,827 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "@miyoria/contracts/voice-link",
+  "$defs": {
+    "VoiceLinkCoreMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/VoiceLinkWelcome"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkJoin"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkLeave"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPlayStart"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPlayEnd"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPlayStop"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPlayDuck"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPlayPause"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPlayResume"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkGoLiveStart"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkGoLiveStop"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPing"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPong"
+        }
+      ]
+    },
+    "VoiceLinkGoLive": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "golive"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/VoiceLinkGoLiveState"
+        },
+        "error": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "guild",
+        "state"
+      ]
+    },
+    "VoiceLinkGoLiveEncoder": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "nvenc",
+        "software"
+      ]
+    },
+    "VoiceLinkGoLiveStart": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "golive_start"
+        },
+        "guild": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "source": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "\\S"
+        },
+        "channel": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fps": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bitrate_kbps": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "encoder": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VoiceLinkGoLiveEncoder"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "audio": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "listen": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "guild",
+        "source"
+      ]
+    },
+    "VoiceLinkGoLiveState": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "live",
+        "stopped",
+        "failed"
+      ]
+    },
+    "VoiceLinkGoLiveStop": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "golive_stop"
+        },
+        "guild": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "type",
+        "guild"
+      ]
+    },
+    "VoiceLinkHello": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "hello"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "token": {
+          "type": "string"
+        },
+        "node": {
+          "default": "",
+          "type": "string"
+        },
+        "self_account": {
+          "$ref": "#/$defs/VoiceLinkSelfAccount"
+        },
+        "capabilities": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "token",
+        "self_account"
+      ]
+    },
+    "VoiceLinkJoin": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "join"
+        },
+        "guild": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "channel": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "guild"
+      ]
+    },
+    "VoiceLinkJoined": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "joined"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "guild",
+        "channel"
+      ]
+    },
+    "VoiceLinkLeave": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "leave"
+        },
+        "guild": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "type",
+        "guild"
+      ]
+    },
+    "VoiceLinkLeft": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "left"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "reason": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "guild"
+      ]
+    },
+    "VoiceLinkNodeError": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "error"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "message"
+      ]
+    },
+    "VoiceLinkNodeMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/VoiceLinkHello"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkJoined"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkLeft"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkVoiceState"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkSpeaking"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkStreamOpen"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkStreamClose"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPlayback"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkGoLive"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkNodeError"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPing"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkPong"
+        }
+      ]
+    },
+    "VoiceLinkParticipant": {
+      "type": "object",
+      "properties": {
+        "user_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "default": "",
+          "type": "string"
+        },
+        "is_self": {
+          "default": false,
+          "type": "boolean"
+        },
+        "muted": {
+          "default": false,
+          "type": "boolean"
+        },
+        "deafened": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "user_id"
+      ]
+    },
+    "VoiceLinkPing": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "ping"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "VoiceLinkPlayDuck": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "play_duck"
+        },
+        "play": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fade_ms": {
+          "default": 0,
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "play",
+        "gain"
+      ]
+    },
+    "VoiceLinkPlayEnd": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "play_end"
+        },
+        "play": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "type",
+        "play"
+      ]
+    },
+    "VoiceLinkPlayPause": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "play_pause"
+        },
+        "play": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "fade_ms": {
+          "default": 0,
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "play"
+      ]
+    },
+    "VoiceLinkPlayResume": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "play_resume"
+        },
+        "play": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "fade_ms": {
+          "default": 0,
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "play"
+      ]
+    },
+    "VoiceLinkPlayStart": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "play_start"
+        },
+        "play": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "guild": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "sample_rate": {
+          "type": "integer",
+          "minimum": 8000,
+          "maximum": 192000
+        },
+        "levels": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "play",
+        "guild",
+        "sample_rate"
+      ]
+    },
+    "VoiceLinkPlayStop": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "play_stop"
+        },
+        "play": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "fade_ms": {
+          "default": 0,
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "play"
+      ]
+    },
+    "VoiceLinkPlayback": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "playback"
+        },
+        "play": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "state": {
+          "$ref": "#/$defs/WirePlaybackState"
+        },
+        "error": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "play",
+        "state"
+      ]
+    },
+    "VoiceLinkPong": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "pong"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "VoiceLinkSelfAccount": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform",
+        "id"
+      ]
+    },
+    "VoiceLinkSpeaking": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "speaking"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "speaking": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "guild",
+        "user_id",
+        "speaking"
+      ]
+    },
+    "VoiceLinkStreamClose": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "stream_close"
+        },
+        "stream": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "type",
+        "stream"
+      ]
+    },
+    "VoiceLinkStreamOpen": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "stream_open"
+        },
+        "stream": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "guild": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "default": "",
+          "type": "string"
+        },
+        "sample_rate": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "type",
+        "stream",
+        "guild",
+        "channel",
+        "user_id",
+        "sample_rate"
+      ]
+    },
+    "VoiceLinkVoiceState": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "voice_state"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "participants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VoiceLinkParticipant"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "guild",
+        "channel",
+        "participants"
+      ]
+    },
+    "VoiceLinkWelcome": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "welcome"
+        },
+        "session": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "session"
+      ]
+    },
+    "WirePlaybackState": {
+      "type": "string",
+      "enum": [
+        "started",
+        "finished",
+        "interrupted",
+        "failed"
+      ]
+    }
+  }
+}

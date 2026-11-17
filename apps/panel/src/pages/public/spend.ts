@@ -3,7 +3,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { isNotProvided } from "@/api/http";
-import type { WalletView } from "@/api/types";
+import type { WalletView } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { fmtInt } from "@/lib/format";
 import { notify } from "@/lib/notify";
@@ -22,7 +22,7 @@ export function useWallet() {
   const api = useApi();
   return useQuery({
     queryKey: WALLET,
-    queryFn: ({ signal }) => api.memberWallet({ signal }),
+    queryFn: ({ signal }) => api.rpc.wallet.view(undefined, { signal }),
     refetchInterval: POLL_MS,
     // An older Core has no such route: asking again will not change that.
     retry: (n, e) => !isNotProvided(e) && n < 2,

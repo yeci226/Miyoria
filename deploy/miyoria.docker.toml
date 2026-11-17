@@ -4,7 +4,7 @@
 #   - 監聽位址是 0.0.0.0(容器內一定要這樣,綁 127.0.0.1 的話宿主機的埠映射連不進來);
 #     對外只由 compose 的 `127.0.0.1:` 埠映射決定,不要把映射改成對外公開
 #   - profiles 在 /profiles(映像檔內建一份,compose 會掛 ../profiles 蓋過去)
-#   - 資料庫預設是 /data 底下的 SQLite;compose 會注入指向 compose 內 postgres 的 DATABASE_URL
+#   - 資料庫是 /data 底下的 SQLite(compose 的 core-data volume)
 #   - 語音 worker 預設連宿主機(host.docker.internal);worker 在別台就設 ASR_URL / TTS_URL
 # 要自訂就複製這個檔案(保留三個 bind = "0.0.0.0:..."),在 deploy/.env 設 MIYORIA_CONFIG_FILE=<你的檔案路徑>。
 # 字串可以用 ${ENV_VAR} 或 ${ENV_VAR:-預設值} 引用環境變數(來自根目錄 .env)。

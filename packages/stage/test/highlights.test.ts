@@ -1,10 +1,16 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { customEvent, SONG_TOPIC } from "@miyoria/types";
+import {
+  type AnyEventDefinition,
+  type Envelope,
+  type EventPayload,
+  Events,
+  eventEnvelope,
+  type PublishMetaArgs,
+} from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
-  EMOTION_TOPIC,
   Highlights,
   HighlightsConfigSchema,
   type Obs,
@@ -14,9 +20,16 @@ import {
   parseStageMessage,
 } from "../src/index.js";
 
+/** An event as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  def: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+): Envelope => eventEnvelope("test", def, data, ...meta);
+
 const cfg = (over: object = {}) => HighlightsConfigSchema.parse({ cooldown_secs: 60, ...over });
 const song = (state: string, extra: object = {}) =>
-  customEvent(SONG_TOPIC, { state, song: "yt-a", title: "雪は何色", ...extra });
+  ev(Events.SingCue, { state, song: "yt-a", title: "雪は何色", ...extra } as never);
 
 describe("highlights", () => {
   it("a_song_sung_to_the_end_is_one", () => {
@@ -31,7 +44,7 @@ describe("highlights", () => {
   it("a_strong_feeling_counts_and_the_cooldown_holds", () => {
     const h = new Highlights(cfg());
     const feel = (emotion: string, intensity: number) =>
-      customEvent(EMOTION_TOPIC, { emotion, intensity });
+      ev(Events.AgentEmotion, { emotion, intensity } as never);
     expect(h.onEvent(feel("laugh", 0.5), 0)).toBeNull();
     expect(h.onEvent(feel("sad", 1), 0)).toBeNull();
     expect(h.onEvent(feel("LAUGH", 0.95), 0)).toContain("laugh");

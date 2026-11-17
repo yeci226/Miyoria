@@ -1,17 +1,26 @@
 import { describe, expect, it } from "vitest";
-import type { ExtensionContext } from "../src/extension.js";
-import { ErrorCode, type Envelope, type Invocation } from "../src/types.js";
+import { type ExtensionContext, toolDecl } from "../src/extension.js";
+import * as Events from "../src/events.js";
+import { ErrorCode, type Envelope, type Invocation, PROTOCOL_VERSION } from "../src/types.js";
 import { account, context, fakeHost, toolContext, waitFor } from "./helpers.js";
 
-function envelope(topic: string): Envelope {
+function envelope(type: string, data: Envelope["data"] = {}): Envelope {
   return {
-    topic,
     id: "01J00000000000000000000001",
-    ts: "2026-11-01T00:00:00Z",
+    at: "2026-11-01T00:00:00Z",
+    type,
+    v: 1,
+    parent: null,
+    turn: null,
+    session: null,
+    space_id: null,
+    room_id: null,
+    person_id: null,
+    account_id: null,
+    key: null,
+    scope: null,
     source: "test",
-    causation: null,
-    correlation: null,
-    event: { type: "custom", data: { topic, payload: {} } },
+    data,
   };
 }
 
@@ -207,29 +216,73 @@ describe("extension runtime", () => {
       activate(c) {
         ctx = c;
         c.events.on("custom.a.*", (e) => {
-          got.push(`a:${e.topic}`);
+          got.push(`a:${e.type}`);
         });
         c.events.on("*", (e) => {
-          got.push(`all:${e.topic}`);
+          got.push(`all:${e.type}`);
         });
       },
     });
     await h.initialize();
-    h.host.notify("event", envelope("custom.a.x"));
-    h.host.notify("event", envelope("custom.b"));
+    // Not an envelope (protocol 1's form among them): ignored.
+    h.host.notify("event", { topic: "custom.a.y", event: { type: "custom", data: {} } });
+    h.host.notify("event", { envelope: { type: "custom.a.z" } });
+    h.host.notify("event", { envelope: envelope("custom.a.x") });
+    h.host.notify("event", { envelope: envelope("custom.b") });
     await waitFor(() => got.length === 3);
     expect(got.sort()).toEqual(["a:custom.a.x", "all:custom.a.x", "all:custom.b"]);
 
-    await ctx.events.publish("custom.out", { n: 1 }, { correlation: "01J" });
+    await ctx.events.publish("custom.out", { n: 1 }, { turn: "01J" });
     const off = ctx.events.on("custom.new", () => {});
     await waitFor(() => h.requests.length === 2);
     off();
     await waitFor(() => h.requests.length === 3);
     expect(h.requests).toEqual([
-      { method: "events.publish", params: { topic: "custom.out", payload: { n: 1 }, correlation: "01J" } },
+      { method: "events.publish", params: { type: "custom.out", data: { n: 1 }, turn: "01J" } },
       { method: "events.subscribe", params: { topics: ["custom.new"] } },
       { method: "events.unsubscribe", params: { topics: ["custom.new"] } },
     ]);
+  });
+
+  it("subscribes by definition: typed payloads, families through a prefix", async () => {
+    const states: string[] = [];
+    const games: string[] = [];
+    const h = fakeHost({
+      activate(c) {
+        c.events.on(Events.VoicePlaybackEvent, (e) => {
+          states.push(e.data.state);
+        });
+        c.events.on(Events.GameAdapterEvent, (e) => {
+          games.push(`${e.type}:${e.data.type}`);
+        });
+      },
+    });
+    const result = await h.initialize();
+    expect(result.contributions.subscriptions).toEqual(["voice.playback", "game.*"]);
+    const playback = { context, turn: null, state: "finished", text: "嗨" };
+    // Another version, and a type under `game.` the family does not cover: not delivered.
+    h.host.notify("event", { envelope: { ...envelope("voice.playback", playback), v: 2 } });
+    h.host.notify("event", { envelope: envelope("game.osu", { type: "x" }) });
+    h.host.notify("event", { envelope: envelope("voice.playback", playback) });
+    h.host.notify("event", { envelope: envelope("game.osu.death", { type: "death" }) });
+    await waitFor(() => states.length === 1 && games.length === 1);
+    expect(states).toEqual(["finished"]);
+    expect(games).toEqual(["game.osu.death:death"]);
+  });
+
+  it("refuses a host that speaks another protocol, saying which side is older", async () => {
+    const h = fakeHost({ activate() {} });
+    await expect(h.initialize({ protocol: 1 })).rejects.toMatchObject({
+      code: ErrorCode.InvalidRequest,
+      message:
+        "the host speaks extension protocol 1 and this extension speaks 2; the host is older: update Miyoria",
+    });
+    await expect(h.initialize({ protocol: 3 })).rejects.toMatchObject({
+      message:
+        "the host speaks extension protocol 3 and this extension speaks 2; the extension is older: rebuild it against a newer @miyoria/sdk",
+    });
+    // Refused before activating: a host that speaks 2 can still initialize it.
+    expect((await h.initialize()).protocol).toBe(PROTOCOL_VERSION);
   });
 
   it("uses host storage and logs through notifications", async () => {
@@ -312,5 +365,14 @@ describe("extension runtime", () => {
     await expect(plain.host.request("task.steer", { steer })).rejects.toMatchObject({
       code: ErrorCode.MethodNotFound,
     });
+  });
+});
+
+describe("toolDecl", () => {
+  it("sends read_only only when the tool says it only looks", () => {
+    const base = { name: "a", description: "b", run: () => "" };
+    expect(toolDecl(base)).not.toHaveProperty("read_only");
+    expect(toolDecl({ ...base, readOnly: false })).not.toHaveProperty("read_only");
+    expect(toolDecl({ ...base, readOnly: true }).read_only).toBe(true);
   });
 });

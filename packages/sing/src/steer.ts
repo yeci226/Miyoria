@@ -20,12 +20,7 @@
 import type { JsonObject, TaskId } from "@miyoria/types";
 import type { SongNo } from "./setlist.js";
 
-/** The task id of song `no`. */
-export function songTask(no: SongNo): TaskId {
-  return `song:${no}`;
-}
-
-/** The song number of a task id made by `songTask`, or `null`. */
+/** The song number of a `song:<no>` task id, or `null`. */
 export function songNo(task: TaskId): SongNo | null {
   const m = /^song:(\d{1,9})$/.exec(task);
   return m === null ? null : Number(m[1]);

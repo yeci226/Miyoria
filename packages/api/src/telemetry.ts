@@ -3,13 +3,12 @@
 // counts) and counts a few bus topics between samples. Samples live in memory for 24 hours, so
 // the series starts when the `api` module started.
 
-import { type MetricFamily, metrics } from "@miyoria/kernel";
-import { type Envelope, eventTopic, MindKey, SelfStateKey, toTimestamp } from "@miyoria/types";
-import { z } from "zod";
-import { readQuery, usizeParam } from "./extract.js";
-import { json, type Route } from "./route.js";
+import type { TelemetryLlm, TelemetryPoint, TelemetryView } from "@miyoria/contracts/api";
+import { type MetricFamily, metrics } from "@miyoria/runtime/kernel";
+import { type BusEvent, Events, is, SelfStateKey, toTimestamp } from "@miyoria/types";
+import { os } from "./contract.js";
+import { countOf } from "./extract.js";
 import type { ApiState } from "./state.js";
-import type { TelemetryLlm, TelemetryPoint, TelemetryView } from "./types.js";
 
 /** One sample a minute. */
 export const SAMPLE_EVERY_MS = 60_000;
@@ -19,11 +18,11 @@ const DEFAULT_MINUTES = 6 * 60;
 
 /** Topics counted per sample, by the key they get in `TelemetryPoint.events`. */
 export const TELEMETRY_TOPICS: Readonly<Record<string, string>> = {
-  "platform.message.created": "messages",
-  "agent.turn.completed": "turns",
-  "agent.initiative": "initiatives",
-  "voice.utterance": "utterances",
-  "action.completed": "actions",
+  [Events.PlatformMessageCreated.type]: "messages",
+  [Events.AgentTurnCompleted.type]: "turns",
+  [Events.AgentInitiative.type]: "initiatives",
+  [Events.VoiceUtteranceEvent.type]: "utterances",
+  [Events.ActionCompleted.type]: "actions",
 };
 
 const FIRST_TOKEN = "miyoria_llm_first_token_seconds";
@@ -86,18 +85,17 @@ export class Telemetry {
   constructor(private readonly max = MAX_POINTS) {}
 
   /** Counts a bus envelope toward the next sample. */
-  handle(env: Envelope): void {
-    const key = TELEMETRY_TOPICS[eventTopic(env.event)];
+  handle(env: BusEvent): void {
+    const key = TELEMETRY_TOPICS[env.type];
     if (!key) return;
     // A turn she ended in silence, or that new messages cancelled, is no reply.
-    if (env.event.type === "agent_turn_completed" && env.event.data.text.trim() === "") return;
+    if (is(Events.AgentTurnCompleted, env) && env.data.text.trim() === "") return;
     this.#counts[key] = (this.#counts[key] ?? 0) + 1;
   }
 
   /** Takes one sample of `state` now. */
   sample(state: ApiState): TelemetryPoint {
     const self = state.optional(SelfStateKey)?.snapshot() ?? null;
-    const stats = state.optional(MindKey)?.stats() ?? null;
     const events: Record<string, number> = {};
     for (const key of Object.values(TELEMETRY_TOPICS)) events[key] = this.#counts[key] ?? 0;
     this.#counts = {};
@@ -108,7 +106,6 @@ export class Telemetry {
       drives: self ? { ...self.drives } : null,
       initiative: self ? self.policy.initiative : null,
       llm: llmTotals(metrics.collect()),
-      mind: stats ? { calls_total: stats.calls_total, tokens_total: stats.tokens_total } : null,
       voice_sessions: state.monitor.voice(state.now()).sessions.length,
       speaking: state.monitor.speaking(),
       events,
@@ -128,18 +125,12 @@ export class Telemetry {
   }
 }
 
-const TelemetryQuerySchema = z.object({ minutes: usizeParam.optional() });
-
-export function telemetryRoutes(state: ApiState): Route[] {
-  return [
-    {
-      method: "GET",
-      path: "/api/telemetry",
-      handler: (c) => {
-        const q = readQuery(c, TelemetryQuerySchema);
-        const minutes = Math.min(Math.max(q.minutes ?? DEFAULT_MINUTES, 1), MAX_POINTS);
-        return json(state.telemetry.view(state.now(), minutes));
-      },
-    },
-  ];
-}
+/** `GET /api/telemetry`, on the route table. */
+export const telemetryRpc = os.telemetry.handler(({ input, context }) => {
+  const { state } = context;
+  const minutes = Math.min(
+    Math.max(countOf(input.query.minutes) ?? DEFAULT_MINUTES, 1),
+    MAX_POINTS,
+  );
+  return state.telemetry.view(state.now(), minutes);
+});

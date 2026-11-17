@@ -1,16 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type {
-  ActivitySnapshot,
-  ActivityTask,
-  ArbiterDecisionView,
-  DecisionRecord,
-  LedgerView,
-  PromptSummary,
-  SavedPrompt,
-  TurnOutcomeRecord,
-} from "@/api/types";
+import type { ActivitySnapshot, ActivityTask, ArbiterDecisionView, DecisionRecord, LedgerView, PromptSummary, SavedPrompt, TurnOutcomeRecord } from "@miyoria/contracts/api";
 import { mockFetch, renderRoute } from "@/test/render";
 
 const AT = "2026-11-02T12:00:00.000Z";

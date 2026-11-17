@@ -11,7 +11,11 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    // The feed contract is read as types only, straight from source (no build step in between).
+    "paths": {
+      "@miyoria/contracts/overlay": ["../../packages/contracts/overlay/src/index.ts"]
+    }
   },
   "include": ["src", "test", "vite.config.ts"]
 }

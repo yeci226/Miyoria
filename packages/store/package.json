@@ -1,7 +1,7 @@
 {
   "name": "@miyoria/store",
   "version": "0.1.0",
-  "description": "Storage interfaces, record types and backends (SQLite via node:sqlite, PostgreSQL + pgvector)",
+  "description": "Storage interfaces, record types and the SQLite backend (node:sqlite)",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -11,25 +11,32 @@
       "@miyoria/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "@miyoria/source": "./src/testing.ts",
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
     }
   },
   "files": [
-    "dist",
-    "migrations"
+    "dist"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "schema:sql": "tsx --conditions=@miyoria/source scripts/schema-sql.ts",
+    "bench:identity": "tsx --conditions=@miyoria/source scripts/bench-identity.ts"
   },
   "dependencies": {
-    "@miyoria/kernel": "workspace:*",
+    "@miyoria/contracts": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
     "@miyoria/types": "workspace:*",
-    "pg": "^8.23.1"
+    "drizzle-orm": "1.0.0-rc.5"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
-    "@types/pg": "^8.23.1",
+    "drizzle-kit": "1.0.0-rc.5",
     "typescript": "~5.9.3",
     "vitest": "^4.1.12"
   }

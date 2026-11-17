@@ -79,22 +79,18 @@ export {
   type ForwarderOptions,
   GIFT_TOPIC,
   SCREEN_TOPIC,
-  SUBTITLE_TOPIC,
 } from "./link/forward.js";
 export { type GoLiveFollow, goliveFollow, VOICE_GOLIVE_TOPIC } from "./link/golive.js";
 export { Highlights, type HighlightsConfig, HighlightsConfigSchema } from "./link/highlights.js";
 export {
-  CLIP_TOPIC,
   DEFAULT_BIND,
-  ERROR_TOPIC,
-  STATUS_TOPIC,
   StageLink,
   type StageLinkConfig,
   StageLinkConfigSchema,
   StageLinkError,
   StageLinkKey,
 } from "./link/link.js";
-export { GAME_SESSION_TOPIC, StageLinkModule } from "./link/module.js";
+export { GAME_SESSION_TOPIC, STAGE_LINK_PATH, StageLinkModule } from "./link/module.js";
 export {
   away,
   factsOf,
@@ -176,7 +172,6 @@ export {
   applyObsSetup,
   describeStep,
   GAME_MODEL,
-  MASK_FILE,
   MASK_FILTER,
   type ObsAdmin,
   type ObsSetupOptions,
@@ -242,6 +237,7 @@ export {
   StageConfigSchema,
   type StageConfigSection,
   StageError,
+  stageLinkFromEnv,
 } from "./runtime.js";
 export { SongVideo, type SongVideoDeps, type SongVideoPlay, songVideoFile } from "./song-video.js";
 export {

@@ -1,13 +1,18 @@
 """The language model behind the lyrics search: names the real song from a video's title, description, channel.
 
-It uses whatever Core is configured with, so there is nothing new to set up: ``miyoria.toml`` ``[llm]``
-(the active profile's ``[llm.purposes]`` first, then the global one), purpose ``fast`` (a short judgement),
-else ``chat``; the first ``provider:model`` entry, the provider's ``base_url`` / ``api_key`` (``${VAR}`` /
-``${VAR:-default}`` read from the environment and the repo's ``.env``). Any OpenAI-compatible
-``/chat/completions`` endpoint works (OpenCode's session header and DeepSeek's thinking switch are sent
-the way Core does). The worker can have its own instead:
+Where the completions come from, first match wins:
 
-    SING_LYRICS_LLM_URL / SING_LYRICS_LLM_KEY / SING_LYRICS_LLM_MODEL   (all three: base url, key, model id)
+1. hostd runs this service (``MIYORIA_HOSTD_URL`` and ``MIYORIA_SERVICE_TOKEN`` set, hostd_client.py): the
+   completion goes to Core through hostd (``cluster.llm``, purpose ``fast``). Core uses its own model and key,
+   counts the call in its budget and writes it to its call log; nothing about the model is set up here.
+2. the worker's own model, all of it given explicitly:
+
+    SING_LYRICS_LLM_URL / SING_LYRICS_LLM_KEY / SING_LYRICS_LLM_MODEL   (base url, key, model id; the key
+                                                                         may be empty)
+
+   Any OpenAI-compatible ``/chat/completions`` endpoint. It is also used when hostd has no link to Core.
+3. none: the lookup works without a language model (lyrics.find_lyrics).
+
     SING_LYRICS_LLM=0                                                    off
     SING_LYRICS_LLM_TIMEOUT_S (20) · SING_LYRICS_LLM_ATTEMPTS (2, see lyrics.find_lyrics)
 
@@ -21,15 +26,20 @@ import json
 import logging
 import os
 import re
-import tomllib
 from pathlib import Path
 from typing import Any, Callable
 
 from lyrics import Query, norm
 
+try:  # workers/hostd_client.py; a worker run by hand has no hostd
+    import hostd_client
+except ImportError:
+    hostd_client = None  # type: ignore[assignment]
+
 log = logging.getLogger("miyoria.sing.lyricsllm")
 
-REPO = Path(__file__).resolve().parent.parent.parent
+# What the lyrics lookup asks Core's language model for: a short judgement.
+HOSTD_PURPOSE = "fast"
 
 SYSTEM = (
     "You identify songs for a lyrics lookup. You get what a video site shows for a video: its title, "
@@ -43,93 +53,64 @@ SYSTEM = (
 )
 
 
-def _env_file() -> dict[str, str]:
-    out: dict[str, str] = {}
-    try:
-        for line in (REPO / ".env").read_text("utf-8").splitlines():
-            m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$", line)
-            if m and not line.lstrip().startswith("#"):
-                out[m.group(1)] = m.group(2).strip("\"'")
-    except OSError:
-        pass
-    return out
-
-
-def _interpolate(value: Any, env: dict[str, str]) -> Any:
-    if not isinstance(value, str):
-        return value
-
-    def sub(m: re.Match[str]) -> str:
-        name, default = m.group(1), m.group(3)
-        return os.environ.get(name) or env.get(name) or (default or "")
-
-    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}", sub, value)
-
-
-def _read(p: Path) -> dict[str, Any]:
-    try:
-        return tomllib.loads(p.read_text("utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def load_config(repo: Path | None = None) -> dict[str, Any] | None:
-    """``{"base_url", "api_key", "model"}`` for the lyrics model, or None when there is none to use."""
-    if os.environ.get("SING_LYRICS_LLM", "1") == "0":
-        return None
+def _own_model() -> dict[str, Any] | None:
+    """The worker's own model from ``SING_LYRICS_LLM_URL`` / ``_KEY`` / ``_MODEL``, or None."""
     url, key, model = (os.environ.get(f"SING_LYRICS_LLM_{n}") for n in ("URL", "KEY", "MODEL"))
     if url and model:
         return {"base_url": url.rstrip("/"), "api_key": key or "", "model": model}
-    repo = repo or REPO
-    cfg = _read(Path(os.environ.get("MIYORIA_CONFIG") or repo / "miyoria.toml"))
-    llm = cfg.get("llm") or {}
-    profile = (cfg.get("core") or {}).get("profile")
-    purposes: dict[str, Any] = {}
-    if profile:
-        purposes.update(((_read(repo / "profiles" / str(profile) / "profile.toml").get("llm") or {}).get("purposes")) or {})
-    for k, v in ((llm.get("purposes")) or {}).items():
-        purposes.setdefault(k, v)
-    entry = next((purposes[p][0] for p in ("fast", "chat") if purposes.get(p)), None)
-    if not entry or ":" not in str(entry):
-        return None
-    provider, model = str(entry).split(":", 1)
-    prov = (llm.get("providers") or {}).get(provider)
-    if not prov:
-        return None
-    env = _env_file()
-    base = _interpolate(prov.get("base_url"), env)
-    if not base:
-        return None
-    out: dict[str, Any] = {"base_url": str(base).rstrip("/"),
-                           "api_key": str(_interpolate(prov.get("api_key"), env) or ""), "model": model}
-    # What Core's openai provider does for these kinds (packages/llm/src/openai/provider.ts): OpenCode
-    # Go wants a session header, DeepSeek-family models think unless told not to (slow for a lookup).
-    kind = str(prov.get("kind") or "")
-    header = prov.get("session_header")
-    if header is None and kind == "opencode":
-        header = "x-opencode-session"
-    if header:
-        out["headers"] = {str(header): "miyoria-sing-lyrics"}
-    off = prov.get("thinking_off")
-    if off is None and kind in ("deepseek", "opencode"):
-        off = {"thinking": {"type": "disabled"}}
-    if off:
-        out["body"] = off
-    return out
+    return None
 
 
-def chat(cfg: dict[str, Any], messages: list[dict[str, str]], timeout: float) -> str:
-    """One chat completion, its text. Raises on any failure. The tests replace this."""
+def load_config() -> dict[str, Any] | None:
+    """How to reach the lookup's model, or None when there is none to use.
+
+    ``{"via": "hostd", "model": "core:fast", "fallback": <own model or None>}`` when hostd runs this
+    service, else the worker's own ``{"base_url", "api_key", "model"}``.
+    """
+    if os.environ.get("SING_LYRICS_LLM", "1") == "0":
+        return None
+    own = _own_model()
+    if hostd_client is not None and hostd_client.available():
+        return {"via": "hostd", "model": f"core:{HOSTD_PURPOSE}", "fallback": own}
+    return own
+
+
+def _chat_hostd(messages: list[dict[str, str]], timeout: float) -> str:
+    assert hostd_client is not None
+    result = hostd_client.call("cluster.llm", {
+        "purpose": HOSTD_PURPOSE, "messages": messages, "max_tokens": 1200, "temperature": 0, "json": True,
+    }, timeout)
+    return str((result or {}).get("text") or "")
+
+
+def _chat_own(cfg: dict[str, Any], messages: list[dict[str, str]], timeout: float) -> str:
     import httpx
 
-    headers = {"Content-Type": "application/json", **(cfg.get("headers") or {})}
+    headers = {"Content-Type": "application/json"}
     if cfg.get("api_key"):
         headers["Authorization"] = "Bearer " + cfg["api_key"]
     r = httpx.post(cfg["base_url"] + "/chat/completions", headers=headers, timeout=timeout,
                    json={"model": cfg["model"], "messages": messages, "temperature": 0, "max_tokens": 1200,
-                         "stream": False, **(cfg.get("body") or {})})
+                         "stream": False})
     r.raise_for_status()
     return str(r.json()["choices"][0]["message"]["content"] or "")
+
+
+def chat(cfg: dict[str, Any], messages: list[dict[str, str]], timeout: float) -> str:
+    """One chat completion, its text. Raises on any failure. The tests replace this.
+
+    Through hostd when ``cfg`` says so; when hostd has no link to Core, the worker's own model if it has one.
+    """
+    if cfg.get("via") == "hostd":
+        try:
+            return _chat_hostd(messages, timeout)
+        except Exception as e:
+            fallback = cfg.get("fallback")
+            if fallback and getattr(e, "code", None) == getattr(hostd_client, "NOT_LINKED", None):
+                log.info("hostd is not linked to Core; asking the worker's own model")
+                return _chat_own(fallback, messages, timeout)
+            raise
+    return _chat_own(cfg, messages, timeout)
 
 
 def parse_songs(text: str) -> list[dict[str, Any]]:

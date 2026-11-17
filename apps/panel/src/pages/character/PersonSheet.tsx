@@ -1,14 +1,12 @@
 import { Ban, Save } from "lucide-react";
 import { useId, useState } from "react";
 import { isApiError } from "@/api/http";
-import type { PersonDetail, RelationshipDelta } from "@/api/types";
+import type { PersonProfile } from "@miyoria/contracts/api";
 import { READ_ONLY_HINT, useCanWrite } from "@/app/session";
-import { useAdjustPerson, useAdjustWallet, usePerson, usePersonWallet, useUpdatePerson } from "@/app/queries";
-import { TimeChart } from "@/components/charts/charts";
+import { useAdjustWallet, usePerson, usePersonWallet, useUpdatePerson } from "@/app/queries";
 import { ConfirmDialog } from "@/components/confirm";
 import { Facts } from "@/components/json-view";
 import { EmptyLine, ErrorLine, SkeletonRows } from "@/components/query-state";
-import { Bipolar, Meter } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
@@ -16,51 +14,55 @@ import { Field } from "@/components/ui/label";
 import { Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { accountString, fmtDateTime, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
+import { tierText } from "./heart";
+import { HeartSection, Section } from "./PersonHeart";
+import { AnchorsSection, EvidenceSection, HistorySection } from "./PersonLog";
 import { QuestsSection } from "./QuestsSection";
 
-/** Affinity, trust and familiarity over time on one -100..100 axis. */
-export function AffinityChart({ history }: { history: RelationshipDelta[] }) {
-  if (history.length < 2) return null;
-  const first = history[0];
-  const last = history[history.length - 1];
-  return (
-    <TimeChart
-      label={`關係變化:好感從 ${Math.round(first?.affinity ?? 0)} 到 ${Math.round(last?.affinity ?? 0)}`}
-      times={history.map((d) => Date.parse(d.at))}
-      series={[
-        { key: "affinity", label: "好感", color: "var(--chart-1)", values: history.map((d) => d.affinity) },
-        { key: "trust", label: "信任", color: "var(--chart-2)", values: history.map((d) => d.trust) },
-        { key: "familiarity", label: "熟悉", color: "var(--chart-3)", values: history.map((d) => d.familiarity) },
-      ]}
-      domain={[-100, 100]}
-      zero
-      height={150}
-      format={(v) => String(Math.round(v))}
-    />
-  );
-}
-
+/** Her words about them, as the editor holds them. */
 interface Draft {
   callName: string;
   tags: string;
-  notes: string;
+  impression: string;
+  stance: string;
+  unfinished: string;
+  jokes: string;
+  dislikes: string;
+  publicFeeling: string;
 }
 
-const fromDetail = (d: PersonDetail): Draft => ({
-  callName: d.relationship?.call_name ?? "",
-  tags: (d.relationship?.tags ?? []).join(", "),
-  notes: d.relationship?.notes ?? "",
+const fromProfile = (p: PersonProfile): Draft => ({
+  callName: p.call_name ?? "",
+  tags: p.tags.filter((t) => t !== "blocked").join(", "),
+  impression: p.impression,
+  stance: p.stance,
+  unfinished: p.unfinished,
+  jokes: p.jokes,
+  dislikes: p.dislikes,
+  publicFeeling: p.public_feeling ?? "",
 });
 
+/** The text fields after the call name and tags: label and how tall. */
+const TEXTS: { key: Exclude<keyof Draft, "callName" | "tags">; label: string; rows: number }[] = [
+  { key: "impression", label: "印象", rows: 4 },
+  { key: "stance", label: "相處方式", rows: 2 },
+  { key: "unfinished", label: "還沒聊完的事", rows: 2 },
+  { key: "jokes", label: "共同的梗", rows: 2 },
+  { key: "dislikes", label: "不喜歡的地方", rows: 2 },
+  { key: "publicFeeling", label: "會員頁上的話", rows: 2 },
+];
+
 /**
- * Call name, tags and notes. Shows the server's values until the first keystroke; from then on
- * the user's edits win over refetches (which hand us a new array every time) until saved.
+ * Her words about them: call name, tags, impression, how she acts with them, what is unfinished,
+ * their jokes, what she dislikes and the line on their member page. Shows the server's values
+ * until the first keystroke; from then on the user's edits win over refetches (which hand us a new
+ * array every time) until saved.
  */
-export function RelationshipEditor({ detail }: { detail: PersonDetail }) {
-  const update = useUpdatePerson(detail.person.id);
+export function RelationshipEditor({ profile }: { profile: PersonProfile }) {
+  const update = useUpdatePerson(profile.person.id);
   const id = useId();
   const [edits, setEdits] = useState<Draft | null>(null);
-  const shown = edits ?? fromDetail(detail);
+  const shown = edits ?? fromProfile(profile);
   const change = (field: keyof Draft, value: string) => setEdits({ ...shown, [field]: value });
 
   const save = () =>
@@ -71,7 +73,12 @@ export function RelationshipEditor({ detail }: { detail: PersonDetail }) {
           .split(/[,,]/)
           .map((t) => t.trim())
           .filter(Boolean),
-        notes: shown.notes,
+        impression: shown.impression,
+        stance: shown.stance,
+        unfinished: shown.unfinished,
+        jokes: shown.jokes,
+        dislikes: shown.dislikes,
+        public_feeling: shown.publicFeeling.trim() || null,
       },
       {
         onSuccess: () => {
@@ -92,15 +99,17 @@ export function RelationshipEditor({ detail }: { detail: PersonDetail }) {
     >
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="稱呼" htmlFor={`${id}-call`}>
-          <Input id={`${id}-call`} value={shown.callName} placeholder={detail.person.display_name} onChange={(e) => change("callName", e.target.value)} />
+          <Input id={`${id}-call`} value={shown.callName} placeholder={profile.person.display_name} onChange={(e) => change("callName", e.target.value)} />
         </Field>
         <Field label="標籤" htmlFor={`${id}-tags`}>
           <Input id={`${id}-tags`} value={shown.tags} placeholder="常客, Minecraft" onChange={(e) => change("tags", e.target.value)} />
         </Field>
       </div>
-      <Field label="備註" htmlFor={`${id}-notes`}>
-        <Textarea id={`${id}-notes`} rows={4} value={shown.notes} onChange={(e) => change("notes", e.target.value)} />
-      </Field>
+      {TEXTS.map((t) => (
+        <Field key={t.key} label={t.label} htmlFor={`${id}-${t.key}`}>
+          <Textarea id={`${id}-${t.key}`} rows={t.rows} value={shown[t.key]} onChange={(e) => change(t.key, e.target.value)} />
+        </Field>
+      ))}
       <div className="flex items-center gap-2">
         <Button writes type="submit" size="sm" variant="secondary" busy={update.isPending} disabled={edits === null}>
           <Save />
@@ -116,7 +125,6 @@ export function RelationshipEditor({ detail }: { detail: PersonDetail }) {
   );
 }
 
-const STEPS = [-10, -5, 5, 10] as const;
 const MAX_ADJUST = 100_000;
 const MAX_NOTE = 100;
 const CURRENCY = "魚幣";
@@ -228,19 +236,8 @@ export function WalletSection({ personId, name }: { personId: string; name: stri
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="grid gap-3">
-      <h3 className="text-sm font-medium">{title}</h3>
-      {children}
-    </section>
-  );
-}
-
-function PersonBody({ detail }: { detail: PersonDetail }) {
-  const r = detail.relationship;
-  const update = useUpdatePerson(detail.person.id);
-  const adjust = useAdjustPerson(detail.person.id);
+function PersonBody({ profile }: { profile: PersonProfile }) {
+  const update = useUpdatePerson(profile.person.id);
   const [confirmBlock, setConfirmBlock] = useState(false);
 
   const setBlocked = (blocked: boolean) =>
@@ -259,84 +256,44 @@ function PersonBody({ detail }: { detail: PersonDetail }) {
     <>
       <SheetHeader>
         <SheetTitle className="flex flex-wrap items-center gap-2 text-lg">
-          {detail.person.display_name}
-          {detail.label && <Badge variant="brand">{detail.label}</Badge>}
-          {detail.blocked && <Badge variant="destructive">已封鎖</Badge>}
+          {profile.person.display_name}
+          {profile.has_row && <Badge variant="brand">{tierText(profile)}</Badge>}
+          {profile.blocked && <Badge variant="destructive">已封鎖</Badge>}
         </SheetTitle>
         <div className="flex flex-wrap gap-2 pt-1">
           <Button
             writes
             size="sm"
             variant="outline"
-            className={detail.blocked ? undefined : "text-primary hover:text-primary"}
+            className={profile.blocked ? undefined : "text-primary hover:text-primary"}
             busy={update.isPending && update.variables?.blocked !== undefined}
-            onClick={() => (detail.blocked ? setBlocked(false) : setConfirmBlock(true))}
+            onClick={() => (profile.blocked ? setBlocked(false) : setConfirmBlock(true))}
           >
             <Ban />
-            {detail.blocked ? "解除封鎖" : "封鎖"}
+            {profile.blocked ? "解除封鎖" : "封鎖"}
           </Button>
         </div>
       </SheetHeader>
       <SheetBody className="grid content-start gap-8">
-        <Section title="關係">
-          {r ? (
-            <div className="grid gap-4">
-              <dl className="grid grid-cols-[3rem_minmax(0,1fr)_2.5rem] items-center gap-x-3 gap-y-3 text-sm">
-                <dt className="text-muted-foreground">好感</dt>
-                <dd>
-                  <Bipolar value={r.affinity} label="好感" />
-                </dd>
-                <dd className="text-right font-mono text-xs tabular-nums">{Math.round(r.affinity)}</dd>
-                <dt className="text-muted-foreground">信任</dt>
-                <dd>
-                  <Meter value={r.trust / 100} tone="brand" label="信任" />
-                </dd>
-                <dd className="text-right font-mono text-xs tabular-nums">{Math.round(r.trust)}</dd>
-                <dt className="text-muted-foreground">熟悉</dt>
-                <dd>
-                  <Meter value={r.familiarity / 100} label="熟悉" />
-                </dd>
-                <dd className="text-right font-mono text-xs tabular-nums">{Math.round(r.familiarity)}</dd>
-              </dl>
-              <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="調整好感">
-                <span className="mr-1 text-[13px] text-muted-foreground">調整好感</span>
-                {STEPS.map((n) => (
-                  <Button
-                    key={n}
-                    writes
-                    size="sm"
-                    variant="outline"
-                    className="w-12 font-mono"
-                    disabled={adjust.isPending}
-                    onClick={() =>
-                      adjust.mutate(
-                        { affinity: n },
-                        { onSuccess: (p) => notify.ok(`好感 ${Math.round(p.relationship?.affinity ?? 0)}`), onError: (e) => notify.error(e) },
-                      )
-                    }
-                  >
-                    {n > 0 ? `+${n}` : `−${-n}`}
-                  </Button>
-                ))}
-              </div>
-              <AffinityChart history={detail.history} />
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">還沒有關係紀錄</p>
-          )}
-        </Section>
+        <HeartSection profile={profile} />
+
+        <HistorySection profile={profile} />
+
+        <EvidenceSection profile={profile} />
+
+        <AnchorsSection profile={profile} />
 
         <Section title="她怎麼看這個人">
-          <RelationshipEditor key={detail.person.id} detail={detail} />
+          <RelationshipEditor key={profile.person.id} profile={profile} />
         </Section>
 
-        <WalletSection personId={detail.person.id} name={detail.person.display_name} />
+        <WalletSection personId={profile.person.id} name={profile.person.display_name} />
 
-        <QuestsSection personId={detail.person.id} />
+        <QuestsSection personId={profile.person.id} />
 
         <Section title="帳號">
           <ul className="divide-y divide-line-soft rounded-md border">
-            {detail.person.accounts.map((a) => (
+            {profile.person.accounts.map((a) => (
               <li key={accountString(a.account)} className="flex items-center gap-3 px-3 py-2.5 text-sm">
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{a.display_name}</span>
@@ -351,38 +308,17 @@ function PersonBody({ detail }: { detail: PersonDetail }) {
           </ul>
         </Section>
 
-        {detail.history.length > 0 && (
-          <Section title="最近的變化">
-            <ul className="divide-y divide-line-soft rounded-md border">
-              {[...detail.history]
-                .reverse()
-                .slice(0, 20)
-                .map((d, i) => (
-                  <li key={`${d.at}-${i}`} className="grid gap-0.5 px-3 py-2.5">
-                    <p className="text-sm">{d.reason}</p>
-                    <p className="flex justify-between gap-3 font-mono text-xs text-muted-foreground">
-                      <span>
-                        好感 {Math.round(d.affinity)} · 信任 {Math.round(d.trust)} · 熟悉 {Math.round(d.familiarity)}
-                      </span>
-                      <time dateTime={d.at}>{fmtRelative(d.at)}</time>
-                    </p>
-                  </li>
-                ))}
-            </ul>
-          </Section>
-        )}
-
         <Facts
           items={{
-            "第一次見面": fmtDateTime(detail.person.created_at),
-            "相關記憶": `${detail.memory_count} 則`,
-            id: <span className="font-mono text-xs">{detail.person.id}</span>,
+            "第一次見面": fmtDateTime(profile.person.created_at),
+            "相關記憶": `${profile.memory_count} 則`,
+            id: <span className="font-mono text-xs">{profile.person.id}</span>,
           }}
         />
       </SheetBody>
       <ConfirmDialog
         open={confirmBlock}
-        title={`封鎖 ${detail.person.display_name}?`}
+        title={`封鎖 ${profile.person.display_name}?`}
         confirmLabel="封鎖"
         busy={update.isPending}
         onClose={() => setConfirmBlock(false)}
@@ -414,7 +350,7 @@ export function PersonSheet({ personId, onClose }: { personId: string | undefine
             <ErrorLine error={person.error} onRetry={() => void person.refetch()} />
           </>
         ) : person.data ? (
-          <PersonBody detail={person.data} />
+          <PersonBody profile={person.data} />
         ) : (
           <EmptyLine>找不到這個人</EmptyLine>
         )}

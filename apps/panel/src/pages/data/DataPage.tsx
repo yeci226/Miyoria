@@ -3,7 +3,7 @@ import { Check, Download, Eye, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { Download as DownloadFile } from "@/api/http";
-import type { DataCategoryView, DataInventory, DataWipeResult } from "@/api/types";
+import type { DataCategoryView, DataInventoryView, DataWipeResult } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { useDataInventory, useDataMutations } from "@/app/queries";
 import { useCanWrite } from "@/app/session";
@@ -84,7 +84,7 @@ function DeleteDialog({
   onClose,
 }: {
   target: DataCategoryView | null;
-  inventory: DataInventory;
+  inventory: DataInventoryView;
   onClose: () => void;
 }) {
   const { wipe } = useDataMutations();
@@ -345,7 +345,7 @@ function DangerZone({ profile }: { profile: string }) {
   );
 }
 
-function DataSections({ inventory }: { inventory: DataInventory }) {
+function DataSections({ inventory }: { inventory: DataInventoryView }) {
   const canWrite = useCanWrite();
   const canManage = inventory.can_manage;
   // Read-only accounts and non-owners never see a delete.
@@ -366,7 +366,7 @@ function DataSections({ inventory }: { inventory: DataInventory }) {
   );
 }
 
-function ExportAll({ inventory }: { inventory: DataInventory | undefined }) {
+function ExportAll({ inventory }: { inventory: DataInventoryView | undefined }) {
   const api = useApi();
   const [busy, setBusy] = useState(false);
   if (!inventory?.can_manage) return null;

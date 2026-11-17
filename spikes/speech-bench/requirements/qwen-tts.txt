@@ -1,5 +1,0 @@
-# Qwen3-TTS. Install the CUDA build of torch FIRST (see qwen-asr.txt).
-# FlashAttention 2 is recommended upstream; on native Windows use --attn sdpa instead.
-#   pip install -U flash-attn --no-build-isolation   (Linux / WSL2)
--r common.txt
-qwen-tts

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ContextKey, DecisionRecord } from "@/api/types";
+import type { DecisionRecord } from "@miyoria/contracts/api";
+import type { ContextKey } from "@miyoria/contracts/wire";
 import { useDecisions } from "@/app/queries";
 import { ChartBlock, type Column, ColumnChart } from "@/components/charts/charts";
 import { SearchInput } from "@/components/controls";

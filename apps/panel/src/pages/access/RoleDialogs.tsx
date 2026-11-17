@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { RoleDefinition } from "@/api/types";
+import type { RoleDefinition } from "@miyoria/contracts/api";
 import { useAccessMutations } from "@/app/queries";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";

@@ -1,8 +1,8 @@
-// Party games (`@miyoria/party`) as `GET /api/party` serves them: the games running now with their
+// Party games (`@miyoria/play/party`) as `GET /api/party` serves them: the games running now with their
 // players and scores, and how the last ones ended. A 503 is the party module being off; an empty
 // snapshot is no game right now.
 
-import type { PartyPlayerView } from "@/api/v4-types";
+import type { PartyPlayerView } from "@miyoria/contracts/api";
 
 /** Why a game ended, in words. */
 export const END_REASONS: Record<string, string> = {

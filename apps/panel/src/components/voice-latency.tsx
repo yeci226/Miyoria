@@ -1,4 +1,4 @@
-import type { VoiceE2eLatency } from "@/api/types";
+import type { VoiceE2eLatency } from "@miyoria/contracts/api";
 import { BarList } from "@/components/charts/charts";
 import { EmptyLine } from "@/components/query-state";
 import { E2E_REASON_LABEL, E2E_SEGMENTS, fmtMs } from "@/lib/e2e";

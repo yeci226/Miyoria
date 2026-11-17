@@ -36,28 +36,23 @@ export function queueLine(open: readonly SongEntry[]): string | null {
 export class SingPrompt implements PromptContributor {
   readonly key = PROMPT_KEY;
 
-  /** `songOnly`: no set list, only the song she is singing (`only_on_request`). */
-  constructor(
-    private readonly singer: Singer,
-    private readonly songOnly = false,
-  ) {}
+  constructor(private readonly singer: Singer) {}
 
   async contribute(): Promise<PromptSection[]> {
     const list = this.singer.list;
     const playing = list.playing();
-    const ready = this.songOnly ? [] : list.ready();
-    const preparing = this.songOnly ? [] : list.preparing();
+    const ready = list.ready();
+    const preparing = list.preparing();
     if (!playing && ready.length === 0 && preparing.length === 0) return [];
     const who = (name: string) => safeName(name, 24);
     const lines: string[] = [];
-    const song = playing && `${this.songOnly ? "" : `#${playing.no} `}${songLabel(playing)}`;
     if (playing && this.singer.starting()) {
       lines.push(
-        `要開始唱:${song}(${who(playing.requester_name)} 點的${dedicationNote(playing)})。你說完這句就開始。`,
+        `要開始唱:#${playing.no} ${songLabel(playing)}(${who(playing.requester_name)} 點的${dedicationNote(playing)})。你說完這句就開始。`,
       );
     } else if (playing) {
       lines.push(
-        `正在唱:${song}(${who(playing.requester_name)} 點的${dedicationNote(playing)})。唱完之前你在語音說的話不會播出;要停用 sing_stop。`,
+        `正在唱:#${playing.no} ${songLabel(playing)}(${who(playing.requester_name)} 點的${dedicationNote(playing)})。唱完之前你在語音說的話不會播出;要停用 sing_stop。`,
       );
       lines.push(
         "唱歌時有人再點歌也能用 sing_request 準備,新歌會排在這首後面;只有連結也可以,不需要歌名。文字頻道照常回,收食物、查魚幣、簽到這些工具照常用,不用等唱完。",

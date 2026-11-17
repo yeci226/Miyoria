@@ -2,7 +2,7 @@
 // sessions that start cold and for reply parents she never saw. The bot needs Read Message
 // History in the channel; without it the fetch fails and the agent goes on without.
 
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import type {
   ContextKey,
   HistoryQuery,

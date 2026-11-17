@@ -7,16 +7,10 @@ import {
   ActuatorRegistryKey,
   CapabilityTool,
   defineCapability,
-} from "@miyoria/actions";
-import { getLogger, ServiceRegistry } from "@miyoria/kernel";
+} from "@miyoria/gate/actions";
+import { getLogger, ServiceRegistry } from "@miyoria/runtime/kernel";
 import { SingerKey } from "@miyoria/sing";
-import {
-  BountyStoreKey,
-  CoinLedgerStoreKey,
-  GoalStoreKey,
-  PeopleStoreKey,
-  SqliteStore,
-} from "@miyoria/store";
+import { PeopleStoreKey, SqliteStore } from "@miyoria/store";
 import {
   type AccountRef,
   AffectStateKey,
@@ -40,7 +34,9 @@ import { agencyCapabilities } from "../src/agency-tools.js";
 import { EconomyConfigSchema } from "../src/config.js";
 import { EconomyService } from "../src/economy.js";
 import { shortId } from "../src/purse.js";
+import { BountyStoreKey, CoinLedgerStoreKey, GoalStoreKey, PURSE } from "../src/records.js";
 import { EconomyKey } from "../src/types.js";
+import { economyOf, ledgerOf, walletOf } from "./ledger.js";
 
 /** 2026-11-08 12:00 local (UTC+8). */
 const T0 = Date.UTC(2026, 10, 8, 4, 0, 0);
@@ -80,9 +76,9 @@ async function rig(config: Record<string, JsonValue> = {}): Promise<Rig> {
   stores.push(store);
   const services = new ServiceRegistry();
   const k = "test";
-  services.provide(k, CoinLedgerStoreKey, store.coins);
-  services.provide(k, GoalStoreKey, store.goals);
-  services.provide(k, BountyStoreKey, store.bounties);
+  services.provide(k, CoinLedgerStoreKey, ledgerOf(store));
+  services.provide(k, GoalStoreKey, economyOf(store).goals);
+  services.provide(k, BountyStoreKey, economyOf(store).bounties);
   services.provide(k, PeopleStoreKey, store.people);
   const people = new Map<string, PersonId>();
   for (const [a, name] of [
@@ -194,22 +190,18 @@ async function rig(config: Record<string, JsonValue> = {}): Promise<Rig> {
 }
 
 async function fund(r: Rig, account: AccountRef, amount: number) {
-  await r.store.coins.post(
-    {
-      id: newId(),
-      profile: "p",
-      account,
-      delta: amount,
-      reason: "talked",
-      ref: null,
-      idem_key: null,
-      ts: toTimestamp(r.clock.at),
-    },
-    { wallet: [account] },
-  );
+  await ledgerOf(r.store).post({
+    id: newId(),
+    person: walletOf(r.store, account),
+    delta: amount,
+    reason: "talked",
+    ref: null,
+    idem_key: null,
+    ts: toTimestamp(r.clock.at),
+  });
 }
 
-const balance = (r: Rig, a: AccountRef) => r.store.coins.balance("p", [a]);
+const balance = (r: Rig, a: AccountRef) => ledgerOf(r.store).balance("p", walletOf(r.store, a));
 const purse = (r: Rig) => r.economy.purse.balance();
 
 /** One of her tools, called in a turn where `speaker` wrote message `id`; always `on_own`. */
@@ -261,7 +253,7 @@ describe("her share of gifts", () => {
     await r.economy.purchase(ALICE, "fortune", "k4");
     await r.economy.frame(ALICE, { buy: "sakura" }, "k5");
     expect(await purse(r)).toBe(11);
-    const rows = await r.store.coins.entries("p", [r.economy.purse.account], {
+    const rows = await ledgerOf(r.store).entries("p", PURSE, {
       reasons: ["her_share"],
       limit: 20,
     });
@@ -436,7 +428,7 @@ const GOAL = { title: "新麥克風", promise: "學三種貓叫", target: 50, da
 
 async function propose(r: Rig, args: Record<string, JsonValue> = GOAL) {
   const out = await say(r, "propose_goal", ALICE, newId(), args);
-  const [goal] = await r.store.goals.list("p", { statuses: ["open"], limit: 1 });
+  const [goal] = await economyOf(r.store).goals.list("p", { statuses: ["open"], limit: 1 });
   return { out, goal };
 }
 
@@ -460,7 +452,7 @@ describe("crowdfunding goals", () => {
     const second = await r.economy.pledge(BOB, goal.id, 40, "b1");
     expect(second).toMatchObject({ pledged: 20, raised: 50, reached: true, balance: 80 });
     expect(await purse(r)).toBe(50);
-    expect((await r.store.goals.get(goal.id))?.status).toBe("reached");
+    expect((await economyOf(r.store).goals.get(goal.id))?.status).toBe("reached");
     const told = news(r).find((t) => t.includes("大家湊到了「新麥克風」"));
     expect(told).toContain("你答應過要:學三種貓叫");
     expect(lastNote(r)).toContain("你答應過大家、還沒做到的(目標「新麥克風」湊到了):學三種貓叫");
@@ -487,7 +479,7 @@ describe("crowdfunding goals", () => {
       done: true,
       goal: goal.id,
     });
-    expect(await r.store.goals.get(goal.id)).toMatchObject({ fulfilled_by: "self" });
+    expect(await economyOf(r.store).goals.get(goal.id)).toMatchObject({ fulfilled_by: "self" });
     expect((await say(r, "goal_done", ALICE, "k2")).data).toMatchObject({ done: false });
     expect(news(r).at(-1)).toContain("你把目標「新麥克風」記成做到了");
     expect(lastNote(r)).not.toContain("學三種貓叫");
@@ -555,15 +547,18 @@ describe("crowdfunding goals", () => {
     await r.economy.pledge(BOB, goal.id, 30, "b");
     r.clock.at = T0 + DAY - 1;
     await r.economy.goalDesk.sweep();
-    expect((await r.store.goals.get(goal.id))?.status).toBe("open");
+    expect((await economyOf(r.store).goals.get(goal.id))?.status).toBe("open");
     r.clock.at = T0 + 2 * DAY;
     await r.economy.goalDesk.sweep();
     await r.economy.goalDesk.sweep();
-    expect((await r.store.goals.get(goal.id))?.status).toBe("expired");
+    expect((await economyOf(r.store).goals.get(goal.id))?.status).toBe("expired");
     expect(await balance(r, ALICE)).toBe(100);
     expect(await balance(r, BOB)).toBe(100);
     expect(await purse(r)).toBe(0);
-    const refunds = await r.store.coins.entries("p", [ALICE], { reasons: ["refund"], limit: 10 });
+    const refunds = await ledgerOf(r.store).entries("p", walletOf(r.store, ALICE), {
+      reasons: ["refund"],
+      limit: 10,
+    });
     expect(refunds).toHaveLength(1);
     // Too late to pledge, and a new goal may be proposed.
     await expect(r.economy.pledge(ALICE, goal.id, 5, "late")).rejects.toMatchObject({
@@ -595,7 +590,7 @@ describe("crowdfunding goals", () => {
     expect(out.data).toMatchObject({ done: true, refunded: 30 });
     expect(await balance(r, ALICE)).toBe(100);
     expect(await balance(r, BOB)).toBe(100);
-    expect((await r.store.goals.get(goal.id))?.status).toBe("cancelled");
+    expect((await economyOf(r.store).goals.get(goal.id))?.status).toBe("cancelled");
     expect((await say(r, "cancel_goal", ALICE, "d")).data).toMatchObject({
       done: false,
       reason: "no_goal",
@@ -614,7 +609,7 @@ describe("crowdfunding goals", () => {
       const { out } = await propose(other, { ...GOAL, ...bad });
       expect(out.data, JSON.stringify(bad)).toMatchObject({ done: false });
     }
-    expect(await other.store.goals.list("p", { limit: 5 })).toEqual([]);
+    expect(await economyOf(other.store).goals.list("p", { limit: 5 })).toEqual([]);
     await expect(propose(other, { ...GOAL, days: 0 })).rejects.toBeTruthy();
     // The title and the promise have their lengths.
     await expect(propose(other, { ...GOAL, title: "題".repeat(31) })).rejects.toBeTruthy();
@@ -631,7 +626,7 @@ describe("crowdfunding goals", () => {
     expect((await propose(r, { ...GOAL, title: "BADWORD" })).out.data).toMatchObject({
       reason: "forbidden",
     });
-    expect(await r.store.goals.list("p", { limit: 5 })).toEqual([]);
+    expect(await economyOf(r.store).goals.list("p", { limit: 5 })).toEqual([]);
     // Singing is a capability she may use: it is hers to promise.
     expect((await propose(r, { ...GOAL, promise: "唱一首歌" })).out.data).toMatchObject({
       done: true,
@@ -643,15 +638,14 @@ describe("crowdfunding goals", () => {
     await fund(r, ALICE, 100);
     const { goal } = await propose(r, { ...GOAL, target: 20 });
     if (!goal) throw new Error("no goal");
-    await r.store.goals.addPledge({
+    await economyOf(r.store).goals.addPledge({
       id: newId(),
       goal: goal.id,
-      profile: "p",
       account: ALICE,
       amount: 20,
       created_at: toTimestamp(T0),
     });
-    await r.store.goals.transition(goal.id, ["open"], {
+    await economyOf(r.store).goals.transition(goal.id, ["open"], {
       status: "reached",
       closed_at: toTimestamp(T0),
     });
@@ -664,7 +658,7 @@ describe("crowdfunding goals", () => {
 
 async function post(r: Rig, args: Record<string, JsonValue>) {
   const out = await say(r, "post_bounty", ALICE, newId(), args);
-  const rows = await r.store.bounties.list("p", { statuses: ["open"], limit: 10 });
+  const rows = await economyOf(r.store).bounties.list("p", { statuses: ["open"], limit: 10 });
   return { out, rows };
 }
 
@@ -691,7 +685,7 @@ describe("bounties", () => {
     expect(await balance(r, BOB)).toBe(30);
     expect(await purse(r)).toBe(70);
     expect((await r.economy.wallet(BOB)).recent[0]?.label).toBe("領到她的懸賞");
-    const done = await r.store.bounties.get(b.id);
+    const done = await economyOf(r.store).bounties.get(b.id);
     expect(done).toMatchObject({ status: "awarded", winner: BOB });
     // One award per bounty, and it is off the list.
     const again = await say(r, "award_bounty", ALICE, "w2", { bounty: shortId(b.id) });
@@ -713,7 +707,7 @@ describe("bounties", () => {
       expect(out.data).toMatchObject({ done: false, reason: "stranger" });
     }
     expect(await purse(r)).toBe(90);
-    expect((await r.store.bounties.get(rows[0]?.id ?? ""))?.status).toBe("open");
+    expect((await economyOf(r.store).bounties.get(rows[0]?.id ?? ""))?.status).toBe("open");
   });
 
   it("goes back to the purse when she cancels it or nobody takes it in time", async () => {
@@ -732,7 +726,7 @@ describe("bounties", () => {
     await r.economy.bountyDesk.sweep();
     await r.economy.bountyDesk.sweep();
     expect(await purse(r)).toBe(100);
-    const all = await r.store.bounties.list("p", { limit: 10 });
+    const all = await economyOf(r.store).bounties.list("p", { limit: 10 });
     expect(all.map((b) => b.status).sort()).toEqual(["cancelled", "expired"]);
     expect(await r.economy.bounties()).toEqual([]);
     // Cancelled ones cannot be cancelled or awarded again.
@@ -763,7 +757,7 @@ describe("bounties", () => {
       reason: "not_enough",
     });
     expect(await purse(other)).toBe(40);
-    expect(await other.store.bounties.list("p", { limit: 5 })).toEqual([]);
+    expect(await economyOf(other.store).bounties.list("p", { limit: 5 })).toEqual([]);
   });
 
   it("only asks for what is hers to decide", async () => {
@@ -791,12 +785,14 @@ describe("the stores", () => {
   it("refuse to move a goal or a bounty twice", async () => {
     const r = await rig();
     const { goal } = await propose(r);
-    expect(await r.store.goals.transition(goal?.id ?? "", ["open"], { status: "cancelled" })).toBe(
-      true,
-    );
-    expect(await r.store.goals.transition(goal?.id ?? "", ["open"], { status: "expired" })).toBe(
+    expect(
+      await economyOf(r.store).goals.transition(goal?.id ?? "", ["open"], { status: "cancelled" }),
+    ).toBe(true);
+    expect(
+      await economyOf(r.store).goals.transition(goal?.id ?? "", ["open"], { status: "expired" }),
+    ).toBe(false);
+    expect(await economyOf(r.store).goals.transition(goal?.id ?? "", [], { status: "open" })).toBe(
       false,
     );
-    expect(await r.store.goals.transition(goal?.id ?? "", [], { status: "open" })).toBe(false);
   });
 });

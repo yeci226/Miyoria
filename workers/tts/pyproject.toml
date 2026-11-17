@@ -1,0 +1,54 @@
+# The TTS worker's environment (workers/tts/server.py, design_voice.py). Not a package:
+# `uv sync --frozen` installs the locked dependencies only. Each backend is an extra; sync exactly
+# one of them:
+#   faster    faster-qwen3-tts, true streaming with CUDA graphs (the default)
+#   qwen-tts  the official qwen-tts package (TTS_BACKEND=qwen-tts)
+# They conflict: faster-qwen3-tts depends on qwen-tts-hf, which ships the same `qwen_tts` module
+# as qwen-tts, and they pin different transformers versions.
+# Keep in step with requirements-faster.txt and requirements.txt (workers/tests/test_projects.py
+# checks it) while the old install command and the Docker image still read those files.
+[project]
+name = "miyoria-worker-tts"
+version = "0.1.0"
+# design_voice.py imports tomllib (3.11).
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "torch",                     # the CUDA build, see [tool.uv.sources]
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "numpy>=1.26",
+    "soundfile>=0.12",           # design_voice.py writes WAVs
+    "scipy>=1.11",               # only used if the model's sample rate ever differs mid-stream
+]
+
+[project.optional-dependencies]
+faster = [
+    "faster-qwen3-tts>=0.5,<0.6",
+    # 5.22 breaks qwen_tts loading the speech tokenizer ("property 'upsample' ... has no setter");
+    # 5.15.1 is the oldest version qwen-tts-hf accepts and is known to work.
+    "transformers==5.15.1",
+]
+qwen-tts = [
+    "qwen-tts",
+]
+
+[tool.uv]
+package = false
+# Workers run on Windows and Linux; nothing is locked for macOS.
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
+conflicts = [
+    [{ extra = "faster" }, { extra = "qwen-tts" }],
+]
+
+# The CUDA 12.8 build of torch, replacing the old first pip step
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# `explicit` keeps every other package on PyPI.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]

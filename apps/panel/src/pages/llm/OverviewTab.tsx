@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
-import type { LlmCallRecord, LlmCallStats, LlmGroupStats } from "@/api/types";
+import type { LlmCallRecord, LlmCallStats, LlmGroupStats } from "@miyoria/contracts/api";
 import { useLlmStats } from "@/app/queries";
 import type { LlmSearch } from "@/app/router";
 import { BarList, ChartBlock, ChartEmpty, ColumnChart } from "@/components/charts/charts";

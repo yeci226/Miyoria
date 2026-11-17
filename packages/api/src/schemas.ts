@@ -1,16 +1,15 @@
 // Zod schemas of the shared wire types that arrive in request bodies.
 
+import { ContextKeySchema as WireContextKeySchema } from "@miyoria/contracts/wire";
 import type { AuthScope } from "@miyoria/store";
 import { type ContextKey, contextKeyEquals } from "@miyoria/types";
 import { z } from "zod";
 
-export const AccountRefSchema = z.object({ platform: z.string(), id: z.string() });
+export { AccountRefSchema } from "@miyoria/contracts/wire";
 
-export const ContextKeySchema = z.object({
-  platform: z.string(),
+/** A context in a request body: a client may leave `scope` out, which means a DM (`null`). */
+export const ContextKeySchema = WireContextKeySchema.extend({
   scope: z.string().nullable().default(null),
-  channel: z.string(),
-  kind: z.enum(["channel", "thread", "dm", "voice"]),
 });
 
 export const AuthScopeSchema = z.discriminatedUnion("type", [

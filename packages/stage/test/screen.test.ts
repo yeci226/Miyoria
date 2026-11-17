@@ -1,9 +1,23 @@
 // Paid screen messages: `economy.screen` becomes a `screen` message for the overlay, which the hub
 // passes on as it is (the overlay queues them).
 
-import { customEvent } from "@miyoria/types";
+import {
+  type AnyEventDefinition,
+  type Envelope,
+  type EventPayload,
+  Events,
+  eventEnvelope,
+  type PublishMetaArgs,
+} from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { Forwarder, OverlayHub, parseCoreMessage } from "../src/index.js";
+
+/** An event as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  def: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+): Envelope => eventEnvelope("test", def, data, ...meta);
 
 describe("screen messages", () => {
   it("round-trips and is bounded", () => {
@@ -25,23 +39,23 @@ describe("screen messages", () => {
     const f = new Forwarder(false);
     const msg = { kind: "message", name: " Owen ", text: " 加油 ", song: null };
     const once = [{ type: "screen", kind: "message", name: "Owen", text: "加油", song: null }];
-    expect(f.onEvent(customEvent("economy.screen", msg))).toStrictEqual(once);
+    expect(f.onEvent(ev(Events.EconomyScreen, msg as never))).toStrictEqual(once);
     // Two in a row stay two (unlike gifts, nothing is merged).
-    expect(f.onEvent(customEvent("economy.screen", msg))).toStrictEqual(once);
+    expect(f.onEvent(ev(Events.EconomyScreen, msg as never))).toStrictEqual(once);
     expect(
       f.onEvent(
-        customEvent("economy.screen", {
+        ev(Events.EconomyScreen, {
           kind: "dedication",
           name: "A",
           text: "給 B",
           song: " 春日影 ",
-        }),
+        } as never),
       ),
     ).toStrictEqual([
       { type: "screen", kind: "dedication", name: "A", text: "給 B", song: "春日影" },
     ]);
     // A message has no song, even if one is sent.
-    expect(f.onEvent(customEvent("economy.screen", { ...msg, song: "x" }))).toStrictEqual(once);
+    expect(f.onEvent(ev(Events.EconomyScreen, { ...msg, song: "x" } as never))).toStrictEqual(once);
     for (const bad of [
       { ...msg, name: "" },
       { ...msg, text: " " },
@@ -49,9 +63,7 @@ describe("screen messages", () => {
       { ...msg, kind: "dedication", song: null },
       "nope",
     ]) {
-      expect(f.onEvent(customEvent("economy.screen", bad as never)), JSON.stringify(bad)).toEqual(
-        [],
-      );
+      expect(f.onEvent(ev(Events.EconomyScreen, bad as never)), JSON.stringify(bad)).toEqual([]);
     }
   });
 

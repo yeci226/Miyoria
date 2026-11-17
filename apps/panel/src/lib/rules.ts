@@ -2,7 +2,8 @@
 // ends, and which rule stopped what. The log keeps no rule id on what a rule stopped, only the
 // reason the service wrote (`<權限>定的規則:<內容>`), so a stop is matched to a rule by that text.
 
-import type { DirectiveAuthority, DirectiveEffect, DirectiveRecord, DirectiveScope, LogEvent } from "@/api/types";
+import type { LogEvent } from "@/api/types";
+import type { DirectiveAuthority, DirectiveEffect, DirectiveRecord, DirectiveScope } from "@miyoria/contracts/api";
 import { accountString, contextShort, fmtDateTime, fmtTime } from "./format";
 
 export const AUTHORITY_LABEL: Record<DirectiveAuthority, string> = {

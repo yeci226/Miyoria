@@ -2,35 +2,37 @@
 // sink with a fake voice node. Only the outside world is fake. This is the proof that the stop works
 // with the pause on: the same tools in her own hands are refused.
 
+import { ActivityModule } from "@miyoria/brain/activity";
+import { CommandsModule } from "@miyoria/commands";
 import {
   ActionsModule,
   ActuatorRegistry,
   ActuatorRegistryKey,
   defineCapability,
-} from "@miyoria/actions";
-import { ActivityModule } from "@miyoria/activity";
-import { CommandsModule } from "@miyoria/commands";
-import { defineManifest, type Module, type ModuleContext } from "@miyoria/kernel";
-import { SchedulerModule } from "@miyoria/scheduler";
+} from "@miyoria/gate/actions";
+import { defineManifest, type Module, type ModuleContext } from "@miyoria/runtime/kernel";
+import { SchedulerModule } from "@miyoria/runtime/scheduler";
+import {
+  ActionSinkKey,
+  ActivityManagerKey,
+  ActuatorExecutorKey,
+  type ContextKey,
+  Events,
+  is,
+  MouthKey,
+  newAction,
+  newId,
+  Principals,
+  voiceLane,
+} from "@miyoria/types";
 import {
   type AudioChunk,
   type AudioStream,
   SpeechService,
   SpeechServiceKey,
   type TtsProvider,
-} from "@miyoria/speech";
-import {
-  ActionSinkKey,
-  ActivityManagerKey,
-  ActuatorExecutorKey,
-  type ContextKey,
-  customEvent,
-  newAction,
-  newId,
-  Principals,
-  voiceLane,
-} from "@miyoria/types";
-import { VoiceModule } from "@miyoria/voice";
+} from "@miyoria/voice/speech";
+import { VoiceModule } from "@miyoria/voice/voice";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   deepseekVoice,
@@ -39,7 +41,7 @@ import {
   nextEvent,
   SELF_ID,
   waitUntil,
-} from "../../voice/test/harness.js";
+} from "../../voice/voice/test/harness.js";
 
 const GUILD = "g1";
 const VOICE: ContextKey = { platform: "discord", scope: GUILD, channel: "vc1", kind: "voice" };
@@ -57,14 +59,12 @@ class World implements Module {
   }
 
   session(state: "started" | "stopped"): void {
-    this.ctx?.publish(
-      customEvent("game.director.session", {
-        state,
-        game: "minecraft",
-        game_name: "Minecraft",
-        context: { ...VOICE },
-      }),
-    );
+    this.ctx?.publish(Events.GameDirectorSession, {
+      state,
+      game: "minecraft",
+      game_name: "Minecraft",
+      context: { ...VOICE },
+    });
   }
 }
 
@@ -131,6 +131,8 @@ async function rig() {
       const registry = new ActuatorRegistry({ services, builtins: false });
       services.provide("app", ActuatorRegistryKey, registry);
       services.provide("app", ActuatorExecutorKey, registry);
+      // Her lines are the main line's; here every turn is (the scheduler refuses lines without it).
+      services.provide("app", MouthKey, { owns: () => true, say: async () => undefined });
       registry.register(
         defineCapability({
           name: "game.stop",
@@ -235,8 +237,8 @@ describe("the stop, for real", () => {
     const completed = h.subscribe(["action.completed"]);
     const actions = h.services.require(ActionSinkKey);
     await actions.submit(line("還在講話"));
-    const muted = (await nextEvent(completed)).event;
-    expect(muted).toMatchObject({ type: "action_completed", data: { ok: false, error: "muted" } });
+    const muted = await nextEvent(completed);
+    expect(muted).toMatchObject({ type: "action.completed", data: { ok: false, error: "muted" } });
 
     await registry.emergency.resume("panel:test");
     node.sendJson({ type: "joined", guild: GUILD, channel: "vc1" });
@@ -259,8 +261,8 @@ describe("cutting one line short (§7.3)", () => {
     await actions.interruptTurn?.(turn);
     expect(await node.recvType("play_stop")).toMatchObject({ play: start.play });
     for (;;) {
-      const event = (await nextEvent(playback)).event;
-      if (event.type !== "voice_playback" || event.data.state === "started") continue;
+      const event = await nextEvent(playback);
+      if (!is(Events.VoicePlaybackEvent, event) || event.data.state === "started") continue;
       expect(event.data).toMatchObject({ state: "interrupted", turn, text: "這句會被切掉" });
       expect(event.data.heard_ms).toBeGreaterThanOrEqual(40);
       break;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Delivery, LogEvent } from "@/api/types";
+import type { LogEvent } from "@/api/types";
+import type { Delivery } from "@miyoria/contracts/api";
 import type { EvalData, Loaded } from "./eval-data";
 import { bootTimes } from "./eval-data";
 import { floorMix, meets, metricOf, read, repeats, trend, unansweredRuns } from "./metrics";

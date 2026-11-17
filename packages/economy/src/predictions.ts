@@ -16,7 +16,7 @@
 //   settling is idempotent: every payout and refund has a key, and a sweep finishes what a crash
 //   left halfway.
 
-import { errorMessage } from "@miyoria/kernel";
+import { errorMessage } from "@miyoria/runtime/kernel";
 import { type AccountRef, newId, toTimestamp } from "@miyoria/types";
 import type { EconomyDoc } from "./docs.js";
 import { type EconomyService, type Member, STRANGER } from "./economy.js";
@@ -153,7 +153,6 @@ export class PredictionDesk {
       };
       const doc: EconomyDoc = {
         id: newId(),
-        profile: this.e.profile,
         kind: PREDICTION,
         owner: null,
         status: "open",
@@ -211,7 +210,6 @@ export class PredictionDesk {
       const at = toTimestamp(this.e.now());
       const bet: EconomyDoc = {
         id: betId,
-        profile: this.e.profile,
         kind: BET,
         owner: who.account,
         status: "open",
@@ -334,9 +332,7 @@ export class PredictionDesk {
           const who = await this.e.holder(owner);
           await this.e
             .ledger()
-            .post(this.e.entryFor(who, payout, "bet_win", pred.id, `betwin:${bet.id}`), {
-              wallet: who.wallet,
-            });
+            .post(this.e.entryFor(who, payout, "bet_win", pred.id, `betwin:${bet.id}`));
           await this.#close(bet, "won", payout);
         } else {
           await this.#close(bet, "lost", 0);

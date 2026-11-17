@@ -5,7 +5,7 @@
 
 import { access } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import { getLogger } from "@miyoria/kernel";
+import { getLogger } from "@miyoria/runtime/kernel";
 import {
   type Clock,
   type PlaybackState,

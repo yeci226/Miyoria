@@ -3,12 +3,12 @@
 // (`[stage.touch]`): a short head tilt and a smile of the eyes on parameters, and, when the
 // owner wants one, a gift expression for a moment. Pure: times are passed in.
 
-import { isJsonObject, type JsonValue } from "@miyoria/types";
+import { Events, isJsonObject, type JsonValue } from "@miyoria/types";
 import { z } from "zod";
 import { approach, clamp } from "./random.js";
 
 /** Topic of a viewer's touch on the stream (`{x, y, part}`, `x`/`y` 0..1, origin top-left). */
-export const TOUCH_TOPIC = "live.touch";
+export const TOUCH_TOPIC = Events.LiveTouch.type;
 
 /** What a touch landed on. */
 export const TOUCH_PARTS = ["head", "face", "body", "screen"] as const;

@@ -1,23 +1,21 @@
+import type { ProfileId } from "@miyoria/contracts/wire";
 import { monotonicFactory } from "ulid";
 import { serviceKey } from "./service-key.js";
 
-// ULID ids (26-character Crockford base32 strings, sortable by creation time).
-export type EventId = string;
-/** Correlates every event, LLM call and action of one agent "turn" (perception to output). */
-export type TurnId = string;
-export type ActionId = string;
-/** A cross-platform person. Several platform accounts can link to one person. */
-export type PersonId = string;
+// The id types themselves are contracts: ULIDs (26-character Crockford base32 strings, sortable
+// by creation time) for events, turns, actions and people; free-form strings for the rest.
+export type {
+  ActionId,
+  EventId,
+  ModuleId,
+  PersonId,
+  PlatformId,
+  ProfileId,
+  TurnId,
+} from "@miyoria/contracts/wire";
 
-// Free-form string ids.
-/** Stable module identifier, e.g. `"platform.discord.bot"` or `"agent"`. */
-export type ModuleId = string;
-/** A profile bundles persona, LLM, voice and avatar, e.g. `"deepseek-chan"`. */
-export type ProfileId = string;
 /** Service: the active profile id, provided by the app before modules start. */
 export const ProfileIdKey = serviceKey<ProfileId>("ProfileId");
-/** `"discord"`, later `"twitch"`, `"youtube"`, `"cli"` ... */
-export type PlatformId = string;
 
 const nextUlid = monotonicFactory();
 

@@ -1,6 +1,12 @@
 // Keeps a module's commands in the current `CommandRegistry` service.
 
-import { errorMessage, getLogger, type ModuleContext, type ServiceLookup } from "@miyoria/kernel";
+import {
+  errorMessage,
+  getLogger,
+  type ModuleContext,
+  type ServiceLookup,
+} from "@miyoria/runtime/kernel";
+import { Events, is } from "@miyoria/types";
 import { type CommandRegistry, CommandRegistryKey } from "./registry.js";
 
 const log = getLogger("commands.mount");
@@ -33,14 +39,13 @@ export class CommandMount {
   /** Registers now and follows `commands` module restarts until the module stops. */
   attach(ctx: ModuleContext): void {
     this.#sync(ctx.services, true);
-    const events = ctx.subscribe("system.module.state");
+    const events = ctx.subscribe(Events.SystemModuleState.type);
     ctx.spawn("command-mount", async () => {
       for await (const env of events) {
-        const event = env.event;
         if (
-          event.type === "module_state_changed" &&
-          event.data.module === COMMANDS_MODULE &&
-          event.data.state === "running"
+          is(Events.SystemModuleState, env) &&
+          env.data.module === COMMANDS_MODULE &&
+          env.data.state === "running"
         ) {
           this.#sync(ctx.services, false);
         }

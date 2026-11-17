@@ -1,14 +1,7 @@
 // The `StageLink` service: the connection to the Stage node and the requests other modules send.
 
-import { type EventBus, errorMessage, getLogger } from "@miyoria/kernel";
-import {
-  customEvent,
-  type Event,
-  type JsonValue,
-  type ModuleId,
-  newId,
-  serviceKey,
-} from "@miyoria/types";
+import { type EventBus, errorMessage, getLogger } from "@miyoria/runtime/kernel";
+import { type EventPayload, Events, type ModuleId, newId, serviceKey } from "@miyoria/types";
 import type WebSocket from "ws";
 import { z } from "zod";
 import {
@@ -32,16 +25,6 @@ import { HighlightsConfigSchema } from "./highlights.js";
 import { ScenesConfigSchema } from "./scenes.js";
 
 const log = getLogger("stage.link");
-
-/**
- * Topic of status updates published by `stage.link`
- * (`{connected, vts, obs, scene, streaming, scenes, hotkeys, overlay_url}`).
- */
-export const STATUS_TOPIC = "stage.status";
-/** Topic of errors reported by the Stage node (`{message}`). */
-export const ERROR_TOPIC = "stage.error";
-/** Topic of a highlight the Stage node saved (`{reason, path}`; the path is on the streaming PC). */
-export const CLIP_TOPIC = "stage.clip";
 
 export const DEFAULT_BIND = "127.0.0.1:7882";
 
@@ -179,7 +162,7 @@ export class StageLink {
 
   /**
    * Saves a highlight (OBS's replay buffer) with `reason` noted next to it. Resolves once saved
-   * (the file arrives as a `CLIP_TOPIC` event); rejects when OBS saved nothing.
+   * (the file arrives as a `Events.StageClip` event); rejects when OBS saved nothing.
    */
   clip(reason: string): Promise<StageStatus> {
     const text = [...reason.trim()].slice(0, CLIP_REASON_MAX).join("");
@@ -240,7 +223,7 @@ export class StageLink {
 
   #setStatus(status: StageStatus | null): void {
     if (!this.#status.set(status ? { ...status } : null)) return;
-    const payload: JsonValue = status
+    const payload: EventPayload<typeof Events.StageStatus> = status
       ? {
           connected: true,
           vts: status.vts,
@@ -252,11 +235,7 @@ export class StageLink {
           overlay_url: status.overlay_url,
         }
       : { connected: false };
-    this.#publish(customEvent(STATUS_TOPIC, payload));
-  }
-
-  #publish(event: Event): void {
-    this.#bus.publish(this.#module, event);
+    this.#bus.publish(this.#module, Events.StageStatus, payload);
   }
 
   /** Closes the connection (module stop). */
@@ -387,7 +366,7 @@ export class StageLink {
       }
       case "clip_saved":
         log.info({ reason: msg.reason, path: msg.path }, "highlight saved");
-        this.#publish(customEvent(CLIP_TOPIC, { reason: msg.reason, path: msg.path }));
+        this.#bus.publish(this.#module, Events.StageClip, { reason: msg.reason, path: msg.path });
         return;
       case "error": {
         log.warn({ message: msg.message, id: msg.id ?? null }, "stage node error");
@@ -396,7 +375,7 @@ export class StageLink {
           conn.pending.delete(msg.id);
           reply?.reject(new StageLinkError(msg.message));
         }
-        this.#publish(customEvent(ERROR_TOPIC, { message: msg.message }));
+        this.#bus.publish(this.#module, Events.StageError, { message: msg.message });
         return;
       }
     }
@@ -412,5 +391,5 @@ export class StageLink {
   }
 }
 
-/** Service key of the `StageLink` (Rust `Arc<StageLink>`). */
+/** Service key of the `StageLink`. */
 export const StageLinkKey = serviceKey<StageLink>("StageLink");

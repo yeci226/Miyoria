@@ -1,8 +1,8 @@
 // Every name she knows people by, for the check that keeps one person's name off another person's
 // page (`mentionsAnother`): display names, handles and what she calls them.
 
-import type { ServiceLookup } from "@miyoria/kernel";
-import { AffectStateKey, HandleDirectoryKey, type KnownName } from "@miyoria/types";
+import type { ServiceLookup } from "@miyoria/runtime/kernel";
+import { HandleDirectoryKey, HeartKey, type KnownName } from "@miyoria/types";
 import { PeopleStoreKey } from "./stores.js";
 
 /**
@@ -30,9 +30,9 @@ export async function knownNames(services: ServiceLookup): Promise<KnownName[] |
     const { handle, display_name, person, account } = entry;
     out.push({ name: handle, person, account }, { name: display_name, person, account });
   }
-  for (const card of services.get(AffectStateKey)?.cards() ?? []) {
-    out.push({ name: card.handle, person: card.person, account: null });
-    if (card.call_name) out.push({ name: card.call_name, person: card.person, account: null });
+  // What she calls people (the heart's rows).
+  for (const { person, call_name } of services.get(HeartKey)?.callNames?.() ?? []) {
+    out.push({ name: call_name, person, account: null });
   }
   return out;
 }

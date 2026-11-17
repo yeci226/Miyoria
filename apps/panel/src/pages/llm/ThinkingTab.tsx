@@ -1,7 +1,8 @@
 import { useNavigate } from "@tanstack/react-router";
 import { Brain, ChevronDown, Maximize2, Wrench } from "lucide-react";
 import { useDeferredValue, useState } from "react";
-import type { LlmCallKind, LlmThinking, LlmThinkingQuery } from "@/api/types";
+import type { LlmThinkingQuery } from "@/api/types";
+import type { LlmCallKind, LlmThinking } from "@miyoria/contracts/api";
 import { useLlmThinking } from "@/app/queries";
 import type { LlmSearch } from "@/app/router";
 import { SearchInput } from "@/components/controls";

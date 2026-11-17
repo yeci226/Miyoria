@@ -1,7 +1,7 @@
 import { PassThrough } from "node:stream";
 import { type ExtensionDefinition, ExtensionRuntime, runExtension } from "../src/extension.js";
 import { RpcPeer } from "../src/rpc.js";
-import type { InitializeParams, InitializeResult } from "../src/types.js";
+import { type InitializeParams, type InitializeResult, PROTOCOL_VERSION } from "../src/types.js";
 
 export interface Call {
   method: string;
@@ -39,7 +39,7 @@ export function fakeHost(def: ExtensionDefinition, answer?: (call: Call) => unkn
 
 export function initParams(): InitializeParams {
   return {
-    protocol: 1,
+    protocol: PROTOCOL_VERSION,
     host: { name: "miyoria", version: "0.1.0" },
     extension: { id: "test.ext", version: "1.0.0", dir: "/ext" },
     config: { greeting: "hi" },

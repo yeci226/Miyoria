@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mockFetch } from "../test/render";
 import { createApi } from "./endpoints";
 import { ApiClient, ApiError, buildQuery, describeError, isNotProvided, joinUrl } from "./http";
-import type { ContextKey } from "./types";
+import type { ContextKey } from "@miyoria/contracts/wire";
 
 const ctx: ContextKey = { platform: "discord", scope: "1", channel: "2", kind: "channel" };
 const headersOf = (init: RequestInit | undefined) => (init?.headers ?? {}) as Record<string, string>;
@@ -26,8 +26,8 @@ describe("ApiClient", () => {
       url.pathname === "/api/health" ? { body: { status: "ok", version: "1.2.3" } } : { body: [] },
     );
     const api = createApi(new ApiClient({ baseUrl: "http://core:7878", token: " s3cret " }));
-    expect((await api.health()).version).toBe("1.2.3");
-    await api.modules();
+    expect((await api.rpc.health()).version).toBe("1.2.3");
+    await api.rpc.modules.list();
     const [healthCall, modulesCall] = fetch.mock.calls;
     expect(String(healthCall?.[0])).toBe("http://core:7878/api/health");
     expect(headersOf(healthCall?.[1]).Authorization).toBeUndefined();
@@ -42,10 +42,10 @@ describe("ApiClient", () => {
       return { body: [] };
     });
     const api = createApi(new ApiClient({ baseUrl: "", token: "" }));
-    expect((await api.authMethods()).discord).toBe(true);
-    const me = await api.session();
+    expect((await api.rpc.auth.methods()).discord).toBe(true);
+    const me = await api.rpc.auth.session();
     expect(me.user?.name).toBe("Owen");
-    await api.queuePause(true);
+    await api.rpc.queue.pause();
     await api.logout();
     expect(fetch.mock.calls).toHaveLength(4);
     for (const [, init] of fetch.mock.calls) {
@@ -64,7 +64,7 @@ describe("ApiClient", () => {
   it("encodes the decisions context as JSON and passes the limit", async () => {
     const fetch = mockFetch(() => ({ body: [] }));
     const api = createApi(new ApiClient({ baseUrl: "", token: "t" }));
-    await api.decisions({ limit: 200, context: ctx });
+    await api.rpc.decisions({ query: { limit: 200, context: JSON.stringify(ctx) } });
     const url = new URL(String(fetch.mock.calls[0]?.[0]), "http://x");
     expect(url.pathname).toBe("/api/decisions");
     expect(url.searchParams.get("limit")).toBe("200");
@@ -76,7 +76,7 @@ describe("ApiClient", () => {
       method === "PUT" && url.pathname === "/api/persona/my%20key" ? { body: { key: "my key", version: 3 } } : undefined,
     );
     const api = createApi(new ApiClient({ baseUrl: "", token: "t" }));
-    const res = await api.setPersonaSection("my key", { body: "hi", edited_by: "panel" });
+    const res = await api.rpc.persona.set({ params: { key: "my key" }, body: { body: "hi", edited_by: "panel" } });
     expect(res.version).toBe(3);
     const init = fetch.mock.calls[0]?.[1];
     expect(init?.method).toBe("PUT");
@@ -84,10 +84,24 @@ describe("ApiClient", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ body: "hi", edited_by: "panel" });
   });
 
+  it("calls a member route by cookie alone, with its Idempotency-Key and a JSON body", async () => {
+    const fetch = mockFetch(() => ({ body: { serial: "MYR-AAAA-BBBB-CCCC" } }));
+    const api = createApi(new ApiClient({ baseUrl: "", token: "t" }));
+    await api.rpc.member.rerollCard({ headers: { "idempotency-key": "k-1" }, body: {} });
+    await api.rpc.public.card({ params: { serial: "MYR AAAA/1" } });
+    const [reroll, check] = fetch.mock.calls;
+    expect(String(reroll?.[0])).toBe("/api/member/card/reroll");
+    expect(headersOf(reroll?.[1]).Authorization).toBeUndefined();
+    expect(headersOf(reroll?.[1])["Idempotency-Key"]).toBe("k-1");
+    expect(JSON.parse(String(reroll?.[1]?.body))).toEqual({});
+    expect(String(check?.[0])).toBe("/api/public/card/MYR%20AAAA%2F1");
+    expect(headersOf(check?.[1]).Authorization).toBeUndefined();
+  });
+
   it("posts module actions to /api/modules/{id}/{action}", async () => {
     const fetch = mockFetch((m) => (m === "POST" ? { body: { id: "platform.discord.bot" } } : undefined));
     const api = createApi(new ApiClient({ baseUrl: "", token: "t" }));
-    await api.moduleAction("platform.discord.bot", "restart");
+    await api.rpc.modules.action({ params: { id: "platform.discord.bot", action: "restart" } });
     expect(String(fetch.mock.calls[0]?.[0])).toBe("/api/modules/platform.discord.bot/restart");
     expect(fetch.mock.calls[0]?.[1]?.method).toBe("POST");
   });
@@ -95,7 +109,7 @@ describe("ApiClient", () => {
   it("classifies the server fallback 404 as not provided", async () => {
     mockFetch(() => undefined);
     const api = createApi(new ApiClient({ baseUrl: "", token: "t" }));
-    const err = await api.people().catch((e: unknown) => e);
+    const err = await api.rpc.people.list({ query: {} }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).kind).toBe("not_provided");
     expect(isNotProvided(err)).toBe(true);
@@ -105,7 +119,7 @@ describe("ApiClient", () => {
   it("classifies a 404 for a missing item as not found", async () => {
     mockFetch(() => ({ status: 404, body: { error: "unknown module `nope`" } }));
     const api = createApi(new ApiClient({ baseUrl: "", token: "t" }));
-    const err = (await api.moduleAction("nope", "enable").catch((e: unknown) => e)) as ApiError;
+    const err = (await api.rpc.modules.action({ params: { id: "nope", action: "enable" } }).catch((e: unknown) => e)) as ApiError;
     expect(err.kind).toBe("not_found");
     expect(err.message).toBe("unknown module `nope`");
   });
@@ -151,7 +165,7 @@ describe("ApiClient", () => {
   it("builds planned query strings", async () => {
     const fetch = mockFetch(() => ({ body: { items: [], next_cursor: null } }));
     const api = createApi(new ApiClient({ baseUrl: "", token: "t" }));
-    await api.memory({ q: "拉麵", kind: "fact", include_superseded: true, limit: 20 });
+    await api.rpc.memory.list({ query: { q: "拉麵", kind: "fact", include_superseded: "true", limit: "20" } });
     const url = new URL(String(fetch.mock.calls[0]?.[0]), "http://x");
     expect(url.pathname).toBe("/api/memory");
     expect(Object.fromEntries(url.searchParams)).toEqual({ q: "拉麵", kind: "fact", include_superseded: "true", limit: "20" });

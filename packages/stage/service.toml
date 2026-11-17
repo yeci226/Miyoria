@@ -1,0 +1,25 @@
+# Stage: drives VTube Studio and OBS and serves the overlay, started as `miyoria stage -c <config>`.
+name = "stage"
+kind = "node"
+provides = ["renderer"]
+summary = "舞台(VTube Studio、OBS 與 overlay)"
+
+[install]
+runtime = "node"
+
+[run]
+# It runs in the workspace folder; see core's service.toml.
+command = ["{miyoria}", "stage", "-c", "{config}"]
+cwd = "{workspace}"
+port = 7884                      # the overlay (`[stage] overlay_bind`)
+pass_env = ["*"]
+# Where Core's stage link is and its token, from Core (cluster.links, to a host approved for
+# renderer); they win over [stage] core_url and token. Until Core has sent them, or on a machine
+# that has not joined, the variables are not set and [stage] is used as before.
+env = { STAGE_LINK_URL = "{link:stage.url}", STAGE_LINK_TOKEN = "{link:stage.token}" }
+after = ["core"]
+guard = ["live"]
+
+# No health URL today: `up` only waits for the process to stay alive.
+[run.health]
+process = true

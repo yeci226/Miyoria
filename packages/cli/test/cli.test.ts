@@ -1,8 +1,9 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { ApiClient } from "@miyoria/api";
+import { ClientError } from "@miyoria/api";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkArgs, helpText, main, parseArgs, UsageError } from "../src/cli.js";
+import { rpcClient } from "../src/commands/remote.js";
 import { type Output, setOutput } from "../src/ui.js";
 
 describe("argument parsing", () => {
@@ -93,14 +94,45 @@ describe("admin API client", () => {
     });
     await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
-    const client = new ApiClient(`http://127.0.0.1:${port}`, "tok");
-    expect(await client.health()).toEqual({ status: "ok", version: "0.1.0" });
-    await expect(client.moduleAction("platform.discord.bot", "enable")).rejects.toThrow(
-      "unknown module `x`",
-    );
+    const rpc = rpcClient(`http://127.0.0.1:${port}`, "tok");
+    expect(await rpc.health()).toEqual({ status: "ok", version: "0.1.0" });
+    await expect(
+      rpc.modules.action({ params: { id: "platform.discord.bot", action: "enable" } }),
+    ).rejects.toThrow("unknown module `x`");
     expect(seen).toEqual([
       "GET /api/health Bearer tok",
       "POST /api/modules/platform.discord.bot/enable Bearer tok",
     ]);
+  });
+
+  it("calls_the_route_table_with_its_input_and_reports_its_errors", async () => {
+    const seen: string[] = [];
+    server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk: Buffer) => {
+        body += chunk.toString();
+      });
+      req.on("end", () => {
+        seen.push(`${req.method} ${req.url} ${req.headers["content-type"]} ${body}`);
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid persona section key `a b`" }));
+      });
+    });
+    await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const rpc = rpcClient(`http://127.0.0.1:${port}`, "tok");
+    const failed = await rpc.persona
+      .set({ params: { key: "a b" }, body: { body: "hi", edited_by: "cli" } })
+      .catch((error: unknown) => error);
+    expect(failed).toBeInstanceOf(ClientError);
+    expect((failed as ClientError).status).toBe(400);
+    expect((failed as ClientError).message).toContain("invalid persona section key `a b`");
+    expect(seen).toEqual([
+      'PUT /api/persona/a%20b application/json {"body":"hi","edited_by":"cli"}',
+    ]);
+    const down = await rpcClient("http://127.0.0.1:1", "tok")
+      .health()
+      .catch((error: unknown) => error);
+    expect((down as ClientError).kind).toBe("transport");
   });
 });

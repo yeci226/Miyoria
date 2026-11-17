@@ -1,0 +1,53 @@
+{
+  "name": "@miyoria/workspace",
+  "version": "0.1.0",
+  "description": "sandbox: Docker code sandbox: runs code she writes, her tools workspace and proposed tools; skills: Her skills: small named how-to documents kept in her workspace and loaded on demand; web: Web search (DuckDuckGo) and a page reader for her, behind an SSRF guard; results are untrusted data; imagegen: Image generation on a ComfyUI server: model adapters, workflow files and a job queue",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    "./sandbox": {
+      "@miyoria/source": "./sandbox/src/index.ts",
+      "types": "./dist/sandbox/src/index.d.ts",
+      "default": "./dist/sandbox/src/index.js"
+    },
+    "./skills": {
+      "@miyoria/source": "./skills/src/index.ts",
+      "types": "./dist/skills/src/index.d.ts",
+      "default": "./dist/skills/src/index.js"
+    },
+    "./web": {
+      "@miyoria/source": "./web/src/index.ts",
+      "types": "./dist/web/src/index.d.ts",
+      "default": "./dist/web/src/index.js"
+    },
+    "./imagegen": {
+      "@miyoria/source": "./imagegen/src/index.ts",
+      "types": "./dist/imagegen/src/index.d.ts",
+      "default": "./dist/imagegen/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miyoria/gate": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
+    "@miyoria/store": "workspace:*",
+    "@miyoria/types": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@miyoria/commands": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

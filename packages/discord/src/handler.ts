@@ -7,18 +7,17 @@ import {
   ReplySinkKey,
   UserResolverKey,
 } from "@miyoria/commands";
-import { errorMessage, getLogger, type ModuleContext } from "@miyoria/kernel";
+import { errorMessage, getLogger, type ModuleContext } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
+  AttachmentSourceKey,
+  Events as BusEvents,
   type ContextKind,
-  customEvent,
-  type JsonValue,
   ModerationKey,
   type PlatformHistories,
   type PlatformSinks,
   PresencePrivacyKey,
   type QuotedMessage,
-  REACTION_TOPIC,
   type ReactionEvent,
   toTimestamp,
 } from "@miyoria/types";
@@ -62,13 +61,10 @@ import {
 } from "./mapping.js";
 import {
   type GuildMemberLike,
-  memberEvent,
   memberUpdate,
   type PresenceLike,
-  presenceEvent,
   presenceUpdate,
   type VoiceStateLike,
-  voiceStateEvent,
   voiceStateUpdate,
 } from "./presence.js";
 import { DiscordUserResolver, type ResolverClientLike } from "./resolver.js";
@@ -170,12 +166,9 @@ export class GatewayBridge {
           typing.channel.id,
           typing.channel.type,
         );
-        this.ctx.publish({
-          type: "platform_typing",
-          data: {
-            context: contextKey(typing.guild?.id ?? null, typing.channel.id, kind),
-            account: account(typing.user.id),
-          },
+        this.ctx.publish(BusEvents.PlatformTyping, {
+          context: contextKey(typing.guild?.id ?? null, typing.channel.id, kind),
+          account: account(typing.user.id),
         });
       }),
     );
@@ -255,7 +248,7 @@ export class GatewayBridge {
   onPresence(presence: PresenceLike, initial: boolean): void {
     const update = presenceUpdate(presence, initial);
     if (update === null || !this.presenceAllowed(update.account)) return;
-    this.ctx.publish(presenceEvent(update));
+    this.ctx.publish(BusEvents.PlatformPresence, update);
   }
 
   /** A reaction added or removed (`platform.reaction`; feedback on her messages). */
@@ -281,15 +274,15 @@ export class GatewayBridge {
       added,
       at: toTimestamp(Date.now()),
     };
-    this.ctx.publish(customEvent(REACTION_TOPIC, event as unknown as JsonValue));
+    this.ctx.publish(BusEvents.PlatformReaction, event);
   }
 
   onVoiceState(state: VoiceStateLike, initial: boolean): void {
-    this.ctx.publish(voiceStateEvent(voiceStateUpdate(state, initial)));
+    this.ctx.publish(BusEvents.PlatformVoiceState, voiceStateUpdate(state, initial));
   }
 
   onMember(member: GuildMemberLike, left: boolean): void {
-    this.ctx.publish(memberEvent(memberUpdate(member, left)));
+    this.ctx.publish(BusEvents.PlatformMember, memberUpdate(member, left));
   }
 
   /** The handlers' shared environment. */
@@ -362,18 +355,23 @@ export class GatewayBridge {
       .filter((id) => id !== bot)
       .sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0));
     for (const id of [bot, ...others]) {
-      this.ctx.publish({
-        type: "platform_ready",
-        data: { platform: PLATFORM, self_account: account(id) },
-      });
+      this.ctx.publish(BusEvents.PlatformReady, { platform: PLATFORM, self_account: account(id) });
     }
     const emojiConfig = this.shared.config.emoji;
-    const sink = new DiscordSink(client.rest, () => this.ctx.services.get(ModerationKey), {
-      table: this.shared.emoji,
-      usage: this.shared.emojiUsage,
-      enabled: () => emojiConfig.enabled,
-      limits: () => emojiConfig,
-    });
+    const sink = new DiscordSink(
+      client.rest,
+      () => this.ctx.services.get(ModerationKey),
+      {
+        table: this.shared.emoji,
+        usage: this.shared.emojiUsage,
+        enabled: () => emojiConfig.enabled,
+        limits: () => emojiConfig,
+      },
+      {
+        source: () => this.ctx.services.get(AttachmentSourceKey),
+        maxBytes: () => this.shared.config.max_upload_bytes,
+      },
+    );
     this.shared.sinks?.register(sink);
     this.shared.histories?.register(
       new DiscordHistory(client as unknown as HistoryClientLike, this.shared.selfIds),
@@ -431,7 +429,7 @@ export class GatewayBridge {
     };
     // Ambient chat in channels she was not given never reaches her (see `gate.ts`).
     if (!messageAllowed(this.shared.config, data, msg.guildId, ids, this.shared.selfIds)) return;
-    this.ctx.publish({ type: "platform_message_created", data });
+    this.ctx.publish(BusEvents.PlatformMessageCreated, data);
   }
 
   /** Channel / thread / DM, from the event itself, a memo, the gateway cache or REST. */

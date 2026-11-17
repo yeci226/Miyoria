@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { BadgeCheck, CircleX, Download, Link2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { isApiError } from "@/api/http";
-import type { IssuedCard } from "@/api/types";
+import type { IssuedCard } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { Logo } from "@/components/logo";
 import { SkeletonRows } from "@/components/query-state";
@@ -101,7 +101,7 @@ function Details({ card, svg }: { card: IssuedCard; svg: React.RefObject<SVGSVGE
       <dl className="grid grid-cols-2 gap-x-6 gap-y-4 border-t border-border pt-4">
         <Fact label="關係">{card.relationship ?? "初次見面"}</Fact>
         <Fact label="她叫你">{card.call_name ?? "—"}</Fact>
-        <Fact label="好感">{card.affinity ?? "—"}</Fact>
+        <Fact label="羈絆">{card.affinity ?? "—"}</Fact>
         <Fact label="信任">{card.trust ?? "—"}</Fact>
         <Fact label="熟悉">{card.familiarity ?? "—"}</Fact>
         {card.stamp && <Fact label="她蓋的章">{card.stamp}</Fact>}
@@ -145,7 +145,7 @@ export function CardVerify({ serial }: { serial: string }) {
   const svg = useRef<SVGSVGElement>(null);
   const card = useQuery({
     queryKey: ["public", "card", serial],
-    queryFn: ({ signal }) => api.publicCard(serial, { signal }),
+    queryFn: ({ signal }) => api.rpc.public.card({ params: { serial } }, { signal }),
     retry: (n, e) => !(isApiError(e) && (e.status === 404 || e.status === 429)) && n < 2,
   });
   const missing = isApiError(card.error) && card.error.status === 404;

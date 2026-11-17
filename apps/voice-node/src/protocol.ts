@@ -1,82 +1,74 @@
-// Voice Link v1 (node side). See docs/protocols/voice-link.md.
+// Voice Link v1 (node side). The messages are written once, in `@miyoria/contracts/voice-link`;
+// see docs/protocols/voice-link.md.
 //
 // Text frames are JSON objects with a `type`; binary frames are audio:
 //   0x01 [stream: u32 LE] [PCM s16le mono 16 kHz ...]   node -> Core (capture)
 //   0x02 [play:   u32 LE] [PCM s16le mono ...]          Core -> node (playback)
 //   0x03 [play:   u32 LE] [PCM s16le mono ...]          Core -> node (levels track of a play
 //                                                       started with `levels`: what lip sync follows)
-//   0x04 [id: u32 LE] [JPEG ...]                         node -> Core (watch: one snapshot)
-//   0x05 [PCM s16le mono 16 kHz ...]                     node -> Core (watch: the stream's audio, no id)
 
-export const PROTOCOL_VERSION = 1;
+import {
+  readFrameHeader,
+  VOICE_LINK_CAPABILITIES,
+  VOICE_LINK_CLOSE,
+  VOICE_LINK_FRAME,
+  VOICE_LINK_FRAME_HEADER_BYTES,
+  VOICE_LINK_LIMITS,
+  VOICE_LINK_U32_MAX,
+  VOICE_LINK_VERSION,
+  type VoiceLinkCoreMessage,
+  VoiceLinkCoreMessageSchema,
+  type VoiceLinkGoLiveEncoder,
+  type VoiceLinkGoLiveState,
+  type VoiceLinkNodeMessageIn,
+  type VoiceLinkParticipant,
+  writeFrameHeader,
+} from "@miyoria/contracts/voice-link";
+
+export const PROTOCOL_VERSION = VOICE_LINK_VERSION;
 /**
  * Optional protocol features this node implements, announced in `hello.capabilities` so Core
  * only sends what the node understands.
  */
-export const NODE_CAPABILITIES: readonly string[] = ["play_duck", "play_pause"];
+export const NODE_CAPABILITIES: readonly string[] = VOICE_LINK_CAPABILITIES;
 export const CAPTURE_SAMPLE_RATE = 16_000;
 
-export const FRAME_CAPTURE = 0x01;
-export const FRAME_PLAYBACK = 0x02;
-export const FRAME_LEVELS = 0x03;
-export const FRAME_SNAPSHOT = 0x04;
-export const FRAME_WATCH_AUDIO = 0x05;
+export const FRAME_CAPTURE = VOICE_LINK_FRAME.CAPTURE;
+export const FRAME_PLAYBACK = VOICE_LINK_FRAME.PLAYBACK;
+export const FRAME_LEVELS = VOICE_LINK_FRAME.LEVELS;
 
-/** WebSocket close codes the protocol assigns meaning to. */
-export const CLOSE_VERSION_MISMATCH = 4400;
-export const CLOSE_BAD_TOKEN = 4401;
-export const CLOSE_REPLACED = 4409;
+/**
+ * Close codes on which the node gives up instead of reconnecting. Core also closes with
+ * `TIMEOUT` (4408) and `GOING_AWAY` (1001); the node reconnects after those, as after any other.
+ */
+export const CLOSE_VERSION_MISMATCH = VOICE_LINK_CLOSE.BAD_HELLO;
+export const CLOSE_BAD_TOKEN = VOICE_LINK_CLOSE.UNAUTHORIZED;
+export const CLOSE_REPLACED = VOICE_LINK_CLOSE.REPLACED;
 
-export const U32_MAX = 0xffff_ffff;
+export const U32_MAX = VOICE_LINK_U32_MAX;
 
 // ── Core -> node ────────────────────────────────────────────────────────────
 
-export type CoreMessage =
-  | { type: "welcome"; session: string }
-  | { type: "join"; guild: string; channel?: string; user_id?: string }
-  | { type: "leave"; guild: string }
-  | { type: "play_start"; play: number; guild: string; sample_rate: number; levels?: boolean }
-  | { type: "play_end"; play: number }
-  | { type: "play_stop"; play: number; fade_ms: number }
-  /** Volume of a play (0..1, 1 = normal), ramped over `fade_ms`; stays until changed. */
-  | { type: "play_duck"; play: number; gain: number; fade_ms: number }
-  /** Fade the play out and hold it; buffered audio waits. */
-  | { type: "play_pause"; play: number; fade_ms: number }
-  /** Continue a paused play with a fade-in. */
-  | { type: "play_resume"; play: number; fade_ms: number }
-  | GoLiveStartMessage
-  | { type: "golive_stop"; guild: string }
-  | { type: "watch_start"; guild: string; user_id: string }
-  | { type: "watch_stop"; guild: string }
-  | { type: "watch_snapshot"; id: number }
-  | { type: "ping" };
+/** `T` with every `null` gone: what the node makes of a field Core sent as `null` (left out). */
+type Present<T> = { [K in keyof T]: Exclude<T[K], null> };
 
-export type GoLiveEncoderChoice = "auto" | "nvenc" | "software";
+/**
+ * A message from Core as the rest of the node sees it: optional fields left out (never `null`),
+ * `fade_ms` always a number. Core's `pong` is not among them (see `parseCoreMessage`).
+ */
+export type CoreMessage = Present<Exclude<VoiceLinkCoreMessage, { type: "pong" }>>;
 
-export interface GoLiveStartMessage {
-  type: "golive_start";
-  guild: string;
-  channel?: string;
-  source: string;
-  width?: number;
-  height?: number;
-  fps?: number;
-  bitrate_kbps?: number;
-  encoder?: GoLiveEncoderChoice;
-  /** Send the source's audio track (default true). */
-  audio?: boolean;
-  /** Have the node's ffmpeg wait for the source to connect (default: true for rtmp://, SRT without `mode=`). */
-  listen?: boolean;
-}
+export type GoLiveEncoderChoice = VoiceLinkGoLiveEncoder;
 
-export type GoLiveWireState = "starting" | "live" | "stopped" | "failed";
-export type WatchWireState = "starting" | "live" | "stopped" | "failed";
+export type GoLiveStartMessage = Extract<CoreMessage, { type: "golive_start" }>;
+
+export type GoLiveWireState = VoiceLinkGoLiveState;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string; ignorable: boolean };
 
-const MIN_PLAY_RATE = 8_000;
-const MAX_PLAY_RATE = 192_000;
+/** `fade_ms` above this is taken as this. */
 export const MAX_FADE_MS = 10_000;
+export const MAX_SOURCE_LEN = VOICE_LINK_LIMITS.SOURCE_MAX_LENGTH;
 
 function fail<T>(error: string, ignorable = false): ParseResult<T> {
   return { ok: false, error, ignorable };
@@ -86,22 +78,46 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function reqId(o: Record<string, unknown>, key: string): string | undefined {
-  const v = o[key];
-  return typeof v === "string" && v.length > 0 && v.length <= 64 ? v : undefined;
-}
-
-function optId(o: Record<string, unknown>, key: string): { ok: true; v: string | undefined } | { ok: false } {
-  const v = o[key];
-  if (v === undefined || v === null) return { ok: true, v: undefined };
-  return typeof v === "string" && v.length > 0 && v.length <= 64 ? { ok: true, v } : { ok: false };
-}
-
 export function isU32(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= U32_MAX;
 }
 
-/** Parses and validates one text frame from Core. Unknown `type`s are reported as ignorable. */
+type CoreMessageSchema = (typeof VoiceLinkCoreMessageSchema.options)[number];
+
+/**
+ * The messages the node handles, by `type`. The node never pings Core, so a `pong` from Core
+ * answers nothing; it stays an unknown, ignorable type, as it always was.
+ */
+const HANDLED = new Map<string, CoreMessageSchema>(
+  VoiceLinkCoreMessageSchema.options
+    .filter((schema) => schema.shape.type.value !== "pong")
+    .map((schema) => [schema.shape.type.value, schema]),
+);
+
+/** What a field must be, in the error for a message whose first bad field it is. */
+const FIELD_RULES: Record<string, string> = {
+  session: "a string",
+  guild: "a non-empty string",
+  channel: "a string",
+  user_id: "a string",
+  play: "a u32",
+  sample_rate: `an integer in ${VOICE_LINK_LIMITS.PLAY_SAMPLE_RATE_MIN}..${VOICE_LINK_LIMITS.PLAY_SAMPLE_RATE_MAX}`,
+  fade_ms: "a non-negative number",
+  gain: "a number in 0..1",
+  source: `a non-empty string (max ${MAX_SOURCE_LEN} chars)`,
+  width: "a positive integer",
+  height: "a positive integer",
+  fps: "a positive integer",
+  bitrate_kbps: "a positive integer",
+  encoder: "auto, nvenc or software",
+  audio: "a boolean",
+  listen: "a boolean",
+};
+
+/**
+ * Parses and validates one text frame from Core. Unknown `type`s are reported as ignorable. A
+ * refused message names its first bad field, in the order the schema lists them.
+ */
 export function parseCoreMessage(text: string): ParseResult<CoreMessage> {
   let raw: unknown;
   try {
@@ -112,213 +128,65 @@ export function parseCoreMessage(text: string): ParseResult<CoreMessage> {
   if (!isRecord(raw)) return fail("message is not a JSON object");
   const type = raw.type;
   if (typeof type !== "string") return fail("missing string field `type`");
+  const schema = HANDLED.get(type);
+  if (schema === undefined) return fail(`unknown message type \`${type}\``, true);
 
-  switch (type) {
-    case "welcome": {
-      const session = raw.session;
-      if (typeof session !== "string" || session.length === 0) return fail("welcome: `session` must be a string");
-      return { ok: true, value: { type, session } };
-    }
-    case "ping":
-      return { ok: true, value: { type } };
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    const bad = new Set(parsed.error.issues.map((issue) => String(issue.path[0])));
+    const field = Object.keys(schema.shape).find((key) => bad.has(key));
+    const rule = field === undefined ? undefined : FIELD_RULES[field];
+    return fail(field === undefined || rule === undefined ? `${type}: malformed` : `${type}: \`${field}\` must be ${rule}`);
+  }
+  // `HANDLED` has no `pong`.
+  return settle(parsed.data as Exclude<VoiceLinkCoreMessage, { type: "pong" }>);
+}
+
+/** What the node does with a parsed message that the schema cannot say. */
+function settle(msg: Exclude<VoiceLinkCoreMessage, { type: "pong" }>): ParseResult<CoreMessage> {
+  switch (msg.type) {
     case "join": {
-      const guild = reqId(raw, "guild");
-      if (!guild) return fail("join: `guild` must be a non-empty string");
-      const channel = optId(raw, "channel");
-      const userId = optId(raw, "user_id");
-      if (!channel.ok) return fail("join: `channel` must be a string");
-      if (!userId.ok) return fail("join: `user_id` must be a string");
-      if (channel.v === undefined && userId.v === undefined) {
+      const value = present(msg);
+      if (value.channel === undefined && value.user_id === undefined) {
         return fail("join: need `channel` or `user_id`");
       }
-      const value: CoreMessage = { type, guild };
-      if (channel.v !== undefined) value.channel = channel.v;
-      if (userId.v !== undefined) value.user_id = userId.v;
       return { ok: true, value };
-    }
-    case "leave": {
-      const guild = reqId(raw, "guild");
-      if (!guild) return fail("leave: `guild` must be a non-empty string");
-      return { ok: true, value: { type, guild } };
     }
     case "play_start": {
-      const play = raw.play;
-      const guild = reqId(raw, "guild");
-      const rate = raw.sample_rate;
-      if (!isU32(play)) return fail("play_start: `play` must be a u32");
-      if (!guild) return fail("play_start: `guild` must be a non-empty string");
-      if (
-        typeof rate !== "number" ||
-        !Number.isInteger(rate) ||
-        rate < MIN_PLAY_RATE ||
-        rate > MAX_PLAY_RATE
-      ) {
-        return fail(`play_start: \`sample_rate\` must be an integer in ${MIN_PLAY_RATE}..${MAX_PLAY_RATE}`);
-      }
-      const value: Extract<CoreMessage, { type: "play_start" }> = { type, play, guild, sample_rate: rate };
-      if (raw.levels === true) value.levels = true;
-      return { ok: true, value };
+      // Anything but `true` counts as left out (the schema already turned a wrong type into that).
+      const { levels, ...value } = present(msg);
+      return { ok: true, value: levels === true ? { ...value, levels: true } : value };
     }
-    case "play_end": {
-      const play = raw.play;
-      if (!isU32(play)) return fail("play_end: `play` must be a u32");
-      return { ok: true, value: { type, play } };
-    }
-    case "play_stop": {
-      const play = raw.play;
-      if (!isU32(play)) return fail("play_stop: `play` must be a u32");
-      const fade = raw.fade_ms;
-      let fadeMs = 0;
-      if (fade !== undefined && fade !== null) {
-        if (typeof fade !== "number" || !Number.isFinite(fade) || fade < 0) {
-          return fail("play_stop: `fade_ms` must be a non-negative number");
-        }
-        fadeMs = Math.min(Math.round(fade), MAX_FADE_MS);
-      }
-      return { ok: true, value: { type, play, fade_ms: fadeMs } };
-    }
-    case "play_duck": {
-      const play = raw.play;
-      if (!isU32(play)) return fail("play_duck: `play` must be a u32");
-      const gain = raw.gain;
-      if (typeof gain !== "number" || !Number.isFinite(gain) || gain < 0 || gain > 1) {
-        return fail("play_duck: `gain` must be a number in 0..1");
-      }
-      const fadeMs = parseFadeMs(raw.fade_ms);
-      if (fadeMs === undefined) return fail("play_duck: `fade_ms` must be a non-negative number");
-      return { ok: true, value: { type, play, gain, fade_ms: fadeMs } };
-    }
+    case "play_stop":
+    case "play_duck":
     case "play_pause":
-    case "play_resume": {
-      const play = raw.play;
-      if (!isU32(play)) return fail(`${type}: \`play\` must be a u32`);
-      const fadeMs = parseFadeMs(raw.fade_ms);
-      if (fadeMs === undefined) return fail(`${type}: \`fade_ms\` must be a non-negative number`);
-      return { ok: true, value: { type, play, fade_ms: fadeMs } };
-    }
-    case "golive_start":
-      return parseGoLiveStart(raw);
-    case "golive_stop": {
-      const guild = reqId(raw, "guild");
-      if (!guild) return fail("golive_stop: `guild` must be a non-empty string");
-      return { ok: true, value: { type, guild } };
-    }
-    case "watch_start": {
-      const guild = reqId(raw, "guild");
-      const userId = reqId(raw, "user_id");
-      if (!guild) return fail("watch_start: `guild` must be a non-empty string");
-      if (!userId) return fail("watch_start: `user_id` must be a non-empty string");
-      return { ok: true, value: { type, guild, user_id: userId } };
-    }
-    case "watch_stop": {
-      const guild = reqId(raw, "guild");
-      if (!guild) return fail("watch_stop: `guild` must be a non-empty string");
-      return { ok: true, value: { type, guild } };
-    }
-    case "watch_snapshot": {
-      const id = raw.id;
-      if (!isU32(id)) return fail("watch_snapshot: `id` must be a u32");
-      return { ok: true, value: { type, id } };
-    }
+    case "play_resume":
+      return { ok: true, value: { ...present(msg), fade_ms: clampFadeMs(msg.fade_ms) } };
     default:
-      return fail(`unknown message type \`${type}\``, true);
+      return { ok: true, value: present(msg) };
   }
 }
 
-export const MAX_SOURCE_LEN = 2048;
-
-function optInt(o: Record<string, unknown>, key: string): { ok: true; v: number | undefined } | { ok: false } {
-  const v = o[key];
-  if (v === undefined || v === null) return { ok: true, v: undefined };
-  return typeof v === "number" && Number.isInteger(v) && v > 0 && v <= U32_MAX ? { ok: true, v } : { ok: false };
+/** The message without its `null` and `undefined` fields. */
+function present<T extends object>(msg: T): Present<T> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(msg)) if (value !== null && value !== undefined) out[key] = value;
+  return out as Present<T>;
 }
 
-function optBool(o: Record<string, unknown>, key: string): { ok: true; v: boolean | undefined } | { ok: false } {
-  const v = o[key];
-  if (v === undefined || v === null) return { ok: true, v: undefined };
-  return typeof v === "boolean" ? { ok: true, v } : { ok: false };
-}
-
-function parseGoLiveStart(raw: Record<string, unknown>): ParseResult<CoreMessage> {
-  const guild = reqId(raw, "guild");
-  if (!guild) return fail("golive_start: `guild` must be a non-empty string");
-  const source = raw.source;
-  if (typeof source !== "string" || source.trim().length === 0 || source.length > MAX_SOURCE_LEN) {
-    return fail(`golive_start: \`source\` must be a non-empty string (max ${MAX_SOURCE_LEN} chars)`);
-  }
-  const channel = optId(raw, "channel");
-  if (!channel.ok) return fail("golive_start: `channel` must be a string");
-  const value: GoLiveStartMessage = { type: "golive_start", guild, source };
-  if (channel.v !== undefined) value.channel = channel.v;
-  for (const key of ["width", "height", "fps", "bitrate_kbps"] as const) {
-    const n = optInt(raw, key);
-    if (!n.ok) return fail(`golive_start: \`${key}\` must be a positive integer`);
-    if (n.v !== undefined) value[key] = n.v;
-  }
-  const encoder = raw.encoder;
-  if (encoder !== undefined && encoder !== null) {
-    if (encoder !== "auto" && encoder !== "nvenc" && encoder !== "software") {
-      return fail("golive_start: `encoder` must be auto, nvenc or software");
-    }
-    value.encoder = encoder;
-  }
-  for (const key of ["audio", "listen"] as const) {
-    const b = optBool(raw, key);
-    if (!b.ok) return fail(`golive_start: \`${key}\` must be a boolean`);
-    if (b.v !== undefined) value[key] = b.v;
-  }
-  return { ok: true, value };
+/** `fade_ms` of the play control messages: `null` = 0, else rounded and capped at `MAX_FADE_MS`. */
+function clampFadeMs(fade: number | null): number {
+  return fade === null ? 0 : Math.min(Math.round(fade), MAX_FADE_MS);
 }
 
 // ── node -> Core ────────────────────────────────────────────────────────────
 
-export interface Participant {
-  user_id: string;
-  display_name: string;
-  is_self: boolean;
-  muted: boolean;
-  deafened: boolean;
-}
+export type Participant = VoiceLinkParticipant;
 
-export type PlaybackState = "started" | "finished" | "interrupted" | "failed";
+export type PlaybackState = Extract<VoiceLinkNodeMessageIn, { type: "playback" }>["state"];
 
-export type NodeMessage =
-  | {
-      type: "hello";
-      version: number;
-      token: string;
-      node: string;
-      self_account: { platform: "discord"; id: string };
-      /** Optional features this node implements ({@link NODE_CAPABILITIES}). */
-      capabilities?: string[];
-    }
-  | { type: "joined"; guild: string; channel: string }
-  | { type: "left"; guild: string; reason?: string }
-  | { type: "voice_state"; guild: string; channel: string; participants: Participant[] }
-  | { type: "speaking"; guild: string; user_id: string; speaking: boolean }
-  | {
-      type: "stream_open";
-      stream: number;
-      guild: string;
-      channel: string;
-      user_id: string;
-      display_name: string;
-      sample_rate: number;
-    }
-  | { type: "stream_close"; stream: number }
-  | { type: "playback"; play: number; state: PlaybackState; error?: string }
-  | { type: "golive"; guild: string; state: GoLiveWireState; error?: string; reason?: string }
-  | {
-      type: "watch";
-      guild: string;
-      user_id: string;
-      state: WatchWireState;
-      reason?: string;
-      error?: string;
-    }
-  | { type: "watch_snapshot_failed"; id: number; error: string }
-  | { type: "error"; message: string }
-  | { type: "pong" };
+/** What the node sends. It never pings Core: Core pings it. */
+export type NodeMessage = Exclude<VoiceLinkNodeMessageIn, { type: "ping" }>;
 
 export function encodeNodeMessage(msg: NodeMessage): string {
   return JSON.stringify(msg);
@@ -326,42 +194,23 @@ export function encodeNodeMessage(msg: NodeMessage): string {
 
 // ── binary frames ───────────────────────────────────────────────────────────
 
+function encodeFrame(tag: number, id: number, pcm: Uint8Array): Buffer {
+  const out = Buffer.allocUnsafe(VOICE_LINK_FRAME_HEADER_BYTES + pcm.byteLength);
+  writeFrameHeader(out, tag, id);
+  out.set(pcm, VOICE_LINK_FRAME_HEADER_BYTES);
+  return out;
+}
+
 /** Builds a `0x01` capture frame. `pcm` is s16le mono 16 kHz. */
 export function encodeCaptureFrame(stream: number, pcm: Uint8Array): Buffer {
   if (!isU32(stream)) throw new RangeError(`stream id out of u32 range: ${stream}`);
-  const out = Buffer.allocUnsafe(5 + pcm.byteLength);
-  out[0] = FRAME_CAPTURE;
-  out.writeUInt32LE(stream, 1);
-  out.set(pcm, 5);
-  return out;
-}
-
-/** Builds a `0x04` snapshot frame: `[0x04][id: u32 LE][JPEG]`. */
-export function encodeSnapshotFrame(id: number, jpeg: Uint8Array): Buffer {
-  if (!isU32(id)) throw new RangeError(`snapshot id out of u32 range: ${id}`);
-  const out = Buffer.allocUnsafe(5 + jpeg.byteLength);
-  out[0] = FRAME_SNAPSHOT;
-  out.writeUInt32LE(id, 1);
-  out.set(jpeg, 5);
-  return out;
-}
-
-/** Builds a `0x05` watch audio frame: `[0x05][PCM s16le mono 16 kHz]`. No id: only one stream is watched at a time. */
-export function encodeWatchAudioFrame(pcm: Uint8Array): Buffer {
-  const out = Buffer.allocUnsafe(1 + pcm.byteLength);
-  out[0] = FRAME_WATCH_AUDIO;
-  out.set(pcm, 1);
-  return out;
+  return encodeFrame(FRAME_CAPTURE, stream, pcm);
 }
 
 /** Builds a `0x02` playback frame (what Core sends). Used by tests and tooling. */
 export function encodePlaybackFrame(play: number, pcm: Uint8Array): Buffer {
   if (!isU32(play)) throw new RangeError(`play id out of u32 range: ${play}`);
-  const out = Buffer.allocUnsafe(5 + pcm.byteLength);
-  out[0] = FRAME_PLAYBACK;
-  out.writeUInt32LE(play, 1);
-  out.set(pcm, 5);
-  return out;
+  return encodeFrame(FRAME_PLAYBACK, play, pcm);
 }
 
 export interface BinaryFrame {
@@ -374,18 +223,12 @@ export interface BinaryFrame {
 
 /** Decodes a binary frame. Returns an error string for malformed / unknown frames. */
 export function decodeBinaryFrame(buf: Uint8Array): ParseResult<BinaryFrame> {
-  if (buf.byteLength < 5) return fail("binary frame shorter than its 5-byte header");
-  const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
-  const kind = b[0];
+  const header = readFrameHeader(buf);
+  if (header === null) return fail("binary frame shorter than its 5-byte header");
+  const kind = header.tag;
   if (kind !== FRAME_CAPTURE && kind !== FRAME_PLAYBACK && kind !== FRAME_LEVELS) {
-    return fail(`unknown binary frame kind 0x${(kind ?? 0).toString(16).padStart(2, "0")}`, true);
+    return fail(`unknown binary frame kind 0x${kind.toString(16).padStart(2, "0")}`, true);
   }
-  return { ok: true, value: { kind, id: b.readUInt32LE(1), pcm: b.subarray(5) } };
-}
-
-/** `fade_ms` of the play control messages: absent = 0, else a non-negative number (capped). */
-function parseFadeMs(fade: unknown): number | undefined {
-  if (fade === undefined || fade === null) return 0;
-  if (typeof fade !== "number" || !Number.isFinite(fade) || fade < 0) return undefined;
-  return Math.min(Math.round(fade), MAX_FADE_MS);
+  const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+  return { ok: true, value: { kind, id: header.id, pcm: b.subarray(VOICE_LINK_FRAME_HEADER_BYTES) } };
 }

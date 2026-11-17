@@ -34,7 +34,8 @@ services:
 
   asr:
     build:
-      context: ../../workers/asr
+      context: ../../workers  # the image needs workers/contracts.py as well
+      dockerfile: asr/Dockerfile
       args:
         BACKEND: ${ASR_BACKEND:-qwen3}
         FLASH_ATTN: ${ASR_FLASH_ATTN:-1}

@@ -13,7 +13,7 @@ import {
   MAX_MENUS_PER_TARGET,
   type MenuSpec,
 } from "@miyoria/commands";
-import { getLogger } from "@miyoria/kernel";
+import { getLogger } from "@miyoria/runtime/kernel";
 import {
   ApplicationCommandOptionType,
   ApplicationCommandType,

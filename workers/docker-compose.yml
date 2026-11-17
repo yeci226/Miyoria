@@ -20,7 +20,8 @@ services:
   asr:
     <<: *gpu
     build:
-      context: ./asr
+      context: .  # workers/: the image needs contracts.py as well
+      dockerfile: asr/Dockerfile
       args:
         BACKEND: ${ASR_BACKEND:-sensevoice}
         FLASH_ATTN: ${ASR_FLASH_ATTN:-0}
@@ -41,7 +42,8 @@ services:
   tts:
     <<: *gpu
     build:
-      context: ./tts
+      context: .
+      dockerfile: tts/Dockerfile
       args:
         FLASH_ATTN: ${TTS_FLASH_ATTN:-0}
         REQUIREMENTS: ${TTS_REQUIREMENTS:-requirements.txt}   # requirements-faster.txt = faster-qwen3-tts (true streaming)

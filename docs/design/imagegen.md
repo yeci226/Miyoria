@@ -1,6 +1,6 @@
 # 生圖模塊(imagegen)
 
-模組 `imagegen`(`packages/imagegen`)連 ComfyUI 的 HTTP API 生圖,提供服務 `ImageGen`(`ImageGenKey`,型別在 `@miyoria/types` 的 `imagegen.ts`)給她的其他系統用。**沒有指令、沒有工具,成員叫不到它。** 第一個使用者會是抽卡(之後再做),所以佇列、每日上限、批次時段都是為大量背景生圖設計的。
+模組 `imagegen`(`packages/workspace/imagegen`)連 ComfyUI 的 HTTP API 生圖,提供服務 `ImageGen`(`ImageGenKey`,型別在 `@miyoria/types` 的 `imagegen.ts`)給她的其他系統用。**沒有指令、沒有工具,成員叫不到它。** 第一個使用者會是抽卡(之後再做),所以佇列、每日上限、批次時段都是為大量背景生圖設計的。
 
 預設關閉:`[modules.imagegen] enabled = true` 才會啟動(和 `sandbox` 一樣是 opt-in)。設定範例在 `miyoria.example.toml`。
 

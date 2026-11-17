@@ -86,6 +86,12 @@ export const DiscordConfigSchema = z.object({
   /** Channels (or the channels threads belong to) where she may follow ambient chat. */
   ambient_channels: z.array(Snowflake).default([]),
   emoji: EmojiConfigSchema.prefault({}),
+  /**
+   * The most bytes the files of one message of hers may be together (artifacts she shares as
+   * attachments). Discord's own default limit for a bot is 10 MiB; a boosted guild takes more,
+   * and a larger value here only helps there.
+   */
+  max_upload_bytes: z.number().int().positive().default(10_485_760),
 });
 
 export type DiscordConfig = z.output<typeof DiscordConfigSchema>;

@@ -1,5 +1,5 @@
 // Coins for the people who played a voice party game (docs/design/v4-plan.md §9.1 and §10): the
-// `PartyRewards` service `@miyoria/party` looks up when a scored game ends.
+// `PartyRewards` service `@miyoria/play/party` looks up when a scored game ends.
 //
 // * The game says how many coins each person earned; this only decides whether they are paid.
 //   Every coin is a `play` row of the ledger, under the same daily cap as the rest of play
@@ -9,7 +9,7 @@
 //   a game announced again after a restart pays nobody twice. The key is not shared with
 //   `Participation`, so a person's "joined" coins and the game's own pay stay separate.
 // * One person failing (a ledger error) does not stop the others; the first error is thrown after
-//   everyone was tried, and `@miyoria/party` logs it and does not retry.
+//   everyone was tried, and `@miyoria/play/party` logs it and does not retry.
 // * One card in the game's voice channel says what moved (notices.ts): each player's coins, who
 //   finished the daily quest by playing, and what that unlocked. Nothing moved, no card.
 

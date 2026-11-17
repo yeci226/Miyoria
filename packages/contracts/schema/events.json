@@ -1,0 +1,8753 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "@miyoria/contracts/events",
+  "$defs": {
+    "EventsActionCompleted": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsSentMessage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "action",
+        "turn",
+        "ok",
+        "error",
+        "message"
+      ]
+    },
+    "EventsActionOutcome": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "impulse",
+            "turn",
+            "task",
+            "notice"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/EventsImpulseSource"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "ok",
+            "ignored",
+            "failed",
+            "denied"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "impulse": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capability": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "done",
+            "denied",
+            "failed"
+          ]
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "context",
+        "person",
+        "summary",
+        "outcome",
+        "detail",
+        "impulse",
+        "turn",
+        "task",
+        "capability",
+        "status",
+        "at"
+      ]
+    },
+    "EventsActionSettled": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "send_message",
+            "speak"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "text": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsSentMessage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blocked": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action",
+        "turn",
+        "type",
+        "context",
+        "text",
+        "ok",
+        "error",
+        "message"
+      ]
+    },
+    "EventsActivityDone": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "done"
+        },
+        "task": {
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/EventsActivityResource"
+        },
+        "request": {
+          "$ref": "#/$defs/EventsActivityRequest"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/WireJsonValue"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "task",
+        "resource",
+        "request",
+        "turn",
+        "detail",
+        "data",
+        "at"
+      ]
+    },
+    "EventsActivityFailed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "failed"
+        },
+        "task": {
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/EventsActivityResource"
+        },
+        "request": {
+          "$ref": "#/$defs/EventsActivityRequest"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "code": {
+          "$ref": "#/$defs/EventsTaskFailureCode"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "task",
+        "resource",
+        "request",
+        "turn",
+        "code",
+        "detail",
+        "at"
+      ]
+    },
+    "EventsActivityFailure": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/EventsTaskFailureCode"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "detail",
+        "at"
+      ]
+    },
+    "EventsActivityPhase": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "running",
+        "stopping",
+        "failed"
+      ]
+    },
+    "EventsActivityRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ensure_voice"
+            },
+            "platform": {
+              "type": "string"
+            },
+            "guild": {
+              "type": "string"
+            },
+            "channel": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "follow": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WireAccountRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "platform",
+            "guild",
+            "channel",
+            "follow"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "leave_voice"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "ensure_live"
+            },
+            "platform": {
+              "type": "string"
+            },
+            "guild": {
+              "type": "string"
+            },
+            "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "platform",
+            "guild",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "stop_live"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "start"
+            },
+            "activity": {
+              "$ref": "#/$defs/EventsBusyActivityType"
+            },
+            "target": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "goal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "activity",
+            "target",
+            "goal"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "stop"
+            },
+            "activity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EventsBusyActivityType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "activity"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "scene_override"
+            },
+            "scene": {
+              "type": "string"
+            },
+            "duration_ms": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "scene",
+            "duration_ms"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "clear_override"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "EventsActivityResource": {
+      "type": "string",
+      "enum": [
+        "presence",
+        "broadcast",
+        "activity"
+      ]
+    },
+    "EventsActivityRestore": {
+      "type": "object",
+      "properties": {
+        "game": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "resumed",
+            "gone",
+            "dropped"
+          ]
+        }
+      },
+      "required": [
+        "game",
+        "outcome"
+      ]
+    },
+    "EventsActivitySnapshot": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number"
+        },
+        "at": {
+          "type": "string"
+        },
+        "presence": {
+          "$ref": "#/$defs/EventsHerPresence"
+        },
+        "broadcast": {
+          "$ref": "#/$defs/EventsHerBroadcast"
+        },
+        "activity": {
+          "$ref": "#/$defs/EventsHerActivity"
+        },
+        "override": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsSceneOverride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scene": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "at",
+        "presence",
+        "broadcast",
+        "activity",
+        "override",
+        "scene"
+      ]
+    },
+    "EventsActivityStarted": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "started"
+        },
+        "task": {
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/EventsActivityResource"
+        },
+        "request": {
+          "$ref": "#/$defs/EventsActivityRequest"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "task",
+        "resource",
+        "request",
+        "turn",
+        "at"
+      ]
+    },
+    "EventsAffectBiases": {
+      "type": "object",
+      "properties": {
+        "talkativeness": {
+          "type": "number"
+        },
+        "initiative": {
+          "type": "number"
+        },
+        "wants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "want": {
+                "type": "string"
+              },
+              "weight": {
+                "type": "number"
+              },
+              "person": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "why": {
+                "type": "string"
+              },
+              "from": {
+                "$ref": "#/$defs/EventsEmotionName"
+              }
+            },
+            "required": [
+              "want",
+              "weight",
+              "person",
+              "why"
+            ]
+          }
+        }
+      },
+      "required": [
+        "talkativeness",
+        "initiative",
+        "wants"
+      ]
+    },
+    "EventsAffectEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EventsAffectEventKind"
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "handle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "person",
+        "handle",
+        "context",
+        "detail",
+        "key",
+        "at"
+      ]
+    },
+    "EventsAffectEventKind": {
+      "type": "string",
+      "enum": [
+        "praised",
+        "cared_arrived",
+        "topic_ignored",
+        "song_finished",
+        "song_applauded",
+        "interrupted",
+        "ignored",
+        "cared_close_with_other",
+        "task_succeeded",
+        "task_failed",
+        "game_won",
+        "game_lost"
+      ]
+    },
+    "EventsAffectSnapshot": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "drives": {
+          "$ref": "#/$defs/EventsDrives"
+        },
+        "boredom": {
+          "type": "number"
+        },
+        "top": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsEmotionReading"
+          }
+        },
+        "mood": {
+          "$ref": "#/$defs/EventsMood"
+        },
+        "mood_line": {
+          "type": "string"
+        },
+        "shown": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsShownEmotion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "biases": {
+          "$ref": "#/$defs/EventsAffectBiases"
+        }
+      },
+      "required": [
+        "at",
+        "drives",
+        "boredom",
+        "top",
+        "mood",
+        "mood_line",
+        "shown",
+        "biases"
+      ]
+    },
+    "EventsAgentEmotion": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "emotion": {
+          "type": "string"
+        },
+        "intensity": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "turn",
+        "context",
+        "emotion"
+      ]
+    },
+    "EventsAgentInitiative": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "hint": {
+          "type": "string"
+        },
+        "about": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireAccountRef"
+          }
+        }
+      },
+      "required": [
+        "context",
+        "reason",
+        "hint",
+        "about"
+      ]
+    },
+    "EventsAgentTool": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "result": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn",
+        "context",
+        "tool",
+        "ok",
+        "result"
+      ]
+    },
+    "EventsArbiterDecision": {
+      "type": "object",
+      "properties": {
+        "impulse": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/EventsImpulseSource"
+        },
+        "verdict": {
+          "$ref": "#/$defs/EventsArbiterVerdict"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsArbiterReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "retry_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "merged_into": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "impulse",
+        "source",
+        "verdict",
+        "reason",
+        "detail",
+        "retry_at",
+        "merged_into",
+        "turn",
+        "task",
+        "at"
+      ]
+    },
+    "EventsArbiterReason": {
+      "type": "string",
+      "enum": [
+        "budget",
+        "rate",
+        "cooldown",
+        "quiet_hours",
+        "consent",
+        "paused",
+        "ceiling",
+        "busy",
+        "unanswered",
+        "repeat",
+        "nobody",
+        "superseded",
+        "expired",
+        "denied"
+      ]
+    },
+    "EventsArbiterVerdict": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "merged",
+        "deferred",
+        "rejected",
+        "preempted",
+        "expired"
+      ]
+    },
+    "EventsArtifactCreated": {
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "mime": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EventsArtifactKind"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/EventsArtifactSource"
+        },
+        "plugin": {
+          "type": "string"
+        },
+        "made_for": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "derived_from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kept_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsArtifactKeptBy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "downloadable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "sha256",
+        "size",
+        "mime",
+        "kind",
+        "filename",
+        "source",
+        "plugin",
+        "made_for",
+        "derived_from",
+        "expires_at",
+        "kept_by",
+        "downloadable"
+      ]
+    },
+    "EventsArtifactExpired": {
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "shares_revoked": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "artifact_id",
+        "sha256",
+        "expires_at",
+        "shares_revoked"
+      ]
+    },
+    "EventsArtifactKeptBy": {
+      "type": "string",
+      "enum": [
+        "album",
+        "person",
+        "owner",
+        "cards"
+      ]
+    },
+    "EventsArtifactKind": {
+      "type": "string",
+      "enum": [
+        "image",
+        "audio",
+        "video",
+        "document",
+        "text"
+      ]
+    },
+    "EventsArtifactShared": {
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "mime": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/EventsArtifactSource"
+        },
+        "requested_by": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "person_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "message_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_stripped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "sha256",
+        "size",
+        "mime",
+        "filename",
+        "source",
+        "requested_by",
+        "person_id",
+        "turn",
+        "context",
+        "message_id",
+        "metadata_stripped"
+      ]
+    },
+    "EventsArtifactSource": {
+      "type": "string",
+      "enum": [
+        "imagegen",
+        "sandbox",
+        "cards",
+        "sing",
+        "clip",
+        "doc",
+        "render"
+      ]
+    },
+    "EventsArtifactSwept": {
+      "type": "object",
+      "properties": {
+        "rows_removed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "blobs_removed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "bytes_freed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "orphan_files_removed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "temp_files_removed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "missing_blobs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "rows_removed",
+        "blobs_removed",
+        "bytes_freed",
+        "orphan_files_removed",
+        "temp_files_removed",
+        "missing_blobs"
+      ]
+    },
+    "EventsArtifactTakenDown": {
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "shares_revoked": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "artifact_id",
+        "by",
+        "reason",
+        "shares_revoked"
+      ]
+    },
+    "EventsAuditEntry": {
+      "type": "object",
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "detail": {
+          "$ref": "#/$defs/WireJsonValue"
+        },
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "actor",
+        "action",
+        "target",
+        "detail",
+        "ok"
+      ]
+    },
+    "EventsBusEnvelope": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "v": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "space_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "room_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "person_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/WireJsonValue"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "type",
+        "v",
+        "parent",
+        "turn",
+        "session",
+        "space_id",
+        "room_id",
+        "person_id",
+        "account_id",
+        "key",
+        "scope",
+        "source",
+        "data"
+      ]
+    },
+    "EventsBusyActivityType": {
+      "type": "string",
+      "enum": [
+        "chatting",
+        "singing",
+        "game",
+        "browse"
+      ]
+    },
+    "EventsClusterHostApproved": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "host",
+        "capabilities"
+      ]
+    },
+    "EventsClusterHostConnected": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "approved": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "host",
+        "platform",
+        "version",
+        "approved"
+      ]
+    },
+    "EventsClusterHostDisconnected": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "code": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "code",
+        "reason"
+      ]
+    },
+    "EventsClusterHostJoined": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "approved"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "host",
+        "status"
+      ]
+    },
+    "EventsClusterHostRemoved": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "how": {
+          "type": "string",
+          "enum": [
+            "revoked",
+            "deleted"
+          ]
+        }
+      },
+      "required": [
+        "host",
+        "how"
+      ]
+    },
+    "EventsClusterServiceState": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/EventsClusterServiceStateKind"
+        },
+        "previous": {
+          "$ref": "#/$defs/EventsClusterServiceStateKind"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "host",
+        "service",
+        "state",
+        "previous",
+        "reason"
+      ]
+    },
+    "EventsClusterServiceStateKind": {
+      "type": "string",
+      "enum": [
+        "stopped",
+        "starting",
+        "running",
+        "stopping",
+        "backoff",
+        "failed",
+        "external",
+        "foreign",
+        "disabled"
+      ]
+    },
+    "EventsCommissionAsked": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "commission": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EventsCommissionKind"
+        },
+        "brief": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "price": {
+          "type": "number"
+        },
+        "due_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "commission",
+        "kind",
+        "brief",
+        "name",
+        "account",
+        "price",
+        "due_at"
+      ]
+    },
+    "EventsCommissionDone": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "delivered",
+            "declined"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/EventsCommissionKind"
+        },
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "kind",
+        "account",
+        "text"
+      ]
+    },
+    "EventsCommissionKind": {
+      "type": "string",
+      "enum": [
+        "poem",
+        "name",
+        "tool",
+        "song",
+        "voice"
+      ]
+    },
+    "EventsCompiledBlock": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "authority": {
+          "type": "string",
+          "enum": [
+            "self",
+            "data"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "chars_in": {
+          "type": "number"
+        },
+        "chars_out": {
+          "type": "number"
+        },
+        "budget_chars": {
+          "type": "number"
+        },
+        "fate": {
+          "type": "string",
+          "enum": [
+            "kept",
+            "summarized",
+            "truncated",
+            "dropped"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "authority",
+        "source",
+        "chars_in",
+        "chars_out",
+        "budget_chars",
+        "fate"
+      ]
+    },
+    "EventsConversationFolded": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "folded_up_to": {
+          "$ref": "#/$defs/EventsFoldMark"
+        },
+        "lines": {
+          "type": "number"
+        },
+        "session_lines": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "context",
+        "folded_up_to",
+        "lines",
+        "session_lines"
+      ]
+    },
+    "EventsDecisionTrace": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "respond": {
+          "type": "boolean"
+        },
+        "score": {
+          "type": "number"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "turn",
+        "context",
+        "respond",
+        "score",
+        "reasons"
+      ]
+    },
+    "EventsDirective": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "issuer": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "authority": {
+          "$ref": "#/$defs/EventsDirectiveAuthority"
+        },
+        "scope": {
+          "$ref": "#/$defs/EventsDirectiveScope"
+        },
+        "effect": {
+          "$ref": "#/$defs/EventsDirectiveEffect"
+        },
+        "text": {
+          "type": "string"
+        },
+        "expires": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string",
+              "const": "until_revoked"
+            }
+          ]
+        },
+        "source_event": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "issuer",
+        "authority",
+        "scope",
+        "effect",
+        "text",
+        "expires",
+        "source_event",
+        "created_at"
+      ]
+    },
+    "EventsDirectiveAuthority": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "moderator",
+        "system",
+        "viewer"
+      ]
+    },
+    "EventsDirectiveChanged": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "add",
+            "remove",
+            "refused",
+            "proposal_dropped"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "directive": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsDirective"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "by": {
+          "type": "string"
+        },
+        "proposal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "text",
+        "directive",
+        "by"
+      ]
+    },
+    "EventsDirectiveEffect": {
+      "type": "string",
+      "enum": [
+        "deny",
+        "require_approval",
+        "prefer",
+        "avoid"
+      ]
+    },
+    "EventsDirectiveScope": {
+      "type": "object",
+      "properties": {
+        "capability": {
+          "type": "string"
+        },
+        "activity": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "person": {
+          "type": "string"
+        }
+      }
+    },
+    "EventsDirectorTrace": {
+      "type": "object",
+      "properties": {
+        "game": {
+          "type": "string"
+        },
+        "trigger": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "goal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verdict": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commentary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "busy": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "observation": {
+          "type": "string"
+        },
+        "want": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsGameWant"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "held": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "game",
+        "trigger",
+        "goal",
+        "action",
+        "verdict",
+        "commentary",
+        "busy",
+        "observation",
+        "want",
+        "held"
+      ]
+    },
+    "EventsDraft": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "v": {
+          "default": 1,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "parent": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "space_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "room_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "person_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/WireJsonValue"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "type",
+        "data"
+      ]
+    },
+    "EventsDriveName": {
+      "type": "string",
+      "enum": [
+        "social",
+        "play",
+        "attention",
+        "rest",
+        "curiosity",
+        "esteem",
+        "hunger",
+        "longing"
+      ]
+    },
+    "EventsDrives": {
+      "type": "object",
+      "properties": {
+        "social": {
+          "type": "number"
+        },
+        "play": {
+          "type": "number"
+        },
+        "attention": {
+          "type": "number"
+        },
+        "rest": {
+          "type": "number"
+        },
+        "curiosity": {
+          "type": "number"
+        },
+        "esteem": {
+          "type": "number"
+        },
+        "hunger": {
+          "type": "number"
+        },
+        "longing": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "social",
+        "play",
+        "attention",
+        "rest",
+        "curiosity",
+        "esteem",
+        "hunger",
+        "longing"
+      ]
+    },
+    "EventsE2eParts": {
+      "type": "object",
+      "properties": {
+        "prepare": {
+          "type": "object",
+          "properties": {
+            "wait": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "decide": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "context": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "prompt": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "wait",
+            "decide",
+            "context",
+            "prompt"
+          ]
+        },
+        "llm_first": {
+          "type": "object",
+          "properties": {
+            "first_token": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "held": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "first_sentence": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "first_token",
+            "held",
+            "first_sentence"
+          ]
+        }
+      },
+      "required": [
+        "prepare",
+        "llm_first"
+      ]
+    },
+    "EventsE2eReason": {
+      "type": "string",
+      "enum": [
+        "barge_in",
+        "interrupted",
+        "cancelled",
+        "floor",
+        "tts_failed",
+        "playback_failed",
+        "speech_end_unknown",
+        "expired"
+      ]
+    },
+    "EventsE2eSegments": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "asr": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "prepare": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "llm_first": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "tts_queue": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "tts_first": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "playback": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "endpoint",
+        "asr",
+        "prepare",
+        "llm_first",
+        "tts_queue",
+        "tts_first",
+        "playback"
+      ]
+    },
+    "EventsEconomyPosted": {
+      "type": "object",
+      "properties": {
+        "entry_id": {
+          "type": "string"
+        },
+        "person_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "reason": {
+          "type": "string"
+        },
+        "ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idem_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "balance": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "entry_id",
+        "person_id",
+        "delta",
+        "reason",
+        "ref",
+        "idem_key",
+        "balance"
+      ]
+    },
+    "EventsEmergencyReport": {
+      "type": "object",
+      "properties": {
+        "paused": {
+          "type": "boolean"
+        },
+        "by": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "step": {
+                "$ref": "#/$defs/EventsEmergencyStepName"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "step",
+              "ok",
+              "detail"
+            ]
+          }
+        }
+      },
+      "required": [
+        "paused",
+        "by",
+        "at",
+        "steps"
+      ]
+    },
+    "EventsEmergencyStepName": {
+      "type": "string",
+      "enum": [
+        "pause",
+        "silence",
+        "song",
+        "stream",
+        "voice",
+        "game",
+        "resume"
+      ]
+    },
+    "EventsEmotionName": {
+      "type": "string",
+      "enum": [
+        "joy",
+        "anger",
+        "sorrow",
+        "fear",
+        "surprise",
+        "disgust",
+        "shy",
+        "pride",
+        "jealousy",
+        "lonely",
+        "missing",
+        "gratitude",
+        "guilt",
+        "frustration"
+      ]
+    },
+    "EventsEmotionReading": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/EventsEmotionName"
+        },
+        "intensity": {
+          "type": "number"
+        },
+        "cause": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "intensity",
+        "cause",
+        "at",
+        "person"
+      ]
+    },
+    "EventsEnvelope": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "v": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "space_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "room_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "person_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EventsScope"
+        },
+        "tier": {
+          "$ref": "#/$defs/EventsTier"
+        },
+        "redacted_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/WireJsonValue"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "type",
+        "v",
+        "parent",
+        "turn",
+        "session",
+        "space_id",
+        "room_id",
+        "person_id",
+        "account_id",
+        "key",
+        "seq",
+        "source",
+        "scope",
+        "tier",
+        "redacted_at",
+        "data"
+      ]
+    },
+    "EventsEvalLiveRun": {
+      "type": "object",
+      "properties": {
+        "v": {
+          "type": "number",
+          "const": 1
+        },
+        "at": {
+          "type": "string"
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": "string"
+        },
+        "repeat": {
+          "type": "number"
+        },
+        "suites": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/EventsEvalLiveSuite"
+          }
+        },
+        "tokens": {
+          "$ref": "#/$defs/EventsEvalLiveTokens"
+        },
+        "usd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "type": "number"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stopped": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "budget"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "v",
+        "at",
+        "commit",
+        "subject",
+        "repeat",
+        "suites",
+        "tokens",
+        "usd",
+        "duration_ms",
+        "models",
+        "stopped"
+      ]
+    },
+    "EventsEvalLiveSuite": {
+      "type": "object",
+      "properties": {
+        "headline": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "items": {
+          "type": "number"
+        },
+        "unsupported": {
+          "type": "number"
+        },
+        "stopped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "headline",
+        "items",
+        "unsupported",
+        "stopped"
+      ]
+    },
+    "EventsEvalLiveTokens": {
+      "type": "object",
+      "properties": {
+        "calls": {
+          "type": "number"
+        },
+        "prompt_tokens": {
+          "type": "number"
+        },
+        "completion_tokens": {
+          "type": "number"
+        },
+        "cached_prompt_tokens": {
+          "type": "number"
+        },
+        "reasoning_tokens": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "calls",
+        "prompt_tokens",
+        "completion_tokens",
+        "cached_prompt_tokens",
+        "reasoning_tokens"
+      ]
+    },
+    "EventsFeedbackSignal": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "positive",
+            "negative"
+          ]
+        },
+        "quote": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "account",
+        "person",
+        "name",
+        "tone",
+        "quote",
+        "at"
+      ]
+    },
+    "EventsFloorClaimKind": {
+      "type": "string",
+      "enum": [
+        "addressed",
+        "reply",
+        "result",
+        "urgent",
+        "notable",
+        "wish",
+        "ambient"
+      ]
+    },
+    "EventsFoldMark": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "ts"
+      ]
+    },
+    "EventsGameAdapterEvent": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/WireJsonValue"
+        },
+        "important": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "EventsGameChatLink": {
+      "type": "object",
+      "properties": {
+        "game": {
+          "type": "string"
+        },
+        "account": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "game",
+        "account",
+        "outcome"
+      ]
+    },
+    "EventsGameSession": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "started",
+            "stopped"
+          ]
+        },
+        "game": {
+          "type": "string"
+        },
+        "game_name": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "code": {
+          "$ref": "#/$defs/EventsTaskFailureCode"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "game",
+        "game_name",
+        "context"
+      ]
+    },
+    "EventsGameSkill": {
+      "type": "object",
+      "properties": {
+        "game": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "at": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "game",
+        "target",
+        "goal",
+        "steps",
+        "at"
+      ]
+    },
+    "EventsGameWant": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "item",
+        "count"
+      ]
+    },
+    "EventsGateDecision": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "capability": {
+          "type": "string"
+        },
+        "risk": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "principal": {
+          "$ref": "#/$defs/EventsPrincipal"
+        },
+        "args": {
+          "$ref": "#/$defs/WireJsonValue"
+        },
+        "why": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "stage": {
+          "$ref": "#/$defs/EventsGateStage"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reviewer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "capability",
+        "risk",
+        "principal",
+        "args",
+        "why",
+        "turn",
+        "allowed",
+        "stage",
+        "reason",
+        "reviewer"
+      ]
+    },
+    "EventsGateStage": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "args",
+        "directive",
+        "pause",
+        "prohibition",
+        "consent",
+        "permission",
+        "budget",
+        "risk",
+        "rate",
+        "review",
+        "escalation"
+      ]
+    },
+    "EventsGift": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "item": {
+          "$ref": "#/$defs/EventsGiftItem"
+        },
+        "count": {
+          "type": "number"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "item",
+        "count",
+        "label"
+      ]
+    },
+    "EventsGiftItem": {
+      "type": "string",
+      "enum": [
+        "rice",
+        "big_bowl",
+        "dessert",
+        "letter",
+        "expression"
+      ]
+    },
+    "EventsGoLiveState": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "live",
+        "stopped",
+        "failed"
+      ]
+    },
+    "EventsGoal": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "what": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        },
+        "trigger": {
+          "$ref": "#/$defs/EventsGoalTrigger"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/EventsGoalStatus"
+        },
+        "expires": {
+          "type": "string"
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/EventsGoalSource"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "closed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "close_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "what",
+        "why",
+        "trigger",
+        "steps",
+        "status",
+        "expires",
+        "person",
+        "context",
+        "source",
+        "created_at",
+        "updated_at",
+        "closed_at",
+        "close_reason"
+      ]
+    },
+    "EventsGoalEnd": {
+      "type": "object",
+      "properties": {
+        "game": {
+          "type": "string"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "director",
+            "command",
+            "queue",
+            "survival"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "done",
+            "failed"
+          ]
+        },
+        "code": {
+          "$ref": "#/$defs/EventsGoalEndCode"
+        },
+        "task": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "attention_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "game",
+        "goal",
+        "source",
+        "status",
+        "code",
+        "task",
+        "detail",
+        "at",
+        "attention_key"
+      ]
+    },
+    "EventsGoalEndCode": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "done",
+            "reported",
+            "gave_up",
+            "no_progress"
+          ]
+        },
+        {
+          "$ref": "#/$defs/EventsTaskFailureCode"
+        }
+      ]
+    },
+    "EventsGoalSource": {
+      "type": "string",
+      "enum": [
+        "plan",
+        "plan_daily",
+        "reflect",
+        "panel"
+      ]
+    },
+    "EventsGoalStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "active",
+        "done",
+        "dropped"
+      ]
+    },
+    "EventsGoalTrigger": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "at"
+            },
+            "time": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "time"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "when_online"
+            },
+            "person": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "person"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "after_activity"
+            },
+            "activity": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "activity"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "whenever"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "EventsHeartCause": {
+      "type": "string",
+      "enum": [
+        "feel",
+        "reflect",
+        "evidence",
+        "decay",
+        "admin",
+        "migrate"
+      ]
+    },
+    "EventsHeartChanged": {
+      "type": "object",
+      "properties": {
+        "person": {
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/EventsHeartField"
+        },
+        "delta": {
+          "type": "number"
+        },
+        "value_after": {
+          "type": "number"
+        },
+        "proposed": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reason_quote": {
+          "type": "string"
+        },
+        "cause": {
+          "$ref": "#/$defs/EventsHeartCause"
+        }
+      },
+      "required": [
+        "person",
+        "field",
+        "delta",
+        "value_after",
+        "proposed",
+        "reason_quote",
+        "cause"
+      ]
+    },
+    "EventsHeartEvidence": {
+      "type": "object",
+      "properties": {
+        "person": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EventsHeartEvidenceKind"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "weight": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "person",
+        "kind",
+        "detail",
+        "weight",
+        "at"
+      ]
+    },
+    "EventsHeartEvidenceKind": {
+      "type": "string",
+      "enum": [
+        "voice_together",
+        "heard_song",
+        "played_together",
+        "task_together",
+        "gift",
+        "card",
+        "deal_kept",
+        "deal_broken"
+      ]
+    },
+    "EventsHeartField": {
+      "type": "string",
+      "enum": [
+        "bond",
+        "trust",
+        "familiarity",
+        "warmth",
+        "respect",
+        "ease",
+        "grudge",
+        "longing",
+        "rapport"
+      ]
+    },
+    "EventsHerActivity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "idle"
+            },
+            "since": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "since"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/EventsBusyActivityType"
+            },
+            "target": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phase": {
+              "$ref": "#/$defs/EventsActivityPhase"
+            },
+            "task": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EventsActivityFailure"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "since": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "target",
+            "phase",
+            "task",
+            "failure",
+            "since"
+          ]
+        }
+      ]
+    },
+    "EventsHerBroadcast": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "off"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "starting",
+                "live",
+                "stopping"
+              ]
+            },
+            "guild": {
+              "type": "string"
+            },
+            "golive": {
+              "type": "boolean"
+            },
+            "obs": {
+              "type": "boolean"
+            },
+            "task": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "since": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "guild",
+            "golive",
+            "obs",
+            "task",
+            "since"
+          ]
+        }
+      ]
+    },
+    "EventsHerPresence": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "joining"
+            },
+            "channel": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "task": {
+              "type": "string"
+            },
+            "since": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "channel",
+            "task",
+            "since"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "in"
+            },
+            "channel": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "since": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "channel",
+            "since"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "leaving"
+            },
+            "channel": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "task": {
+              "type": "string"
+            },
+            "since": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "channel",
+            "task",
+            "since"
+          ]
+        }
+      ]
+    },
+    "EventsIdentityImported": {
+      "type": "object",
+      "properties": {
+        "handle": {
+          "type": "string"
+        },
+        "old_handle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "accounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsImportedAccount"
+          }
+        },
+        "prefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsImportedPref"
+          }
+        },
+        "legacy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsLegacySnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "from": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "handle",
+        "old_handle",
+        "name",
+        "accounts",
+        "prefs",
+        "legacy",
+        "from"
+      ]
+    },
+    "EventsImageJob": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/EventsImageJobState"
+        },
+        "progress": {
+          "type": "number"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "purpose",
+        "state",
+        "progress",
+        "error",
+        "outputs"
+      ]
+    },
+    "EventsImageJobState": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "done",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "EventsImportedAccount": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "external_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform",
+        "external_id"
+      ]
+    },
+    "EventsImportedPref": {
+      "type": "string",
+      "enum": [
+        "privacy",
+        "voice_consent"
+      ]
+    },
+    "EventsImpulse": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/EventsImpulseSource"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "speak",
+            "act"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/EventsImpulseTarget"
+        },
+        "capability": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "args": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        "priority": {
+          "$ref": "#/$defs/EventsPriority"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        },
+        "hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "about": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireAccountRef"
+          }
+        },
+        "coalesce_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "goal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "attention": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsImpulseAttention"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "claim": {
+          "$ref": "#/$defs/EventsFloorClaimKind"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "kind",
+        "target",
+        "capability",
+        "args",
+        "priority",
+        "expires_at",
+        "why",
+        "hint",
+        "about",
+        "coalesce_key",
+        "goal",
+        "created_at"
+      ]
+    },
+    "EventsImpulseAttention": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "repeat_after_ms": {
+          "type": "number"
+        },
+        "revision": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "key",
+        "repeat_after_ms"
+      ]
+    },
+    "EventsImpulseSource": {
+      "type": "string",
+      "enum": [
+        "message",
+        "plan",
+        "agenda",
+        "followup",
+        "notice",
+        "game",
+        "song",
+        "world",
+        "command",
+        "panel"
+      ]
+    },
+    "EventsImpulseTarget": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "person",
+        "account"
+      ]
+    },
+    "EventsInputAction": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "mark",
+        "rate_limit",
+        "ignore"
+      ]
+    },
+    "EventsInputFlag": {
+      "type": "string",
+      "enum": [
+        "injection",
+        "flood",
+        "bait",
+        "impersonation"
+      ]
+    },
+    "EventsInputSource": {
+      "type": "string",
+      "enum": [
+        "chat",
+        "voice",
+        "game_chat",
+        "web",
+        "tool",
+        "other"
+      ]
+    },
+    "EventsInputVerdict": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/EventsInputSource"
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "$ref": "#/$defs/EventsInputAction"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsInputFlag"
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "owner": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "at",
+        "source",
+        "author",
+        "action",
+        "flags",
+        "reasons",
+        "owner"
+      ]
+    },
+    "EventsIntentStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "started",
+        "done",
+        "denied",
+        "dropped",
+        "failed"
+      ]
+    },
+    "EventsKnowledgeChanged": {
+      "type": "object",
+      "properties": {
+        "doc": {
+          "$ref": "#/$defs/EventsKnowledgeDoc"
+        },
+        "deleted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "doc",
+        "deleted"
+      ]
+    },
+    "EventsKnowledgeDoc": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/EventsKnowledgeSubject"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "content": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        "sources": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/EventsKnowledgeFieldSource"
+          }
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "version": {
+          "type": "number"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsKnowledgeVersion"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "subject",
+        "kind",
+        "title",
+        "content",
+        "sources",
+        "created_at",
+        "updated_at",
+        "version",
+        "history"
+      ]
+    },
+    "EventsKnowledgeFieldSource": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EventsKnowledgeSourceKind"
+        },
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "account",
+        "name",
+        "origin",
+        "confidence",
+        "at"
+      ]
+    },
+    "EventsKnowledgeSourceKind": {
+      "type": "string",
+      "enum": [
+        "self",
+        "inferred",
+        "said",
+        "panel"
+      ]
+    },
+    "EventsKnowledgeSubject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "person"
+            },
+            "person": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "person"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "guild"
+            },
+            "platform": {
+              "type": "string"
+            },
+            "guild": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "platform",
+            "guild"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "self"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "topic"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        }
+      ]
+    },
+    "EventsKnowledgeVersion": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number"
+        },
+        "at": {
+          "type": "string"
+        },
+        "by": {
+          "$ref": "#/$defs/EventsKnowledgeSourceKind"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "why": {
+          "type": "string"
+        },
+        "ops": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "at",
+        "by",
+        "name",
+        "why",
+        "ops"
+      ]
+    },
+    "EventsLatencyTurnEnd": {
+      "type": "object",
+      "properties": {
+        "ended_by": {
+          "type": "string"
+        },
+        "probability": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ended_by",
+        "probability"
+      ]
+    },
+    "EventsLedgerEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "impulse",
+            "turn",
+            "task",
+            "notice"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/EventsImpulseSource"
+        },
+        "self_initiated": {
+          "type": "boolean"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "ok",
+            "ignored",
+            "failed",
+            "denied"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "impulse": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "kind",
+        "source",
+        "self_initiated",
+        "context",
+        "person",
+        "summary",
+        "outcome",
+        "detail",
+        "impulse",
+        "turn",
+        "task",
+        "updated_at"
+      ]
+    },
+    "EventsLegacySnapshot": {
+      "type": "object",
+      "properties": {
+        "first_seen": {
+          "type": "string"
+        },
+        "old_tier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cards": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "first_seen",
+        "old_tier",
+        "cards"
+      ]
+    },
+    "EventsLivePart": {
+      "type": "string",
+      "enum": [
+        "head",
+        "face",
+        "body",
+        "screen"
+      ]
+    },
+    "EventsLiveTouch": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "part": {
+          "$ref": "#/$defs/EventsLivePart"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "part"
+      ]
+    },
+    "EventsLlmBudget": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/EventsLlmBudgetState"
+        },
+        "spent_today_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "daily_usd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "spent_month_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "monthly_usd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "spent_today_usd",
+        "daily_usd",
+        "spent_month_usd",
+        "monthly_usd"
+      ]
+    },
+    "EventsLlmBudgetState": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "degraded",
+        "exhausted"
+      ]
+    },
+    "EventsLlmCall": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "log_day": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requested_at": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "chain": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "module": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/EventsLlmCallStatus"
+        },
+        "error_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finish_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoning": {
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsLlmCallUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "first_token_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fallbacks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsLlmCallFallback"
+          }
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "call_id",
+        "log_day",
+        "requested_at",
+        "purpose",
+        "chain",
+        "kind",
+        "module",
+        "label",
+        "model",
+        "provider",
+        "status",
+        "error_kind",
+        "finish_reason",
+        "reasoning",
+        "usage",
+        "cost_usd",
+        "duration_ms",
+        "first_token_ms",
+        "fallbacks",
+        "retries",
+        "tools"
+      ]
+    },
+    "EventsLlmCallFallback": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "kind"
+      ]
+    },
+    "EventsLlmCallStatus": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "error",
+        "aborted"
+      ]
+    },
+    "EventsLlmCallUsage": {
+      "type": "object",
+      "properties": {
+        "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "completion_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cached_prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "prompt_tokens",
+        "completion_tokens",
+        "cached_prompt_tokens",
+        "reasoning_tokens"
+      ]
+    },
+    "EventsMemberUpdate": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "is_bot": {
+          "type": "boolean"
+        },
+        "left": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "platform",
+        "guild",
+        "account",
+        "display_name",
+        "is_bot",
+        "left"
+      ]
+    },
+    "EventsMessageExcluded": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "message": {
+          "$ref": "#/$defs/WireMessageRef"
+        },
+        "author": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requested_by": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "message",
+        "author",
+        "requested_by",
+        "at"
+      ]
+    },
+    "EventsMindSuggestion": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hint": {
+          "type": "string"
+        },
+        "about": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireAccountRef"
+          }
+        }
+      },
+      "required": [
+        "source",
+        "reason",
+        "context",
+        "hint",
+        "about"
+      ]
+    },
+    "EventsModerationBlock": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string",
+          "enum": [
+            "visible",
+            "voice"
+          ]
+        },
+        "category": {
+          "$ref": "#/$defs/EventsModerationCategory"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "layer": {
+          "type": "string",
+          "enum": [
+            "rules",
+            "provider"
+          ]
+        },
+        "at": {
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/EventsOutputPath"
+        },
+        "chars": {
+          "type": "number"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "field",
+        "category",
+        "rule",
+        "layer",
+        "at",
+        "path",
+        "chars",
+        "fingerprint",
+        "context",
+        "turn"
+      ]
+    },
+    "EventsModerationCategory": {
+      "type": "string",
+      "enum": [
+        "hate",
+        "minors",
+        "self_harm",
+        "doxxing",
+        "secrets",
+        "custom"
+      ]
+    },
+    "EventsModuleState": {
+      "type": "object",
+      "properties": {
+        "module": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/EventsModuleStateKind"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "module",
+        "state",
+        "reason"
+      ]
+    },
+    "EventsModuleStateKind": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "running",
+        "degraded",
+        "stopping",
+        "stopped",
+        "failed"
+      ]
+    },
+    "EventsMood": {
+      "type": "object",
+      "properties": {
+        "valence": {
+          "type": "number"
+        },
+        "arousal": {
+          "type": "number"
+        },
+        "energy": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "valence",
+        "arousal",
+        "energy"
+      ]
+    },
+    "EventsMoodChanged": {
+      "type": "object",
+      "properties": {
+        "valence": {
+          "type": "number"
+        },
+        "arousal": {
+          "type": "number"
+        },
+        "energy": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "valence",
+        "arousal",
+        "energy",
+        "reason"
+      ]
+    },
+    "EventsMoodNudge": {
+      "type": "object",
+      "properties": {
+        "valence": {
+          "type": "number"
+        },
+        "arousal": {
+          "type": "number"
+        },
+        "energy": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "valence",
+        "arousal",
+        "energy",
+        "reason"
+      ]
+    },
+    "EventsNotice": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "task": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsTaskFailureCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "source",
+        "task",
+        "turn",
+        "context",
+        "ok",
+        "code",
+        "text",
+        "expires_at"
+      ]
+    },
+    "EventsOutputPath": {
+      "type": "string",
+      "enum": [
+        "reply",
+        "fallback",
+        "translation",
+        "tts",
+        "aside",
+        "game_chat",
+        "other"
+      ]
+    },
+    "EventsPlatformMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/WireMessageRef"
+        },
+        "author": {
+          "$ref": "#/$defs/WireAuthor"
+        },
+        "text": {
+          "type": "string"
+        },
+        "mentions_self": {
+          "type": "boolean"
+        },
+        "reply_to_self": {
+          "type": "boolean"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireAttachment"
+          }
+        },
+        "ts": {
+          "type": "string"
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireMessageRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "referenced": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireQuotedMessage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stickers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireSticker"
+          }
+        },
+        "embeds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireEmbed"
+          }
+        },
+        "forwarded": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireForwardedMessage"
+          }
+        },
+        "mentions_others": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireMentionedAccount"
+          }
+        },
+        "opens_with_other_mention": {
+          "type": "boolean"
+        },
+        "turn_complete": {
+          "type": "boolean"
+        },
+        "card": {
+          "type": "boolean"
+        },
+        "self": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "author",
+        "text",
+        "mentions_self",
+        "reply_to_self",
+        "attachments",
+        "ts"
+      ]
+    },
+    "EventsPlatformReaction": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/WireMessageRef"
+        },
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "emoji": {
+          "type": "string"
+        },
+        "added": {
+          "type": "boolean"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "account",
+        "display_name",
+        "emoji",
+        "added",
+        "at"
+      ]
+    },
+    "EventsPlatformReady": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "self_account": {
+          "$ref": "#/$defs/WireAccountRef"
+        }
+      },
+      "required": [
+        "platform",
+        "self_account"
+      ]
+    },
+    "EventsPlatformTyping": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        }
+      },
+      "required": [
+        "context",
+        "account"
+      ]
+    },
+    "EventsPresenceActivity": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/EventsPresenceActivityKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "details": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "details",
+        "state",
+        "started_at",
+        "url"
+      ]
+    },
+    "EventsPresenceActivityKind": {
+      "type": "string",
+      "enum": [
+        "playing",
+        "streaming",
+        "listening",
+        "watching",
+        "competing",
+        "custom"
+      ]
+    },
+    "EventsPresenceStatus": {
+      "type": "string",
+      "enum": [
+        "online",
+        "idle",
+        "dnd",
+        "offline"
+      ]
+    },
+    "EventsPresenceUpdate": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "is_bot": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/EventsPresenceStatus"
+        },
+        "activities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsPresenceActivity"
+          }
+        },
+        "initial": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "platform",
+        "guild",
+        "account",
+        "display_name",
+        "is_bot",
+        "status",
+        "activities",
+        "initial"
+      ]
+    },
+    "EventsPrincipal": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EventsPrincipalKind"
+        },
+        "requester": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "override": {
+          "type": "boolean"
+        },
+        "actor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "requester",
+        "context",
+        "override",
+        "actor"
+      ]
+    },
+    "EventsPrincipalKind": {
+      "type": "string",
+      "enum": [
+        "self",
+        "user",
+        "command",
+        "panel",
+        "director"
+      ]
+    },
+    "EventsPriority": {
+      "type": "string",
+      "enum": [
+        "system",
+        "direct",
+        "request",
+        "initiative",
+        "idle"
+      ]
+    },
+    "EventsQueueChanged": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsQueueItem"
+          }
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "vote": {
+          "type": "object",
+          "properties": {
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tallies": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "total": {
+              "type": "number"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "ends_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "options",
+            "tallies",
+            "total",
+            "started_at",
+            "ends_at"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "paused"
+      ]
+    },
+    "EventsQueueItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "number"
+        },
+        "requester": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "requester_name": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "number"
+        },
+        "votes": {
+          "type": "number"
+        },
+        "state": {
+          "$ref": "#/$defs/EventsQueueItemState"
+        },
+        "position": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "requester",
+        "requester_name",
+        "kind",
+        "text",
+        "context",
+        "created_at",
+        "priority",
+        "votes",
+        "state",
+        "position"
+      ]
+    },
+    "EventsQueueItemState": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "active",
+        "done",
+        "skipped",
+        "removed"
+      ]
+    },
+    "EventsQueueVoteResult": {
+      "type": "object",
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tallies": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "winner": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "winner_option": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": "number"
+        },
+        "ended_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "options",
+        "tallies",
+        "winner",
+        "winner_option",
+        "total",
+        "ended_at"
+      ]
+    },
+    "EventsReasoningLevel": {
+      "type": "string",
+      "enum": [
+        "off",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "EventsRedactedData": {
+      "type": "object",
+      "properties": {
+        "redacted": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "redacted"
+      ]
+    },
+    "EventsReflectionRun": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "daily",
+            "light"
+          ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "insights": {
+          "type": "number"
+        },
+        "superseded": {
+          "type": "number"
+        },
+        "lessons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "goals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "feelings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokens": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "kind",
+        "context",
+        "summary",
+        "insights",
+        "superseded",
+        "lessons",
+        "goals",
+        "documents",
+        "feelings",
+        "error",
+        "tokens",
+        "ms"
+      ]
+    },
+    "EventsReminder": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "what": {
+          "type": "string"
+        },
+        "due": {
+          "type": "string"
+        },
+        "daily": {
+          "type": "boolean"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "for_account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fired": {
+          "type": "number"
+        },
+        "created_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "what",
+        "due",
+        "daily",
+        "context",
+        "person",
+        "for_account",
+        "fired",
+        "created_at"
+      ]
+    },
+    "EventsReminderChanged": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "set",
+            "fired",
+            "held",
+            "done",
+            "cancelled"
+          ]
+        },
+        "reminder": {
+          "$ref": "#/$defs/EventsReminder"
+        }
+      },
+      "required": [
+        "state",
+        "reminder"
+      ]
+    },
+    "EventsRoomPlaced": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "furniture",
+            "outfit",
+            "background"
+          ]
+        }
+      },
+      "required": [
+        "item",
+        "label",
+        "kind"
+      ]
+    },
+    "EventsSalienceKind": {
+      "type": "string",
+      "enum": [
+        "came_online",
+        "joined_voice",
+        "started_game",
+        "channel_quiet",
+        "mentioned"
+      ]
+    },
+    "EventsSalientEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EventsSalienceKind"
+        },
+        "key": {
+          "type": "string"
+        },
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number"
+        },
+        "count": {
+          "type": "number"
+        },
+        "first_at": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "key",
+        "account",
+        "person",
+        "display_name",
+        "context",
+        "detail",
+        "score",
+        "count",
+        "first_at",
+        "at"
+      ]
+    },
+    "EventsSandboxKilledReason": {
+      "type": "string",
+      "enum": [
+        "timeout",
+        "aborted",
+        "output_limit",
+        "memory"
+      ]
+    },
+    "EventsSandboxLanguage": {
+      "type": "string",
+      "enum": [
+        "python",
+        "node"
+      ]
+    },
+    "EventsSandboxRunFinished": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "language": {
+          "$ref": "#/$defs/EventsSandboxLanguage"
+        },
+        "exit_code": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "type": "number"
+        },
+        "killed_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsSandboxKilledReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files_out": {
+          "type": "number"
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "language",
+        "exit_code",
+        "duration_ms",
+        "killed_reason",
+        "files_out",
+        "session"
+      ]
+    },
+    "EventsSandboxSessionCloseReason": {
+      "type": "string",
+      "enum": [
+        "closed",
+        "idle",
+        "lifetime",
+        "disk",
+        "lost",
+        "shutdown"
+      ]
+    },
+    "EventsSandboxSessionClosed": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/EventsSandboxSessionCloseReason"
+        },
+        "runs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "reason",
+        "runs"
+      ]
+    },
+    "EventsSandboxSessionStarted": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "language": {
+          "$ref": "#/$defs/EventsSandboxLanguage"
+        }
+      },
+      "required": [
+        "name",
+        "language"
+      ]
+    },
+    "EventsSandboxTool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "approved",
+            "rejected"
+          ]
+        },
+        "language": {
+          "$ref": "#/$defs/EventsSandboxLanguage"
+        },
+        "code_sha256": {
+          "type": "string"
+        },
+        "proposed_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reviewer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "status",
+        "language",
+        "code_sha256",
+        "proposed_by",
+        "reviewer"
+      ]
+    },
+    "EventsSandboxToolRemoved": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "EventsSandboxWorkspaceEnforced": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "run_id",
+        "removed"
+      ]
+    },
+    "EventsSavedPrompt": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "at": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "reasoning": {
+          "$ref": "#/$defs/EventsReasoningLevel"
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsCompiledBlock"
+          }
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "system",
+                  "user",
+                  "assistant"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "text"
+            ]
+          }
+        },
+        "prompt_tokens": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "turn",
+        "context",
+        "at",
+        "purpose",
+        "reasoning",
+        "blocks",
+        "messages",
+        "prompt_tokens"
+      ]
+    },
+    "EventsSceneOverride": {
+      "type": "object",
+      "properties": {
+        "scene": {
+          "type": "string"
+        },
+        "until": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scene",
+        "until",
+        "by"
+      ]
+    },
+    "EventsScope": {
+      "type": "string",
+      "enum": [
+        "public",
+        "space",
+        "room",
+        "dm",
+        "self",
+        "owner"
+      ]
+    },
+    "EventsScreenLine": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "message",
+            "dedication"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "song": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "text",
+        "song"
+      ]
+    },
+    "EventsSelfFeel": {
+      "type": "object",
+      "properties": {
+        "emotion": {
+          "type": "string"
+        },
+        "emotions": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "amount": {
+          "type": "number"
+        },
+        "toward": {
+          "type": "string"
+        },
+        "person": {
+          "type": "string"
+        },
+        "cause": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "EventsSelfNudge": {
+      "type": "object",
+      "properties": {
+        "social": {
+          "type": "number"
+        },
+        "play": {
+          "type": "number"
+        },
+        "attention": {
+          "type": "number"
+        },
+        "rest": {
+          "type": "number"
+        },
+        "curiosity": {
+          "type": "number"
+        },
+        "esteem": {
+          "type": "number"
+        },
+        "hunger": {
+          "type": "number"
+        },
+        "longing": {
+          "type": "number"
+        },
+        "boredom": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "EventsSentMessage": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "id": {
+          "type": "string"
+        },
+        "blocked": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "id"
+      ]
+    },
+    "EventsShareAudience": {
+      "type": "string",
+      "enum": [
+        "person",
+        "space",
+        "link"
+      ]
+    },
+    "EventsShareCreated": {
+      "type": "object",
+      "properties": {
+        "share_id": {
+          "type": "string"
+        },
+        "artifact_id": {
+          "type": "string"
+        },
+        "audience": {
+          "$ref": "#/$defs/EventsShareAudience"
+        },
+        "person_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "space_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/EventsShareMode"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_uses": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "share_id",
+        "artifact_id",
+        "audience",
+        "person_id",
+        "space_id",
+        "mode",
+        "expires_at",
+        "max_uses"
+      ]
+    },
+    "EventsShareMode": {
+      "type": "string",
+      "enum": [
+        "stream",
+        "download"
+      ]
+    },
+    "EventsShareOpened": {
+      "type": "object",
+      "properties": {
+        "share_id": {
+          "type": "string"
+        },
+        "artifact_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "share_id",
+        "artifact_id"
+      ]
+    },
+    "EventsShareRevoked": {
+      "type": "object",
+      "properties": {
+        "share_id": {
+          "type": "string"
+        },
+        "artifact_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "share_id",
+        "artifact_id",
+        "reason"
+      ]
+    },
+    "EventsShownEmotion": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/EventsEmotionName"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "style": {
+          "type": "string"
+        },
+        "masked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "from",
+        "tag",
+        "style",
+        "masked"
+      ]
+    },
+    "EventsSocialEvent": {
+      "type": "object",
+      "properties": {
+        "person": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "number"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hunger": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "person",
+        "name",
+        "kind",
+        "source",
+        "scale",
+        "context"
+      ]
+    },
+    "EventsSongBeats": {
+      "type": "object",
+      "properties": {
+        "bpm": {
+          "type": "number"
+        },
+        "times_ms": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "required": [
+        "bpm",
+        "times_ms"
+      ]
+    },
+    "EventsSongCue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "started"
+            },
+            "song": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "video": {
+              "type": "string"
+            },
+            "offset_ms": {
+              "type": "number"
+            },
+            "duration_ms": {
+              "type": "number"
+            },
+            "beats": {
+              "$ref": "#/$defs/EventsSongBeats"
+            }
+          },
+          "required": [
+            "state",
+            "song",
+            "title"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "line"
+            },
+            "song": {
+              "type": "string"
+            },
+            "index": {
+              "type": "number"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "song",
+            "index",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "ended"
+            },
+            "song": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "song",
+            "outcome"
+          ]
+        }
+      ]
+    },
+    "EventsSongPrepare": {
+      "type": "object",
+      "properties": {
+        "no": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "progress": {
+          "type": "number"
+        },
+        "exclusive": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "no",
+        "title",
+        "stage",
+        "progress",
+        "exclusive"
+      ]
+    },
+    "EventsSpeechPause": {
+      "type": "object",
+      "properties": {
+        "paused": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "paused",
+        "reason"
+      ]
+    },
+    "EventsStageClip": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "path"
+      ]
+    },
+    "EventsStageError": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
+    "EventsStageStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "connected": {
+              "type": "boolean",
+              "const": true
+            },
+            "vts": {
+              "type": "boolean"
+            },
+            "obs": {
+              "type": "boolean"
+            },
+            "scene": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "streaming": {
+              "type": "boolean"
+            },
+            "scenes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "hotkeys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "overlay_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "connected",
+            "vts",
+            "obs",
+            "scene",
+            "streaming",
+            "scenes",
+            "hotkeys",
+            "overlay_url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "connected": {
+              "type": "boolean",
+              "const": false
+            }
+          },
+          "required": [
+            "connected"
+          ]
+        }
+      ]
+    },
+    "EventsSteerOutcome": {
+      "type": "string",
+      "enum": [
+        "applied",
+        "rejected",
+        "too_late"
+      ]
+    },
+    "EventsSystemShutdown": {
+      "type": "object",
+      "properties": {}
+    },
+    "EventsTaskDone": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "done"
+        },
+        "task": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/WireJsonValue"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "task",
+        "detail",
+        "data",
+        "at"
+      ]
+    },
+    "EventsTaskEvent": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/EventsTaskStarted"
+        },
+        {
+          "$ref": "#/$defs/EventsTaskProgress"
+        },
+        {
+          "$ref": "#/$defs/EventsTaskDone"
+        },
+        {
+          "$ref": "#/$defs/EventsTaskFailed"
+        },
+        {
+          "$ref": "#/$defs/EventsTaskSteered"
+        }
+      ]
+    },
+    "EventsTaskFailed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "failed"
+        },
+        "task": {
+          "type": "string"
+        },
+        "code": {
+          "$ref": "#/$defs/EventsTaskFailureCode"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "task",
+        "code",
+        "detail",
+        "at"
+      ]
+    },
+    "EventsTaskFailureCode": {
+      "type": "string",
+      "enum": [
+        "timeout",
+        "cancelled",
+        "superseded",
+        "busy",
+        "invalid",
+        "not_found",
+        "unreachable",
+        "precondition",
+        "disconnected",
+        "crashed",
+        "died",
+        "denied",
+        "internal"
+      ]
+    },
+    "EventsTaskProgress": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "progress"
+        },
+        "task": {
+          "type": "string"
+        },
+        "progress": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "task",
+        "progress",
+        "detail",
+        "at"
+      ]
+    },
+    "EventsTaskStarted": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "started"
+        },
+        "task": {
+          "type": "string"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "task",
+        "goal",
+        "at"
+      ]
+    },
+    "EventsTaskSteered": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "steered"
+        },
+        "task": {
+          "type": "string"
+        },
+        "steer": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/EventsSteerOutcome"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "task",
+        "steer",
+        "outcome",
+        "detail",
+        "at"
+      ]
+    },
+    "EventsThought": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsThoughtTrigger"
+          }
+        },
+        "thought": {
+          "type": "string"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "intents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsThoughtIntent"
+          }
+        },
+        "tokens": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ms": {
+          "type": "number"
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsMindSuggestion"
+          }
+        },
+        "input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsThoughtInput"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effects": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsThoughtEffects"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "attempts": {
+          "type": "number"
+        },
+        "idle": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "thoughts": {
+                  "type": "number"
+                },
+                "minutes": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "thoughts",
+                "minutes"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "triggers",
+        "thought",
+        "changes",
+        "intents",
+        "tokens",
+        "error",
+        "ms"
+      ]
+    },
+    "EventsThoughtDecision": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "capability": {
+          "type": "string"
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "capability",
+        "allowed",
+        "stage",
+        "reason"
+      ]
+    },
+    "EventsThoughtEffects": {
+      "type": "object",
+      "properties": {
+        "drives": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "emotions": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "talkativeness": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "type": "string"
+              },
+              "level": {
+                "type": "number"
+              },
+              "minutes": {
+                "type": "number"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope",
+              "level",
+              "minutes",
+              "why"
+            ]
+          }
+        },
+        "initiative": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "level": {
+                  "type": "number"
+                },
+                "why": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "level",
+                "why"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "feelings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "hint": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "+",
+                      "-"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "person",
+              "name",
+              "note",
+              "hint"
+            ]
+          }
+        },
+        "agenda_added": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "why"
+            ]
+          }
+        },
+        "agenda_done": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "agenda_dropped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "ok",
+              "error"
+            ]
+          }
+        }
+      },
+      "required": [
+        "drives",
+        "talkativeness",
+        "initiative",
+        "feelings",
+        "agenda_added",
+        "agenda_done",
+        "agenda_dropped",
+        "documents"
+      ]
+    },
+    "EventsThoughtInput": {
+      "type": "object",
+      "properties": {
+        "time": {
+          "type": "string"
+        },
+        "night": {
+          "type": "boolean"
+        },
+        "self": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "mood": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/EventsMood"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "boredom": {
+                  "type": "number"
+                },
+                "drives": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "number"
+                  }
+                },
+                "initiative": {
+                  "type": "number"
+                },
+                "emotions": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "number"
+                  }
+                },
+                "shown": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "mood",
+                "boredom",
+                "drives",
+                "initiative"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsMindSuggestion"
+          }
+        },
+        "world": {
+          "type": "string"
+        },
+        "places": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              },
+              "here": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ref",
+              "label",
+              "note",
+              "here"
+            ]
+          }
+        },
+        "people": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "person": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "relation": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "feeling": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "doing": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "heart": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "ref",
+              "name",
+              "person",
+              "relation",
+              "feeling",
+              "doing"
+            ]
+          }
+        },
+        "agenda": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "due": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocked": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "ref",
+              "text",
+              "due",
+              "blocked"
+            ]
+          }
+        },
+        "memories": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "documents": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lessons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recap": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unanswered": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocked": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "capability": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "capability",
+              "reason"
+            ]
+          }
+        },
+        "idle": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "thoughts": {
+                  "type": "number"
+                },
+                "minutes": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "thoughts",
+                "minutes"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recent": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "time",
+        "night",
+        "self",
+        "suggestions",
+        "world",
+        "places",
+        "people",
+        "agenda",
+        "memories",
+        "documents",
+        "lessons",
+        "recap",
+        "digest",
+        "unanswered",
+        "blocked",
+        "idle",
+        "capabilities",
+        "recent"
+      ]
+    },
+    "EventsThoughtIntent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "capability": {
+          "type": "string"
+        },
+        "args": {
+          "$ref": "#/$defs/WireJsonValue"
+        },
+        "why": {
+          "type": "string"
+        },
+        "opening": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "about": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/EventsIntentStatus"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EventsThoughtDecision"
+          }
+        },
+        "said": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/EventsIntentStatus"
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "at",
+              "status",
+              "detail"
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "capability",
+        "args",
+        "why",
+        "opening",
+        "context",
+        "about",
+        "expires_at",
+        "status",
+        "detail",
+        "turn",
+        "decisions",
+        "said"
+      ]
+    },
+    "EventsThoughtTrigger": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EventsThoughtTriggerKind"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "detail",
+        "context",
+        "at"
+      ]
+    },
+    "EventsThoughtTriggerKind": {
+      "type": "string",
+      "enum": [
+        "heartbeat",
+        "salient",
+        "suggestion",
+        "turn",
+        "voice_quiet",
+        "manual"
+      ]
+    },
+    "EventsTier": {
+      "type": "string",
+      "enum": [
+        "keep",
+        "long",
+        "short",
+        "ambient"
+      ]
+    },
+    "EventsTurnCancelCause": {
+      "type": "string",
+      "enum": [
+        "input",
+        "barge_in",
+        "superseded",
+        "expired",
+        "floor",
+        "shutdown"
+      ]
+    },
+    "EventsTurnCompleted": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn",
+        "context",
+        "text"
+      ]
+    },
+    "EventsTurnFocus": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "reason": {
+          "$ref": "#/$defs/EventsTurnReason"
+        },
+        "phase": {
+          "$ref": "#/$defs/EventsTurnPhase"
+        },
+        "addressed_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "addressed_accounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireAccountRef"
+          }
+        },
+        "focus": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireMessageRef"
+          }
+        },
+        "background": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireMessageRef"
+          }
+        },
+        "restarts": {
+          "type": "number"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn",
+        "context",
+        "reason",
+        "phase",
+        "addressed_by",
+        "addressed_accounts",
+        "focus",
+        "background",
+        "restarts",
+        "started_at",
+        "updated_at"
+      ]
+    },
+    "EventsTurnOutcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "sent"
+            },
+            "parts": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "parts"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "silence"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "cancelled"
+            },
+            "cause": {
+              "$ref": "#/$defs/EventsTurnCancelCause"
+            },
+            "by": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "cause",
+            "by"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "error"
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "error"
+          ]
+        }
+      ]
+    },
+    "EventsTurnOutcomeRecord": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "reason": {
+          "$ref": "#/$defs/EventsTurnReason"
+        },
+        "outcome": {
+          "$ref": "#/$defs/EventsTurnOutcome"
+        },
+        "addressed_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "focus": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireMessageRef"
+          }
+        },
+        "restarts": {
+          "type": "number"
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "off",
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latency_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "at": {
+          "type": "string"
+        },
+        "corrections": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "voice_stages": {
+          "$ref": "#/$defs/EventsVoiceTurnStages"
+        }
+      },
+      "required": [
+        "turn",
+        "context",
+        "reason",
+        "outcome",
+        "addressed_by",
+        "focus",
+        "restarts",
+        "reasoning",
+        "latency_ms",
+        "at"
+      ]
+    },
+    "EventsTurnPhase": {
+      "type": "string",
+      "enum": [
+        "debounce",
+        "generating",
+        "speaking",
+        "done"
+      ]
+    },
+    "EventsTurnReason": {
+      "type": "string",
+      "enum": [
+        "addressed",
+        "reply_to_her",
+        "ambient",
+        "initiative",
+        "notice"
+      ]
+    },
+    "EventsTurnStarted": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        }
+      },
+      "required": [
+        "turn",
+        "context"
+      ]
+    },
+    "EventsVoiceBargeIn": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "action": {
+          "$ref": "#/$defs/EventsVoiceBargeInAction"
+        },
+        "reason": {
+          "$ref": "#/$defs/EventsVoiceBargeInReason"
+        }
+      },
+      "required": [
+        "context",
+        "turn",
+        "account",
+        "action",
+        "reason"
+      ]
+    },
+    "EventsVoiceBargeInAction": {
+      "type": "string",
+      "enum": [
+        "duck",
+        "pause",
+        "resume",
+        "stop"
+      ]
+    },
+    "EventsVoiceBargeInReason": {
+      "type": "string",
+      "enum": [
+        "focus",
+        "name",
+        "substantive",
+        "other",
+        "no_focus",
+        "short_reply",
+        "echo",
+        "music",
+        "timeout",
+        "legacy",
+        "floor"
+      ]
+    },
+    "EventsVoiceGoLive": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/EventsGoLiveState"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "platform",
+        "guild",
+        "state",
+        "error",
+        "reason"
+      ]
+    },
+    "EventsVoiceJoined": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "participants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireVoiceParticipant"
+          }
+        }
+      },
+      "required": [
+        "context",
+        "participants"
+      ]
+    },
+    "EventsVoiceLatency": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "const": "asr"
+            },
+            "context": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "speaker": {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "audio_ms": {
+              "type": "number"
+            },
+            "transcribe_ms": {
+              "type": "number"
+            },
+            "asr_ms": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "stage",
+            "context",
+            "speaker",
+            "provider",
+            "audio_ms",
+            "transcribe_ms",
+            "asr_ms"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "const": "turn"
+            },
+            "context": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "complete",
+                "incomplete",
+                "unknown"
+              ]
+            },
+            "probability": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "judge_ms": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "stage",
+            "context",
+            "verdict",
+            "probability",
+            "judge_ms"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "const": "turn_resumed"
+            },
+            "context": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "after_ms": {
+              "type": "number"
+            },
+            "at": {
+              "type": "number"
+            },
+            "probability": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "stage",
+            "context",
+            "after_ms",
+            "at",
+            "probability"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "const": "llm"
+            },
+            "context": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "turn": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "first_token_ms": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "stage",
+            "context",
+            "turn",
+            "model",
+            "first_token_ms"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "const": "speculation"
+            },
+            "context": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "turn": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "dropped"
+              ]
+            },
+            "ms": {
+              "type": "number"
+            },
+            "model": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "stage",
+            "context",
+            "turn",
+            "result",
+            "ms",
+            "model"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "const": "tts"
+            },
+            "context": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "turn": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "provider": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "chars": {
+              "type": "number"
+            },
+            "first_audio_ms": {
+              "type": "number"
+            },
+            "prefetched": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "stage",
+            "context",
+            "turn",
+            "provider",
+            "chars",
+            "first_audio_ms",
+            "prefetched"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "const": "filler"
+            },
+            "context": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "turn": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "ms": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "stage",
+            "context",
+            "turn",
+            "text",
+            "ms"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "stage": {
+              "type": "string",
+              "const": "e2e"
+            },
+            "context": {
+              "$ref": "#/$defs/WireContextKey"
+            },
+            "turn": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "utterance": {
+              "type": "string"
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EventsE2eReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "total_ms": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "segments": {
+              "$ref": "#/$defs/EventsE2eSegments"
+            },
+            "unattributed_ms": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "prefetched": {
+              "type": "boolean"
+            },
+            "provider": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_end": {
+              "$ref": "#/$defs/EventsLatencyTurnEnd"
+            },
+            "parts": {
+              "$ref": "#/$defs/EventsE2eParts"
+            },
+            "speculative": {
+              "type": "boolean"
+            },
+            "filler_ms": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "stage",
+            "context",
+            "turn",
+            "utterance",
+            "complete",
+            "reason",
+            "total_ms",
+            "segments",
+            "unattributed_ms",
+            "prefetched",
+            "provider"
+          ]
+        }
+      ]
+    },
+    "EventsVoiceLeft": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "reason"
+      ]
+    },
+    "EventsVoiceParticipants": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "participants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireVoiceParticipant"
+          }
+        }
+      },
+      "required": [
+        "context",
+        "participants"
+      ]
+    },
+    "EventsVoicePlayback": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/WirePlaybackState"
+        },
+        "text": {
+          "type": "string"
+        },
+        "emotion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "heard_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "total_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "blocked": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speaker": {
+          "$ref": "#/$defs/WireAuthor"
+        }
+      },
+      "required": [
+        "context",
+        "turn",
+        "state",
+        "text"
+      ]
+    },
+    "EventsVoiceSpeaking": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "speaking": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "context",
+        "account",
+        "speaking"
+      ]
+    },
+    "EventsVoiceStateUpdate": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "is_bot": {
+          "type": "boolean"
+        },
+        "channel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "self_mute": {
+          "type": "boolean"
+        },
+        "self_deaf": {
+          "type": "boolean"
+        },
+        "server_mute": {
+          "type": "boolean"
+        },
+        "server_deaf": {
+          "type": "boolean"
+        },
+        "video": {
+          "type": "boolean"
+        },
+        "streaming": {
+          "type": "boolean"
+        },
+        "initial": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "platform",
+        "guild",
+        "account",
+        "display_name",
+        "is_bot",
+        "channel",
+        "channel_name",
+        "self_mute",
+        "self_deaf",
+        "server_mute",
+        "server_deaf",
+        "video",
+        "streaming",
+        "initial"
+      ]
+    },
+    "EventsVoiceSynthesis": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "turn"
+      ]
+    },
+    "EventsVoiceTurnStages": {
+      "type": "object",
+      "properties": {
+        "heard_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "wait_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "decide_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "context_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "prompt_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "first_token_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "held_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "first_sentence_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "speculative": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "heard_ms",
+        "wait_ms",
+        "decide_ms",
+        "context_ms",
+        "prompt_ms",
+        "first_token_ms",
+        "held_ms",
+        "first_sentence_ms",
+        "speculative"
+      ]
+    },
+    "EventsVoiceUpcoming": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "emotion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "context",
+        "turn",
+        "text",
+        "emotion"
+      ]
+    },
+    "WireAccountRef": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform",
+        "id"
+      ]
+    },
+    "WireAttachment": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "content_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url",
+        "filename",
+        "content_type"
+      ]
+    },
+    "WireAuthor": {
+      "type": "object",
+      "properties": {
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "is_bot": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "account",
+        "display_name",
+        "is_bot"
+      ]
+    },
+    "WireContextKey": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WireContextKind"
+        }
+      },
+      "required": [
+        "platform",
+        "scope",
+        "channel",
+        "kind"
+      ]
+    },
+    "WireContextKind": {
+      "type": "string",
+      "enum": [
+        "channel",
+        "thread",
+        "dm",
+        "voice"
+      ]
+    },
+    "WireEmbed": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thumbnail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "url"
+      ]
+    },
+    "WireForwardedMessage": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireAttachment"
+          }
+        },
+        "stickers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireSticker"
+          }
+        },
+        "embeds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireEmbed"
+          }
+        }
+      },
+      "required": [
+        "text",
+        "attachments",
+        "stickers",
+        "embeds"
+      ]
+    },
+    "WireJsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        }
+      ]
+    },
+    "WireMentionedAccount": {
+      "type": "object",
+      "properties": {
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "is_bot": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "account",
+        "display_name",
+        "is_bot"
+      ]
+    },
+    "WireMessageRef": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "id"
+      ]
+    },
+    "WirePlaybackState": {
+      "type": "string",
+      "enum": [
+        "started",
+        "finished",
+        "interrupted",
+        "failed"
+      ]
+    },
+    "WireQuotedMessage": {
+      "type": "object",
+      "properties": {
+        "author": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireAccountRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "author_name": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "author",
+        "author_name",
+        "text"
+      ]
+    },
+    "WireSticker": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "WireVoiceParticipant": {
+      "type": "object",
+      "properties": {
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "is_self": {
+          "type": "boolean"
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "deafened": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "account",
+        "display_name",
+        "is_self",
+        "muted",
+        "deafened"
+      ]
+    }
+  }
+}

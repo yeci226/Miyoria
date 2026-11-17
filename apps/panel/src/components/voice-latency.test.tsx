@@ -1,6 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { VoiceE2eLatency, VoiceState, WorldView } from "@/api/types";
+import type { VoiceState } from "@/api/types";
+import type { VoiceE2eLatency, WorldView } from "@miyoria/contracts/api";
 import { VoiceCard } from "@/pages/live/VoiceCard";
 import { mockFetch, renderPage } from "@/test/render";
 import { VoiceLatency } from "./voice-latency";

@@ -1,22 +1,21 @@
 // `/api/data/*` against a real in-memory SQLite store: inventory, export, deletes with their
 // confirmations and module pauses, the backup-before-reset rule and the factory reset.
 
-import { ACTIVENESS_PREFIX, AgentHandleKey, MODE_PREFIX } from "@miyoria/agent";
-import * as arbiter from "@miyoria/arbiter";
-import { AuthService, AuthServiceKey } from "@miyoria/auth";
+import { AuthService, AuthServiceKey, authTables } from "@miyoria/auth";
+import { ACTIVENESS_PREFIX, AgentHandleKey, MODE_PREFIX } from "@miyoria/brain/agent";
+import * as arbiter from "@miyoria/brain/arbiter";
+import type { DataInventoryView, DataWipeResult } from "@miyoria/contracts/api";
+import { FEELING_PREFIX } from "@miyoria/heart/person";
+import * as self from "@miyoria/heart/self";
+import { MAINTENANCE_KEY, memoryTables, WATERMARK_PREFIX } from "@miyoria/memory/memory";
+import * as queue from "@miyoria/play/queue";
 import {
   defineManifest,
   type Module,
   type ModuleContext,
   Supervisor,
   SupervisorKey,
-} from "@miyoria/kernel";
-import { USAGE_KEY_PREFIX, USAGE_PROFILE } from "@miyoria/llm";
-import { MAINTENANCE_KEY, WATERMARK_PREFIX } from "@miyoria/memory";
-import * as queue from "@miyoria/queue";
-import { SandboxKey, type ScriptInfo, TOOL_KEY_PREFIX } from "@miyoria/sandbox";
-import * as self from "@miyoria/self";
-import { SETTINGS_KEY as MOOD_KEY } from "@miyoria/social";
+} from "@miyoria/runtime/kernel";
 import {
   AuditLogKey,
   AuthStoreKey,
@@ -36,14 +35,13 @@ import {
   PRIVACY_PROFILE,
   toTimestamp,
 } from "@miyoria/types";
-import { CONSENT_PROFILE, consentKey } from "@miyoria/voice";
+import { CONSENT_PROFILE, consentKey } from "@miyoria/voice/voice";
+import { SandboxKey, type ScriptInfo, TOOL_KEY_PREFIX } from "@miyoria/workspace/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ActiveProfileKey,
   ApiModule,
   BACKUP_TOKEN_HEADER,
-  type DataInventoryView,
-  type DataWipeResult,
   parseContextKeyString,
   SESSION_STORE_PREFIX,
   SESSION_STORE_PROFILE,
@@ -55,7 +53,7 @@ const P = "deepseek-chan";
 const OWNER = { platform: "discord", id: "1" };
 const ctx: ContextKey = { platform: "discord", scope: "g1", channel: "c1", kind: "channel" };
 
-/** Like the real mood module: saves what it cached on stop. */
+/** A module that saves what it cached on stop, under the `mood` category's module id. */
 class SavingMood implements Module {
   readonly manifest = defineManifest("mood", "mood stand-in");
   starts = 0;
@@ -119,9 +117,9 @@ async function harness(options: { sandbox?: boolean } = {}) {
   s.provide(k, ProfileDataStoreKey, store.profileData);
   s.provide(k, SettingsStoreKey, store.settings);
   s.provide(k, MessageLogKey, store.messages);
-  s.provide(k, AuthStoreKey, store.auth);
+  s.provide(k, AuthStoreKey, store.plugin(authTables).store);
   s.provide(k, AuditLogKey, store.audit);
-  const auth = await AuthService.load(store.auth, store.audit, [OWNER], "user");
+  const auth = await AuthService.load(store.plugin(authTables).store, store.audit, [OWNER], "user");
   s.provide("auth", AuthServiceKey, auth);
   const cleared: string[] = [];
   s.provide("agent", AgentHandleKey, {
@@ -145,7 +143,7 @@ async function harness(options: { sandbox?: boolean } = {}) {
   // Some of everything.
   const now = toTimestamp(Date.UTC(2026, 10, 2));
   const owen = await store.people.upsertAccount({ platform: "discord", id: "2" }, "Owen");
-  await store.memories.upsert({
+  await store.plugin(memoryTables).upsert({
     id: newId(),
     profile: P,
     kind: "fact",
@@ -182,8 +180,16 @@ async function harness(options: { sandbox?: boolean } = {}) {
   await store.settings.set(P, `${MODE_PREFIX}discord:g1:c1`, "always");
   await store.settings.set(P, `${ACTIVENESS_PREFIX}discord:dm:voice:v1`, "high");
   await store.settings.set(GLOBAL_SETTINGS_PROFILE, "queue:state", { items: [] });
-  await store.settings.set(GLOBAL_SETTINGS_PROFILE, "llm_usage:2026-11", { usd: 1 });
-  await store.auth.upsertRole({ name: "vip", rank: 50, grants: ["x"], denies: [], builtin: false });
+  // One finished LLM call: the `llm_usage` category counts these events.
+  await store.events?.append([
+    {
+      draft: { id: newId(), at: now, type: "llm.call", data: { call_id: "c1", cost_usd: 1 } },
+      source: "llm",
+    },
+  ]);
+  await store
+    .plugin(authTables)
+    .store.upsertRole({ name: "vip", rank: 50, grants: ["x"], denies: [], builtin: false });
   await auth.reload();
   await auth.assign("test", { platform: "discord", id: "2" }, "vip", { type: "global" });
   await store.personaOverrides.set(P, "style", "新的口吻", "test");
@@ -209,7 +215,9 @@ describe("data routes", () => {
     expect(inv.categories.map((c) => c.id)).toEqual(DATA_CATEGORIES.map((c) => c.id));
     expect(countOf(inv, "memories")).toBe(1);
     expect(countOf(inv, "messages")).toBe(2);
-    expect(countOf(inv, "people")).toBe(2); // one person, one account
+    // One person and their account, and where the two chat lines were said: a space, a room, a
+    // session and the person's membership of the space.
+    expect(countOf(inv, "people")).toBe(6);
     expect(countOf(inv, "audit")).toBeGreaterThan(0);
     const people = inv.categories.find((c) => c.id === "people");
     expect(people).toMatchObject({ shared: true, confirm: "typed", kept: false });
@@ -219,6 +227,7 @@ describe("data routes", () => {
       "inner",
       "knowledge",
       "learning",
+      "artifacts",
     ]);
     expect(inv.categories.find((c) => c.id === "audit")?.kept).toBe(true);
     // Without a sandbox there is no tools workspace.
@@ -269,8 +278,8 @@ describe("data routes", () => {
       message_log: 1,
       memory_watermarks: 1,
       conversation_states: 0,
-      log_events: 0,
-      log_event_rollups: 0,
+      events: 0,
+      event_rollups: 0,
     });
     expect((await h.store.settings.list(P, WATERMARK_PREFIX)).size).toBe(0);
     expect(countOf(await inventoryOf(h), "memories")).toBe(1);
@@ -353,15 +362,15 @@ describe("data categories", () => {
     expect(has("active", MODE_PREFIX)).toBe(true);
     expect(has("active", ACTIVENESS_PREFIX)).toBe(true);
     expect(has("active", self.STATE_KEY)).toBe(true);
-    expect(has("active", self.FEELING_PREFIX)).toBe(true);
-    expect(has("active", MOOD_KEY)).toBe(true);
+    // The old per-person cards stay in the catalog (archived, read once by the heart).
+    expect(has("active", FEELING_PREFIX)).toBe(true);
+    expect(has("active", "mood:last")).toBe(true);
     expect(has("active", TOOL_KEY_PREFIX)).toBe(true);
     for (const [profile, name] of [
       [arbiter.STATE_PROFILE, arbiter.STATE_KEY],
       [queue.STATE_PROFILE, queue.STATE_KEY],
       [CONSENT_PROFILE, consentKey({ platform: "x", id: "y" }).replace(/x:y$/, "")],
       [PRIVACY_PROFILE, PRIVACY_PREFIX],
-      [USAGE_PROFILE, USAGE_KEY_PREFIX],
       [SESSION_STORE_PROFILE, SESSION_STORE_PREFIX],
     ] as const) {
       expect(profile).toBe(GLOBAL_SETTINGS_PROFILE);

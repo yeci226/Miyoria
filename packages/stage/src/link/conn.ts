@@ -1,7 +1,7 @@
 // One Stage connection: hello validation, the per-connection state and its close frame.
 
 import { timingSafeEqual } from "node:crypto";
-import { errorMessage } from "@miyoria/kernel";
+import { errorMessage } from "@miyoria/runtime/kernel";
 import WebSocket from "ws";
 import {
   CLOSE,
@@ -13,7 +13,7 @@ import {
 } from "../protocol.js";
 
 export const MAX_MESSAGE = 1 << 16;
-/** Bytes queued on a socket before messages are dropped (the Rust queue held 256 messages). */
+/** Bytes queued on a socket before messages are dropped. */
 const MAX_BUFFERED = 1 << 20;
 
 /** Constant-time comparison of the token. */

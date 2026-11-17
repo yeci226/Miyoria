@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { IssuedFortune } from "@/api/types";
+import type { IssuedFortune } from "@miyoria/contracts/api";
 import { FortuneFace, FortuneSlip, fortuneFileName, rankInk, slipDate } from "./FortuneSlip";
 
 const SLIP: IssuedFortune = {

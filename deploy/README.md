@@ -1,46 +1,30 @@
 # deploy
 
-Docker 部署:Core 容器(Node 24,內含管理面板),以及(可選)PostgreSQL 17 + pgvector。完整的部署、升級、備份流程見 [docs/OPERATIONS.md](../docs/OPERATIONS.md)。
+Docker 部署:Core 容器(Node 24,內含管理面板),資料存在容器 volume 裡的 SQLite。完整的部署、升級、備份流程見 [docs/OPERATIONS.md](../docs/OPERATIONS.md)。
 
-> 不用 Docker 也能跑:`npx miyoria@latest init` → `npx miyoria core`,資料預設存在 SQLite(`data/miyoria.db`),不需要另外裝資料庫。
+> 不用 Docker 也能跑:`pnpm dlx miyoria@latest init` → `pnpm dlx miyoria core`,資料預設存在 SQLite(`data/miyoria.db`),不需要另外裝資料庫。
 
 | 檔案 | 用途 |
 |---|---|
-| `docker-compose.yml` | `postgres` 服務(預設)+ `core` 服務(compose profile `core`) |
+| `docker-compose.yml` | `core` 服務 |
 | `Dockerfile.core` | Core 映像檔:多階段(pnpm install → build 面板與 `miyoria` 套件 → `pnpm deploy`),非 root、`/data` volume、healthcheck |
 | `miyoria.docker.toml` | Core 容器用的設定(內建一份,compose 也會掛進去) |
-| `.env.example` | compose 變數(資料庫密碼、埠),複製成 `deploy/.env` |
+| `.env.example` | compose 變數(埠、映像檔、設定檔,都是可選的),複製成 `deploy/.env` |
 | `speech/` | 語音辨識 / 合成放在 Linux server 的 compose,見 [speech/README.md](speech/README.md) |
 
 build 時排除的檔案(`.env`、`node_modules`、`dist`、`legacy`、`spikes`、`data`、授權不能散佈的模型檔……)在根目錄的 [`.dockerignore`](../.dockerignore)。
 
-## 只要 PostgreSQL(本機開發)
-
-Core 在宿主機跑(`npx miyoria core` 或 `pnpm dev:core`),資料庫用 Docker:
-
-```sh
-cp deploy/.env.example deploy/.env   # 記得改密碼
-docker compose -f deploy/docker-compose.yml up -d postgres
-docker compose -f deploy/docker-compose.yml ps   # 等 STATUS 變成 healthy
-```
-
-不加 `--profile core` 時只會啟動 `postgres`,不需要根目錄的 `.env`。
-
-- 只綁在 `127.0.0.1:5432`,不會對外開放;要換 port 就改 `deploy/.env` 的 `POSTGRES_PORT`。
-- 資料存在名為 `miyoria_pgdata` 的 volume,`down` 不會刪資料;要清空就 `down -v`。
-- `vector` 擴充由 Miyoria 第一次啟動時的 migration 建立,不需要手動處理。
-
 ## Core 也放進 Docker(server 部署)
 
 ```sh
-cp deploy/.env.example deploy/.env   # 改 POSTGRES_PASSWORD(只用字母數字 - _ .)
-npx miyoria init                     # 在專案根目錄產生 .env(LLM key、Discord token、各種 token)
-docker compose -f deploy/docker-compose.yml --profile core up -d --build
-docker compose -f deploy/docker-compose.yml --profile core ps      # core 要變成 healthy
-docker compose -f deploy/docker-compose.yml --profile core logs -f core
+cp deploy/.env.example deploy/.env   # 可選:改埠、映像檔、設定檔
+pnpm dlx miyoria init                     # 在專案根目錄產生 .env(LLM key、Discord token、各種 token)
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml ps      # core 要變成 healthy
+docker compose -f deploy/docker-compose.yml logs -f core
 ```
 
-- 兩個 `.env`:`deploy/.env` 給 compose(資料庫密碼、埠),根目錄 `.env` 給 Miyoria(秘密)。容器內的 `DATABASE_URL` 由 compose 組成,指向 `postgres:5432`;想在容器裡用 SQLite,在 `deploy/.env` 設 `CORE_DATABASE_URL=sqlite:/data/miyoria.db`(存在 `core-data` volume)。
+- 兩個 `.env`:`deploy/.env` 給 compose(埠、映像檔),根目錄 `.env` 給 Miyoria(秘密)。容器內的 `DATABASE_URL` 由 compose 設成 `sqlite:/data/miyoria.db`(存在 `core-data` volume);要換路徑就在 `deploy/.env` 設 `CORE_DATABASE_URL`。
 - **綁定位址**:容器裡的 Admin API、voice link、stage link 一定要綁 `0.0.0.0`(`miyoria.docker.toml` 已經這樣設);綁 `127.0.0.1` 的話 Docker 的埠映射連不進去。給宿主機用的 `miyoria.toml`(綁 `127.0.0.1`)不要直接掛進容器;要自訂就複製 `miyoria.docker.toml`,保留三個 `bind`,在 `deploy/.env` 設 `MIYORIA_CONFIG_FILE`。
 - 宿主機端的埠一律只綁 `127.0.0.1`:`7878` Admin API / 管理面板、`7879` voice link、`7882` stage link。別台機器要連,走 Tailscale / SSH tunnel / wss 反向代理(見 OPERATIONS §9),不要把 compose 的 `ports:` 改成 `0.0.0.0`。
 - 管理面板已經在映像檔裡(`MIYORIA_PANEL_DIR=/opt/miyoria/dist/panel`),開 http://127.0.0.1:7878/ 就是。
@@ -59,24 +43,10 @@ docker compose -f deploy/docker-compose.yml --profile core logs -f core
 
 ## DATABASE_URL(Core 在宿主機時)
 
-預設 `sqlite:data/miyoria.db`(相對於 `miyoria.toml` 的資料夾)。要用上面的 Postgres,依 `deploy/.env` 的值組成,寫進根目錄 `.env`:
-
-```
-DATABASE_URL=postgres://miyoria:change-me@127.0.0.1:5432/miyoria
-```
+預設 `sqlite:data/miyoria.db`(相對於 `miyoria.toml` 的資料夾)。只支援 SQLite:`postgres://` 之類的網址會讓 Core 啟動失敗。
 
 不想保存資料(測試)時可以用 `DATABASE_URL=memory://`,重啟就沒了。
 
 ## 備份
 
-SQLite:停掉 Core 複製 `data/`,或 `sqlite3 data/miyoria.db ".backup <檔案>"`。Postgres:`scripts/backup.sh`(Windows:`scripts\backup.ps1`)與對應的 `restore` 腳本。見 [OPERATIONS §7](../docs/OPERATIONS.md#7-備份與還原)。
-
-## 測試
-
-`@miyoria/store` 的 PostgreSQL 測試只在有設定 `MIYORIA_TEST_DATABASE_URL` 時才會跑(SQLite 的一律會跑):
-
-```sh
-MIYORIA_TEST_DATABASE_URL=postgres://miyoria:change-me@127.0.0.1:5432/miyoria pnpm --filter @miyoria/store test
-```
-
-測試每次都用新的 id,可以跟開發資料共用同一個資料庫。
+停掉 Core 複製 `data/`,或 `sqlite3 data/miyoria.db ".backup <檔案>"`。見 [OPERATIONS §7](../docs/OPERATIONS.md#7-備份與還原)。

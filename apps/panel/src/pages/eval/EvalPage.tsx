@@ -24,7 +24,8 @@ import {
   UNMEASURED,
 } from "@/lib/metrics";
 import { readStorage, writeStorage } from "@/lib/storage";
-import { V4Metrics } from "./V4Metrics";
+import { LiveEval } from "./LiveEval";
+import { Participation } from "./Participation";
 
 const HOUR = 3_600_000;
 
@@ -264,7 +265,8 @@ export function EvalPage() {
           <Unmeasured />
         </>
       )}
-      <V4Metrics />
+      <Participation />
+      <LiveEval />
     </Page>
   );
 }

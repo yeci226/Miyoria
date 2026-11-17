@@ -2,13 +2,14 @@
 // lost), refunds, the sweep that finishes what a crash left, and her tools and `/me bet`.
 
 import { CommandRegistry, Permissions } from "@miyoria/commands";
-import { ServiceRegistry } from "@miyoria/kernel";
+import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import type { AccountRef, JsonValue } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { EconomyCommands } from "../src/commands.js";
 import { shortId } from "../src/purse.js";
 import { v2Capabilities } from "../src/v2-tools.js";
 import { Economy2Key } from "../src/v2-types.js";
+import { ledgerOf, walletOf } from "./ledger.js";
 import {
   ALICE,
   ALICE_TWO,
@@ -216,10 +217,11 @@ describe("settling", () => {
     await r.economy.v2.placeBet(ALICE, p.id, 1, 30, "a");
     await r.economy.v2.placeBet(BOB, p.id, 1, 10, "b");
     await r.economy.v2.placeBet(ERIN, p.id, 2, 20, "c");
-    const post = r.store.coins.post.bind(r.store.coins);
+    const ledger = ledgerOf(r.store);
+    const post = ledger.post.bind(ledger);
     let failed = 0;
-    r.store.coins.post = async (entry, rule) => {
-      if (entry.reason === "bet_win" && entry.account.id === BOB.id && failed === 0) {
+    ledger.post = async (entry, rule) => {
+      if (entry.reason === "bet_win" && entry.person === walletOf(r.store, BOB) && failed === 0) {
         failed += 1;
         throw new Error("disk full");
       }
@@ -228,7 +230,7 @@ describe("settling", () => {
     await r.economy.v2.resolvePrediction(p.id, 1);
     expect(await balance(r, ALICE)).toBe(115);
     expect(await balance(r, BOB)).toBe(90);
-    r.store.coins.post = post;
+    ledger.post = post;
     await r.economy.v2.sweep();
     await r.economy.v2.sweep();
     expect(await balance(r, BOB)).toBe(105);

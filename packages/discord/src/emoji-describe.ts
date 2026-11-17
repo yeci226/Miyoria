@@ -2,7 +2,7 @@
 // (`discord.emoji.desc.<id>`), so `:fanfan:` reads as "a bowl of rice, for begging food" even
 // when the name says nothing. Emoji the owner described in the config are never sent.
 
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import type { ServerEmoji } from "./emoji.js";
 import { emojiImageUrl } from "./emoji.js";
 

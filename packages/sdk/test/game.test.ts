@@ -87,8 +87,8 @@ describe("game adapter helper", () => {
     await waitFor(() => h.requests.filter((r) => r.method === "events.publish").length === 2);
     const published = h.requests.filter((r) => r.method === "events.publish").map((r) => r.params);
     expect(published).toEqual([
-      { topic: "game.mc.death", payload: { type: "death", data: { cause: "creeper" }, important: true } },
-      { topic: "game.mc.player.joined", payload: { type: "player.joined", data: { name: "Owen" } } },
+      { type: "game.mc.death", data: { type: "death", data: { cause: "creeper" }, important: true } },
+      { type: "game.mc.player.joined", data: { type: "player.joined", data: { name: "Owen" } } },
     ]);
     expect(h.notifications.some((n) => n.method === "log")).toBe(true);
   });

@@ -1,0 +1,299 @@
+// The relay's wire and the machinery both ends share: the frame codec, the credit accounting, the
+// receiving end of a body and the pump that sends one.
+
+import { describe, expect, it } from "vitest";
+import {
+  decodeRelayFrame,
+  encodeRelayFrame,
+  HOST_RELAY_DROPPED_REQUEST_HEADERS,
+  HOST_RELAY_FRAME,
+  HOST_RELAY_LIMITS,
+  HostRelayFrameError,
+  HostRelayRequestSchema,
+  HostRelayResponseSchema,
+  pumpRelayBody,
+  RelayInbound,
+  RelayReceiveWindow,
+  RelaySendWindow,
+  relayHeaders,
+} from "../src/index.js";
+
+const F = HOST_RELAY_FRAME;
+const L = HOST_RELAY_LIMITS;
+
+function bytesOf(...values: number[]): Uint8Array {
+  return Uint8Array.from(values);
+}
+
+describe("relay frames", () => {
+  it("lays a frame out as kind, stream id (u32 LE), payload", () => {
+    const data = bytesOf(9, 8, 7);
+    const frame = encodeRelayFrame({ kind: F.RESPONSE_CHUNK, stream: 0x01020304, data });
+    expect([...frame]).toEqual([0x03, 0x04, 0x03, 0x02, 0x01, 9, 8, 7]);
+    expect([...encodeRelayFrame({ kind: F.REQUEST_END, stream: 1 })]).toEqual([2, 1, 0, 0, 0]);
+    expect([...encodeRelayFrame({ kind: F.CREDIT, stream: 2, bytes: 0x10000 })]).toEqual([
+      6, 2, 0, 0, 0, 0, 0, 1, 0,
+    ]);
+  });
+
+  it("round-trips every kind", () => {
+    const frames = [
+      { kind: F.REQUEST_CHUNK, stream: 1, data: bytesOf(1, 2) },
+      { kind: F.REQUEST_END, stream: 2 },
+      { kind: F.RESPONSE_CHUNK, stream: L.STREAM_ID_MAX, data: new Uint8Array(L.CHUNK_BYTES) },
+      { kind: F.RESPONSE_END, stream: 3 },
+      { kind: F.ABORT, stream: 4, reason: "取消 cancelled" },
+      { kind: F.CREDIT, stream: 5, bytes: L.WINDOW_BYTES },
+    ] as const;
+    for (const f of frames) expect(decodeRelayFrame(encodeRelayFrame(f))).toEqual(f);
+  });
+
+  it("decodes a chunk as a view, not a copy", () => {
+    const frame = encodeRelayFrame({ kind: F.RESPONSE_CHUNK, stream: 1, data: bytesOf(5) });
+    const decoded = decodeRelayFrame(frame);
+    if (decoded.kind !== F.RESPONSE_CHUNK) throw new Error("wrong kind");
+    expect(decoded.data.buffer).toBe(frame.buffer);
+  });
+
+  it("cuts a long abort reason at a character boundary", () => {
+    const frame = encodeRelayFrame({ kind: F.ABORT, stream: 1, reason: "語".repeat(200) });
+    expect(frame.byteLength - L.HEADER_BYTES).toBeLessThanOrEqual(L.ABORT_REASON_BYTES);
+    const decoded = decodeRelayFrame(frame);
+    if (decoded.kind !== F.ABORT) throw new Error("wrong kind");
+    expect(decoded.reason).toBe("語".repeat(85));
+  });
+
+  it("refuses to encode what the wire cannot carry", () => {
+    const data = new Uint8Array(L.CHUNK_BYTES + 1);
+    expect(() => encodeRelayFrame({ kind: F.REQUEST_CHUNK, stream: 1, data })).toThrow(RangeError);
+    expect(() => encodeRelayFrame({ kind: F.REQUEST_END, stream: 0 })).toThrow(RangeError);
+    expect(() => encodeRelayFrame({ kind: F.CREDIT, stream: 1, bytes: 0 })).toThrow(RangeError);
+  });
+
+  it("rejects malformed frames", () => {
+    const bad = [
+      bytesOf(1, 1, 0, 0), // shorter than the header
+      bytesOf(9, 1, 0, 0, 0), // unknown kind
+      bytesOf(0, 1, 0, 0, 0),
+      bytesOf(1, 0, 0, 0, 0), // stream 0
+      bytesOf(2, 1, 0, 0, 0, 7), // end with a payload
+      bytesOf(4, 1, 0, 0, 0, 7),
+      bytesOf(6, 1, 0, 0, 0, 1, 0), // credit of a wrong size
+      bytesOf(6, 1, 0, 0, 0, 0, 0, 0, 0), // credit of 0
+      new Uint8Array(L.HEADER_BYTES + L.CHUNK_BYTES + 1).fill(1, 0, 2), // chunk over the limit
+      new Uint8Array(L.HEADER_BYTES + L.ABORT_REASON_BYTES + 1).fill(5, 0, 1).fill(1, 1, 2),
+    ];
+    for (const frame of bad) expect(() => decodeRelayFrame(frame)).toThrow(HostRelayFrameError);
+  });
+});
+
+describe("relay.request shapes", () => {
+  it("parses a request with its defaults and refuses a path that is not one", () => {
+    expect(
+      HostRelayRequestSchema.parse({ stream: 1, service: "sing", method: "GET", path: "/x?y=1" }),
+    ).toEqual({
+      stream: 1,
+      service: "sing",
+      method: "GET",
+      path: "/x?y=1",
+      headers: {},
+      body: false,
+    });
+    for (const path of ["x", "", "/a b", "http://evil/"]) {
+      expect(
+        HostRelayRequestSchema.safeParse({ stream: 1, service: "s", method: "GET", path }).success,
+      ).toBe(false);
+    }
+    expect(HostRelayResponseSchema.safeParse({ status: 101 }).success).toBe(false);
+  });
+
+  it("drops hop-by-hop headers and the ones the host sets", () => {
+    const headers = new Headers({
+      "Content-Type": "application/json",
+      Authorization: "Bearer caller",
+      Connection: "keep-alive",
+      "X-Trace": "1",
+    });
+    expect(relayHeaders(headers, HOST_RELAY_DROPPED_REQUEST_HEADERS)).toEqual({
+      "content-type": "application/json",
+      "x-trace": "1",
+    });
+  });
+});
+
+describe("credit accounting", () => {
+  it("lets a sender have at most the window in flight", () => {
+    const rx = new RelayReceiveWindow(100, 25);
+    expect(rx.receive(100)).toBe(true);
+    expect(rx.receive(1)).toBe(false);
+    expect(rx.consume(20)).toBe(0);
+    expect(rx.consume(10)).toBe(30);
+    expect(rx.receive(30)).toBe(true);
+    expect(rx.receive(1)).toBe(false);
+    expect(rx.buffered).toBe(100);
+  });
+
+  it("makes a sender wait for credit", async () => {
+    const tx = new RelaySendWindow(10);
+    tx.take(10);
+    expect(() => tx.take(1)).toThrow(RangeError);
+    let ready = false;
+    const waiting = tx.ready().then(() => {
+      ready = true;
+    });
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    tx.grant(4);
+    await waiting;
+    expect(tx.available).toBe(4);
+    expect(tx.sent).toBe(10);
+    const stop = new AbortController();
+    tx.take(4);
+    const aborted = tx.ready(stop.signal);
+    stop.abort(new Error("stop"));
+    await expect(aborted).rejects.toThrow("stop");
+  });
+});
+
+describe("RelayInbound", () => {
+  it("hands chunks over in order and sends credit as they are read", async () => {
+    const credits: number[] = [];
+    const inbound = new RelayInbound({
+      window: 8,
+      credit: (n) => credits.push(n),
+      cancel: () => {},
+    });
+    expect(inbound.push(bytesOf(1, 2, 3, 4))).toBe(true);
+    expect(inbound.push(bytesOf(5, 6, 7, 8))).toBe(true);
+    expect(inbound.push(bytesOf(9))).toBe(false); // over the window
+    expect(credits).toEqual([]);
+    const reader = inbound.readable.getReader();
+    expect([...((await reader.read()).value ?? [])]).toEqual([1, 2, 3, 4]);
+    // The credit step is min(256 KiB, window): 8 bytes here.
+    expect(credits).toEqual([]);
+    expect(inbound.buffered).toBe(4);
+    expect([...((await reader.read()).value ?? [])]).toEqual([5, 6, 7, 8]);
+    expect(credits).toEqual([8]);
+    expect(inbound.push(bytesOf(9, 9, 9, 9))).toBe(true);
+    expect(inbound.push(bytesOf(9, 9, 9, 9))).toBe(true);
+    expect(inbound.end()).toBe(true);
+    expect(inbound.push(bytesOf(1))).toBe(false); // after the end
+    expect([...((await reader.read()).value ?? [])]).toEqual([9, 9, 9, 9]);
+    expect([...((await reader.read()).value ?? [])]).toEqual([9, 9, 9, 9]);
+    expect((await reader.read()).done).toBe(true);
+    // No credit once the end is in.
+    expect(credits).toEqual([8]);
+  });
+
+  it("fails the reader with the error, and ignores what arrives after", async () => {
+    const inbound = new RelayInbound({ credit: () => {}, cancel: () => {} });
+    const reader = inbound.readable.getReader();
+    const read = reader.read();
+    inbound.fail(new Error("host gone"));
+    await expect(read).rejects.toThrow("host gone");
+    expect(inbound.push(bytesOf(1))).toBe(true);
+  });
+
+  it("tells the owner when the consumer cancels", async () => {
+    const reasons: unknown[] = [];
+    const inbound = new RelayInbound({ credit: () => {}, cancel: (r) => reasons.push(r) });
+    inbound.push(bytesOf(1));
+    await inbound.readable.cancel("enough");
+    expect(reasons).toEqual(["enough"]);
+    expect(inbound.failed).toBe(true);
+  });
+
+  it("settles on the end or on enough buffered bytes", async () => {
+    const a = new RelayInbound({ credit: () => {}, cancel: () => {} });
+    const ended = a.settled(10);
+    a.push(bytesOf(1, 2));
+    a.end();
+    expect(await ended).toBe(true);
+    const b = new RelayInbound({ credit: () => {}, cancel: () => {} });
+    const full = b.settled(2);
+    b.push(bytesOf(1, 2));
+    expect(await full).toBe(false);
+  });
+});
+
+describe("pumpRelayBody", () => {
+  function sink() {
+    const frames: Uint8Array[] = [];
+    return {
+      frames,
+      bufferedAmount: 0,
+      send(frame: Uint8Array) {
+        frames.push(frame);
+        return true;
+      },
+    };
+  }
+
+  it("splits into chunks, stops at the window and goes on with credit", async () => {
+    const out = sink();
+    const window = new RelaySendWindow(L.CHUNK_BYTES * 2);
+    const body = new Uint8Array(L.CHUNK_BYTES * 3 + 10).map((_, i) => i % 251);
+    const stop = new AbortController();
+    const done = pumpRelayBody({
+      source: new Blob([body]).stream(),
+      sink: out,
+      stream: 7,
+      kind: F.RESPONSE_CHUNK,
+      window,
+      signal: stop.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(out.frames.length).toBe(2);
+    expect(window.available).toBe(0);
+    window.grant(L.CHUNK_BYTES * 2);
+    await done;
+    const decoded = out.frames.map((f) => decodeRelayFrame(f));
+    expect(decoded.map((f) => f.kind)).toEqual([3, 3, 3, 3, 4]);
+    const joined = Buffer.concat(
+      decoded.flatMap((f) => (f.kind === F.RESPONSE_CHUNK ? [f.data] : [])),
+    );
+    expect(joined.equals(Buffer.from(body))).toBe(true);
+  });
+
+  it("stops and cancels the source when aborted", async () => {
+    const out = sink();
+    let cancelled: unknown = null;
+    const source = new ReadableStream<Uint8Array>({
+      pull: () => new Promise(() => {}),
+      cancel: (reason) => {
+        cancelled = reason;
+      },
+    });
+    const stop = new AbortController();
+    const done = pumpRelayBody({
+      source,
+      sink: out,
+      stream: 1,
+      kind: F.REQUEST_CHUNK,
+      window: new RelaySendWindow(),
+      signal: stop.signal,
+    });
+    stop.abort(new Error("caller gave up"));
+    await expect(done).rejects.toThrow("caller gave up");
+    expect(cancelled).toBeInstanceOf(Error);
+    expect(out.frames).toEqual([]);
+  });
+
+  it("waits while the socket's queue is long", async () => {
+    const out = sink();
+    out.bufferedAmount = L.SOCKET_HIGH_WATER_BYTES + 1;
+    const done = pumpRelayBody({
+      source: new Blob([bytesOf(1)]).stream(),
+      sink: out,
+      stream: 1,
+      kind: F.REQUEST_CHUNK,
+      window: new RelaySendWindow(),
+      signal: new AbortController().signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(out.frames).toEqual([]);
+    out.bufferedAmount = 0;
+    await done;
+    expect(out.frames.length).toBe(2);
+  });
+});

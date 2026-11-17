@@ -1,0 +1,27 @@
+# MediaMTX: relays OBS's RTMP stream to the voice node and to Core's LL-HLS proxy.
+name = "mediamtx"
+kind = "worker"
+provides = ["media"]
+platforms = ["win32"]
+summary = "影像中轉(OBS 推流,語音節點與網頁現場拉流)"
+
+[install]
+runtime = "binary"
+
+# The executable is not in git (workers/mediamtx/README.md).
+[[install.manual]]
+path = "workers/mediamtx/mediamtx.exe"
+what = "MediaMTX 執行檔(GitHub releases 的 mediamtx_v1.21.3_windows_amd64.zip,用 checksums.sha256 核對)"
+
+[run]
+command = ["{service}/mediamtx.exe", "mediamtx.yml"]
+cwd = "."
+# The API address; the ports (RTMP 1935, LL-HLS 8888) are in mediamtx.yml, all on 127.0.0.1.
+port = 9997
+# MediaMTX reads its HLS secret from MTX_HLSCDNSECRET: Core's MIYORIA_HLS_SECRET from .env, which
+# the daemon has in its environment. Without it the service is disabled with the reason.
+env = { MTX_HLSCDNSECRET = "{env:MIYORIA_HLS_SECRET}" }
+
+# Plain TCP: the API path that answers 200 without a stream is not checked yet.
+[run.health]
+tcp = true

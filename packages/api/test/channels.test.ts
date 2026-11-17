@@ -1,7 +1,8 @@
 // `GET /api/channels/levels` and `PUT /api/channels/level` against a fake agent handle.
 
-import { AgentHandleKey, type ChannelMode } from "@miyoria/agent";
-import { Supervisor, SupervisorKey } from "@miyoria/kernel";
+import { AgentHandleKey, type ChannelMode } from "@miyoria/brain/agent";
+import type { ChannelLevelsView } from "@miyoria/contracts/api";
+import { Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
 import {
   type ContextKey,
   contextKeyString,
@@ -10,7 +11,7 @@ import {
   WorldStateKey,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
-import { ActiveProfileKey, ApiModule, type ChannelLevelsView } from "../src/index.js";
+import { ActiveProfileKey, ApiModule } from "../src/index.js";
 import { raw } from "./support/http.js";
 
 const TOKEN = "test-token";

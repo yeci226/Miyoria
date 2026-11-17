@@ -1,4 +1,4 @@
-import type { LifeActivityId } from "@/api/v4-types";
+import type { LifeActivityId } from "@miyoria/contracts/api";
 
 /** The rows of §8.1, as the Core's table names them. */
 export const ACTIVITY_LABEL: Record<LifeActivityId, string> = {

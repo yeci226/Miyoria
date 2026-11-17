@@ -1,0 +1,39 @@
+{
+  "name": "@miyoria/eval",
+  "version": "0.1.0",
+  "description": "Evaluation: incident fixtures with rule-based checks and a pass^k scorecard, and live suites (persona, tools, relationship) against the real model",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "@miyoria/source": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "eval": "tsx --conditions=@miyoria/source src/cli.ts",
+    "extract": "node scripts/extract-incidents.mjs",
+    "blind": "tsx --conditions=@miyoria/source src/blind-cli.ts"
+  },
+  "dependencies": {
+    "@miyoria/brain": "workspace:*",
+    "@miyoria/gate": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@miyoria/memory": "workspace:*",
+    "@miyoria/play": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
+    "@miyoria/store": "workspace:*",
+    "@miyoria/types": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

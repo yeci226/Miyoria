@@ -14,11 +14,8 @@
 // produce `self` blocks from contributors it trusts (`SELF_BLOCK_KEYS`); anything else that
 // claims `self` is demoted to `data`.
 
-import type { TurnId } from "./ids.js";
-import type { ContextKey } from "./platform.js";
+import type { SavedPromptData } from "@miyoria/contracts/events";
 import type { PromptSection } from "./prompt.js";
-import type { ReasoningLevel } from "./reasoning.js";
-import type { Timestamp } from "./time.js";
 
 /**
  * `self`: her own state, rendered into the trusted system block (instructions she follows);
@@ -42,8 +39,6 @@ export const SELF_BLOCK_KEYS = [
   /** Notices waiting for her (task outcomes). */
   "self.notices",
 ] as const;
-
-export type SelfBlockKey = (typeof SELF_BLOCK_KEYS)[number];
 
 export interface PromptBlock extends PromptSection {
   authority: PromptAuthority;
@@ -87,16 +82,4 @@ export interface CompiledBlock {
 }
 
 /** A compressed copy of the prompt one turn actually sent (every turn, or sampled). */
-export interface SavedPrompt {
-  turn: TurnId;
-  context: ContextKey;
-  at: Timestamp;
-  /** The LLM purpose (`chat`) and the reasoning level used. */
-  purpose: string;
-  reasoning: ReasoningLevel;
-  blocks: CompiledBlock[];
-  /** The messages as sent, role + text, possibly compressed (long history elided). */
-  messages: { role: "system" | "user" | "assistant"; text: string }[];
-  /** Prompt tokens as reported by the provider (`null`: not reported). */
-  prompt_tokens: number | null;
-}
+export type SavedPrompt = SavedPromptData;

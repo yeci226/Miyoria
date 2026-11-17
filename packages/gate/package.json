@@ -1,0 +1,42 @@
+{
+  "name": "@miyoria/gate",
+  "version": "0.1.0",
+  "description": "actions: Actuator registry and gate: every action she takes, with principals, risk tiers, consent, self-review and audit; moderation: Content safety: model-independent output moderation and a defence for hostile input",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    "./actions": {
+      "@miyoria/source": "./actions/src/index.ts",
+      "types": "./dist/actions/src/index.d.ts",
+      "default": "./dist/actions/src/index.js"
+    },
+    "./moderation": {
+      "@miyoria/source": "./moderation/src/index.ts",
+      "types": "./dist/moderation/src/index.d.ts",
+      "default": "./dist/moderation/src/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@miyoria/commands": "workspace:*",
+    "@miyoria/llm": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
+    "@miyoria/store": "workspace:*",
+    "@miyoria/types": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.12"
+  }
+}

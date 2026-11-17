@@ -23,9 +23,10 @@
   },
   "dependencies": {
     "@miyoria/commands": "workspace:*",
-    "@miyoria/kernel": "workspace:*",
+    "@miyoria/runtime": "workspace:*",
     "@miyoria/store": "workspace:*",
     "@miyoria/types": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.5",
     "zod": "^4.6.7"
   },
   "devDependencies": {

@@ -1,7 +1,7 @@
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
-import type { ReminderView } from "@/api/v4-types";
-import { useCancelReminder, useReminders } from "@/app/v4-queries";
+import type { ReminderView } from "@miyoria/contracts/api";
+import { useCancelReminder, useReminders } from "@/app/queries";
 import { ConfirmDialog } from "@/components/confirm";
 import { RowActions } from "@/components/controls";
 import { ModuleQuery } from "@/components/module-query";

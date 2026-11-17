@@ -19,7 +19,7 @@ afterEach(async () => {
 function host() {
   const hostToExt = new PassThrough();
   const extToHost = new PassThrough();
-  const published: Array<{ topic: string; payload: unknown }> = [];
+  const published: Array<{ type: string; data: unknown }> = [];
   const taskEvents: Array<Record<string, unknown>> = [];
   const runtime = runExtension(extension, { input: hostToExt, output: extToHost, exit: () => {}, timeoutMs: 2000 });
   const peer = new RpcPeer({
@@ -27,7 +27,7 @@ function host() {
     output: hostToExt,
     timeoutMs: 3000,
     onRequest: (method, params) => {
-      if (method === "events.publish") published.push(params as { topic: string; payload: unknown });
+      if (method === "events.publish") published.push(params as { type: string; data: unknown });
       return {};
     },
     onNotification: (method, params) => {
@@ -40,7 +40,7 @@ function host() {
 
 function initialize(peer: RpcPeer, config: Record<string, unknown>, game: string | null = "minecraft") {
   return peer.request<InitializeResult>("initialize", {
-    protocol: 1,
+    protocol: 2,
     host: { name: "miyoria", version: "0.1.0" },
     extension: { id: "miyoria.minecraft", version: "0.1.0", dir: "/ext", game },
     config,
@@ -64,7 +64,7 @@ describe("extension", () => {
     expect(result.contributions.prompts).toEqual([]);
     const m = mod;
     await waitFor(() => m.hellos === 1);
-    await waitFor(() => published.some((p) => p.topic === "game.minecraft.connected"));
+    await waitFor(() => published.some((p) => p.type === "game.minecraft.connected"));
 
     const observed = await peer.request<{ state: Record<string, unknown>; summary: string; task: string | null }>(
       "task.observe",
@@ -86,14 +86,14 @@ describe("extension", () => {
     expect(taskEvents[1]).toMatchObject({ detail: "到了" });
 
     m.emit("death", { last_damage_source: "fall" });
-    await waitFor(() => published.some((p) => p.topic === "game.minecraft.death"));
-    expect(published.find((p) => p.topic === "game.minecraft.death")?.payload).toEqual({
+    await waitFor(() => published.some((p) => p.type === "game.minecraft.death"));
+    expect(published.find((p) => p.type === "game.minecraft.death")?.data).toEqual({
       type: "death",
       data: { last_damage_source: "fall", text: "死掉了(摔落)" },
       important: true,
     });
     // Task lifecycle never goes out as a game event.
-    expect(published.some((p) => p.topic.startsWith("game.minecraft.task"))).toBe(false);
+    expect(published.some((p) => p.type.startsWith("game.minecraft.task"))).toBe(false);
   });
 
   it("fails activation when the manifest does not declare the game", async () => {

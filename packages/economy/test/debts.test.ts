@@ -3,15 +3,15 @@
 import type { AccountRef } from "@miyoria/types";
 import { newId, toTimestamp } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
+import { economyOf, ledgerOf, walletOf } from "./ledger.js";
 import { ALICE, ALICE_TWO, BOB, rig as baseRig, DAY, type Rig } from "./rig.js";
 
 const rig = () => baseRig({ achievement_cap: 0, play_rewards: {}, quest_reward: 0 });
 
 async function broken(r: Rig, account: AccountRef, task = "唱一首歌"): Promise<void> {
   const at = toTimestamp(r.clock.at);
-  await r.store.deals.create({
+  await economyOf(r.store).deals.create({
     id: newId(),
-    profile: "p",
     account,
     item: "rice",
     count: 1,
@@ -28,18 +28,17 @@ async function broken(r: Rig, account: AccountRef, task = "唱一首歌"): Promi
 }
 
 async function feed(r: Rig, account: AccountRef): Promise<void> {
-  await r.store.coins.post(
+  await ledgerOf(r.store).post(
     {
       id: newId(),
-      profile: "p",
-      account,
+      person: walletOf(r.store, account),
       delta: -10,
       reason: "feed",
       ref: "rice",
       idem_key: null,
       ts: toTimestamp(r.clock.at),
     },
-    { wallet: [account], covered: false },
+    { covered: false },
   );
 }
 

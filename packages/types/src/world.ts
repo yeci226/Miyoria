@@ -1,23 +1,20 @@
 // Perception (docs/design/autonomy.md §3): what platforms report about people (presence, voice
 // states, members) and the `WorldState` service that turns it into a queryable snapshot.
 //
-// Platform modules publish the `PRESENCE_TOPIC`, `VOICE_STATE_TOPIC` and `MEMBER_TOPIC` custom
-// events with the payloads below; the `world` module consumes them and publishes
-// `SALIENT_TOPIC` events for changes worth her attention.
+// Platform modules publish `Events.PlatformPresence`, `Events.PlatformVoiceState` and
+// `Events.PlatformMember` with the payloads below; the `world` module consumes them and publishes
+// `Events.WorldSalient` for changes worth her attention.
 
+import type {
+  MemberUpdateData,
+  PresenceUpdateData,
+  SalientEventData,
+  VoiceStateUpdateData,
+} from "@miyoria/contracts/events";
 import type { PersonId, PlatformId } from "./ids.js";
 import type { AccountRef, ContextKey } from "./platform.js";
 import { serviceKey } from "./service-key.js";
 import type { Timestamp } from "./time.js";
-
-/** Someone's presence changed (`PresenceUpdate`). */
-export const PRESENCE_TOPIC = "platform.presence";
-/** Someone's voice state changed (`VoiceStateUpdate`). */
-export const VOICE_STATE_TOPIC = "platform.voice_state";
-/** A guild member was seen, changed or left (`MemberUpdate`). */
-export const MEMBER_TOPIC = "platform.member";
-/** A change worth her attention (`SalientEvent`), from the `world` module. */
-export const SALIENT_TOPIC = "world.salient";
 
 export type PresenceStatus = "online" | "idle" | "dnd" | "offline";
 
@@ -46,48 +43,12 @@ export interface PresenceActivity {
   url: string | null;
 }
 
-export interface PresenceUpdate {
-  platform: PlatformId;
-  guild: string;
-  account: AccountRef;
-  display_name: string;
-  is_bot: boolean;
-  status: PresenceStatus;
-  activities: PresenceActivity[];
-  /** Part of the snapshot sent after connecting, not a change. */
-  initial: boolean;
-}
+// The payloads are contracts (`@miyoria/contracts/events`, `platform.ts`).
+export type PresenceUpdate = PresenceUpdateData;
 
-export interface VoiceStateUpdate {
-  platform: PlatformId;
-  guild: string;
-  account: AccountRef;
-  display_name: string;
-  is_bot: boolean;
-  /** Voice channel id; `null` = not in voice in this guild. */
-  channel: string | null;
-  channel_name: string | null;
-  self_mute: boolean;
-  self_deaf: boolean;
-  server_mute: boolean;
-  server_deaf: boolean;
-  /** Camera on. */
-  video: boolean;
-  /** Screen share (Go Live) on. */
-  streaming: boolean;
-  /** Part of the snapshot sent after connecting, not a change. */
-  initial: boolean;
-}
+export type VoiceStateUpdate = VoiceStateUpdateData;
 
-export interface MemberUpdate {
-  platform: PlatformId;
-  guild: string;
-  account: AccountRef;
-  display_name: string;
-  is_bot: boolean;
-  /** The member left (or was removed from) the guild. */
-  left: boolean;
-}
+export type MemberUpdate = MemberUpdateData;
 
 // ---- snapshot -------------------------------------------------------------------------------
 
@@ -253,24 +214,8 @@ export type SalienceKind =
   /** She was mentioned in a context she has not been part of lately. */
   | "mentioned";
 
-/** Payload of `world.salient`. */
-export interface SalientEvent {
-  kind: SalienceKind;
-  /** Coalescing key (same key = same thing happening again). */
-  key: string;
-  account: AccountRef | null;
-  person: PersonId | null;
-  display_name: string | null;
-  context: ContextKey | null;
-  /** Short neutral description (zh-TW) with untrusted names inside. */
-  detail: string;
-  /** 0..1, how much it probably matters. */
-  score: number;
-  /** How many raw occurrences were merged into this event. */
-  count: number;
-  first_at: Timestamp;
-  at: Timestamp;
-}
+/** Payload of `world.salient` (contract: `SalientEventSchema` in @miyoria/contracts/events). */
+export type SalientEvent = SalientEventData;
 
 // ---- privacy --------------------------------------------------------------------------------
 

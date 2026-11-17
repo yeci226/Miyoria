@@ -6,23 +6,20 @@
 // `cache_secs`, like the other public views, so traffic does not reach the ledger. Being looked at
 // changes nothing about her. Joining or leaving is a member route (`POST /api/member/board`).
 
+import type { PublicBoard } from "@miyoria/contracts/api";
 import { type BoardLine, EconomyKey } from "@miyoria/economy";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { safeName } from "@miyoria/types";
-import { clientKey, tooMany } from "./public.js";
-import type { Route } from "./route.js";
-import type { ApiContext, ApiState } from "./state.js";
+import { os } from "./contract.js";
+import { ApiError } from "./errors.js";
+import { clientKey } from "./public.js";
+import type { ApiState } from "./state.js";
 
 const log = getLogger("api.board");
 
 /** Places the public page lists. */
 export const PUBLIC_BOARD_PLACES = 20;
 const HIDDEN_NAME = "匿名";
-
-/** The body of the public board, field by field. */
-export interface PublicBoard {
-  entries: { rank: number; name: string; spent: number }[];
-}
 
 async function build(state: ApiState): Promise<PublicBoard> {
   const economy = state.optional(EconomyKey);
@@ -40,31 +37,37 @@ async function build(state: ApiState): Promise<PublicBoard> {
   };
 }
 
-/** The public board route; none when `[modules.api.public] enabled` is off. */
-export function boardRoutes(state: ApiState): Route[] {
-  if (!state.publicSide.config.enabled) return [];
-  let held: { at: number; body: string } | null = null;
-  const serve = async (c: ApiContext): Promise<Response> => {
+/** What the board last answered, and when: it is built at most once per `cache_secs`. */
+const held = new WeakMap<ApiState, { at: number; value: PublicBoard }>();
+
+async function board(state: ApiState): Promise<PublicBoard> {
+  const side = state.publicSide;
+  const now = state.now();
+  const hit = held.get(state);
+  if (hit && now - hit.at < side.config.cache_secs * 1000) return hit.value;
+  let value: PublicBoard;
+  try {
+    value = await build(state);
+  } catch (error) {
+    log.warn({ error: errorMessage(error) }, "cannot build the board");
+    value = { entries: [] };
+  }
+  held.set(state, { at: now, value });
+  return value;
+}
+
+/** `GET /api/public/board`; served only while the public side is on (see `rpc.ts`). */
+export const boardRpc = {
+  board: os.public.board.handler(async ({ context }) => {
+    const { state, c } = context;
     const side = state.publicSide;
     const wait = side.admit(clientKey(c));
-    if (wait !== null) return tooMany(wait);
-    const now = state.now();
-    if (held === null || now - held.at >= side.config.cache_secs * 1000) {
-      try {
-        held = { at: now, body: JSON.stringify(await build(state)) };
-      } catch (error) {
-        log.warn({ error: errorMessage(error) }, "cannot build the board");
-        held = { at: now, body: JSON.stringify({ entries: [] } satisfies PublicBoard) };
-      }
-    }
-    return new Response(held.body, {
-      status: 200,
-      headers: {
-        "content-type": "application/json",
-        "cache-control": `public, max-age=${Math.ceil(side.config.cache_secs)}`,
-        "x-content-type-options": "nosniff",
-      },
-    });
-  };
-  return [{ method: "GET", path: "/api/public/board", public: true, handler: serve }];
-}
+    if (wait !== null) throw ApiError.tooMany(wait);
+    context.resHeaders?.set(
+      "cache-control",
+      `public, max-age=${Math.ceil(side.config.cache_secs)}`,
+    );
+    context.resHeaders?.set("x-content-type-options", "nosniff");
+    return board(state);
+  }),
+};

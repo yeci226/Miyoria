@@ -7,11 +7,7 @@
 // name, or a transcript with substantive content for her. Others duck her volume; after a pause
 // she resumes when it turns out nobody was talking to her.
 
-import type { TurnId } from "./ids.js";
-import type { AccountRef, ContextKey } from "./platform.js";
-
-/** Payload: `VoiceBargeIn`, on every change of what the interruption does to her speech. */
-export const VOICE_BARGE_IN_TOPIC = "voice.barge_in";
+import type { VoiceBargeInData } from "@miyoria/contracts/events";
 
 /**
  * `duck`: her volume went down (somebody else is talking); `pause`: she holds her breath, the
@@ -41,12 +37,5 @@ export type VoiceBargeInReason =
   | "legacy"
   | "floor";
 
-export interface VoiceBargeIn {
-  context: ContextKey;
-  /** The turn whose speech was playing (`null` when unknown). */
-  turn: TurnId | null;
-  /** Who talked (`null` when nobody did, e.g. `floor` or `timeout`). */
-  account: AccountRef | null;
-  action: VoiceBargeInAction;
-  reason: VoiceBargeInReason;
-}
+/** The payload (contract: `VoiceBargeInSchema` in @miyoria/contracts/events). */
+export type VoiceBargeIn = VoiceBargeInData;

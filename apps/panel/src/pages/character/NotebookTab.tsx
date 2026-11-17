@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNotebook, useNotebookPage } from "@/app/v4-queries";
+import { useNotebook, useNotebookPage } from "@/app/queries";
 import { ModuleQuery } from "@/components/module-query";
 import { EmptyLine, ErrorLine, SkeletonRows } from "@/components/query-state";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";

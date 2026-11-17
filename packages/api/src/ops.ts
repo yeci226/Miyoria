@@ -1,12 +1,28 @@
 // Live operation: extensions, MCP servers, the request queue, the stage (VTube Studio / OBS) and
-// the voice monitor. Scene, stream and say go through the actuator registry's gate (principal
-// `panel`).
+// the voice monitor, all on the route table (`@miyoria/contracts/api`). Scene, stream and say go
+// through the actuator registry's gate (principal `panel`).
 
-import { ActuatorRegistryKey } from "@miyoria/actions";
-import { type CatalogEntry, ExtensionCatalogKey, extensionModuleId } from "@miyoria/ext-host";
-import { errorMessage, getLogger, type ModuleStatus, SupervisorKey } from "@miyoria/kernel";
-import { type ServerStatus as McpServerStatus, McpStatusKey } from "@miyoria/mcp";
-import { type RequestQueue, RequestQueueKey } from "@miyoria/queue";
+import type {
+  ExtensionInfo,
+  McpServerInfo,
+  McpState,
+  QueueState,
+  SceneRolesState,
+  StageLinkState,
+  StageState,
+  StreamAction,
+  VoiceState,
+} from "@miyoria/contracts/api";
+import { ActuatorRegistryKey } from "@miyoria/gate/actions";
+import { type ToolRegistry, ToolRegistryKey } from "@miyoria/llm/tools";
+import { type RequestQueue, RequestQueueKey } from "@miyoria/play/queue";
+import {
+  type CatalogEntry,
+  ExtensionCatalogKey,
+  extensionModuleId,
+} from "@miyoria/plugin-host/ext-host";
+import { type ServerStatus as McpServerStatus, McpStatusKey } from "@miyoria/plugin-host/mcp";
+import { errorMessage, getLogger, type ModuleStatus, SupervisorKey } from "@miyoria/runtime/kernel";
 import {
   defaultStageStatus,
   SceneRoleError,
@@ -15,7 +31,6 @@ import {
   type StageLink,
   StageLinkKey,
 } from "@miyoria/stage";
-import { type ToolRegistry, ToolRegistryKey } from "@miyoria/tools";
 import {
   type ContextKey,
   contextKeyString,
@@ -25,23 +40,11 @@ import {
   Principals,
   VoiceSinkKey,
 } from "@miyoria/types";
-import { z } from "zod";
+import { os } from "./contract.js";
 import { runModuleAction } from "./core.js";
 import { ApiError } from "./errors.js";
-import { readJson, usizeJson } from "./extract.js";
-import { json, param, type Route } from "./route.js";
 import { isQueueNotFound, MCP_MODULE_ID } from "./services.js";
 import { type ApiContext, type ApiState, actorOf, toJson } from "./state.js";
-import type {
-  ExtensionInfo,
-  McpServerInfo,
-  McpState,
-  QueueState,
-  SayResponse,
-  SceneRolesState,
-  StageLinkState,
-  StageState,
-} from "./types.js";
 
 const log = getLogger("api.ops");
 
@@ -76,24 +79,26 @@ function extensionInfo(entry: CatalogEntry, status: ModuleStatus | undefined): E
   };
 }
 
-function extensions(state: ApiState): Response {
+function extensions(state: ApiState): ExtensionInfo[] {
   const catalog = state.service(ExtensionCatalogKey, "extension host");
   const sup = state.service(SupervisorKey, "supervisor");
   const modules = sup.list();
-  return json(
-    catalog.entries.map((e) => {
-      const id = extensionModuleId(e.spec);
-      return extensionInfo(
-        e,
-        modules.find((m) => m.id === id),
-      );
-    }),
-  );
+  return catalog.entries.map((e) => {
+    const id = extensionModuleId(e.spec);
+    return extensionInfo(
+      e,
+      modules.find((m) => m.id === id),
+    );
+  });
 }
 
-async function extensionAction(state: ApiState, c: ApiContext): Promise<Response> {
+async function extensionAction(
+  state: ApiState,
+  c: ApiContext,
+  id: string,
+  action: string,
+): Promise<ExtensionInfo> {
   const catalog = state.service(ExtensionCatalogKey, "extension host");
-  const id = param(c, "id");
   const entry = catalog.entries.find(
     (e) => e.spec.manifest.id === id || extensionModuleId(e.spec) === id,
   );
@@ -102,10 +107,10 @@ async function extensionAction(state: ApiState, c: ApiContext): Promise<Response
     state,
     c,
     extensionModuleId(entry.spec),
-    param(c, "action"),
+    action,
     "extension",
   );
-  return json(extensionInfo(entry, status));
+  return extensionInfo(entry, status);
 }
 
 // ---- MCP --------------------------------------------------------------------------------
@@ -134,19 +139,22 @@ function mcpInfo(s: McpServerStatus, tools: ToolRegistry | undefined): McpServer
   };
 }
 
-function mcpServers(state: ApiState): Response {
+function mcpServers(state: ApiState): McpServerInfo[] {
   const status = state.service(McpStatusKey, "MCP module");
   const tools = state.optional(ToolRegistryKey);
-  return json(status.servers().map((s) => mcpInfo(s, tools)));
+  return status.servers().map((s) => mcpInfo(s, tools));
 }
 
 /**
  * Only `restart` is supported (it restarts the whole `mcp` module); turning single servers on
  * or off is configuration (`[mcp.servers.<name>] enabled`).
  */
-async function mcpAction(state: ApiState, c: ApiContext): Promise<Response> {
-  const name = param(c, "name");
-  const action = param(c, "action");
+async function mcpAction(
+  state: ApiState,
+  c: ApiContext,
+  name: string,
+  action: string,
+): Promise<McpServerInfo> {
   const status = state.service(McpStatusKey, "MCP module");
   if (!status.server(name)) throw ApiError.notFound(`unknown MCP server \`${name}\``);
   if (action === "enable" || action === "disable") {
@@ -162,7 +170,7 @@ async function mcpAction(state: ApiState, c: ApiContext): Promise<Response> {
   const fresh = state.service(McpStatusKey, "MCP module");
   const server = fresh.server(name);
   if (!server) throw ApiError.unavailable(`MCP server \`${name}\` is restarting`);
-  return json(mcpInfo(server, state.optional(ToolRegistryKey)));
+  return mcpInfo(server, state.optional(ToolRegistryKey));
 }
 
 // ---- request queue ----------------------------------------------------------------------
@@ -190,25 +198,27 @@ function queueError(error: unknown): ApiError {
     : ApiError.conflict(errorMessage(error));
 }
 
-function queue(state: ApiState): Response {
-  return json(queueState(state.service(RequestQueueKey, "request queue")));
+function queue(state: ApiState): QueueState {
+  return queueState(state.service(RequestQueueKey, "request queue"));
 }
 
-async function setPaused(state: ApiState, c: ApiContext, paused: boolean): Promise<Response> {
+async function setPaused(state: ApiState, c: ApiContext, paused: boolean): Promise<QueueState> {
   const q = state.service(RequestQueueKey, "request queue");
   if (paused) q.pause();
   else q.resume();
   await state.audit(c, paused ? "queue.pause" : "queue.resume", "queue", {}, true);
-  return json(queueState(q));
+  return queueState(q);
 }
 
-const MoveSchema = z.object({ position: usizeJson });
-
-/** `POST /api/queue/{id}/skip` and `POST /api/queue/{id}/move`. */
-async function queueItemAction(state: ApiState, c: ApiContext): Promise<Response> {
+/** `POST /api/queue/{id}/skip` and `POST /api/queue/{id}/move` (to `position`). */
+async function queueItemAction(
+  state: ApiState,
+  c: ApiContext,
+  id: string,
+  action: "skip" | "move",
+  position: number,
+): Promise<QueueState> {
   const q = state.service(RequestQueueKey, "request queue");
-  const id = param(c, "id");
-  const action = param(c, "action");
   const digits = id.trim().replace(/^#+/, "");
   if (!/^\+?\d+$/.test(digits)) throw ApiError.notFound(`no item #${id}`);
   const item = Number.parseInt(digits, 10);
@@ -221,26 +231,22 @@ async function queueItemAction(state: ApiState, c: ApiContext): Promise<Response
     } catch (error) {
       failure = error;
     }
-  } else if (action === "move") {
-    const request = await readJson(c, MoveSchema);
+  } else {
     // The listing puts active items first; `moveItem` counts pending items only.
     const active = q.list().filter((i) => i.state === "active").length;
-    const position = Math.max(request.position - active, 0);
-    detail = { position: request.position };
+    detail = { position };
     try {
-      q.moveItem(item, position);
+      q.moveItem(item, Math.max(position - active, 0));
     } catch (error) {
       failure = error;
     }
-  } else {
-    throw ApiError.notFound(`unknown action \`${action}\` (expected skip or move)`);
   }
   if (!(failure !== null && isQueueNotFound(failure))) {
     if (failure !== null) detail.error = errorMessage(failure);
     await state.audit(c, `queue.${action}`, String(item), toJson(detail), failure === null);
   }
   if (failure !== null) throw queueError(failure);
-  return json(queueState(q));
+  return queueState(q);
 }
 
 // ---- stage ------------------------------------------------------------------------------
@@ -277,8 +283,8 @@ function stageLink(state: ApiState): StageLink {
   return state.service(StageLinkKey, "stage link");
 }
 
-function stage(state: ApiState): Response {
-  return json(stageState(state, stageLink(state)));
+function stage(state: ApiState): StageState {
+  return stageState(state, stageLink(state));
 }
 
 function requireObs(state: ApiState, link: StageLink): void {
@@ -288,18 +294,15 @@ function requireObs(state: ApiState, link: StageLink): void {
   }
 }
 
-const SceneSchema = z.object({ scene: z.string() });
-
-async function stageScene(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, SceneSchema);
-  const scene = request.scene.trim();
+async function stageScene(state: ApiState, c: ApiContext, name: string): Promise<StageState> {
+  const scene = name.trim();
   if (scene === "") throw ApiError.badRequest("`scene` must not be empty");
   const link = stageLink(state);
   requireObs(state, link);
   const failure = await act(state, c, "stage.scene", { name: scene });
   await state.audit(c, "stage.scene", scene, {}, failure === null);
   if (failure !== null) throw failure;
-  return json(stageState(state, link));
+  return stageState(state, link);
 }
 
 /**
@@ -357,11 +360,12 @@ function scenesState(roles: SceneRoles): SceneRolesState {
   return roles.view();
 }
 
-const SceneRoleSchema = z.object({ role: z.string(), scene: z.string().nullable() });
-
 /** The panel's choice of scene for a role (`scene: null` = back to the classification). */
-async function setSceneRole(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, SceneRoleSchema);
+async function setSceneRole(
+  state: ApiState,
+  c: ApiContext,
+  request: { role: string; scene: string | null },
+): Promise<SceneRolesState> {
   const roles = sceneRoles(state);
   const role = request.role.trim().toLowerCase();
   let failure: unknown = null;
@@ -373,10 +377,10 @@ async function setSceneRole(state: ApiState, c: ApiContext): Promise<Response> {
   await state.audit(c, "stage.scene_role", role, { scene: request.scene }, failure === null);
   if (failure instanceof SceneRoleError) throw ApiError.badRequest(failure.message);
   if (failure !== null) throw ApiError.badGateway(failure);
-  return json(scenesState(roles));
+  return scenesState(roles);
 }
 
-async function classifyScenes(state: ApiState, c: ApiContext): Promise<Response> {
+async function classifyScenes(state: ApiState, c: ApiContext): Promise<SceneRolesState> {
   const roles = sceneRoles(state);
   let failure: unknown = null;
   try {
@@ -387,26 +391,24 @@ async function classifyScenes(state: ApiState, c: ApiContext): Promise<Response>
   await state.audit(c, "stage.scene_classify", "scenes", {}, failure === null);
   if (failure instanceof SceneRoleError) throw ApiError.conflict(failure.message);
   if (failure !== null) throw ApiError.badGateway(failure);
-  return json(scenesState(roles));
+  return scenesState(roles);
 }
 
-const StreamSchema = z.object({ action: z.enum(["start", "stop"]) });
-
-async function stageStream(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, StreamSchema);
+async function stageStream(
+  state: ApiState,
+  c: ApiContext,
+  action: StreamAction,
+): Promise<StageState> {
   const link = stageLink(state);
   requireObs(state, link);
-  const failure = await act(state, c, "stage.stream", { action: request.action });
-  await state.audit(c, "stage.stream", request.action, {}, failure === null);
+  const failure = await act(state, c, "stage.stream", { action });
+  await state.audit(c, "stage.stream", action, {}, failure === null);
   if (failure !== null) throw failure;
-  return json(stageState(state, link));
+  return stageState(state, link);
 }
 
-const ExpressionSchema = z.object({ expression: z.string() });
-
-async function stageExpression(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, ExpressionSchema);
-  const expression = request.expression.trim();
+async function stageExpression(state: ApiState, c: ApiContext, asked: string): Promise<StageState> {
+  const expression = asked.trim();
   if (expression === "") throw ApiError.badRequest("`expression` must not be empty");
   const link = stageLink(state);
   const current = stageState(state, link);
@@ -422,17 +424,18 @@ async function stageExpression(state: ApiState, c: ApiContext): Promise<Response
   await state.audit(c, "stage.expression", expression, {}, failure === null);
   if (failure !== null) throw ApiError.badGateway(failure);
   state.monitor.setExpression(expression);
-  return json(stageState(state, link));
+  return stageState(state, link);
 }
-
-const SaySchema = z.object({ text: z.string(), emotion: z.string().nullish() });
 
 /**
  * Speaks `text` through TTS in the voice channel she is in, without the LLM. Returns as soon as
  * speaking started; the turn id correlates the `voice.playback` events.
  */
-async function stageSay(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, SaySchema);
+async function stageSay(
+  state: ApiState,
+  c: ApiContext,
+  request: { text: string; emotion?: string | null | undefined },
+): Promise<{ turn: string }> {
   const text = request.text.trim();
   if (text === "") throw ApiError.badRequest("`text` must not be empty");
   if ([...text].length > MAX_SAY_CHARS) {
@@ -466,13 +469,12 @@ async function stageSay(state: ApiState, c: ApiContext): Promise<Response> {
     log.warn({ error: failure.message }, "speaking from the API failed");
     throw failure;
   }
-  const body: SayResponse = { turn };
-  return json(body);
+  return { turn };
 }
 
 // ---- voice ------------------------------------------------------------------------------
 
-async function voice(state: ApiState): Promise<Response> {
+async function voice(state: ApiState): Promise<VoiceState> {
   const body = state.monitor.voice(state.now());
   const sinks = state.optional(PlatformSinksKey);
   await Promise.all(
@@ -484,39 +486,56 @@ async function voice(state: ApiState): Promise<Response> {
       }
     }),
   );
-  return json(body);
+  return body;
 }
 
-export function opsRoutes(state: ApiState): Route[] {
-  return [
-    { method: "GET", path: "/api/extensions", handler: () => extensions(state) },
-    {
-      method: "POST",
-      path: "/api/extensions/:id/:action",
-      handler: (c) => extensionAction(state, c),
-    },
-    { method: "GET", path: "/api/mcp", handler: () => mcpServers(state) },
-    { method: "POST", path: "/api/mcp/:name/:action", handler: (c) => mcpAction(state, c) },
-    { method: "GET", path: "/api/queue", handler: () => queue(state) },
-    { method: "POST", path: "/api/queue/pause", handler: (c) => setPaused(state, c, true) },
-    { method: "POST", path: "/api/queue/resume", handler: (c) => setPaused(state, c, false) },
-    { method: "POST", path: "/api/queue/:id/:action", handler: (c) => queueItemAction(state, c) },
-    { method: "GET", path: "/api/stage", handler: () => stage(state) },
-    { method: "POST", path: "/api/stage/scene", handler: (c) => stageScene(state, c) },
-    {
-      method: "GET",
-      path: "/api/stage/scenes",
-      handler: () => json(scenesState(sceneRoles(state))),
-    },
-    { method: "PUT", path: "/api/stage/scenes", handler: (c) => setSceneRole(state, c) },
-    {
-      method: "POST",
-      path: "/api/stage/scenes/classify",
-      handler: (c) => classifyScenes(state, c),
-    },
-    { method: "POST", path: "/api/stage/expression", handler: (c) => stageExpression(state, c) },
-    { method: "POST", path: "/api/stage/stream", handler: (c) => stageStream(state, c) },
-    { method: "POST", path: "/api/stage/say", handler: (c) => stageSay(state, c) },
-    { method: "GET", path: "/api/voice", handler: () => voice(state) },
-  ];
-}
+/** The ops routes on the route table (`@miyoria/contracts/api`). */
+export const opsRpc = {
+  extensions: {
+    list: os.extensions.list.handler(({ context }) => extensions(context.state)),
+    action: os.extensions.action.handler(({ input, context }) =>
+      extensionAction(context.state, context.c, input.params.id, input.params.action),
+    ),
+  },
+  mcp: {
+    list: os.mcp.list.handler(({ context }) => mcpServers(context.state)),
+    action: os.mcp.action.handler(({ input, context }) =>
+      mcpAction(context.state, context.c, input.params.name, input.params.action),
+    ),
+  },
+  queue: {
+    list: os.queue.list.handler(({ context }) => queue(context.state)),
+    pause: os.queue.pause.handler(({ context }) => setPaused(context.state, context.c, true)),
+    resume: os.queue.resume.handler(({ context }) => setPaused(context.state, context.c, false)),
+    skip: os.queue.skip.handler(({ input, context }) =>
+      queueItemAction(context.state, context.c, input.params.id, "skip", 0),
+    ),
+    move: os.queue.move.handler(({ input, context }) =>
+      queueItemAction(context.state, context.c, input.params.id, "move", input.body.position),
+    ),
+  },
+  stage: {
+    status: os.stage.status.handler(({ context }) => stage(context.state)),
+    scene: os.stage.scene.handler(({ input, context }) =>
+      stageScene(context.state, context.c, input.body.scene),
+    ),
+    scenes: os.stage.scenes.handler(({ context }) => scenesState(sceneRoles(context.state))),
+    setSceneRole: os.stage.setSceneRole.handler(({ input, context }) =>
+      setSceneRole(context.state, context.c, input.body),
+    ),
+    classify: os.stage.classify.handler(({ context }) => classifyScenes(context.state, context.c)),
+    expression: os.stage.expression.handler(({ input, context }) =>
+      stageExpression(context.state, context.c, input.body.expression),
+    ),
+    stream: os.stage.stream.handler(({ input, context }) =>
+      stageStream(context.state, context.c, input.body.action),
+    ),
+    say: os.stage.say.handler(({ input, context }) =>
+      stageSay(context.state, context.c, input.body),
+    ),
+  },
+  /** The monitor; `control.ts` adds the controls. */
+  voice: {
+    state: os.voice.state.handler(({ context }) => voice(context.state)),
+  },
+};

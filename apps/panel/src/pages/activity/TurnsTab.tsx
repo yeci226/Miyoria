@@ -1,6 +1,7 @@
 import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import type { E2eRecord, LogEvent, TurnOutcomeRecord } from "@/api/types";
+import type { E2eRecord, LogEvent } from "@/api/types";
+import type { TurnOutcomeRecord } from "@miyoria/contracts/api";
 import { useTurnE2e, useTurnEvents, useTurnOutcomes } from "@/app/queries";
 import { BarList } from "@/components/charts/charts";
 import { LogEventSheet } from "@/components/consciousness";

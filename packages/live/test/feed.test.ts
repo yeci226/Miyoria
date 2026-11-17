@@ -3,13 +3,15 @@
 
 import {
   type ActivitySnapshot,
-  AFFECT_CHANGED_TOPIC,
+  type AnyEventDefinition,
   type ContextKey,
-  customEvent,
-  type Event,
+  type Envelope,
+  type EventPayload,
+  Events,
+  eventEnvelope,
   type JsonObject,
   type LiveEvent,
-  SONG_TOPIC,
+  type PublishMetaArgs,
 } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
@@ -53,7 +55,7 @@ function rig(over: Partial<Screen> = {}, channels = [OPEN]) {
   );
   const seen: LiveEvent[] = [];
   state.follow((e) => seen.push(e));
-  const send = (event: Event) => state.onEvent(event, clock);
+  const send = (envelope: Envelope) => state.onEvent(envelope, clock);
   const advance = (ms: number) => {
     clock += ms;
     state.tick(clock);
@@ -62,24 +64,24 @@ function rig(over: Partial<Screen> = {}, channels = [OPEN]) {
   return { state, seen, send, advance, lines };
 }
 
-const started = (turn: string, context: ContextKey): Event => ({
-  type: "agent_turn_started",
-  data: { turn, context },
-});
-const completed = (turn: string, context: ContextKey, said: string): Event => ({
-  type: "agent_turn_completed",
-  data: { turn, context, text: said },
-});
+/** An event as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  def: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+): Envelope => eventEnvelope("test", def, data, ...meta);
+
+const started = (turn: string, context: ContextKey) =>
+  ev(Events.AgentTurnStarted, { turn, context });
+const completed = (turn: string, context: ContextKey, said: string) =>
+  ev(Events.AgentTurnCompleted, { turn, context, text: said });
 const playback = (
   turn: string | null,
   context: ContextKey,
   state: "started" | "finished",
   said: string,
   extra: { emotion?: string | null; blocked?: string | null } = {},
-): Event => ({
-  type: "voice_playback",
-  data: { context, turn, state, text: said, ...extra },
-});
+) => ev(Events.VoicePlaybackEvent, { context, turn, state, text: said, ...extra });
 
 describe("the place rule", () => {
   it("takes listed server channels only: never a DM, a place outside a server or her own", () => {
@@ -121,8 +123,8 @@ describe("the place rule", () => {
     const dm = text(OPEN, "dm");
     r.send(started("d", dm));
     r.advance(2_000);
-    r.send(customEvent("agent.emotion", { emotion: "sad", context: ctx(dm), turn: "d" }));
-    r.send(customEvent("agent.emotion", { emotion: "sad", turn: "d" }));
+    r.send(ev(Events.AgentEmotion, { emotion: "sad", context: ctx(dm), turn: "d" } as never));
+    r.send(ev(Events.AgentEmotion, { emotion: "sad", turn: "d" } as never));
     r.send(playback("d", voice(CLOSED), "started", "悄悄話", { emotion: "sad" }));
     expect(r.seen).toEqual([]);
     expect(r.state.snapshot()).toMatchObject({ activity: null, speaking: false });
@@ -158,18 +160,18 @@ describe("the place rule", () => {
   it("shows her resting face from anywhere: how she feels, not about what", () => {
     const r = rig();
     r.send(
-      customEvent(AFFECT_CHANGED_TOPIC, {
+      ev(Events.AffectChanged, {
         shown: { tag: "shy", from: "embarrassed" },
         top: [{ name: "embarrassed", intensity: 0.6 }],
-      }),
+      } as never),
     );
     expect(r.state.snapshot().emotion).toEqual({ name: "shy", intensity: 0.6 });
   });
 
   it("refuses an emotion name that is not one", () => {
     const r = rig();
-    r.send(customEvent("agent.emotion", { emotion: "<img src=x>", context: ctx(text(OPEN)) }));
-    r.send(customEvent("agent.emotion", { emotion: "x".repeat(40), context: ctx(text(OPEN)) }));
+    r.send(ev(Events.AgentEmotion, { emotion: "<img src=x>", context: ctx(text(OPEN)) } as never));
+    r.send(ev(Events.AgentEmotion, { emotion: "x".repeat(40), context: ctx(text(OPEN)) } as never));
     expect(r.seen).toEqual([]);
   });
 });
@@ -273,19 +275,19 @@ describe("what she is doing", () => {
   it("sings with the title on show and the lyrics left out", () => {
     const r = rig();
     r.state.setPresence(body());
-    r.send(customEvent(SONG_TOPIC, { state: "started", song: "s1", title: "春日影" }));
-    r.send(customEvent(SONG_TOPIC, { state: "line", song: "s1", index: 0, text: "歌詞" }));
+    r.send(ev(Events.SingCue, { state: "started", song: "s1", title: "春日影" }));
+    r.send(ev(Events.SingCue, { state: "line", song: "s1", index: 0, text: "歌詞" }));
     const snap = r.state.snapshot();
     expect(snap.activity).toMatchObject({ kind: "singing", detail: "春日影" });
     expect(snap.presence.place).toBe("singing");
     expect(r.lines()).toEqual([]);
-    r.send(customEvent(SONG_TOPIC, { state: "ended", song: "s1", outcome: "finished" }));
+    r.send(ev(Events.SingCue, { state: "ended", song: "s1", outcome: "finished" }));
     expect(r.state.snapshot().presence.place).toBe("idle");
   });
 
   it("leaves out a title moderation does not pass", () => {
     const r = rig();
-    r.send(customEvent(SONG_TOPIC, { state: "started", song: "s1", title: "BAD song" }));
+    r.send(ev(Events.SingCue, { state: "started", song: "s1", title: "BAD song" }));
     expect(r.state.snapshot().activity).toMatchObject({ kind: "singing", detail: null });
   });
 });

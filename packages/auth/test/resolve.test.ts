@@ -161,7 +161,7 @@ describe("resolution", () => {
     expect(outranks(admin, 80)).toBe(false);
   });
 
-  test("resolution_serializes_like_serde", () => {
+  test("resolution_serializes_as_tagged_json", () => {
     const s = snapshot();
     const r = s.resolve(subject("2", ctx("g1", "c1"), [], false));
     expect(JSON.parse(JSON.stringify(r.effective))).toEqual({

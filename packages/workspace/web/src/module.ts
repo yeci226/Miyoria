@@ -1,0 +1,46 @@
+import { actuatorsFor } from "@miyoria/gate/actions";
+import { LlmRouterKey } from "@miyoria/llm/llm";
+import { defineManifest, type Module, type ModuleContext } from "@miyoria/runtime/kernel";
+import { WebConfigSchema } from "./config.js";
+import { webCapabilities } from "./tools.js";
+import { WebService } from "./web.js";
+
+/**
+ * Module `web`: her `web_search` (Tavily when a key is set, else DuckDuckGo's HTML endpoint) and `web_read` (one public page as
+ * text) and `web_image` (one public picture, as downloaded) as capabilities `web.search` /
+ * `web.read` / `web.image`, permission `tools.web`. Page fetches go through
+ * the SSRF guard (net.ts); results reach her as untrusted data (web.ts). Enabled unless
+ * `[modules.web] enabled = false`. Registers in the `ActuatorRegistry`; nothing else needs it.
+ */
+export class WebModule implements Module {
+  static readonly ID = "web";
+  readonly manifest = defineManifest(WebModule.ID, "Web", {
+    description: "Web search and a page reader for her; results are untrusted data",
+    optional: ["actions"],
+    configSchema: WebConfigSchema,
+  });
+  #unregister: (() => void) | null = null;
+
+  async start(ctx: ModuleContext): Promise<void> {
+    const config = ctx.config(WebConfigSchema);
+    const web = new WebService({
+      config,
+      clock: ctx.clock,
+      // Not in the config: the environment's key (`.env` is loaded into it), so a key alone is enough.
+      tavilyKey: config.tavily_api_key.trim() || process.env.TAVILY_API_KEY?.trim() || "",
+      // Read when she asks: the router may not be up yet, and `[llm.image_input]` can differ by model.
+      takesImages: () => ctx.services.get(LlmRouterKey)?.takesImages("chat") === true,
+      note: (detail) => ctx.log.warn({ detail }, "a web search failed"),
+    });
+    const actuators = actuatorsFor(ctx);
+    const off = webCapabilities(web).map((capability) => actuators.register(capability));
+    this.#unregister = () => {
+      for (const f of off) f();
+    };
+  }
+
+  async stop(): Promise<void> {
+    this.#unregister?.();
+    this.#unregister = null;
+  }
+}

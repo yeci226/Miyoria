@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { Drives } from "../src/index.js";
 import {
   affinityLevel,
-  affinityStep,
   circadianEnergy,
   deriveMood,
   emotionsLine,
@@ -12,9 +11,6 @@ import {
   RELATIONSHIP_LABELS,
   relationshipLabel,
   renderAffectMood,
-  renderPeople,
-  renderPersonLine,
-  stanceStale,
   toTimestamp,
 } from "../src/index.js";
 
@@ -130,57 +126,36 @@ describe("the one mood renderer", () => {
     );
     expect([0.1, 0.4, 0.65].map(intensityWord)).toEqual(["淡", "中", "強"]);
   });
-
-  it("one line per person: handle, one-word label, her feeling sentence", () => {
-    const card = { handle: "Owen", label: "好朋友" as const, feeling: "他很可靠,\n有點在意。" };
-    expect(renderPersonLine(card)).toBe("- Owen:好朋友;他很可靠, 有點在意。");
-    expect(renderPersonLine({ ...card, feeling: "" })).toBe("- Owen:好朋友");
-    expect(renderPersonLine({ ...card, feeling: "字".repeat(200) }).length).toBeLessThan(110);
-    expect(renderPeople([card, { ...card, handle: "Amy", label: "陌生人", feeling: "" }])).toEqual([
-      "- Owen:好朋友;他很可靠, 有點在意。",
-      "- Amy:陌生人",
-    ]);
-  });
 });
 
 describe("the relationship label scale", () => {
   const grid = [
-    [-60, 50, "很討厭"],
-    [-20, 50, "討厭"],
-    [0, 0, "陌生人"],
-    [0, 5, "認識"],
-    [20, 0, "朋友"],
-    [50, 12, "好朋友"],
-    [50, 5, "朋友"],
-    [80, 35, "摯友"],
-    [80, 20, "好朋友"],
+    [-60, true, "很討厭"],
+    [-20, true, "討厭"],
+    [0, false, "陌生人"],
+    [0, true, "認識"],
+    [20, true, "朋友"],
+    [50, true, "好朋友"],
+    [80, true, "摯友"],
+    [130, true, "知心"],
   ] as const;
 
-  it.each(grid)("affinity %s, familiarity %s: %s", (affinity, familiarity, label) => {
-    expect(relationshipLabel({ affinity, familiarity })).toBe(label);
+  it.each(grid)("bond %s, met %s: %s", (affinity, met, label) => {
+    expect(relationshipLabel({ affinity, met })).toBe(label);
     expect(RELATIONSHIP_LABELS).toContain(label);
   });
 });
 
 describe("affinityLevel", () => {
-  it("is the affinity as a whole number, truncated toward zero, within -100..100", () => {
+  it("is the affinity as a whole number, truncated toward zero, within -100..1000", () => {
     expect(affinityLevel(0)).toBe(0);
     expect(affinityLevel(4.9)).toBe(4);
     expect(Object.is(affinityLevel(-0.5), 0)).toBe(true);
     expect(affinityLevel(45)).toBe(45);
     expect(affinityLevel(-60.7)).toBe(-60);
-    expect(affinityLevel(250)).toBe(100);
+    expect(affinityLevel(250)).toBe(250);
+    expect(affinityLevel(1250)).toBe(1000);
     expect(affinityLevel(-250)).toBe(-100);
     expect(affinityLevel(Number.NaN)).toBe(0);
-  });
-
-  it("re-deciding the stance comes every 5 levels", () => {
-    expect(affinityStep(4)).toBe(0);
-    expect(affinityStep(5)).toBe(1);
-    expect(Object.is(affinityStep(-4), 0)).toBe(true);
-    expect(affinityStep(-5)).toBe(-1);
-    expect(stanceStale(60, 64)).toBe(false);
-    expect(stanceStale(64, 65)).toBe(true);
-    expect(stanceStale(66, 61)).toBe(true);
   });
 });

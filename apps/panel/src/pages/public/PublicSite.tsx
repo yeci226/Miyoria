@@ -1,6 +1,6 @@
 import { ArrowLeft, CircleAlert, LogOut } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import type { MemberSession, PublicDay, PublicSong } from "@/api/types";
+import type { MemberSession, PublicDay, PublicSong } from "@miyoria/contracts/api";
 import { ChartBlock, ChartEmpty, ColumnChart } from "@/components/charts/charts";
 import { Logo } from "@/components/logo";
 import { Page } from "@/components/page";

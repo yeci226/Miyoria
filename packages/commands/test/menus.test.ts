@@ -1,4 +1,4 @@
-import { ServiceRegistry } from "@miyoria/kernel";
+import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import {
   type MessageActionOutcome,
   type MessageActionRequest,

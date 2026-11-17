@@ -138,6 +138,13 @@ export class Wave {
   #width = 0;
   #height = 0;
   #dpr = 1;
+  /**
+   * The canvas may have changed size since its layout was last read. Reading the layout forces
+   * style and layout, so it is read when a `ResizeObserver` says so, not on every frame (without
+   * one, it stays `true`).
+   */
+  #stale = true;
+  readonly #observed: boolean;
 
   constructor(parent: Element) {
     this.element = document.createElement("canvas");
@@ -145,6 +152,12 @@ export class Wave {
     this.element.setAttribute("aria-hidden", "true");
     parent.append(this.element);
     this.#ctx = this.element.getContext("2d");
+    this.#observed = typeof ResizeObserver !== "undefined";
+    if (this.#observed) {
+      new ResizeObserver(() => {
+        this.#stale = true;
+      }).observe(this.element);
+    }
   }
 
   set hidden(v: boolean) {
@@ -185,9 +198,16 @@ export class Wave {
     const ctx = this.#ctx;
     if (!ctx) return false;
     const dpr = window.devicePixelRatio || 1;
+    if (!this.#stale && dpr === this.#dpr) return this.#width > 0 && this.#height > 0;
+    this.#stale = !this.#observed;
     const w = this.element.clientWidth;
     const h = this.element.clientHeight;
-    if (w === 0 || h === 0) return false;
+    if (w === 0 || h === 0) {
+      this.#width = 0;
+      this.#height = 0;
+      this.#dpr = dpr;
+      return false;
+    }
     this.#rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
     if (w !== this.#width || h !== this.#height || dpr !== this.#dpr) {
       this.#width = w;

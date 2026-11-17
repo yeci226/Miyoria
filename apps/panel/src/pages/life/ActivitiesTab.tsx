@@ -1,5 +1,5 @@
-import type { ActivityView } from "@/api/v4-types";
-import { useActivities } from "@/app/v4-queries";
+import type { ActivityView } from "@miyoria/contracts/api";
+import { useActivities } from "@/app/queries";
 import { SegmentBar } from "@/components/charts/charts";
 import { ModuleQuery } from "@/components/module-query";
 import { Dot, StatusBadge } from "@/components/status";

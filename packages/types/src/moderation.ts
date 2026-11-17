@@ -10,6 +10,7 @@
 // The service is local and synchronous on purpose: the voice path cannot wait for a network call.
 // Optional providers (`ModerationProvider`) run only in `screenAsync` and can only tighten.
 
+import type { InputVerdictData, ModerationBlockData } from "@miyoria/contracts/events";
 import { type Authorizer, AuthorizerKey } from "./auth.js";
 import type { TurnId } from "./ids.js";
 import {
@@ -20,11 +21,6 @@ import {
 } from "./platform.js";
 import { type ServiceKey, serviceKey } from "./service-key.js";
 import { filterOutgoing } from "./untrusted.js";
-
-/** Bus topic of one blocked output. Its payload (`ModerationBlockRecord`) never holds the text. */
-export const MODERATION_BLOCK_TOPIC = "moderation.block";
-/** Bus topic of an input that was not passed as it is (`InputVerdictRecord`, no text either). */
-export const MODERATION_INPUT_TOPIC = "moderation.input";
 
 /** What a rule is about. `custom` is the owner's own. */
 export const MODERATION_CATEGORIES = [
@@ -87,17 +83,8 @@ export interface OutputVerdict {
   blocked: ModerationBlock[];
 }
 
-/** What is logged and published about a block. No text, only a fingerprint for correlation. */
-export interface ModerationBlockRecord extends ModerationBlock {
-  at: string;
-  path: OutputPath;
-  /** Characters of the blocked text. */
-  chars: number;
-  /** Keyed hash of the blocked text; the key changes on every start, so it cannot be looked up. */
-  fingerprint: string;
-  context: ContextKey | null;
-  turn: TurnId | null;
-}
+/** What is logged and published about a block, with no text (contract: `ModerationBlockSchema` in @miyoria/contracts/events). */
+export type ModerationBlockRecord = ModerationBlockData;
 
 /**
  * An outside check (a hosted moderation endpoint, a small local classifier). It can only say
@@ -167,16 +154,11 @@ export interface InputVerdict {
   owner: boolean;
 }
 
-/** What is published on `MODERATION_INPUT_TOPIC`. */
-export interface InputVerdictRecord {
-  at: string;
-  source: InputSource;
-  author: string | null;
-  action: InputAction;
-  flags: InputFlag[];
-  reasons: string[];
-  owner: boolean;
-}
+/**
+ * What is published as `Events.ModerationInput` (contract: `InputVerdictSchema` in
+ * @miyoria/contracts/events).
+ */
+export type InputVerdictRecord = InputVerdictData;
 
 // ---- service --------------------------------------------------------------------------------
 

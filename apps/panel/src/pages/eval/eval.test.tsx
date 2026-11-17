@@ -1,6 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { Delivery, LogEvent } from "@/api/types";
+import type { LogEvent } from "@/api/types";
+import type { Delivery } from "@miyoria/contracts/api";
 import { UNMEASURED } from "@/lib/metrics";
 import { mockFetch, renderRoute } from "@/test/render";
 

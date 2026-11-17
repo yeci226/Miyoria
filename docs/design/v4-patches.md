@@ -5,7 +5,7 @@ v4-plan §2.5 說她的輸出在模型寫完之後還會被改寫、扣住或重
 ## 1. 怎麼量
 
 - 每一種修正觸發時記一次,不記她說了什麼:
-  - Prometheus `miyoria_agent_corrections_total{kind, channel}`,`channel` 是 `voice` 或 `text`(`packages/agent/src/metrics.ts`)。
+  - Prometheus `miyoria_agent_corrections_total{kind, channel}`,`channel` 是 `voice` 或 `text`(`packages/brain/agent/src/metrics.ts`)。
   - 回合結果 `agent.turn.outcome` 多一個 `corrections` 欄位(`CountedOutcome`,`packages/types/src/corrections.ts`):有送到模型的回合都有,沒觸發就是 `{}`;沒送到模型的回合沒有這個欄位。整筆紀錄原樣存進 `turn_outcomes`,不用改 store。
 - `GET /api/turns/metrics` 每天和整段各算一次:每一種修正在語音、文字各觸發幾次、出現在幾個回合,以及「量到的回合」有幾個(`corrections.measured`)。「佔回覆」= 有觸發的回合 / 量到的回合,舊紀錄不算進分母。
 - 面板 評測 / 參與度 底下的「事後修正」:每一種的語音、文字次數和佔回覆,選一種看每天的佔比曲線和每天的表(當天量到的回合寫在旁邊)。
@@ -38,7 +38,7 @@ v4-plan §2.5 說她的輸出在模型寫完之後還會被改寫、扣住或重
 | 19 | 寫給自己的盤算拿掉那行(PR 8) | `leak.ts:44,112`(`isSelfTalk`、`ReplyScreen`);主線 `turn.ts:2709`;V2 `turn.ts:2331`;語音 `turn.ts:1476`(`#selfTalk`) | 2026-11-08「莎露朵在問我上面訊息寫什麼,直接念給她聽就好。」 | 第三人稱、對自己下指令的那一行不送也不念,同一則的其他行照送;不算她說過的話 | 根治推理外洩(§5) | `self_talk_cut` | 開關 `self_talk` |
 | 20 | 主人說「不要玩 X」替她寫規則(PR 8) | `prohibition.ts:49`;`turn.ts:372,1431`(`keepRules`) | `mc-owner-rule-never-written`:說了四次不要玩 Minecraft,她都答應,沒有一次呼叫 `directive_add` | 回合結束時用說話者的身分寫一條 deny,規則服務照樣判斷那個人能不能寫 | 工具說明完整、迴圈內她看得到自己沒做(§4.2) | `prohibition_written` | 開關 `prohibition_write` |
 | — | 每個工具說明後的請求規則 | `actions/src/tools.ts:19` | 好感決定要不要做 | 每個能力工具說明後面附一段 | 主線已用 `slimTool` 拿掉,固定規則講一次(`output.ts:110`) | 不是輸出 | 主線已拆;V2 還在 |
-| — | 高風險動作的第二次 LLM 審核 | `packages/actions` 閘門的 `review` 階段 | | 動作被擋或要 owner 核准 | | 閘門稽核本來就記 | **外牆,不拆** |
+| — | 高風險動作的第二次 LLM 審核 | `packages/gate/actions` 閘門的 `review` 階段 | | 動作被擋或要 owner 核准 | | 閘門稽核本來就記 | **外牆,不拆** |
 | — | `isSelfTalk` | `types/src/impulse.ts:145`,`arbiter.ts:370` | | 生成之前:自己起頭的發言受 Arbiter 限制 | | 不是輸出 | 不是事後修正;和 #19 的 `leak.ts` `isSelfTalk` 同名,是不同的東西 |
 | — | 預算用完的固定句 | `signals.ts:17` | | 不呼叫模型 | | 不是輸出 | 外牆(預算) |
 
@@ -148,7 +148,7 @@ backlog 記的:2026-11-09 15:29,`reasoning` off 的一回合把思考當回覆�
 
 ## 7. 事故題
 
-`packages/eval` 加了 2026-11-10 的兩題,改回去就會讓 `pnpm eval` 變紅:
+`tools/eval` 加了 2026-11-10 的兩題,改回去就會讓 `pnpm eval` 變紅:
 
 - `repeat-question-one-wish`(新 harness `wish`):九點的提案、承諾、十一點的兩次私訊、S 的回答、Plan 的目標、S 在頻道說的話,依序丟進 arbiter 真正的 `WishBook`,她每一次問 S 之前先問 `screen`。現在只留 11:07 的第一則;紀錄裡是十次。她問的句子是改寫的,時間、次數和 S 說的話來自程式註解和測試。
 - `attention-aside-about-her`(新 harness `attention`):「@Bob 她一直跳針,第六次了」是回覆她的訊息,但對 Bob 說;用 agent 的 `directReason` 判斷,不能當成對她說。旁邊放一則「真的假的」(不是事故裡的),讓「全部都不算對她說」的改法也會變紅。

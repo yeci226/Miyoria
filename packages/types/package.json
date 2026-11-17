@@ -11,6 +11,11 @@
       "@miyoria/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./bond": {
+      "@miyoria/source": "./src/bond.ts",
+      "types": "./dist/bond.d.ts",
+      "default": "./dist/bond.js"
     }
   },
   "files": [
@@ -22,6 +27,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@miyoria/contracts": "workspace:*",
     "ulid": "^3.0.2"
   },
   "devDependencies": {

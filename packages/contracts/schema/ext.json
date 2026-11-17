@@ -1,0 +1,1522 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "@miyoria/contracts/ext",
+  "$defs": {
+    "EventsBusEnvelope": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "v": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "space_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "room_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "person_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventsScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/WireJsonValue"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "type",
+        "v",
+        "parent",
+        "turn",
+        "session",
+        "space_id",
+        "room_id",
+        "person_id",
+        "account_id",
+        "key",
+        "scope",
+        "source",
+        "data"
+      ]
+    },
+    "EventsScope": {
+      "type": "string",
+      "enum": [
+        "public",
+        "space",
+        "room",
+        "dm",
+        "self",
+        "owner"
+      ]
+    },
+    "ExtArgKind": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "string",
+                "integer",
+                "boolean",
+                "user",
+                "role"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "choice"
+            },
+            "choices": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "choices"
+          ]
+        }
+      ]
+    },
+    "ExtArgSpec": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ExtArgKind"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "kind",
+        "required"
+      ]
+    },
+    "ExtArgValue": {
+      "type": [
+        "string",
+        "number",
+        "boolean"
+      ]
+    },
+    "ExtCommandReply": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "ephemeral": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "ExtCommandSpec": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtArgSpec"
+          }
+        },
+        "permission": {
+          "type": "string"
+        },
+        "ephemeral": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "description",
+        "args",
+        "permission",
+        "ephemeral"
+      ]
+    },
+    "ExtCommandsUnregisterParams": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "ExtContributions": {
+      "type": "object",
+      "properties": {
+        "tools": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtToolDecl"
+          }
+        },
+        "commands": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtCommandSpec"
+          }
+        },
+        "prompts": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subscriptions": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "executor": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtExecutorDecl"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ExtEventNotification": {
+      "type": "object",
+      "properties": {
+        "envelope": {
+          "$ref": "#/$defs/EventsBusEnvelope"
+        }
+      },
+      "required": [
+        "envelope"
+      ]
+    },
+    "ExtEventsPublishParams": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "data": {
+          "default": null,
+          "$ref": "#/$defs/WireJsonValue"
+        },
+        "turn": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "ExtEventsTopicsParams": {
+      "type": "object",
+      "properties": {
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "topics"
+      ]
+    },
+    "ExtExecutorDecl": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "goals": {
+          "default": [],
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtGoalDecl"
+          }
+        },
+        "guide": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 8000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "steer": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "ExtExtensionInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "dir": {
+          "type": "string"
+        },
+        "game": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "dir"
+      ]
+    },
+    "ExtGoalDecl": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]{1,40}$"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "parameters": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireJsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "budget_s": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 86400
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "ExtHostInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "ExtInitializeParams": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "host": {
+          "$ref": "#/$defs/ExtHostInfo"
+        },
+        "extension": {
+          "$ref": "#/$defs/ExtExtensionInfo"
+        },
+        "config": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        "permissions": {
+          "$ref": "#/$defs/ExtPermissions"
+        }
+      },
+      "required": [
+        "protocol",
+        "host",
+        "extension",
+        "config",
+        "permissions"
+      ]
+    },
+    "ExtInitializeResult": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "default": 1,
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "contributions": {
+          "default": {},
+          "$ref": "#/$defs/ExtContributions"
+        }
+      }
+    },
+    "ExtInvocation": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "args": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ExtArgValue"
+          }
+        },
+        "invoker": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "invoker_display_name": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "invoker_is_guild_admin": {
+          "type": "boolean"
+        },
+        "platform_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resolved_users": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ExtResolvedUser"
+          }
+        }
+      },
+      "required": [
+        "path",
+        "args",
+        "invoker",
+        "invoker_display_name",
+        "context",
+        "invoker_is_guild_admin"
+      ]
+    },
+    "ExtKeyParams": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "ExtLogParams": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "default": "",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "fields": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireJsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
+    "ExtParticipant": {
+      "type": "object",
+      "properties": {
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "account",
+        "display_name",
+        "person"
+      ]
+    },
+    "ExtPermissions": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "type": "boolean"
+        },
+        "commands": {
+          "type": "boolean"
+        },
+        "network": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "input": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "events",
+        "tools",
+        "commands",
+        "network",
+        "input"
+      ]
+    },
+    "ExtPriority": {
+      "type": "string",
+      "enum": [
+        "system",
+        "direct",
+        "request",
+        "initiative",
+        "idle"
+      ]
+    },
+    "ExtPromptContributeParams": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/ExtPromptRequest"
+        }
+      },
+      "required": [
+        "key",
+        "request"
+      ]
+    },
+    "ExtPromptContributeResult": {
+      "type": "object",
+      "properties": {
+        "sections": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtPromptSection"
+          }
+        }
+      }
+    },
+    "ExtPromptRequest": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "participants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtParticipant"
+          }
+        },
+        "speakers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireAccountRef"
+          }
+        },
+        "query": {
+          "type": "string"
+        },
+        "recent": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "voice": {
+          "type": "boolean"
+        },
+        "now": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "turn",
+        "context",
+        "participants",
+        "speakers",
+        "query",
+        "recent",
+        "voice",
+        "now"
+      ]
+    },
+    "ExtPromptSection": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "order": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "body",
+        "order"
+      ]
+    },
+    "ExtResolvedUser": {
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "platform_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "is_guild_admin": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "display_name",
+        "platform_roles",
+        "is_guild_admin"
+      ]
+    },
+    "ExtRpcErrorObject": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {}
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "ExtRpcId": {
+      "type": [
+        "number",
+        "string"
+      ]
+    },
+    "ExtRpcMessage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "$ref": "#/$defs/ExtRpcId"
+            },
+            "method": {
+              "type": "string"
+            },
+            "params": {}
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "method": {
+              "type": "string"
+            },
+            "params": {}
+          },
+          "required": [
+            "jsonrpc",
+            "method"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExtRpcId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result": {}
+          },
+          "required": [
+            "jsonrpc",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExtRpcId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "$ref": "#/$defs/ExtRpcErrorObject"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "error"
+          ]
+        }
+      ]
+    },
+    "ExtSteerOutcome": {
+      "type": "string",
+      "enum": [
+        "applied",
+        "rejected",
+        "too_late"
+      ]
+    },
+    "ExtStorageGetResult": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireJsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "value"
+      ]
+    },
+    "ExtStorageSetParams": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireJsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "ExtStructuredState": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "state": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        "task": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "state",
+        "task",
+        "summary"
+      ]
+    },
+    "ExtTaskCancelParams": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "task"
+      ]
+    },
+    "ExtTaskEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "started"
+            },
+            "task": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "goal": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "goal",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "progress"
+            },
+            "task": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "progress": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "detail": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "progress",
+            "detail",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "done"
+            },
+            "task": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "detail": {
+              "type": "string"
+            },
+            "data": {
+              "$ref": "#/$defs/WireJsonValue"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "detail",
+            "data",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "failed"
+            },
+            "task": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "code": {
+              "$ref": "#/$defs/ExtTaskFailureCode"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "code",
+            "detail",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "steered"
+            },
+            "task": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "steer": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "outcome": {
+              "$ref": "#/$defs/ExtSteerOutcome"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "steer",
+            "outcome",
+            "detail",
+            "at"
+          ]
+        }
+      ]
+    },
+    "ExtTaskEventParams": {
+      "type": "object",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/ExtTaskEvent"
+        }
+      },
+      "required": [
+        "event"
+      ]
+    },
+    "ExtTaskFailureCode": {
+      "type": "string",
+      "enum": [
+        "timeout",
+        "cancelled",
+        "superseded",
+        "busy",
+        "invalid",
+        "not_found",
+        "unreachable",
+        "precondition",
+        "disconnected",
+        "crashed",
+        "died",
+        "denied",
+        "internal"
+      ]
+    },
+    "ExtTaskSpec": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        "budget_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 86400
+        }
+      },
+      "required": [
+        "id",
+        "goal",
+        "args",
+        "budget_s"
+      ]
+    },
+    "ExtTaskStartParams": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/ExtTaskSpec"
+        }
+      },
+      "required": [
+        "task"
+      ]
+    },
+    "ExtTaskSteer": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "patch": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        "why": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "cause": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "task",
+        "patch",
+        "why",
+        "cause"
+      ]
+    },
+    "ExtTaskSteerParams": {
+      "type": "object",
+      "properties": {
+        "steer": {
+          "$ref": "#/$defs/ExtTaskSteer"
+        }
+      },
+      "required": [
+        "steer"
+      ]
+    },
+    "ExtToolCallContext": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "account": {
+          "$ref": "#/$defs/WireAccountRef"
+        },
+        "message": {
+          "$ref": "#/$defs/WireMessageRef"
+        },
+        "priority": {
+          "$ref": "#/$defs/ExtPriority"
+        }
+      },
+      "required": [
+        "turn",
+        "context",
+        "account",
+        "message",
+        "priority"
+      ]
+    },
+    "ExtToolCallParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "args": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        "context": {
+          "$ref": "#/$defs/ExtToolCallContext"
+        }
+      },
+      "required": [
+        "name",
+        "context"
+      ]
+    },
+    "ExtToolCallResult": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ]
+    },
+    "ExtToolDecl": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "parameters": {
+          "default": {
+            "type": "object",
+            "properties": {}
+          },
+          "$ref": "#/$defs/WireJsonValue"
+        },
+        "permission": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "read_only": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "ExtToolsUnregisterParams": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "WireAccountRef": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform",
+        "id"
+      ]
+    },
+    "WireContextKey": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WireContextKind"
+        }
+      },
+      "required": [
+        "platform",
+        "scope",
+        "channel",
+        "kind"
+      ]
+    },
+    "WireContextKind": {
+      "type": "string",
+      "enum": [
+        "channel",
+        "thread",
+        "dm",
+        "voice"
+      ]
+    },
+    "WireJsonValue": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        }
+      ]
+    },
+    "WireMessageRef": {
+      "type": "object",
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "id"
+      ]
+    }
+  }
+}

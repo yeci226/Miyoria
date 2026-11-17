@@ -1,6 +1,6 @@
 // `AuthService`: the cached authorizer and role management API.
 
-import { errorMessage, getLogger, withTimeout } from "@miyoria/kernel";
+import { errorMessage, getLogger, withTimeout } from "@miyoria/runtime/kernel";
 import type {
   AuditEntry,
   AuditLog,

@@ -14,16 +14,18 @@
 // Only people she knows earn (`EconomyService.earn` checks); keys make a replayed event or a
 // restart pay nothing twice.
 
-import { errorMessage, type Logger, type ServiceLookup } from "@miyoria/kernel";
+import { errorMessage, type Logger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import { SingerKey } from "@miyoria/sing";
 import {
   type AccountRef,
   accountRefString,
+  type BusEvent,
   type ContextKey,
   contextKeyEquals,
-  type Event,
+  Events,
+  is,
+  type JsonValue,
   parseSongCue,
-  SONG_TOPIC,
   type VoiceParticipant,
 } from "@miyoria/types";
 import type { EconomyConfig } from "./config.js";
@@ -79,7 +81,7 @@ export class Earnings {
   }
 
   /** One bus event at `now` (epoch ms). Never throws. */
-  async onEvent(event: Event, now: number): Promise<void> {
+  async onEvent(event: BusEvent, now: number): Promise<void> {
     try {
       await this.#on(event, now);
     } catch (error) {
@@ -87,48 +89,43 @@ export class Earnings {
     }
   }
 
-  async #on(event: Event, now: number): Promise<void> {
-    switch (event.type) {
-      case "platform_ready":
-        this.#self.add(accountRefString(event.data.self_account));
-        return;
-      case "platform_message_created": {
-        const author = event.data.author;
-        if (!author.is_bot) await this.#saw(author.account, now);
-        return;
-      }
-      case "voice_joined":
+  async #on(event: BusEvent, now: number): Promise<void> {
+    if (is(Events.PlatformReady, event)) {
+      this.#self.add(accountRefString(event.data.self_account));
+      return;
+    } else if (is(Events.PlatformMessageCreated, event)) {
+      const author = event.data.author;
+      if (!author.is_bot) await this.#saw(author.account, now);
+      return;
+    } else if (is(Events.VoiceJoined, event)) {
+      this.#voice = {
+        context: event.data.context,
+        present: this.#present(event.data.participants),
+      };
+      return;
+    } else if (is(Events.VoiceParticipants, event)) {
+      if (this.#voice === null || contextKeyEquals(this.#voice.context, event.data.context)) {
         this.#voice = {
           context: event.data.context,
           present: this.#present(event.data.participants),
         };
-        return;
-      case "voice_participants":
-        if (this.#voice === null || contextKeyEquals(this.#voice.context, event.data.context)) {
-          this.#voice = {
-            context: event.data.context,
-            present: this.#present(event.data.participants),
-          };
-        }
-        return;
-      case "voice_left":
-        if (this.#voice !== null && contextKeyEquals(this.#voice.context, event.data.context)) {
-          this.#voice = null;
-        }
-        return;
-      case "voice_utterance": {
-        const speaker = event.data.speaker;
-        if (speaker.is_bot || this.#isSelf(speaker.account)) return;
-        await this.settleVoice(now);
-        this.#spoke.set(accountRefString(speaker.account), speaker.account);
-        await this.#saw(speaker.account, now);
-        return;
       }
-      case "custom":
-        if (event.data.topic === SONG_TOPIC) await this.#song(event.data.payload);
-        return;
-      default:
-        return;
+      return;
+    } else if (is(Events.VoiceLeft, event)) {
+      if (this.#voice !== null && contextKeyEquals(this.#voice.context, event.data.context)) {
+        this.#voice = null;
+      }
+      return;
+    } else if (is(Events.VoiceUtteranceEvent, event)) {
+      const speaker = event.data.speaker;
+      if (speaker.is_bot || this.#isSelf(speaker.account)) return;
+      await this.settleVoice(now);
+      this.#spoke.set(accountRefString(speaker.account), speaker.account);
+      await this.#saw(speaker.account, now);
+      return;
+    } else {
+      if (event.type === Events.SingCue.type) await this.#song(event.data as JsonValue);
+      return;
     }
   }
 

@@ -11,14 +11,13 @@
 // Only a person she knows and has not blocked may draw (403, as everywhere); the slip is built
 // from what the page shows them (`fortune.ts`).
 
-import { EconomyError, EconomyKey, STRANGER } from "@miyoria/economy";
-import { errorMessage, getLogger } from "@miyoria/kernel";
-import { LlmRouterKey } from "@miyoria/llm";
-import { FortuneStoreKey } from "@miyoria/store";
+import type { IssuedFortune } from "@miyoria/contracts/api";
+import { EconomyError, EconomyKey, FortuneStoreKey, STRANGER } from "@miyoria/economy";
+import { LlmRouterKey } from "@miyoria/llm/llm";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { type AccountRef, accountRefString } from "@miyoria/types";
-import { z } from "zod";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { readJson } from "./extract.js";
 import { type FortuneHolder, fortuneOfDay, keepFortune, writeFortune } from "./fortune.js";
 import {
   accountsOf,
@@ -29,11 +28,9 @@ import {
   shown,
   shownMemories,
 } from "./member.js";
-import { localDay, tooMany } from "./public.js";
-import { json, type Route } from "./route.js";
+import { localDay } from "./public.js";
 import type { SessionRecord } from "./session.js";
 import type { ApiContext, ApiState } from "./state.js";
-import type { IssuedFortune } from "./types.js";
 import { keyOf } from "./wallet.js";
 
 const log = getLogger("api.fortune");
@@ -43,8 +40,6 @@ const WRITE_FAILED = "她現在寫不出來,魚幣已經退回";
 const UNFINISHED = "上次抽籤沒有完成,魚幣已經退回,請再抽一次";
 /** Memories she is shown for a slip at most. */
 const MEMORIES_SHOWN = 5;
-
-const FortuneSchema = z.strictObject({});
 
 const session = (c: ApiContext): SessionRecord => c.get("member");
 
@@ -66,19 +61,17 @@ export async function fortuneTodayOf(
   return { fortune: found, price: economy?.price("fortune").price ?? 0 };
 }
 
-async function fortuneToday(state: ApiState, c: ApiContext): Promise<Response> {
-  return json(await fortuneTodayOf(state, session(c).account));
-}
-
-async function draw(state: ApiState, c: ApiContext): Promise<Response> {
-  // The body must be `{}`: nothing a request says reaches the slip.
-  await readJson(c, FortuneSchema);
-  const key = keyOf(c);
+async function draw(
+  state: ApiState,
+  c: ApiContext,
+  idempotencyKey: string | undefined,
+): Promise<FortuneDrawn> {
+  const key = keyOf(idempotencyKey);
   const { account, name } = session(c);
   // Each draw asks a model: the same hourly allowance as the other heavy things.
   const wait = state.publicSide.admitHeavy(`fortune:${accountRefString(account)}`);
-  if (wait !== null) return tooMany(wait);
-  return json(await drawFortune(state, { account, name }, key));
+  if (wait !== null) throw ApiError.tooMany(wait);
+  return drawFortune(state, { account, name }, key);
 }
 
 /** What a draw answers (`POST /api/member/fortune`). */
@@ -175,28 +168,15 @@ export async function drawFortune(
   return { fortune: kept, charged: bought.charged, balance: bought.balance };
 }
 
-/** Runs `handler` unless this account has been asking too much. */
-function limited(state: ApiState, handler: (c: ApiContext) => Promise<Response>) {
-  return async (c: ApiContext): Promise<Response> => {
-    const wait = state.publicSide.admitMember(accountRefString(session(c).account));
-    return wait !== null ? tooMany(wait) : handler(c);
-  };
-}
-
-/** The fortune routes; none when `[modules.api.public] enabled` is off. */
-export function fortuneRoutes(state: ApiState): Route[] {
-  if (!state.publicSide.config.enabled) return [];
-  const routes: Route[] = [
-    {
-      method: "GET",
-      path: "/api/member/fortune",
-      handler: limited(state, (c) => fortuneToday(state, c)),
-    },
-    {
-      method: "POST",
-      path: "/api/member/fortune",
-      handler: limited(state, (c) => draw(state, c)),
-    },
-  ];
-  return routes.map((r) => ({ ...r, member: true }));
-}
+/**
+ * The fortune routes; served only while the public side is on (see `rpc.ts`). The draw's body must
+ * be `{}`: nothing a request says reaches the slip.
+ */
+export const fortuneRpc = {
+  today: os.fortune.today.handler(({ context: { state, c } }) => {
+    return fortuneTodayOf(state, session(c).account);
+  }),
+  draw: os.fortune.draw.handler(({ input, context: { state, c } }) => {
+    return draw(state, c, input.headers["idempotency-key"]);
+  }),
+};

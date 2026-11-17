@@ -1,4 +1,4 @@
-import type { ModuleStateKind } from "@/api/types";
+import type { ModuleStateKind } from "@miyoria/contracts/api";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 

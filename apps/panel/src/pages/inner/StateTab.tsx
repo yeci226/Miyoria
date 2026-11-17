@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { SelfView } from "@/api/types";
+import type { SelfView } from "@miyoria/contracts/api";
 import { EmptyLine } from "@/components/query-state";
 import { Bipolar, Meter, StatusBadge } from "@/components/status";
 import { RangeToggle, StateFacets, useRange, useTrend } from "@/components/trends";

@@ -2,13 +2,14 @@
 // throttled progress), its wire format and the Stage's overlay hub.
 
 import {
+  type AnyEventDefinition,
   type ContextKey,
-  customEvent,
-  type Event,
+  type Envelope,
+  type EventPayload,
+  Events,
+  eventEnvelope,
   type JsonObject,
-  SONG_PREPARE_TOPIC,
-  SONG_TOPIC,
-  SPEECH_SYNTH_TOPIC,
+  type PublishMetaArgs,
 } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
@@ -19,25 +20,24 @@ import {
   prepareLabel,
 } from "../src/index.js";
 
+/** An event as the bus delivers it. */
+const ev = <D extends AnyEventDefinition>(
+  def: D,
+  data: EventPayload<D>,
+  ...meta: PublishMetaArgs<D>
+): Envelope => eventEnvelope("test", def, data, ...meta);
+
 const VOICE: ContextKey = { platform: "discord", scope: "g", channel: "vc", kind: "voice" };
 const TEXT: ContextKey = { platform: "discord", scope: "g", channel: "chat", kind: "channel" };
 
-const started = (turn: string, context = VOICE): Event => ({
-  type: "agent_turn_started",
-  data: { turn, context },
-});
-const completed = (turn: string): Event => ({
-  type: "agent_turn_completed",
-  data: { turn, context: VOICE, text: "" },
-});
-const synth = (turn: string | null): Event =>
-  customEvent(SPEECH_SYNTH_TOPIC, { context: { ...VOICE }, turn });
-const playback = (turn: string | null, state: "started" | "finished" | "failed"): Event => ({
-  type: "voice_playback",
-  data: { context: VOICE, turn, state, text: "嗯。", emotion: null },
-});
-const prepare = (p: JsonObject): Event =>
-  customEvent(SONG_PREPARE_TOPIC, {
+const started = (turn: string, context = VOICE) => ev(Events.AgentTurnStarted, { turn, context });
+const completed = (turn: string) =>
+  ev(Events.AgentTurnCompleted, { turn, context: VOICE, text: "" });
+const synth = (turn: string | null) => ev(Events.VoiceSynthesis, { context: { ...VOICE }, turn });
+const playback = (turn: string | null, state: "started" | "finished" | "failed") =>
+  ev(Events.VoicePlaybackEvent, { context: VOICE, turn, state, text: "嗯。", emotion: null });
+const prepare = (p: JsonObject) =>
+  ev(Events.SingPrepare, {
     no: 1,
     title: "夜に駆ける",
     stage: "download",
@@ -45,7 +45,7 @@ const prepare = (p: JsonObject): Event =>
     exclusive: null,
     ...p,
   });
-const song = (p: JsonObject): Event => customEvent(SONG_TOPIC, { song: "s1", ...p });
+const song = (p: JsonObject) => ev(Events.SingCue, { song: "s1", ...p } as never);
 
 /** A tracker on a fake clock. */
 function tracker(options: ConstructorParameters<typeof ActivityTracker>[0] = {}) {
@@ -57,7 +57,7 @@ function tracker(options: ConstructorParameters<typeof ActivityTracker>[0] = {})
     advance(ms: number) {
       now += ms;
     },
-    feed(...events: Event[]) {
+    feed(...events: Envelope[]) {
       for (const e of events) t.onEvent(e, now);
     },
     next: () => t.next(now),

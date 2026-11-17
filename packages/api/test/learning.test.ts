@@ -1,6 +1,6 @@
 // `/api/knowledge*`, `/api/reflection`, `/api/mind/digests`: what she organized and learned.
 
-import { Supervisor, SupervisorKey } from "@miyoria/kernel";
+import { DIGEST_PREFIX, GOAL_MIGRATION_KEY, GOAL_PREFIX } from "@miyoria/heart/mind";
 import {
   DOC_PREFIX,
   FEEDBACK_PREFIX,
@@ -10,8 +10,8 @@ import {
   REFLECT_STATE_KEY,
   RUN_PREFIX,
   STATE_PREFIX,
-} from "@miyoria/learning";
-import { DIGEST_PREFIX, GOAL_MIGRATION_KEY, GOAL_PREFIX, PLAN_STATE_KEY } from "@miyoria/mind";
+} from "@miyoria/memory/learning";
+import { Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
 import { DATA_CATEGORIES, MemorySettingsStore } from "@miyoria/store";
 import {
   type ConversationState,
@@ -22,7 +22,8 @@ import {
   ReflectionKey,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
-import { ActiveProfileKey, ApiClient, ApiModule } from "../src/index.js";
+import { ActiveProfileKey, ApiModule } from "../src/index.js";
+import { adminCalls } from "./support/admin.js";
 import { statusOf } from "./support/http.js";
 
 const TOKEN = "test-token";
@@ -52,7 +53,7 @@ async function harness(provide: (sup: Supervisor) => void) {
   await sup.startAll();
   const base = api.url();
   if (!base) throw new Error("api is not running");
-  return new ApiClient(base, TOKEN);
+  return adminCalls(base, TOKEN);
 }
 
 describe("learning routes", () => {
@@ -78,8 +79,6 @@ describe("learning routes", () => {
       { kind: "self", account: null, person: null, name: null, context: null },
     );
     const mind: Mind = {
-      accepting: true,
-      suggest: () => true,
       thoughts: () => [],
       digests: () => [
         {
@@ -150,8 +149,9 @@ describe("learning routes", () => {
     ]) {
       expect(names, name).toContain(name);
     }
-    // Her plan state and the agenda migration record live under one prefix.
-    for (const key of [GOAL_MIGRATION_KEY, PLAN_STATE_KEY]) {
+    // The agenda migration record lives under one of them (the old plan state, `mind:plan:state`,
+    // under the same prefix).
+    for (const key of [GOAL_MIGRATION_KEY, "mind:plan:state"]) {
       expect(
         names.some((n) => key.startsWith(n)),
         key,

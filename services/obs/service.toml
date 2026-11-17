@@ -1,0 +1,11 @@
+# OBS Studio: the streaming program Stage controls over obs-websocket; run by hand.
+name = "obs"
+kind = "external"
+summary = "OBS Studio(直播軟體,Stage 用 obs-websocket 控制)"
+
+[probe]
+port = 4455                      # obs-websocket (`[obs] port` of Stage)
+
+# It uses video memory hostd must leave free.
+[gpu]
+policy = "reserve"

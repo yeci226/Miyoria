@@ -1,5 +1,0 @@
-node_modules/
-.env
-# 錄到的音訊不進 git(語音隱私,見 ARCHITECTURE §10.1)
-recordings/
-*.wav

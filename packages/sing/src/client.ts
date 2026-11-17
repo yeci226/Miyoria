@@ -1,6 +1,8 @@
 // HTTP client of the song worker (`workers/sing/server.py`, docs/protocols/voice-link.md
 // 「歌曲 Worker」). Everything it returns about a song (title, artist, lyrics) comes from YouTube or
-// lrclib and is untrusted.
+// lrclib and is untrusted. Every request goes through Core's endpoint registry (`request`), which
+// adds the worker's token and relays it over a host's control link when the worker is not
+// reachable directly.
 
 import { createWriteStream } from "node:fs";
 import { mkdir, rename, rm } from "node:fs/promises";
@@ -8,123 +10,39 @@ import { connect } from "node:net";
 import { dirname } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { z } from "zod";
+import {
+  type WORKERS_SING_PCM_TRACKS,
+  WorkersHealthSchema,
+  type WorkersSingGpuContext,
+  WorkersSingGpuStatusSchema,
+  type WorkersSingJob,
+  WorkersSingJobReplySchema,
+  type WorkersSingJobRequestIn,
+  WorkersSingJobSchema,
+  type WorkersSingSongMeta,
+  WorkersSingSongMetaSchema,
+} from "@miyoria/contracts/workers";
+import type { Endpoint, EndpointSource } from "./endpoints.js";
 
-const LyricLineSchema = z.object({ t: z.number(), text: z.string() });
+export const SongMetaSchema = WorkersSingSongMetaSchema;
+export type SongMeta = WorkersSingSongMeta;
 
-export const SongMetaSchema = z.object({
-  id: z.string(),
-  title: z.string().catch(""),
-  artist: z.string().nullable().catch(null),
-  duration_s: z.number().nullable().catch(null),
-  lyrics: z
-    .object({ synced: z.boolean().catch(false), lines: z.array(LyricLineSchema).catch([]) })
-    .nullable()
-    .catch(null),
-  play: z.object({
-    sample_rate: z.number().int().positive(),
-    samples: z.number().int().nullable(),
-  }),
-  pitch: z.record(z.string(), z.unknown()).catch({}),
-  timings: z.record(z.string(), z.number()).catch({}),
-  peak_vram_mb: z.number().nullable().catch(null),
-  /** Its original video sits in the song's cache dir as `video.file` (older workers: none). */
-  has_video: z.boolean().catch(false),
-  video: z.object({ file: z.string() }).nullable().catch(null),
-  /** What became of the song's backing voices (`acapella` has no instrumental). */
-  backing: z.string().optional().catch(undefined),
-  /** Its beat: tempo and beat times in seconds from the start of the playback (older workers: none). */
-  beats: z
-    .object({ bpm: z.number(), times: z.array(z.number()) })
-    .nullable()
-    .catch(null)
-    .optional(),
-});
-export type SongMeta = z.output<typeof SongMetaSchema>;
-export type LyricLine = z.output<typeof LyricLineSchema>;
+export const GpuStatusSchema = WorkersSingGpuStatusSchema;
 
-/**
- * Where the worker runs a job and why (`workers/sing/gpu.py`): decided before every GPU stage and
- * again while it runs. `reason` is written for people, and for her.
- */
-export const GpuStatusSchema = z.object({
-  policy: z.string().catch("auto"),
-  stage: z.string().catch(""),
-  /** `share`, `offload`, `exclusive`, `wait`, `cpu` or `give_up`. */
-  mode: z.string().nullable().catch(null),
-  code: z.string().nullable().catch(null),
-  reason: z.string().nullable().catch(null),
-  free_mb: z.number().nullable().catch(null),
-  total_mb: z.number().nullable().catch(null),
-  need_mb: z.number().nullable().catch(null),
-  step_s: z.number().nullable().catch(null),
-  baseline_s: z.number().nullable().catch(null),
-  spilling: z.boolean().catch(false),
-  spills: z.number().catch(0),
-  waited_s: z.number().catch(0),
-  silenced_s: z.number().catch(0),
-  /** How long her voice would be gone if it went now, reload included. */
-  silence_est_s: z.number().nullable().catch(null),
-  silence_max_s: z.number().nullable().catch(null),
-});
-export type GpuStatus = z.output<typeof GpuStatusSchema>;
-
-export const WorkerJobSchema = z.object({
-  id: z.string(),
-  state: z.enum(["queued", "running", "done", "failed", "cancelled"]),
-  stage: z.string().catch(""),
-  progress: z.number().catch(0),
-  error: z.string().nullable().catch(null),
-  song_id: z.string().nullable().catch(null),
-  cached: z.boolean().catch(false),
-  position: z.number().nullable().catch(null),
-  source: z
-    .object({ title: z.string().catch(""), artist: z.string().nullable().catch(null) })
-    .nullable()
-    .catch(null),
-  song: SongMetaSchema.nullable().catch(null),
-  /**
-   * The job has the GPU to itself (the TTS / ASR workers offloaded): `waiting` for our go,
-   * `offloading`, `active`, `reloading`, `done`; `shared`: it runs next to them, speech goes on;
-   * `null` when it does not need it (older workers: always `null`).
-   */
-  exclusive: z
-    .enum(["waiting", "offloading", "active", "reloading", "done", "shared"])
-    .nullable()
-    .catch(null),
-  gpu: GpuStatusSchema.nullable().catch(null),
-});
-export type WorkerJob = z.output<typeof WorkerJobSchema>;
+export const WorkerJobSchema = WorkersSingJobSchema;
+export type WorkerJob = WorkersSingJob;
 
 /** What a request names: a search, a link or a file of the worker's song library. */
-export interface SongQuery {
-  query?: string;
-  url?: string;
-  path?: string;
-  /** Whole-song transposition in semitones (her voice follows). */
-  key?: number;
-  /** The song's backing voices (`keep` when left out; each mode is a song of its own in the worker). */
-  backing?: "keep" | "drop" | "convert" | "acapella";
-  /** The worker waits for `goExclusive` before it takes the GPU (she says she is off first). */
-  exclusive_ack?: boolean;
-}
+export type SongQuery = WorkersSingJobRequestIn;
 
 /**
  * What only Core knows, for the worker's GPU decisions: who would notice her going quiet, and which
  * jobs are needed now. Sent on every poll; without it for a while the worker assumes people.
  */
-export interface GpuContext {
-  in_voice: boolean;
-  /** People in her voice channels who can hear her. */
-  listeners: number;
-  /** Go Live or OBS is on: there are viewers, however many. */
-  live: boolean;
-  /** Jobs of songs that are sung as soon as they are ready. */
-  urgent: string[];
-}
+export type GpuContext = WorkersSingGpuContext;
 
 /** The two tracks Core streams: the mix, and the converted vocal her mouth follows. */
-export type SongTrack = "play_mix.pcm" | "play_vocals.pcm";
+export type SongTrack = (typeof WORKERS_SING_PCM_TRACKS)[number];
 
 export class SingWorkerError extends Error {
   override readonly name = "SingWorkerError";
@@ -195,12 +113,31 @@ export interface SingWorker {
 /** Longest wait for the connection check after a submit timed out. */
 const PROBE_MS = 3000;
 
+/**
+ * The request never left Core: there is no relay (`RelayUnavailableError` of `@miyoria/cluster`),
+ * or the relay refused before sending (`RelayError` with `sent: false`: the host is not
+ * connected, or too many requests to it are open).
+ */
+function relayUnavailable(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "RelayUnavailableError") return true;
+  return error.name === "RelayError" && (error as { sent?: unknown }).sent === false;
+}
+
+/** One song worker: an endpoint of Core's registry (`sing`). */
 export class HttpSingWorker implements SingWorker {
-  readonly #base: string;
+  readonly #endpoint: Endpoint;
+  readonly #source: EndpointSource;
+  readonly #where: string;
   readonly #timeoutMs: number;
 
-  constructor(url: string, timeoutMs: number) {
-    this.#base = url.replace(/\/+$/, "");
+  constructor(endpoint: Endpoint, timeoutMs: number, source: EndpointSource) {
+    this.#endpoint = endpoint;
+    this.#source = source;
+    this.#where =
+      endpoint.via === "direct"
+        ? endpoint.url.replace(/\/+$/, "")
+        : `${endpoint.service} on ${endpoint.host} (over its control link)`;
     this.#timeoutMs = timeoutMs;
   }
 
@@ -209,13 +146,13 @@ export class HttpSingWorker implements SingWorker {
     const all = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let res: Response;
     try {
-      res = await fetch(`${this.#base}${path}`, { ...init, signal: all });
+      res = await this.#source.request(this.#endpoint, path, { ...init, signal: all });
     } catch (error) {
       if (signal?.aborted) throw error;
-      throw new SingWorkerError(`song worker unreachable at ${this.#base}: ${String(error)}`, {
+      throw new SingWorkerError(`song worker unreachable at ${this.#where}: ${String(error)}`, {
         cause: error,
         unreachable: true,
-        maybeReceived: !neverConnected(error),
+        maybeReceived: !neverConnected(error) && !relayUnavailable(error),
       });
     }
     if (!res.ok) {
@@ -233,10 +170,9 @@ export class HttpSingWorker implements SingWorker {
 
   async #job(path: string, init: RequestInit, signal?: AbortSignal): Promise<WorkerJob> {
     const res = await this.#call(path, init, this.#timeoutMs, signal);
-    const body = (await res.json()) as { job?: unknown };
-    const parsed = WorkerJobSchema.safeParse(body.job);
+    const parsed = WorkersSingJobReplySchema.safeParse(await res.json());
     if (!parsed.success) throw new SingWorkerError("song worker sent a malformed job");
-    return parsed.data;
+    return parsed.data.job;
   }
 
   async submit(query: SongQuery, signal?: AbortSignal): Promise<WorkerJob> {
@@ -253,10 +189,12 @@ export class HttpSingWorker implements SingWorker {
     } catch (error) {
       // Timed out: the worker may have taken the job, unless it cannot even be connected to now
       // (a computer that is off, or off the tailnet, often drops the connection attempt silently
-      // instead of refusing it, so the request timeout fires first).
+      // instead of refusing it, so the request timeout fires first). Only a direct endpoint can be
+      // probed; over a control link the relay's own error is the answer.
       if (
         error instanceof SingWorkerError &&
         error.maybeReceived &&
+        this.#endpoint.via === "direct" &&
         !(await this.#connects(Math.min(this.#timeoutMs, PROBE_MS)))
       ) {
         throw new SingWorkerError(error.message, { cause: error.cause, unreachable: true });
@@ -270,7 +208,12 @@ export class HttpSingWorker implements SingWorker {
    * worker is too busy to answer, so this tells "off" from "slow".
    */
   #connects(ms: number): Promise<boolean> {
-    const url = new URL(this.#base);
+    let url: URL;
+    try {
+      url = new URL(this.#endpoint.url);
+    } catch {
+      return Promise.resolve(false);
+    }
     const host = url.hostname.replace(/^\[|\]$/g, "");
     const port = Number(url.port) || (url.protocol === "https:" ? 443 : 80);
     return new Promise((resolve) => {
@@ -362,8 +305,8 @@ export class HttpSingWorker implements SingWorker {
   async health(signal?: AbortSignal): Promise<string | null> {
     try {
       const res = await this.#call("/health", {}, this.#timeoutMs, signal);
-      const body = (await res.json()) as { status?: unknown };
-      return body.status === "ok" ? null : "song worker is not ok";
+      const body = WorkersHealthSchema.safeParse(await res.json());
+      return body.success && body.data.status === "ok" ? null : "song worker is not ok";
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }

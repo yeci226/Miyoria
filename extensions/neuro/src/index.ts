@@ -1,7 +1,7 @@
 // Neuro Game SDK compatible bridge: a WebSocket server (loopback by default, off unless
 // `serve = true`) that games integrating the Neuro Game SDK connect to. See README.md.
 
-import { defineExtension } from "@miyoria/sdk";
+import { defineExtension, Events } from "@miyoria/sdk";
 import { NeuroAdapter } from "./adapter.js";
 import { parseConfig } from "./config.js";
 import { NeuroServer } from "./server.js";
@@ -33,9 +33,9 @@ export default defineExtension({
     adapter.markReady();
 
     const speech = new SpeechRelay((message) => session.link?.send(message));
-    const off = ctx.events.on("voice.playback", (envelope) => {
-      if (!session.connected || envelope.event.type !== "voice_playback") return;
-      speech.playback(envelope.event.data.state);
+    const off = ctx.events.on(Events.VoicePlaybackEvent, (envelope) => {
+      if (!session.connected) return;
+      speech.playback(envelope.data.state);
     });
 
     const server = new NeuroServer(config, session, ctx.log);

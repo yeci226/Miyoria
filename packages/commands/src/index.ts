@@ -57,10 +57,8 @@ export {
   MESSAGE_EXCLUDE_NODE,
   REPLY_COOLDOWN_MS,
   registerMenus,
-  unregisterMenus,
 } from "./menus.js";
 export {
-  type CommandsConfig,
   CommandsConfigSchema,
   CommandsModule,
   type CommandsModuleOptions,
@@ -96,15 +94,13 @@ export {
 export {
   CHANNEL_TIERS,
   type ChannelTier,
-  PANEL_COMMANDS,
   type PanelsOptions,
   panelCommandPaths,
   panelDefs,
   registerPanels,
   tierOf,
-  unregisterPanels,
 } from "./panels.js";
-export { Permissions, parseAccount, ROLE_RANK, type Role } from "./perms.js";
+export { Permissions, parseAccount, type Role } from "./perms.js";
 export {
   type AuthorizerPreload,
   AuthorizerPreloadKey,

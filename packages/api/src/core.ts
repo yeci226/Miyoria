@@ -1,16 +1,33 @@
 // The original routes: health, modules, decisions, LLM usage and cost, persona, events (SSE).
+// All on the route table (`healthRpc`, `personaRpc`, `coreRpc`, `eventsRpc`).
 
-import { PersonaHandleKey } from "@miyoria/agent";
-import { errorMessage, getLogger, type ModuleStatus, SupervisorKey } from "@miyoria/kernel";
-import { LlmRouterKey, MIYORIA_VERSION } from "@miyoria/llm";
+import { PersonaHandleKey } from "@miyoria/brain/agent";
+import type {
+  CostReport,
+  DecisionRecord,
+  ModuleInfo,
+  PersonaOverride,
+  PersonaSectionInfo,
+  SetPersonaRequest,
+  SetPersonaResponse,
+  UsageMap,
+} from "@miyoria/contracts/api";
+import type { BusEnvelopeJson } from "@miyoria/contracts/events";
+import { LlmRouterKey, MIYORIA_VERSION } from "@miyoria/llm/llm";
+import {
+  errorMessage,
+  getLogger,
+  type ModuleStatus,
+  RequiredModuleError,
+  SupervisorKey,
+} from "@miyoria/runtime/kernel";
 import { DecisionLogKey, PersonaOverrideStoreKey } from "@miyoria/store";
-import type { JsonValue, ModuleId } from "@miyoria/types";
-import { z } from "zod";
+import type { BusEnvelope, JsonValue, ModuleId } from "@miyoria/types";
+import { withEventMeta } from "@orpc/server";
+import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { contextParam, readJson, readQuery, usizeParam } from "./extract.js";
-import { json, param, type Route } from "./route.js";
+import { contextParam } from "./extract.js";
 import { type ApiContext, type ApiState, actorOf } from "./state.js";
-import type { HealthInfo, PersonaSectionInfo, SetPersonaResponse, UsageInfo } from "./types.js";
 
 const log = getLogger("api.server");
 
@@ -69,6 +86,8 @@ export async function runModuleAction(
     }
   } catch (error) {
     if (error instanceof ApiError) throw error;
+    // Asked to disable a module that cannot be: nothing was stopped.
+    if (error instanceof RequiredModuleError) throw ApiError.conflict(error.message);
     failure = error;
   } finally {
     if (onAbort) signal.removeEventListener("abort", onAbort);
@@ -79,38 +98,25 @@ export async function runModuleAction(
   return findModule(sup.list(), id);
 }
 
-function health(): Response {
-  const body: HealthInfo = { status: "ok", version: MIYORIA_VERSION };
-  return json(body);
+function listModules(state: ApiState): ModuleInfo[] {
+  return state.service(SupervisorKey, "supervisor").list();
 }
 
-function listModules(state: ApiState): Response {
-  return json(state.service(SupervisorKey, "supervisor").list());
-}
-
-async function moduleAction(state: ApiState, c: ApiContext): Promise<Response> {
-  const status = await runModuleAction(state, c, param(c, "id"), param(c, "action"), "module");
-  return json(status);
-}
-
-const DecisionsQuerySchema = z.object({
-  limit: usizeParam.optional(),
-  /** JSON-encoded `ContextKey`. */
-  context: z.string().optional(),
-});
-
-async function decisions(state: ApiState, c: ApiContext): Promise<Response> {
-  const q = readQuery(c, DecisionsQuerySchema);
+/** `GET /api/decisions?limit=&context=`: `context` is a JSON-encoded `ContextKey`. */
+async function decisions(
+  state: ApiState,
+  q: { limit?: number | undefined; context?: string | undefined },
+): Promise<DecisionRecord[]> {
   const context = contextParam(q.context);
   const limit = Math.min(q.limit ?? DEFAULT_DECISIONS, MAX_DECISIONS);
   const decisionLog = state.service(DecisionLogKey, "decision log");
   const profile = state.profile();
-  return json(await decisionLog.recent(profile, context, limit));
+  return decisionLog.recent(profile, context, limit);
 }
 
-function llmUsage(state: ApiState): Response {
+function llmUsage(state: ApiState): UsageMap {
   const router = state.service(LlmRouterKey, "LLM router");
-  const usage: Record<string, UsageInfo> = {};
+  const usage: UsageMap = {};
   for (const key of [...router.usage().keys()].sort()) {
     const u = router.usage().get(key);
     if (!u) continue;
@@ -121,19 +127,16 @@ function llmUsage(state: ApiState): Response {
       cached_prompt_tokens: u.cached_prompt_tokens,
     };
   }
-  return json(usage);
+  return usage;
 }
 
-function llmCost(state: ApiState): Response {
-  return json(state.service(LlmRouterKey, "LLM router").costReport());
+function llmCost(state: ApiState): CostReport {
+  return state.service(LlmRouterKey, "LLM router").costReport();
 }
 
-function persona(state: ApiState): Response {
+function personaSections(state: ApiState): PersonaSectionInfo[] {
   const handle = state.service(PersonaHandleKey, "persona");
-  const sections: PersonaSectionInfo[] = handle
-    .sections()
-    .map((s) => ({ key: s.key, body: s.body }));
-  return json(sections);
+  return handle.sections().map((s) => ({ key: s.key, body: s.body }));
 }
 
 function checkSectionKey(key: string): void {
@@ -143,14 +146,12 @@ function checkSectionKey(key: string): void {
   );
 }
 
-const SetPersonaSchema = z.object({
-  body: z.string(),
-  edited_by: z.string().nullish(),
-});
-
-async function setPersonaSection(state: ApiState, c: ApiContext): Promise<Response> {
-  const request = await readJson(c, SetPersonaSchema);
-  const key = param(c, "key");
+async function setPersonaSection(
+  state: ApiState,
+  c: ApiContext,
+  key: string,
+  request: SetPersonaRequest,
+): Promise<SetPersonaResponse> {
   checkSectionKey(key);
   const handle = state.service(PersonaHandleKey, "persona");
   const overrides = state.service(PersonaOverrideStoreKey, "persona override store");
@@ -172,90 +173,105 @@ async function setPersonaSection(state: ApiState, c: ApiContext): Promise<Respon
   await state.audit(c, "persona.set", key, detail, failure === null);
   if (failure !== null || version === null) throw ApiError.internal(failure);
   handle.setSection(key, text);
-  const body: SetPersonaResponse = { key, version };
-  return json(body);
+  return { key, version };
 }
 
-async function personaHistory(state: ApiState, c: ApiContext): Promise<Response> {
-  const key = param(c, "key");
+async function personaHistory(state: ApiState, key: string): Promise<PersonaOverride[]> {
   checkSectionKey(key);
   const overrides = state.service(PersonaOverrideStoreKey, "persona override store");
   const profile = state.profile();
-  return json(await overrides.history(profile, key));
+  return overrides.history(profile, key);
 }
 
-const EventsQuerySchema = z.object({
-  /** Comma-separated topic patterns; empty means everything. */
-  topics: z.string().optional(),
-});
+/** `GET /api/health`. */
+export const healthRpc = os.health.handler(() => ({ status: "ok", version: MIYORIA_VERSION }));
 
-/** `GET /api/events?topics=platform.*,agent.*`: Server-Sent Events of bus envelopes. */
-function events(state: ApiState, c: ApiContext): Response {
-  const q = readQuery(c, EventsQuerySchema);
-  const patterns = (q.topics ?? "")
+/** `GET /api/persona`, `PUT /api/persona/{key}`, `GET /api/persona/{key}/history`. */
+export const personaRpc = {
+  list: os.persona.list.handler(({ context }) => personaSections(context.state)),
+  set: os.persona.set.handler(({ input, context }) =>
+    setPersonaSection(context.state, context.c, input.params.key, input.body),
+  ),
+  history: os.persona.history.handler(({ input, context }) =>
+    personaHistory(context.state, input.params.key),
+  ),
+};
+
+/** The module, decision and LLM usage routes on the route table. */
+export const coreRpc = {
+  modules: {
+    list: os.modules.list.handler(({ context }) => listModules(context.state)),
+    action: os.modules.action.handler(({ input, context }) =>
+      runModuleAction(context.state, context.c, input.params.id, input.params.action, "module"),
+    ),
+  },
+  decisions: os.decisions.handler(({ input, context }) => decisions(context.state, input.query)),
+  llm: {
+    usage: os.llm.usage.handler(({ context }) => llmUsage(context.state)),
+    cost: os.llm.cost.handler(({ context }) => llmCost(context.state)),
+  },
+};
+
+/** The envelope's fields in the schema's order (the bus stamps them in another order). */
+function wireEnvelope(env: BusEnvelope): BusEnvelope {
+  return {
+    id: env.id,
+    at: env.at,
+    type: env.type,
+    v: env.v,
+    parent: env.parent,
+    turn: env.turn,
+    session: env.session,
+    space_id: env.space_id,
+    room_id: env.room_id,
+    person_id: env.person_id,
+    account_id: env.account_id,
+    key: env.key,
+    scope: env.scope,
+    source: env.source,
+    data: env.data,
+  };
+}
+
+/**
+ * The bus envelopes matching `topics` (comma-separated patterns; none: everything), each with its
+ * id as the SSE `id:`, until the client goes away or the module stops. An event that does not
+ * serialize is skipped. The subscription is made when the stream starts and closed in `finally`.
+ */
+async function* busEvents(
+  state: ApiState,
+  topics: string | undefined,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<BusEnvelopeJson, void, unknown> {
+  const patterns = (topics ?? "")
     .split(",")
     .map((p) => p.trim())
     .filter((p) => p !== "");
-  const headers = { "content-type": "text/event-stream", "cache-control": "no-cache" };
-  // A `HEAD` gets the headers only; don't leave a subscription behind for it.
-  if (c.req.method === "HEAD") return new Response(null, { status: 200, headers });
   // Closed when the module stops, which ends the stream.
   const sub = state.ctx.subscribe(patterns.length === 0 ? "*" : patterns);
-  const encoder = new TextEncoder();
-  let keepAlive: ReturnType<typeof setInterval> | undefined;
-  const requestSignal = c.req.raw.signal;
-  const onClientGone = () => sub.close();
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      keepAlive = setInterval(() => {
-        try {
-          controller.enqueue(encoder.encode(":\n\n"));
-        } catch {
-          sub.close();
-        }
-      }, KEEP_ALIVE_MS);
-      requestSignal.addEventListener("abort", onClientGone, { once: true });
-    },
-    async pull(controller) {
-      for (;;) {
-        const env = await sub.recv();
-        if (env === null) {
-          clearInterval(keepAlive);
-          requestSignal.removeEventListener("abort", onClientGone);
-          controller.close();
-          return;
-        }
-        let data: string;
-        try {
-          data = JSON.stringify(env);
-        } catch (error) {
-          log.warn({ error: errorMessage(error) }, "failed to serialize event for SSE");
-          continue;
-        }
-        controller.enqueue(encoder.encode(`id: ${env.id}\ndata: ${data}\n\n`));
-        return;
+  // A generator waiting for the next event cannot be returned from; closing the subscription
+  // ends that wait.
+  const close = () => sub.close();
+  signal?.addEventListener("abort", close, { once: true });
+  try {
+    for await (const env of sub) {
+      let wire: BusEnvelopeJson;
+      try {
+        // As JSON reads it, so what the schema checks is what is sent.
+        wire = JSON.parse(JSON.stringify(wireEnvelope(env))) as BusEnvelopeJson;
+      } catch (error) {
+        log.warn({ error: errorMessage(error) }, "failed to serialize event for SSE");
+        continue;
       }
-    },
-    cancel() {
-      clearInterval(keepAlive);
-      requestSignal.removeEventListener("abort", onClientGone);
-      sub.close();
-    },
-  });
-  return new Response(stream, { status: 200, headers });
+      yield withEventMeta(wire, { id: env.id });
+    }
+  } finally {
+    signal?.removeEventListener("abort", close);
+    sub.close();
+  }
 }
 
-export function coreRoutes(state: ApiState): Route[] {
-  return [
-    { method: "GET", path: "/api/health", handler: health, public: true },
-    { method: "GET", path: "/api/modules", handler: () => listModules(state) },
-    { method: "POST", path: "/api/modules/:id/:action", handler: (c) => moduleAction(state, c) },
-    { method: "GET", path: "/api/decisions", handler: (c) => decisions(state, c) },
-    { method: "GET", path: "/api/llm/usage", handler: () => llmUsage(state) },
-    { method: "GET", path: "/api/llm/cost", handler: () => llmCost(state) },
-    { method: "GET", path: "/api/persona", handler: () => persona(state) },
-    { method: "PUT", path: "/api/persona/:key", handler: (c) => setPersonaSection(state, c) },
-    { method: "GET", path: "/api/persona/:key/history", handler: (c) => personaHistory(state, c) },
-    { method: "GET", path: "/api/events", handler: (c) => events(state, c) },
-  ];
-}
+/** `GET /api/events`: Server-Sent Events of bus envelopes (`HEAD` is answered by the shell). */
+export const eventsRpc = os.events.handler(({ input, context, signal }) =>
+  busEvents(context.state, input.query.topics, signal),
+);

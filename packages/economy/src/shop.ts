@@ -49,7 +49,7 @@ export class ShopDesk {
   }
 
   async #titles(who: Member): Promise<EconomyDoc[]> {
-    return this.e.docs().list(this.e.profile, TITLE, { owners: who.wallet, limit: 100 });
+    return this.e.docs().list(this.e.profile, TITLE, { owners: who.accounts, limit: 100 });
   }
 
   /** The titles a person bought. */
@@ -136,7 +136,6 @@ export class ShopDesk {
     const at = toTimestamp(this.e.now());
     await this.e.docs().create({
       id: `title:${who.person.id}:${item.id}`,
-      profile: this.e.profile,
       kind: TITLE,
       owner: who.account,
       status: "held",

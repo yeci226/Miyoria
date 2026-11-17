@@ -13,8 +13,8 @@
 //
 // `talk` and `initiative` are weights per unit of intensity, and the strongest up and the strongest
 // down of each count, not their sum: one feeling never adds up with another into a flood. What
-// they become is `computeBiases` (packages/self/src/biases.ts), bounded by its `MAX_BIAS` and by
-// the Floor's own limits. Display rules may hide an emotion's `tag` (packages/self/src/display.ts):
+// they become is `computeBiases` (packages/heart/self/src/biases.ts), bounded by its `MAX_BIAS` and by
+// the Floor's own limits. Display rules may hide an emotion's `tag` (packages/heart/self/src/display.ts):
 // that is what she shows, and what she feels still moves `talk`, `initiative` and `want`.
 //
 // None of this touches a rule: emotions change how she speaks and what she wants, never what she

@@ -2,17 +2,7 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import type {
-  GoalView,
-  IssuedCard,
-  IssuedFortune,
-  MemberSession,
-  MemberView,
-  PublicSongs,
-  PublicStatus,
-  SessionInfo,
-  WalletView,
-} from "@/api/types";
+import type { GoalView, IssuedCard, IssuedFortune, MemberSession, MemberView, PublicSongs, PublicStatus, SessionInfo, WalletView } from "@miyoria/contracts/api";
 import { App } from "@/app/App";
 import { STORAGE_BASE_URL, STORAGE_TOKEN } from "@/app/connection";
 import { createAppRouter } from "@/app/router";
@@ -51,6 +41,15 @@ const ME: MemberView = {
     familiarity: "熟",
     public_feeling: "妳總是記得跟我打招呼。",
   },
+  bond: {
+    tier: "好朋友",
+    stage: 2,
+    tier_label: "好朋友 II",
+    next_tier: "摯友",
+    next_label: "好朋友 III",
+    tier_progress: 0.4,
+    ring: { lap: 0, fraction: 0.5, full: false },
+  },
   memories: [{ text: "小愛喜歡貓", kind: "fact", date: "2026-11-07" }],
   songs: [{ title: "群青", artist: "YOASOBI", state: "ready", requested_at: "2026-11-07T12:00:00Z" }],
   activity: [
@@ -70,8 +69,10 @@ const STRANGER: MemberView = {
     familiarity: null,
     public_feeling: null,
   },
+  bond: null,
   memories: [],
   songs: [],
+  activity: [],
   can_request_song: false,
   forget: ME.forget,
 };
@@ -110,6 +111,7 @@ const WALLET: WalletView = {
     { ts: "2026-11-08T03:00:00Z", delta: 10, label: "每日簽到" },
     { ts: "2026-11-08T02:00:00Z", delta: -10, label: "餵了一碗白飯" },
   ],
+  deals: [],
   on_board: false,
 };
 
@@ -133,6 +135,7 @@ const GOAL: GoalView = {
   my_pledge: 0,
   deadline: "2099-01-01T00:00:00Z",
   status: "open",
+  fulfilled: false,
 };
 
 const OFFERS_FOR_REROLL = {
@@ -176,7 +179,13 @@ const CARD: IssuedCard = {
   trust: "信任",
   familiarity: "熟",
   public_feeling: "妳總是記得跟我打招呼。",
+  line: null,
+  stamp: null,
+  fields: [],
   pose: "blush",
+  frame: null,
+  foil: false,
+  voided_at: null,
 };
 
 function core(o: Options = {}) {
@@ -390,12 +399,55 @@ describe("a member", () => {
     renderApp();
     const view = await screen.findByRole("region", { name: "她眼中的你" });
     expect(await within(view).findByText("小愛")).toBeInTheDocument();
-    expect(within(view).getByText("好朋友")).toBeInTheDocument();
-    expect(within(view).getByText("很好")).toBeInTheDocument();
+    // The header and the bond band both say where they are, with the stage.
+    expect(within(view).getAllByText("好朋友 II")).toHaveLength(2);
+    expect(within(view).getByText("離「好朋友 III」還有一段")).toBeInTheDocument();
+    expect(within(view).getAllByText("信任")).toHaveLength(2);
+    expect(within(view).getByText("熟")).toBeInTheDocument();
     expect(within(view).getByText("妳總是記得跟我打招呼。")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "一起的回憶" })).toHaveTextContent("小愛喜歡貓");
     expect(screen.getByRole("region", { name: "你點的歌" })).toHaveTextContent("群青");
     expect(within(view).getByRole("heading", { name: "Alice" })).toBeInTheDocument();
+  });
+
+  it("sees the bond as the ring with nothing on the heart, and never a number", async () => {
+    // A bond deep in the ring (lap 4): the page has only the lap, the fill and the words.
+    const bond = { tier: "心有靈犀", stage: 2, tier_label: "心有靈犀 II", next_tier: "形影不離", next_label: "心有靈犀 III", tier_progress: 0.4, ring: { lap: 3, fraction: 0.4, full: false } };
+    core({ member: USER, me: { ...ME, bond } });
+    renderApp();
+    const view = await screen.findByRole("region", { name: "她眼中的你" });
+    const ring = await waitFor(() => {
+      const svg = view.querySelector('[data-bond-ring="ring"]');
+      if (!svg) throw new Error("no ring yet");
+      return svg;
+    });
+    expect(ring.querySelector("text")).toBeNull();
+    expect(ring.querySelectorAll('[data-segment="lit"]')).toHaveLength(3);
+    expect(ring.getAttribute("aria-label")).toBe("羈絆 心有靈犀 II");
+    expect(within(view).getByText("離「心有靈犀 III」還有一段")).toBeInTheDocument();
+    // No digit anywhere in how she sees them: not in the text, not in the drawing.
+    expect(view.textContent).not.toMatch(/[0-9]/);
+    // 信任 and 熟悉 keep their bands, in words.
+    expect(within(view).getAllByText("信任")).toHaveLength(2);
+    expect(within(view).getByText("熟悉")).toBeInTheDocument();
+  });
+
+  it("says nothing of a next step at the top", async () => {
+    const bond = { tier: "永恆羈絆", stage: null, tier_label: "永恆羈絆", next_tier: null, next_label: null, tier_progress: 1, ring: { lap: 9, fraction: 1, full: true } };
+    core({ member: USER, me: { ...ME, bond } });
+    renderApp();
+    const view = await screen.findByRole("region", { name: "她眼中的你" });
+    expect(await within(view).findAllByText("永恆羈絆")).toHaveLength(2);
+    expect(view.textContent).not.toMatch(/還有一段/);
+    expect(view.querySelectorAll('[data-segment="lit"]')).toHaveLength(10);
+  });
+
+  it("keeps the six steps of the bond from a Core without the ring", async () => {
+    core({ member: USER, me: { ...ME, bond: null } });
+    renderApp();
+    const view = await screen.findByRole("region", { name: "她眼中的你" });
+    expect(await within(view).findByText("很好")).toBeInTheDocument();
+    expect(view.querySelector("[data-bond-ring]")).toBeNull();
   });
 
   it("sees how much they talked to her and what she did, as charts", async () => {
@@ -484,6 +536,8 @@ describe("someone she has nothing to show for", () => {
     renderApp();
     const view = await screen.findByRole("region", { name: "她眼中的你" });
     expect(await within(view).findByText("她還不認識你")).toBeInTheDocument();
+    expect(view.querySelector("[data-bond-ring]")).toBeNull();
+    expect(within(view).queryByText("羈絆")).toBeNull();
     expect(screen.getByRole("region", { name: "一起的回憶" })).toHaveTextContent("還沒有一起的回憶");
     expect(screen.queryByLabelText("歌名或 YouTube / bilibili 連結")).toBeNull();
     expect(document.body.textContent).not.toMatch(/封鎖|blocked/i);

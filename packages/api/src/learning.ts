@@ -2,9 +2,17 @@
 // shape), `GET /api/knowledge/conversations` (her running notes on each conversation),
 // `GET /api/reflection` (her reflections, lessons and feedback signals) and
 // `GET /api/mind/digests` (condensed older thoughts). Changes are hers (or the data page's
-// delete), not these routes'.
+// delete), not these routes'. On the route table (`@miyoria/contracts/api`): `knowledgeRpc`,
+// `reflectionRpc` and `digestRpc`.
 
-import { SocialKey } from "@miyoria/social";
+import type {
+  ConversationNote as ConversationNoteView,
+  KnowledgeDoc as KnowledgeDocView,
+  KnowledgeView,
+  Lesson as LessonView,
+  ReflectionView,
+} from "@miyoria/contracts/api";
+import { PeopleDirectoryKey } from "@miyoria/heart/person";
 import {
   ConversationStatesKey,
   KnowledgeKey,
@@ -14,15 +22,8 @@ import {
   PlatformSinksKey,
   ReflectionKey,
 } from "@miyoria/types";
-import { json, type Route } from "./route.js";
+import { os } from "./contract.js";
 import type { ApiState } from "./state.js";
-import type {
-  ConversationNoteView,
-  KnowledgeDocView,
-  KnowledgeView,
-  LessonView,
-  ReflectionView,
-} from "./types.js";
 
 const MAX_RUNS = 60;
 
@@ -34,7 +35,7 @@ function shortId(id: string): string {
 function subjectLabel(state: ApiState, subject: KnowledgeSubject): string {
   switch (subject.type) {
     case "person":
-      return state.optional(SocialKey)?.displayName(subject.person) ?? subject.person;
+      return state.optional(PeopleDirectoryKey)?.displayName(subject.person) ?? subject.person;
     case "guild":
       return `伺服器 ${subject.guild}`;
     case "self":
@@ -72,7 +73,7 @@ async function conversations(state: ApiState): Promise<ConversationNoteView[]> {
 
 function reflectionView(state: ApiState, days: number): ReflectionView {
   const reflection = state.service(ReflectionKey, "reflect module");
-  const social = state.optional(SocialKey);
+  const social = state.optional(PeopleDirectoryKey);
   const lessons: LessonView[] = (state.optional(LessonsKey)?.all() ?? []).map((l) => ({
     ...l,
     display_name: l.person === null ? null : (social?.displayName(l.person) ?? null),
@@ -85,31 +86,27 @@ function reflectionView(state: ApiState, days: number): ReflectionView {
   };
 }
 
-function intQuery(raw: string | undefined, fallback: number, max: number): number {
+/** A count of the query string; one that is not a number is `fallback`, as it always was. */
+function intQuery(raw: string | number | undefined, fallback: number, max: number): number {
   const n = Number(raw ?? fallback);
   return Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), 1), max) : fallback;
 }
 
-export function learningRoutes(state: ApiState): Route[] {
-  return [
-    { method: "GET", path: "/api/knowledge", handler: () => json(knowledgeView(state)) },
-    {
-      method: "GET",
-      path: "/api/knowledge/conversations",
-      handler: async () => json(await conversations(state)),
-    },
-    {
-      method: "GET",
-      path: "/api/reflection",
-      handler: (c) => json(reflectionView(state, intQuery(c.req.query("days"), 7, 14))),
-    },
-    {
-      method: "GET",
-      path: "/api/mind/digests",
-      handler: (c) => {
-        const mind = state.service(MindKey, "mind module");
-        return json(mind.digests?.(intQuery(c.req.query("limit"), 20, 100)) ?? []);
-      },
-    },
-  ];
-}
+/** `GET /api/knowledge` and `GET /api/knowledge/conversations`. */
+export const knowledgeRpc = {
+  documents: os.knowledge.documents.handler(({ context }) => knowledgeView(context.state)),
+  conversations: os.knowledge.conversations.handler(({ context }) => conversations(context.state)),
+};
+
+/** `GET /api/reflection?days=`. */
+export const reflectionRpc = os.reflection.handler(({ input, context }) =>
+  reflectionView(context.state, intQuery(input.query.days, 7, 14)),
+);
+
+/** `GET /api/mind/digests?limit=`: joins the mind group. */
+export const digestRpc = {
+  digests: os.mind.digests.handler(({ input, context }) => {
+    const mind = context.state.service(MindKey, "mind module");
+    return mind.digests?.(intQuery(input.query.limit, 20, 100)) ?? [];
+  }),
+};

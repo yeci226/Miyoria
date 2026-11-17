@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Music } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
-import type { MemberCard, MemberDay, MemberForgetResult, MemberSession, MemberSong } from "@/api/types";
+import { BondRing } from "@miyoria/card-face";
+import type { MemberBond, MemberDay, MemberForgetResult, MemberSession, MemberSong, MemberView } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { ChartBlock, ChartEmpty, ColumnChart } from "@/components/charts/charts";
 import { ConfirmDialog } from "@/components/confirm";
@@ -36,7 +37,7 @@ function useMe() {
   const api = useApi();
   return useQuery({
     queryKey: ME,
-    queryFn: ({ signal }) => api.memberMe({ signal }),
+    queryFn: ({ signal }) => api.rpc.member.me(undefined, { signal }),
     refetchInterval: POLL_MS,
   });
 }
@@ -67,12 +68,35 @@ function Band({ label, value, scale }: { label: string; value: string | null; sc
   );
 }
 
-function HerView({ card }: { card: MemberCard }) {
+/**
+ * The bond as they see it: the ring with nothing on the heart, the tier, and how far the next step
+ * is in words. Never the number.
+ */
+function BondBand({ bond }: { bond: MemberBond }) {
+  const tier = bond.tier_label || bond.tier;
+  return (
+    <div className="grid min-w-0 grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-3">
+      <div className="size-[4.5rem] [&>svg]:size-full">
+        <BondRing lap={bond.ring.lap} fraction={bond.ring.fraction} full={bond.ring.full} title={`羈絆 ${tier}`} />
+      </div>
+      <div className="grid min-w-0 gap-1">
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="text-xs text-muted-foreground">羈絆</dt>
+          <dd className="truncate text-sm font-medium">{tier}</dd>
+        </div>
+        {bond.next_label && <dd className="text-[13px] text-muted-foreground">離「{bond.next_label}」還有一段</dd>}
+      </div>
+    </div>
+  );
+}
+
+function HerView({ view }: { view: MemberView }) {
+  const { card, bond } = view;
   if (card.relationship === null) return <EmptyLine>她還不認識你</EmptyLine>;
   return (
     <div className="grid gap-4">
       <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-3">
-        <Band label="好感" value={card.affinity} scale={AFFINITY} />
+        {bond ? <BondBand bond={bond} /> : <Band label="羈絆" value={card.affinity} scale={AFFINITY} />}
         <Band label="信任" value={card.trust} scale={TRUST} />
         <Band label="熟悉" value={card.familiarity} scale={FAMILIARITY} />
       </dl>
@@ -89,6 +113,7 @@ function HerView({ card }: { card: MemberCard }) {
 export function MemberProfile({ member }: { member: MemberSession }) {
   const me = useMe();
   const card = me.data?.card;
+  const bond = me.data?.bond;
   const initial = [...member.name.trim()][0] ?? "?";
   return (
     <Card aria-label="她眼中的你">
@@ -110,7 +135,7 @@ export function MemberProfile({ member }: { member: MemberSession }) {
                 </span>
               )}
               <span>
-                關係 <span className="font-medium text-foreground">{card.relationship}</span>
+                關係 <span className="font-medium text-foreground">{bond?.tier_label || card.relationship}</span>
               </span>
             </p>
           ) : (
@@ -119,7 +144,7 @@ export function MemberProfile({ member }: { member: MemberSession }) {
         </div>
       </div>
       <QueryView query={me} skeleton={<SkeletonRows count={2} />}>
-        {(v) => <HerView card={v.card} />}
+        {(v) => <HerView view={v} />}
       </QueryView>
     </Card>
   );
@@ -236,7 +261,7 @@ function RequestSong() {
   const [query, setQuery] = useState("");
   const id = useId();
   const request = useMutation({
-    mutationFn: (text: string) => api.memberRequestSong(text),
+    mutationFn: (text: string) => api.rpc.member.requestSong({ body: { query: text } }),
     onSuccess: () => {
       setQuery("");
       notify.ok("已經交給她了,唱不唱由她決定");
@@ -286,7 +311,7 @@ function YourData() {
   const me = useMe();
   const [asking, setAsking] = useState(false);
   const forget = useMutation({
-    mutationFn: () => api.memberForget(),
+    mutationFn: () => api.rpc.member.forget({ body: { confirm: true } }),
     onSuccess: (r) => {
       setAsking(false);
       notify.ok(forgotten(r));

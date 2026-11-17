@@ -1,4 +1,4 @@
-import type { CompiledBlock, SavedPrompt, TurnOutcomeRecord } from "@/api/types";
+import type { CompiledBlock, SavedPrompt, TurnOutcomeRecord } from "@miyoria/contracts/api";
 import { isApiError } from "@/api/http";
 import { usePrompt, useTurnOutcomes } from "@/app/queries";
 import { Facts } from "@/components/json-view";

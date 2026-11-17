@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Brain, Check, ChevronDown, Copy, Wrench } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import type { LlmCallDetail, LlmCallRecord } from "@/api/types";
+import type { LlmCallDetail, LlmCallRecord } from "@miyoria/contracts/api";
 import { useLlmCall } from "@/app/queries";
 import { ErrorLine, SkeletonRows } from "@/components/query-state";
 import { StatusBadge } from "@/components/status";

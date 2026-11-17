@@ -3,9 +3,11 @@
 // hands exactly that over; an older one ignores it and the turn is cut out of a time window.
 
 import type { Api } from "@/api/endpoints";
-import type { E2eRecord, LogEvent, Timestamp } from "@/api/types";
+import type { E2eRecord, LogEvent } from "@/api/types";
+import type { Timestamp } from "@miyoria/contracts/wire";
 import { laneOf, turnOf } from "@/lib/consciousness";
 import { asE2eEvent } from "@/lib/e2e";
+import { factEventsInput } from "@/lib/fact-events";
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -51,15 +53,15 @@ export interface TurnFacts {
  * to `turnFacts`.
  */
 export async function fetchTurnEvents(
-  api: Pick<Api, "factEvents">,
+  api: Pick<Api, "rpc">,
   turn: string,
   window: { since: Timestamp; until: Timestamp } | null,
   limit: number,
   signal?: AbortSignal,
 ): Promise<LogEvent[]> {
-  const exact = await api.factEvents({ turn, order: "asc", limit }, { signal });
+  const exact = await api.rpc.facts.events(factEventsInput({ turn, order: "asc", limit }), { signal });
   if (exact.some((e) => turnOf(e) === turn) || window === null) return exact;
-  return api.factEvents({ ...window, order: "asc", limit }, { signal });
+  return api.rpc.facts.events(factEventsInput({ ...window, order: "asc", limit }), { signal });
 }
 
 /** The measurement of a turn's reply in its log lines (the newest, if it was measured twice). */

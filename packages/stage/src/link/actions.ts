@@ -9,8 +9,8 @@
 // tool, a command, the panel) is a timed override (`scene_override`, `manual_hold_ms` long) the
 // director follows instead of fighting it.
 
-import { type Capability, CapabilityError, defineCapability } from "@miyoria/actions";
-import { SerialQueue } from "@miyoria/kernel";
+import { type Capability, CapabilityError, defineCapability } from "@miyoria/gate/actions";
+import { SerialQueue } from "@miyoria/runtime/kernel";
 import { actLane, type StreamCurtain } from "@miyoria/types";
 import { z } from "zod";
 import { GIFT_EXPRESSION_MAX_S, GIFT_EXPRESSIONS, type SceneTransition } from "../protocol.js";
@@ -98,6 +98,7 @@ export function stageCapabilities(
     permission: "stream.scene",
     tool: {
       name: "stage_scene",
+      meta: { effect: "act", speed: "instant", group: "stream" },
       description:
         `切換直播畫面(OBS)的場景。通常用 role 指定用途:${ROLE_HELP};` +
         "也可以用 name 指定直播機回報的場景名稱。開台、玩遊戲、暫離時導演會自動切換,只有你自己想換時才用。",

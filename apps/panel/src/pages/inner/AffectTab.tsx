@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { AffectBiases, AffectSnapshot } from "@/api/types";
+import type { AffectBiases, AffectSnapshot } from "@miyoria/contracts/api";
 import { useAffect } from "@/app/queries";
 import { EmptyLine, QueryView, SkeletonRows } from "@/components/query-state";
 import { Bipolar, Meter, StatusBadge } from "@/components/status";

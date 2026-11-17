@@ -1,6 +1,6 @@
 // `/me card` and `/me fortune`: neutral answers over the Keepsakes service, and the hub page.
 
-import { ServiceRegistry } from "@miyoria/kernel";
+import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import {
   type KeepsakeCard,
   type KeepsakeCardOrder,

@@ -1,7 +1,8 @@
 // 意識軸: EventLog lines laid on four lanes (聽到, 想, 說, 做), joined by their `cause`. Pure
 // functions only; the drawing is `components/charts/consciousness-axis.tsx`.
 
-import type { LogEvent, LogEventKind, SteerBody, SteerOutcome, ThoughtBody, TurnOutcome } from "@/api/types";
+import type { LogEvent, SteerBody, SteerOutcome, ThoughtBody } from "@/api/types";
+import type { LogEventKind, TurnOutcome } from "@miyoria/contracts/api";
 import { asE2eEvent, fmtMs } from "@/lib/e2e";
 import { OUTCOME_KINDS, outcomeText, REASON_LABEL, TURN_REASON_LABEL, VERDICT_LABEL } from "@/pages/activity/labels";
 
@@ -32,7 +33,7 @@ const first = (r: Rec, keys: string[]): string | undefined => {
   }
   return undefined;
 };
-const label = <T extends string>(table: Record<T, string>, key: string | undefined): string | undefined =>
+const label = <T extends string>(table: Partial<Record<T, string>>, key: string | undefined): string | undefined =>
   key === undefined ? undefined : ((table as Record<string, string>)[key] ?? key);
 
 /** What a task or an action did is 做; people and the world are 聽到. */
@@ -147,8 +148,14 @@ export function describe(e: LogEvent): Described {
       return { title: text(body.said) ?? e.source, detail: label(CHANNEL_LABEL, text(body.channel)) ?? null };
     case "delivered":
       return { title: text(body.said) ?? e.source, detail: `已送達${text(body.channel) ? ` · ${label(CHANNEL_LABEL, text(body.channel))}` : ""}` };
-    case "action":
+    case "action": {
+      // A tool call of a turn (`agent.tool`): the tool, and what it answered.
+      const tool = e.source === "agent.tool" ? text(body.tool) : undefined;
+      if (tool !== undefined) {
+        return { title: `${body.ok === false ? "工具失敗 · " : ""}${tool}`, detail: text(body.result) ?? null };
+      }
       return { title: text(body.capability) ?? e.source, detail: text(body.why) ?? null };
+    }
     case "steer": {
       const s = steerBody(e);
       if (s === null) return { title: "改方向", detail: null };

@@ -1,7 +1,8 @@
 import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, Brain, RotateCcw, Shuffle, Wrench, X } from "lucide-react";
 import { useDeferredValue, useState } from "react";
-import type { LlmCallRecord, LlmCallsQuery } from "@/api/types";
+import type { LlmCallsQuery } from "@/api/types";
+import type { LlmCallRecord } from "@miyoria/contracts/api";
 import { useLlmCalls, useLlmStats } from "@/app/queries";
 import type { LlmSearch } from "@/app/router";
 import { SearchInput } from "@/components/controls";

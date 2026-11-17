@@ -8,7 +8,7 @@
 // A chosen picture stays on the member page: it is picked by looking at the pictures. `/me
 // fortune` draws once a day and shows the same slip when asked again, for nothing.
 
-import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/kernel";
+import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import {
   type KeepsakeCard,
   type KeepsakeCards,

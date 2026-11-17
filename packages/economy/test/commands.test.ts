@@ -8,7 +8,7 @@ import {
   panelDefs,
   replyEphemeral,
 } from "@miyoria/commands";
-import { ServiceRegistry } from "@miyoria/kernel";
+import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import type { AccountRef, ContextKey } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { EconomyCommands, PATHS, walletText } from "../src/commands.js";

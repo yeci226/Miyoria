@@ -12,7 +12,8 @@
     "verbatimModuleSyntax": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "customConditions": ["@miyoria/source"]
   },
   "include": ["src", "test"]
 }

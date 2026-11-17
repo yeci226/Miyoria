@@ -11,7 +11,7 @@
 
 import { stat } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import type { Clock } from "@miyoria/types";
 import type { Obs, ObsConfig, SceneItem } from "./obs.js";
 

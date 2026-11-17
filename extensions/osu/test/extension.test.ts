@@ -80,7 +80,7 @@ function host() {
 
 function initialize(peer: RpcPeer, config: Record<string, unknown>) {
   return peer.request<InitializeResult>("initialize", {
-    protocol: 1,
+    protocol: 2,
     host: { name: "miyoria", version: "0.1.0" },
     extension: { id: "miyoria.osu", version: "0.1.0", dir: "/ext", game: null },
     config,

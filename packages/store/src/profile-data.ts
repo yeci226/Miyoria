@@ -1,4 +1,4 @@
-// How a backend's raw column values become plain JSON (backups, inventories). The categories
+// How raw column values become plain JSON (backups, inventories). The categories
 // themselves and their SQL live in `data.ts`.
 
 import type { JsonValue } from "@miyoria/types";
@@ -6,7 +6,7 @@ import { fromMicros, normalizeTimestamp } from "./common.js";
 
 export type ExportColumn = "text" | "num" | "bool" | "ts" | "json";
 
-/** A raw value (SQLite or pg) of a column of kind `kind` as JSON. */
+/** A raw SQLite value of a column of kind `kind` as JSON. */
 export function exportValue(kind: ExportColumn, raw: unknown): JsonValue {
   if (raw === null || raw === undefined) return null;
   switch (kind) {

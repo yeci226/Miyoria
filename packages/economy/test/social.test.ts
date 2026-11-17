@@ -3,8 +3,8 @@
 // two rows finished by a retry) and the sponsor board (opt-in only, the window, refunds, linked
 // accounts as one person, no balances).
 
-import { getLogger, ServiceRegistry } from "@miyoria/kernel";
-import { CoinLedgerStoreKey, PeopleStoreKey, SqliteStore } from "@miyoria/store";
+import { getLogger, ServiceRegistry } from "@miyoria/runtime/kernel";
+import { PeopleStoreKey, SqliteStore } from "@miyoria/store";
 import {
   type AccountRef,
   AffectStateKey,
@@ -15,8 +15,10 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { EconomyConfigSchema } from "../src/config.js";
 import { EconomyService } from "../src/economy.js";
+import { CoinLedgerStoreKey } from "../src/records.js";
 import { inIdOf, NO_RECEIVER, NO_TRANSFERS, OWN_ACCOUNT, otherName } from "../src/transfer.js";
 import { EconomyError } from "../src/types.js";
+import { economyOf, ledgerOf, walletOf } from "./ledger.js";
 
 const DAY = 86_400_000;
 const T0 = Date.UTC(2026, 10, 8, 4, 0, 0);
@@ -39,7 +41,7 @@ async function rig(config: Record<string, number> = {}) {
   const store = await SqliteStore.open(":memory:");
   stores.push(store);
   const services = new ServiceRegistry();
-  services.provide("t", CoinLedgerStoreKey, store.coins);
+  services.provide("t", CoinLedgerStoreKey, ledgerOf(store));
   services.provide("t", PeopleStoreKey, store.people);
   const people = new Map<string, PersonId>();
   for (const [a, name] of [
@@ -82,19 +84,15 @@ async function post(
   extra: { ref?: string | null; at?: number; id?: string } = {},
 ) {
   const id = extra.id ?? `seed-${account.id}-${reason}-${r.clock.at}-${delta}-${Math.random()}`;
-  await r.store.coins.post(
-    {
-      id,
-      profile: "p",
-      account,
-      delta,
-      reason,
-      ref: extra.ref ?? null,
-      idem_key: null,
-      ts: new Date(extra.at ?? r.clock.at).toISOString(),
-    },
-    { wallet: [] },
-  );
+  await ledgerOf(r.store).post({
+    id,
+    person: walletOf(r.store, account),
+    delta,
+    reason,
+    ref: extra.ref ?? null,
+    idem_key: null,
+    ts: new Date(extra.at ?? r.clock.at).toISOString(),
+  });
   return id;
 }
 
@@ -123,10 +121,16 @@ describe("transfers", () => {
     expect(mine).toMatchObject({ delta: -30, label: "轉給 Bob∶*x*" });
     expect(theirs).toMatchObject({ delta: 30, label: "Alice 轉給你" });
     const rowOut = (
-      await r.store.coins.entries("p", [ALICE], { reasons: ["transfer_out"], limit: 9 })
+      await ledgerOf(r.store).entries("p", walletOf(r.store, ALICE), {
+        reasons: ["transfer_out"],
+        limit: 9,
+      })
     )[0];
     const rowIn = (
-      await r.store.coins.entries("p", [BOB], { reasons: ["transfer_in"], limit: 9 })
+      await ledgerOf(r.store).entries("p", walletOf(r.store, BOB), {
+        reasons: ["transfer_in"],
+        limit: 9,
+      })
     )[0];
     expect(rowIn?.id).toBe(inIdOf(rowOut?.id ?? ""));
     expect(rowOut?.ref?.startsWith(rowIn?.id ?? "?")).toBe(true);
@@ -138,7 +142,7 @@ describe("transfers", () => {
     const r = await rig();
     await post(r, ALICE, 80, "checkin");
     await r.economy.transfer(ALICE, BOB, 10, "k1");
-    const spent = await r.store.coins.spent(
+    const spent = await ledgerOf(r.store).spent(
       "p",
       ["feed", "letter", "expression"],
       "2000-01-01T00:00:00Z",
@@ -212,19 +216,15 @@ describe("transfers", () => {
     const r = await rig();
     await post(r, ALICE, 80, "checkin");
     // The first try died after the sender's row.
-    await r.store.coins.post(
-      {
-        id: "OUT1",
-        profile: "p",
-        account: ALICE,
-        delta: -25,
-        reason: "transfer_out",
-        ref: "OUT1~in:Bob",
-        idem_key: "transfer:crash",
-        ts: new Date(T0).toISOString(),
-      },
-      { wallet: [ALICE] },
-    );
+    await ledgerOf(r.store).post({
+      id: "OUT1",
+      person: walletOf(r.store, ALICE),
+      delta: -25,
+      reason: "transfer_out",
+      ref: "OUT1~in:Bob",
+      idem_key: "transfer:crash",
+      ts: new Date(T0).toISOString(),
+    });
     expect(await balance(r, BOB)).toBe(0);
     const done = await r.economy.transfer(ALICE, BOB, 25, "crash");
     expect(done.sent).toBe(25);
@@ -238,19 +238,15 @@ describe("transfers", () => {
     const r = await rig({ transfer_in_per_day: 30 });
     await post(r, ALICE, 80, "checkin");
     await post(r, BOB, 0 + 1, "checkin");
-    await r.store.coins.post(
-      {
-        id: "OUT2",
-        profile: "p",
-        account: ALICE,
-        delta: -40,
-        reason: "transfer_out",
-        ref: "OUT2~in:Bob",
-        idem_key: "transfer:late",
-        ts: new Date(T0).toISOString(),
-      },
-      { wallet: [ALICE] },
-    );
+    await ledgerOf(r.store).post({
+      id: "OUT2",
+      person: walletOf(r.store, ALICE),
+      delta: -40,
+      reason: "transfer_out",
+      ref: "OUT2~in:Bob",
+      idem_key: "transfer:late",
+      ts: new Date(T0).toISOString(),
+    });
     await refused(r.economy.transfer(ALICE, BOB, 40, "late"), 403, NO_RECEIVER);
     expect(await balance(r, ALICE)).toBe(80 - 40 + 40);
     expect(await balance(r, BOB)).toBe(1);
@@ -321,10 +317,9 @@ describe("the sponsor board", () => {
     const held = await post(r, BOB, -10, "deal_escrow", { id: "ESC1" });
     const paid = await post(r, BOB, -40, "deal_escrow", { id: "ESC2" });
     const sent = (id: string, escrow: string, status: string) =>
-      r.store.deals
-        .create({
+      economyOf(r.store)
+        .deals.create({
           id,
-          profile: "p",
           account: BOB,
           item: "rice",
           count: 1,
@@ -339,7 +334,8 @@ describe("the sponsor board", () => {
           closed_at: null,
         } as never)
         .then(async () => {
-          if (status !== "open") await r.store.deals.transition(id, ["open"], { status } as never);
+          if (status !== "open")
+            await economyOf(r.store).deals.transition(id, ["open"], { status } as never);
         });
     await sent("D1", held, "open");
     await sent("D2", paid, "settled");
@@ -376,9 +372,14 @@ describe("the sponsor board", () => {
 
   it("leaves a chosen frame alone", async () => {
     const r = await rig();
-    await r.store.coins.selectFrame("p", ALICE, "sakura", new Date(T0).toISOString());
+    await ledgerOf(r.store).selectFrame(
+      "p",
+      walletOf(r.store, ALICE),
+      "sakura",
+      new Date(T0).toISOString(),
+    );
     await r.economy.setOnBoard(ALICE, false);
     await r.economy.setOnBoard(ALICE_TWO, false);
-    expect(await r.store.coins.selectedFrame("p", [ALICE, ALICE_TWO])).toBe("sakura");
+    expect(await ledgerOf(r.store).selectedFrame("p", walletOf(r.store, ALICE))).toBe("sakura");
   });
 });

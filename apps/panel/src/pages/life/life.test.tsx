@@ -1,11 +1,23 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import type { ActivityView, LifeDayView, ReminderView, SkillView, WorkspaceView } from "@/api/v4-types";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ActivityView, LifeDayView, ReminderView, SkillView, WorkspaceView } from "@miyoria/contracts/api";
 import { mockFetch, renderRoute } from "@/test/render";
 import { dayColumns } from "./TodayTab";
 
-const NOW = Date.now();
+// Local noon of today, with the clock held there: the fixtures sit minutes before "now" and have
+// to fall on the same day, which they did not when the tests ran just after midnight.
+const noon = new Date();
+noon.setHours(12, 0, 0, 0);
+const NOW = noon.getTime();
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 const iso = (ms: number) => new Date(ms).toISOString();
 
 const reminder = (over: Partial<ReminderView> = {}): ReminderView => ({

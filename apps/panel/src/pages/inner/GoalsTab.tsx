@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { Goal, GoalTrigger } from "@/api/types";
-import { useDayPlan, useGoals } from "@/app/queries";
+import type { Goal, GoalTrigger } from "@miyoria/contracts/api";
+import { useGoals } from "@/app/queries";
 import { EmptyLine, QueryView } from "@/components/query-state";
 import { StatusBadge } from "@/components/status";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,20 +29,6 @@ function When({ at }: { at: string }) {
     <time dateTime={at} title={fmtDateTime(at)} className="whitespace-nowrap">
       {fmtRelative(at)}
     </time>
-  );
-}
-
-function DayPlanCard() {
-  const plan = useDayPlan();
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>今天的計畫</CardTitle>
-      </CardHeader>
-      <QueryView query={plan} isEmpty={(p) => !p.day_plan} empty={<EmptyLine>今天還沒寫計畫</EmptyLine>}>
-        {(p) => <p className="pb-2 text-sm leading-relaxed whitespace-pre-wrap">{p.day_plan}</p>}
-      </QueryView>
-    </Card>
   );
 }
 
@@ -108,7 +94,6 @@ export function GoalsTab() {
   const goals = useGoals(closed);
   return (
     <div className="grid gap-(--stage-gap)">
-      <DayPlanCard />
       <Card>
         <CardHeader>
           <CardTitle>目標</CardTitle>

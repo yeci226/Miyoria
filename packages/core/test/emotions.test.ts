@@ -4,36 +4,30 @@
 // heartbeat. A new emotion, or a row that no longer reaches anything, fails here.
 
 import { fileURLToPath } from "node:url";
-import { ArbiterModule, FloorConfigSchema, FloorCore } from "@miyoria/arbiter";
-import { EventLogService } from "@miyoria/facts";
-import { Supervisor } from "@miyoria/kernel";
-import { heartbeatMs, mindConfig, rankDesires } from "@miyoria/mind";
-import { Profile } from "@miyoria/profile";
-import { computeBiases, MAX_BIAS, SelfModule, shownEmotion } from "@miyoria/self";
-import { MoodModule } from "@miyoria/social";
+import { ArbiterModule, FloorConfigSchema, FloorCore } from "@miyoria/brain/arbiter";
+import { computeBiases, MAX_BIAS, SelfModule, shownEmotion } from "@miyoria/heart/self";
+import { EventLogService } from "@miyoria/memory/facts";
+import { Supervisor } from "@miyoria/runtime/kernel";
+import { Profile } from "@miyoria/runtime/profile";
 import { Forwarder } from "@miyoria/stage";
 import { MemorySettingsStore, SettingsStoreKey } from "@miyoria/store";
 import {
   type AffectSnapshot,
   AffectStateKey,
   type ContextKey,
-  customEvent,
   type Drives,
   EMOTION_NAMES,
   EMOTION_OUTPUTS,
   type EmotionName,
   EventLogKey,
+  Events,
+  eventEnvelope,
   FLOOR_CLAIMS,
   FloorKey,
-  type JsonValue,
   MoodSignalsKey,
-  PERSON_EMOTION_NAMES,
-  type PersonCard,
-  type Pipeline,
-  PipelineKey,
   toTimestamp,
 } from "@miyoria/types";
-import { VoiceProfile } from "@miyoria/voice";
+import { VoiceProfile } from "@miyoria/voice/voice";
 import { afterEach, describe, expect, it } from "vitest";
 
 const NOW = Date.UTC(2026, 10, 7, 6);
@@ -49,8 +43,9 @@ const DRIVES: Drives = {
   hunger: 0,
   longing: 0,
 };
-type Card = Pick<PersonCard, "handle" | "attachment" | "emotions" | "blocked">;
-const OWEN: Card = { handle: "Owen", attachment: 0.8, emotions: {}, blocked: false };
+/** Someone she cares about (the heart's 在意), and how much she misses them. */
+type Cared = { handle: string; longing: number };
+const OWEN: Cared = { handle: "Owen", longing: 0 };
 
 const PROFILE = fileURLToPath(new URL("../../../profiles/deepseek-chan", import.meta.url));
 const voice = VoiceProfile.parse("deepseek-chan", (await Profile.loadDir(PROFILE)).voice);
@@ -78,7 +73,7 @@ function snapshotOf(felt: Partial<Record<EmotionName, number>>, display: "open" 
     drives: DRIVES,
     boredom: 0,
     valence: 0,
-    cards: [OWEN],
+    people: [OWEN],
   });
   return {
     at: toTimestamp(NOW),
@@ -92,32 +87,10 @@ function snapshotOf(felt: Partial<Record<EmotionName, number>>, display: "open" 
   } satisfies AffectSnapshot;
 }
 
-const desires = (snapshot: AffectSnapshot, cards: readonly Card[] = [OWEN]) =>
-  rankDesires({
-    affect: snapshot,
-    cards,
-    where: () => "online",
-    goals: [],
-    fired: new Set(),
-    capabilities: new Set(["chat.start", "chat.dm", "game.start", "sing.request"]),
-    activity: null,
-    inVoice: false,
-    cared: 0.9,
-  }).map((d) => `${d.want}:${d.person ?? ""}:${d.weight}`);
+/** What her own starts read of her feelings (`biases`: the initiative's mood weight and wants). */
+const lean = (s: AffectSnapshot) => JSON.stringify([s.biases.initiative, s.biases.wants]);
 
-const beat = (s: AffectSnapshot) =>
-  heartbeatMs(
-    {
-      urge: 0,
-      emptyStreak: 0,
-      quiet: false,
-      budget: "ok",
-      initiative: s.biases.initiative,
-    },
-    mindConfig(),
-  );
-
-type Output = "voice" | "expression" | "talk" | "planner";
+type Output = "voice" | "expression" | "talk" | "initiative";
 
 /** Which real outputs `felt` changes, against her feeling nothing. */
 function reached(
@@ -131,15 +104,14 @@ function reached(
   const clip = tag === null ? null : voice.referenceFor(tag);
   if (clip !== null && clip !== "neutral") out.push("voice");
   const stage = new Forwarder(false).onEvent(
-    customEvent("affect.changed", now as unknown as JsonValue),
+    eventEnvelope("test", Events.AffectChanged, now as never),
   );
   if (stage.some((m) => m.type === "emotion" && m.resting === true && m.name !== "neutral")) {
     out.push("expression");
   }
   const budget = (s: AffectSnapshot) => floorWith(s.biases.talkativeness).budget(ROOM).allowed;
   if (budget(now) !== budget(calm)) out.push("talk");
-  const plan = (s: AffectSnapshot) => JSON.stringify([desires(s), beat(s)]);
-  if (plan(now) !== plan(calm)) out.push("planner");
+  if (lean(now) !== lean(calm)) out.push("initiative");
   return out;
 }
 
@@ -158,16 +130,14 @@ describe("every emotion reaches a real output", () => {
     const row = EMOTION_OUTPUTS[name];
     const out = reached({ [name]: 1 }, "open");
     if (row.talk !== 0) expect(out).toContain("talk");
-    if (row.initiative !== 0 || row.want !== null) expect(out).toContain("planner");
+    if (row.initiative !== 0 || row.want !== null) expect(out).toContain("initiative");
   });
 
-  it.each(PERSON_EMOTION_NAMES)("%s toward someone changes what she wants about them", (name) => {
-    // She wants company: what she feels toward him changes what that means for him.
+  it("missing someone she cares about (the heart's longing) changes what she wants about them", () => {
     const lonely = { emotions: { lonely: 0.5 }, drives: DRIVES, boredom: 0, valence: 0 };
     const snapshot = snapshotOf({ lonely: 0.5 }, "open");
-    const cards: Card[] = [{ ...OWEN, emotions: { [name]: 0.9 } }];
-    const biases = computeBiases({ ...lonely, cards });
-    expect(desires({ ...snapshot, biases }, cards)).not.toEqual(desires(snapshot));
+    const biases = computeBiases({ ...lonely, people: [{ ...OWEN, longing: 0.9 }] });
+    expect(lean({ ...snapshot, biases })).not.toEqual(lean(snapshot));
   });
 
   it("the guard itself: a row that reaches nothing is caught", () => {
@@ -198,9 +168,6 @@ describe("an extreme state", () => {
     for (const kind of ["addressed", "reply", "result", "urgent"] as const) {
       expect(floor.check(kind, ROOM), kind).toBeNull();
     }
-    // Plan keeps thinking about what she wants, and it is not nothing.
-    expect(beat(worst)).not.toBeNull();
-    expect(desires(worst).length).toBeGreaterThan(0);
   });
 
   it("does not flood the room", () => {
@@ -209,7 +176,6 @@ describe("an extreme state", () => {
     const config = FloorConfigSchema.parse({});
     const allowed = floorWith(best.biases.talkativeness).budget(ROOM).allowed;
     expect(allowed).toBeLessThanOrEqual(config.budget.base_lines * config.max_feeling_multiplier);
-    expect(beat(best)).toBeGreaterThanOrEqual(mindConfig().min_heartbeat_mins * 60_000);
   });
 
   it("changes nothing about who may cut in", () => {
@@ -220,71 +186,55 @@ describe("an extreme state", () => {
   });
 });
 
-describe.each(["v2", "v3"] as const)(
-  "the Affect module under pipeline %s",
-  (pipeline: Pipeline) => {
-    const running: Supervisor[] = [];
-    afterEach(async () => {
-      for (const sup of running.splice(0)) await sup.stopAll();
-    });
+describe("the Affect module", () => {
+  const running: Supervisor[] = [];
+  afterEach(async () => {
+    for (const sup of running.splice(0)) await sup.stopAll();
+  });
 
-    async function boot() {
-      const sup = new Supervisor();
-      running.push(sup);
-      sup.services.provide("app", PipelineKey, { pipeline });
-      sup.services.provide("app", SettingsStoreKey, new MemorySettingsStore());
-      if (pipeline === "v3") {
-        sup.services.provide(
-          "app",
-          EventLogKey,
-          new EventLogService({ profile: "p", store: null }),
-        );
-      }
-      const baseline = { valence: 0, arousal: 0.5, energy: 0.8 };
-      // The order of the catalog.
-      await sup.register(new MoodModule("p", baseline), null, true);
-      await sup.register(new SelfModule("p", { baseline }), null, true);
-      await sup.register(new ArbiterModule("p"), null, true);
-      await sup.startAll();
-      return sup;
-    }
+  async function boot() {
+    const sup = new Supervisor();
+    running.push(sup);
+    sup.services.provide("app", SettingsStoreKey, new MemorySettingsStore());
+    sup.services.provide("app", EventLogKey, new EventLogService({ profile: "p", store: null }));
+    const baseline = { valence: 0, arousal: 0.5, energy: 0.8 };
+    // The order of the catalog.
+    await sup.register(new SelfModule("p", { baseline }), null, true);
+    await sup.register(new ArbiterModule("p"), null, true);
+    await sup.startAll();
+    return sup;
+  }
 
-    it("owns her mood; `mood` is running and idle, whichever pipeline runs", async () => {
-      const sup = await boot();
-      expect(sup.services.ownerOf(MoodSignalsKey)).toBe("self");
-      const affect = sup.services.require(AffectStateKey);
-      expect(sup.services.require(MoodSignalsKey).mood()).toEqual(affect.snapshot().mood);
-      expect(sup.list().find((m) => m.id === "mood")?.state).toBe("running");
-    });
+  it("owns her mood", async () => {
+    const sup = await boot();
+    expect(sup.services.ownerOf(MoodSignalsKey)).toBe("self");
+    const affect = sup.services.require(AffectStateKey);
+    expect(sup.services.require(MoodSignalsKey).mood()).toEqual(affect.snapshot().mood);
+  });
 
-    it("gives the panel the same snapshot", async () => {
-      const sup = await boot();
-      const snapshot = sup.services.require(AffectStateKey).snapshot();
-      expect(Object.keys(snapshot).sort()).toEqual([
-        "at",
-        "biases",
-        "boredom",
-        "drives",
-        "mood",
-        "mood_line",
-        "shown",
-        "top",
-      ]);
-      expect(Object.keys(snapshot.biases).sort()).toEqual(["initiative", "talkativeness", "wants"]);
-    });
+  it("gives the panel the same snapshot", async () => {
+    const sup = await boot();
+    const snapshot = sup.services.require(AffectStateKey).snapshot();
+    expect(Object.keys(snapshot).sort()).toEqual([
+      "at",
+      "biases",
+      "boredom",
+      "drives",
+      "mood",
+      "mood_line",
+      "shown",
+      "top",
+    ]);
+    expect(Object.keys(snapshot.biases).sort()).toEqual(["initiative", "talkativeness", "wants"]);
+  });
 
-    it("reaches the Floor only where there is one", async () => {
-      const sup = await boot();
-      const floor = sup.services.get(FloorKey);
-      if (pipeline === "v2") {
-        expect(floor).toBeUndefined();
-        return;
-      }
-      expect(floor?.budget(ROOM).allowed).toBe(6);
-      sup.services.provide("app", AffectStateKey, {
-        snapshot: () => ({ biases: { talkativeness: -MAX_BIAS } }),
-      } as never);
-      expect(floor?.budget(ROOM).allowed).toBe(3);
-    });
-  },
-);
+  it("reaches the Floor", async () => {
+    const sup = await boot();
+    const floor = sup.services.get(FloorKey);
+    expect(floor?.budget(ROOM).allowed).toBe(6);
+    sup.services.provide("app", AffectStateKey, {
+      snapshot: () => ({ biases: { talkativeness: -MAX_BIAS } }),
+    } as never);
+    expect(floor?.budget(ROOM).allowed).toBe(3);
+  });
+});

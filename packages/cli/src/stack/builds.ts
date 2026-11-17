@@ -5,7 +5,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import type { Config } from "@miyoria/kernel";
+import type { Config } from "@miyoria/runtime/kernel";
 import { isJsonObject } from "@miyoria/types";
 import type { Runner } from "./system.js";
 
@@ -178,12 +178,39 @@ function extensionConfigured(config: Config, id: string): boolean {
 
 export function buildTargets(root: string, configDir: string, config: Config): BuildTarget[] {
   const targets: BuildTarget[] = [];
+  // The SDK compiles against the built contracts, so they come first: a checkout that moved to
+  // a newer commit has stale contracts, and the SDK build then fails on names it cannot find.
+  const contracts = join(root, "packages", "contracts");
+  const contractSources: string[] = [];
+  if (existsSync(join(contracts, "package.json"))) {
+    contractSources.push(
+      join(contracts, "package.json"),
+      join(contracts, "tsconfig.build.json"),
+      ...readdirSync(contracts, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && existsSync(join(contracts, e.name, "src")))
+        .map((e) => join(contracts, e.name, "src")),
+    );
+    targets.push({
+      id: "contracts",
+      label: "契約(@miyoria/contracts)",
+      cwd: root,
+      sources: contractSources,
+      outputs: [join(contracts, "dist")],
+      command: "pnpm",
+      args: ["--filter", "@miyoria/contracts", "build"],
+    });
+  }
   const sdk = join(root, "packages", "sdk");
   targets.push({
     id: "sdk",
     label: "SDK(@miyoria/sdk)",
     cwd: root,
-    sources: [join(sdk, "src"), join(sdk, "package.json"), join(sdk, "tsconfig.build.json")],
+    sources: [
+      join(sdk, "src"),
+      join(sdk, "package.json"),
+      join(sdk, "tsconfig.build.json"),
+      ...contractSources,
+    ],
     outputs: [join(sdk, "dist")],
     command: "pnpm",
     args: ["--filter", "@miyoria/sdk", "build"],

@@ -2,7 +2,7 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ModuleInfo, SessionInfo } from "@/api/types";
+import type { ModuleInfo, SessionInfo } from "@miyoria/contracts/api";
 import { writeStorage } from "@/lib/storage";
 import { type Handler, mockFetch } from "@/test/render";
 import { App } from "./App";

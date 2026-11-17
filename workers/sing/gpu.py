@@ -42,7 +42,8 @@ stage that does not fit (her voice offline for it, after she said so).
 song should not wait for minutes, or run for a quarter of an hour on the CPU, to spare her a short
 silence): a stage that fits shares the card as above; one that does not takes her voice offline for
 it at once (bounded windows while people listen, a gap after each), and only Demucs' separation
-(``CPU_FALLBACK``) goes to the CPU instead. ``auto`` is the order above (her voice first); ``share``
+(``CPU_FALLBACK``) goes to the CPU instead; a stage her voice cannot make room for waits, and
+fails with the reason after SING_WAIT_MAX_S. ``auto`` is the order above (her voice first); ``share``
 never touches her voice, ``wait`` never touches it and never runs without room, ``offload`` always
 takes the card (the old behaviour).
 """
@@ -173,6 +174,25 @@ class Profile:
 
     def use(self, name: str, total_mb: int | None) -> None:
         self._key = f"{name}/{total_mb}" if total_mb else name
+
+    def use_key(self, key: str) -> None:
+        """The card by the key hostd names it by (``name/total_mb``, as ``use`` makes it)."""
+        self._key = key
+
+    def by_card(self, fn: Callable[[], Any]) -> dict[str, Any]:
+        """``fn()`` with the profile on each card it has a record of, by card key; ``None`` is left
+        out. For a lease client: only hostd reads the card, so it sends what it knows of each."""
+        here = self._key
+        out: dict[str, Any] = {}
+        try:
+            for key in sorted(self._data["devices"]):
+                self._key = key
+                value = fn()
+                if value is not None:
+                    out[key] = value
+        finally:
+            self._key = here
+        return out
 
     def _device(self) -> dict[str, Any]:
         return self._data["devices"].setdefault(self._key, {"stages": {}})
@@ -498,6 +518,9 @@ def decide(f: Facts) -> Decision:
             code, why = ("urgent", "這首現在就要,") if f.urgent else ("no_room", "")
             return Decision("offload", code,
                             f"{why}顯示卡放不下({have}),語音暫時離線,最多 {limits.silence_max_s:.0f} 秒")
+        # Bounded like ``auto``'s wait (since 2026-11-16; before, it waited for ever).
+        if f.waited_total_s >= limits.wait_max_s:
+            return Decision("give_up", "no_room", f"等了 {f.waited_total_s / 60:.0f} 分鐘顯示卡還是放不下這首({have})")
         return Decision("wait", "no_room", f"顯示卡放不下({have}),語音讓出來也沒用,等空間")
     helps = can and (f.freed_mb is None or room is None or room + f.freed_mb >= want)
     small = f.total_mb is not None and f.total_mb < want
@@ -607,6 +630,10 @@ class GpuJob:
         self.peak_allocated_mb: int | None = None
         self._wait_from: float | None = None
         self._window_at = 0.0
+        self._offline_at = 0.0
+        # Each window her voice was offline for this job: its real silence, from the first offload
+        # to her voice back, next to the work time the silence limit bounds (``window_closed``).
+        self.windows: list[dict[str, Any]] = []
         self._quiet_from: float | None = None  # people could hear her being gone since then
         self._free_before: int | None = None
         self._checked = 0.0
@@ -895,10 +922,12 @@ class GpuJob:
     def window_opening(self) -> None:
         self._free_before = self.machine.card().free_mb
 
-    def window_opened(self) -> None:
+    def window_opened(self, offline_at: float | None = None) -> None:
+        """``offline_at``: when the first offload was asked (her voice went then)."""
         now = self.clock()
         self.window = True
         self._window_at = now
+        self._offline_at = now if offline_at is None else offline_at
         self._quiet_from = None if self.people() is False else now
         self.speech.forget()
         free = self.machine.card().free_mb
@@ -910,13 +939,23 @@ class GpuJob:
             self.machine.profile.note_offload(free - self._free_before, None)
         self.machine.profile.save()
 
-    def window_closed(self, reload_s: float | None) -> None:
-        """Her voice is back (or was asked back and could not be reached)."""
+    def window_closed(self, reload_s: float | None, asked_back_at: float | None = None) -> None:
+        """Her voice is back (or was asked back and could not be reached). ``asked_back_at``: when
+        the reload was asked."""
         if not self.window:
             return
         self.window = False
         now = self.clock()
         self.silenced_s += now - self._window_at
+        asked = now if asked_back_at is None else asked_back_at
+        self.windows.append({
+            "offload_s": round(self._window_at - self._offline_at, 1),
+            "work_s": round(asked - self._window_at, 1),
+            "reload_s": round(now - asked, 1),
+            "silence_s": round(now - self._offline_at, 1),
+            # What SING_SILENCE_MAX_S bounded: the work time, while people could hear (else none).
+            "limit_s": self.limits.silence_max_s if self._quiet_from is not None else None,
+        })
         if self._quiet_from is not None:
             self.machine.gap_until = now + self.limits.silence_gap_s
         self._quiet_from = None
@@ -957,5 +996,5 @@ class GpuJob:
         """What stays with the song in meta.json."""
         return {"policy": self.policy, "policy_source": self.policy_source, "decisions": self.history,
                 "spills": self.spills, "steps": self.reduced_to, "waited_s": round(self.waited_total_s, 1),
-                "silenced_s": round(self.silenced_s, 1)}
+                "silenced_s": round(self.silenced_s, 1), "windows": list(self.windows)}
 

@@ -11,7 +11,7 @@
 // A / I / U / E / O weights, which become VTS `VoiceA..VoiceO` / `VoiceSilence` (the model maps
 // them to `ParamA..ParamO` / `ParamSilence`).
 
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { type Clock, systemClock } from "@miyoria/types";
 import { z } from "zod";
 import { type BoundAddress, formatAddress, HttpServer } from "./net.js";

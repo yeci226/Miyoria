@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import type { LifeEntry } from "@/api/v4-types";
-import { useLifeToday } from "@/app/v4-queries";
+import type { LifeEntry } from "@miyoria/contracts/api";
+import { useLifeToday } from "@/app/queries";
 import { ChartBlock, ColumnChart } from "@/components/charts/charts";
 import { ModuleQuery } from "@/components/module-query";
 import { EmptyLine } from "@/components/query-state";

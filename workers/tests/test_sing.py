@@ -15,6 +15,7 @@ from pathlib import Path
 import threading
 
 import pytest
+from conftest import NO_BODY, send
 
 SING = Path(__file__).resolve().parent.parent / "sing"
 sys.path.insert(0, str(SING))
@@ -669,29 +670,28 @@ def test_coverage_of_a_line():
     assert coverage("あいうえおかきくけこ", "さしすせそたちつてと") < 0.2
 
 
-def test_llm_config_follows_core_and_its_provider_kind(tmp_path, monkeypatch):
+def test_llm_config_comes_from_hostd_or_the_worker_never_from_cores_files(tmp_path, monkeypatch):
     import lyricsllm
 
-    (tmp_path / "profiles" / "p").mkdir(parents=True)
-    (tmp_path / "profiles" / "p" / "profile.toml").write_text('[llm.purposes]\nfast = ["go:model-fast"]\n', "utf-8")
-    (tmp_path / "miyoria.toml").write_text(
-        '[core]\nprofile = "p"\n[llm.providers.go]\nkind = "opencode"\nbase_url = "https://x.test/v1"\n'
-        'api_key = "${LYRICS_TEST_KEY:-fallback}"\n[llm.purposes]\nchat = ["other:chat-model"]\n', "utf-8")
-    monkeypatch.delenv("SING_LYRICS_LLM_URL", raising=False)
-    monkeypatch.delenv("SING_LYRICS_LLM", raising=False)
-    monkeypatch.delenv("MIYORIA_CONFIG", raising=False)
-    monkeypatch.setenv("LYRICS_TEST_KEY", "k1")
-    cfg = lyricsllm.load_config(tmp_path)
-    assert cfg["model"] == "model-fast" and cfg["base_url"] == "https://x.test/v1" and cfg["api_key"] == "k1"
-    assert cfg["headers"] == {"x-opencode-session": "miyoria-sing-lyrics"} and cfg["body"]["thinking"]["type"] == "disabled"
-    monkeypatch.setenv("SING_LYRICS_LLM_URL", "http://127.0.0.1:1/v1")
+    for name in ("SING_LYRICS_LLM", "SING_LYRICS_LLM_URL", "SING_LYRICS_LLM_KEY", "SING_LYRICS_LLM_MODEL",
+                 "MIYORIA_HOSTD_URL", "MIYORIA_SERVICE_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    # Core's config next to the worker is not read any more.
+    (tmp_path / "miyoria.toml").write_text('[llm.providers.go]\nbase_url = "https://x.test/v1"\n'
+                                          '[llm.purposes]\nfast = ["go:m"]\n', "utf-8")
+    monkeypatch.setenv("MIYORIA_CONFIG", str(tmp_path / "miyoria.toml"))
+    monkeypatch.chdir(tmp_path)
+    assert lyricsllm.load_config() is None
+    monkeypatch.setenv("SING_LYRICS_LLM_URL", "http://127.0.0.1:1/v1/")
     monkeypatch.setenv("SING_LYRICS_LLM_MODEL", "mine")
-    assert lyricsllm.load_config(tmp_path)["model"] == "mine"  # the worker's own setting wins
+    assert lyricsllm.load_config() == {"base_url": "http://127.0.0.1:1/v1", "api_key": "", "model": "mine"}
+    # hostd runs the worker: Core's model through hostd, the worker's own kept for when hostd is not linked
+    monkeypatch.setenv("MIYORIA_HOSTD_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("MIYORIA_SERVICE_TOKEN", "t")
+    cfg = lyricsllm.load_config()
+    assert cfg["via"] == "hostd" and cfg["model"] == "core:fast" and cfg["fallback"]["model"] == "mine"
     monkeypatch.setenv("SING_LYRICS_LLM", "0")
-    assert lyricsllm.load_config(tmp_path) is None
-    monkeypatch.delenv("SING_LYRICS_LLM")
-    monkeypatch.delenv("SING_LYRICS_LLM_URL")
-    assert lyricsllm.load_config(tmp_path / "nowhere") is None
+    assert lyricsllm.load_config() is None
 
 
 def test_llm_answer_parsing_and_cache(tmp_path):
@@ -1418,3 +1418,517 @@ def test_the_split_from_the_song_alone_leaves_the_rest_of_it(tmp_path):
     b.complete_stems(tmp_path)
     backing, _ = sf.read(tmp_path / "backing.wav", dtype="float32")
     assert np.allclose(backing, x * 0.3, atol=1e-4)
+
+
+# ── running parts of a job side by side ──────────────────────────────────────
+
+
+def test_lyrics_are_looked_up_while_the_song_converts(sing, monkeypatch):
+    """The lookup starts once the lead is there, not after the mix; its ASR check waits for the conversion."""
+    if not is_mock():
+        pytest.skip("reads the mock backend's log")
+    server = _sing_server()
+    b = server.state.backend
+    seen: list[tuple[str, bool]] = []
+
+    def gate():
+        job = server.state.jobs[server.state.running]
+        seen.append((job.stage, job.converted.is_set()))
+
+    monkeypatch.setattr(b, "lyrics_gate", gate)
+    monkeypatch.setattr(b, "delay", 0.05)
+    monkeypatch.setenv("SING_MOCK_LYRICS_ASR", "1")
+    after = len(b.lyrics_after_asr_wait)
+    song = _job(sing, "lyrics side by side")["song"]
+    stage, converted = seen[-1]
+    assert stage in ("lead", "convert") and converted is False
+    assert b.lyrics_after_asr_wait[after:] == [True]  # the ASR check came after the conversion
+    assert song["lyrics"]["synced"] and song["timings"]["lyrics_s"] >= 0
+    assert b.lyrics_calls[-1] == pytest.approx(2.0)  # the lead's length, the mix's to come
+
+
+def test_the_next_song_is_found_and_downloaded_while_one_is_made(sing, monkeypatch):
+    if not is_mock():
+        pytest.skip("reads the mock backend's log")
+    b = _sing_server().state.backend
+    monkeypatch.setattr(b, "delay", 0.25)
+    first = sing.post("/jobs", json={"query": "prefetch first one"}).json()["job"]["id"]
+    second = sing.post("/jobs", json={"query": "prefetch second one"}).json()["job"]["id"]
+    assert wait(sing, first)["state"] == "done"
+    done = wait(sing, second)
+    assert done["state"] == "done", done
+    timings = done["song"]["timings"]
+    assert timings.get("prefetched") == 1
+    assert "resolve_s" not in timings and "download_s" not in timings
+
+
+def test_no_prefetch_when_it_is_off(sing, monkeypatch):
+    if not is_mock():
+        pytest.skip("reads the mock backend's log")
+    b = _sing_server().state.backend
+    monkeypatch.setattr(b, "delay", 0.25)
+    monkeypatch.setenv("SING_PREFETCH", "0")
+    first = sing.post("/jobs", json={"query": "no prefetch first"}).json()["job"]["id"]
+    second = sing.post("/jobs", json={"query": "no prefetch second"}).json()["job"]["id"]
+    wait(sing, first)
+    timings = wait(sing, second)["song"]["timings"]
+    assert "prefetched" not in timings and "download_s" in timings
+
+
+def test_a_download_cut_short_leaves_no_source_behind(sing, monkeypatch, tmp_path):
+    if not is_mock():
+        pytest.skip("mock only")
+    server = _sing_server()
+
+    def broken(src, dest, progress):
+        dest.write_bytes(b"half a song")
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(server.state.backend, "fetch", broken)
+    dest = tmp_path / "source.wav"
+    with pytest.raises(RuntimeError):
+        server._fetch(server.Source(key="mock-cut", kind="mock", title="T"), dest, lambda f: None)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_source_is_downloaded_once_at_a_time(sing, monkeypatch, tmp_path):
+    """A job and the prefetch of the next one wanting the same song: never two writers of one file."""
+    if not is_mock():
+        pytest.skip("mock only")
+    server = _sing_server()
+    lock, live, calls = threading.Lock(), [0], []
+
+    def slow(src, dest, progress):
+        with lock:
+            live[0] += 1
+            calls.append(live[0])
+        time.sleep(0.2)
+        dest.write_bytes(b"a song")
+        with lock:
+            live[0] -= 1
+
+    monkeypatch.setattr(server.state.backend, "fetch", slow)
+    src, dest = server.Source(key="mock-twice", kind="mock", title="T"), tmp_path / "source.wav"
+    runs = [threading.Thread(target=server._fetch, args=(src, dest, lambda f: None)) for _ in range(2)]
+    for t in runs:
+        t.start()
+    for t in runs:
+        t.join()
+    assert calls == [1] and dest.read_bytes() == b"a song"  # the second one took the first one's file
+    server._fetch(src, dest, lambda f: None, again=True)  # a forced job downloads it again
+    assert calls == [1, 1]
+
+
+def test_the_next_job_is_marked_before_its_prefetch_starts(sing, monkeypatch):
+    """Marked under the lock the worker starts jobs under: a job that starts meanwhile waits for it."""
+    if not is_mock():
+        pytest.skip("reads the mock backend's log")
+    server = _sing_server()
+    monkeypatch.setattr(server.state.backend, "delay", 0.25)
+    seen: list[tuple[str | None, str]] = []
+    original = server._prefetch
+
+    def spy(job, running):
+        seen.append((job.prefetch, job.state))
+        original(job, running)
+
+    monkeypatch.setattr(server, "_prefetch", spy)
+    first = sing.post("/jobs", json={"query": "marked first"}).json()["job"]["id"]
+    second = sing.post("/jobs", json={"query": "marked second"}).json()["job"]["id"]
+    wait(sing, first)
+    assert wait(sing, second)["state"] == "done"
+    assert seen and seen[0][0] == "running"
+
+
+def test_the_models_are_let_go_when_the_queued_jobs_are_cancelled(sing, monkeypatch):
+    """Kept for the next job, which was then cancelled: let go once the queue is empty."""
+    if not is_mock():
+        pytest.skip("reads the mock backend's log")
+    server = _sing_server()
+    b = server.state.backend
+    monkeypatch.setattr(b, "delay", 0.2)
+    monkeypatch.setenv("SING_PREFETCH", "0")
+    ids: list[str] = []
+
+    def cancel_the_rest(more):
+        if more:
+            for j in ids[1:]:
+                sing.delete(f"/jobs/{j}")
+
+    monkeypatch.setattr(b, "idle_hook", cancel_the_rest)
+    before = len(b.idles)
+    ids += [sing.post("/jobs", json={"query": f"let go {i}"}).json()["job"]["id"] for i in range(2)]
+    wait(sing, ids[0])
+    assert wait(sing, ids[1])["state"] == "cancelled"
+    t0 = time.time()
+    while b.idles[before:] != [True, False] and time.time() - t0 < 5:
+        time.sleep(0.05)
+    assert b.idles[before:] == [True, False]
+
+
+def test_the_prepared_instrumental_mixes_exactly_the_same(tmp_path):
+    np = pytest.importorskip("numpy")
+    sf = pytest.importorskip("soundfile")
+    import engine
+
+    sr, n = 44100, 44100
+    t = np.arange(n) / sr
+
+    def tone(hz, a):
+        return (a * np.sin(2 * np.pi * hz * t)).astype("float32")[:, None].repeat(2, axis=1)
+
+    for name, hz, a in (("lead", 440, 0.4), ("conv", 440, 0.1), ("inst", 220, 0.2), ("backing", 330, 0.1)):
+        sf.write(tmp_path / f"{name}.wav", tone(hz, a), sr)
+
+    class Backend:
+        def transpose(self, x, sr, key):
+            return np.roll(x, key * 10, axis=0) * 0.9  # any change, the same both times
+
+    plain, ready = tmp_path / "plain", tmp_path / "ready"
+    plain.mkdir()
+    ready.mkdir()
+    args = (tmp_path / "lead.wav", tmp_path / "conv.wav", tmp_path / "inst.wav", -2)
+    engine.mix_song(*args, plain, Backend(), -16.0, tmp_path / "backing.wav")
+    prepared = engine.instrumental_for_mix(tmp_path / "inst.wav", -2, Backend(), tmp_path / "backing.wav")
+    engine.mix_song(*args, ready, Backend(), -16.0, tmp_path / "backing.wav", prepared=prepared)
+    for f in ("mix.wav", "instrumental.wav", "play_mix.pcm"):
+        assert (plain / f).read_bytes() == (ready / f).read_bytes(), f
+
+
+def test_find_lyrics_waits_once_for_the_asr_and_not_on_its_budget(net, monkeypatch, tmp_path):
+    import lyrics
+
+    net(lrclib=[_lrclib_item("Song", "Artist", 200, _lrc(12, 16.0))])
+    audio = tmp_path / "lead.wav"
+    audio.write_bytes(b"x")
+    monkeypatch.setattr(lyrics, "_clip", lambda *a: b"wav")
+    order: list[str] = []
+    monkeypatch.setattr(lyrics, "asr_text", lambda wav, url, timeout: order.append("asr") or "line number 3 of the song")
+    hints = {"title": "Song", "artist": None}
+
+    def slow_wait():
+        order.append("wait")
+        time.sleep(0.3)
+
+    r = lyrics.find_lyrics(hints, 200, llm=None, audio=audio, asr_url="http://asr", asr_mode="1", asr_wait=slow_wait,
+                           budget_s=0.2)
+    assert r is not None and r["checks"]["asr"]["ok"] is True
+    assert order[0] == "wait" and order.count("wait") == 1 and "asr" in order
+    order.clear()
+    assert lyrics.find_lyrics(hints, 200, llm=None, audio=audio, asr_url="http://asr", asr_mode="0",
+                              asr_wait=slow_wait) is not None
+    assert order == []  # no spot check, no wait
+
+
+def test_the_rvc_pass_falls_back_to_a_fresh_process(monkeypatch, tmp_path):
+    import rvcpass
+
+    env = {"SING_APPLIO_DIR": str(tmp_path / "applio"), "SING_RVC_MODEL": str(tmp_path / "m.pth")}
+    srv = rvcpass.Server(env)
+    args = srv._args("A.wav", "B.wav", -3)
+    assert args[args.index("--input-path") + 1] == "A.wav" and args[args.index("--output-path") + 1] == "B.wav"
+    assert args[args.index("--pitch") + 1] == "-3" and "core.py" not in args and "infer" not in args
+
+    calls: list[str] = []
+
+    class Broken:
+        def start(self, warm_up=True):
+            pass
+
+        def run(self, *a):
+            calls.append("server")
+            raise RuntimeError("it died")
+
+        def stop(self):
+            calls.append("stop")
+
+    monkeypatch.setattr(rvcpass, "available", lambda env=None: True)
+    monkeypatch.setattr(rvcpass, "_server", Broken())
+    monkeypatch.setattr(rvcpass, "run_once", lambda i, o, e=None, p=0: calls.append("fresh") or o)
+    monkeypatch.delenv("SING_RVC_SERVER", raising=False)
+    assert rvcpass.run(tmp_path / "in.wav", tmp_path / "out.wav") == tmp_path / "out.wav"
+    assert calls == ["server", "stop", "fresh"] and rvcpass._server is None
+    monkeypatch.setenv("SING_RVC_SERVER", "0")
+    calls.clear()
+    rvcpass.run(tmp_path / "in.wav", tmp_path / "out.wav")
+    assert calls == ["fresh"]
+
+
+def test_an_applio_without_the_pitch_hook_keeps_its_warm_process(monkeypatch, tmp_path):
+    """It cannot be asked for the pitch, but converts with a given shift: it stays up, and is not asked again."""
+    import rvcpass
+
+    calls: list[str] = []
+
+    class NoHook:
+        def start(self, warm_up=True):
+            pass
+
+        def run(self, i, o, pitch=0, choose=None, ref=None):
+            calls.append("ask" if choose else "run")
+            if choose is not None:
+                raise rvcpass.CannotAsk("no pitch hook")
+            return o
+
+        def stop(self):
+            calls.append("stop")
+
+    srv = NoHook()
+    monkeypatch.setattr(rvcpass, "available", lambda env=None: True)
+    monkeypatch.setattr(rvcpass, "_server", srv)
+    monkeypatch.setattr(rvcpass, "_cannot_ask", False)
+    monkeypatch.delenv("SING_RVC_SERVER", raising=False)
+    with pytest.raises(rvcpass.CannotAsk):
+        rvcpass.run_choosing(tmp_path / "in.wav", tmp_path / "out.wav", lambda q: 0)
+    assert rvcpass.run(tmp_path / "in.wav", tmp_path / "out.wav", pitch=3) == tmp_path / "out.wav"
+    with pytest.raises(rvcpass.CannotAsk):
+        rvcpass.run_choosing(tmp_path / "in.wav", tmp_path / "out.wav", lambda q: 0)
+    assert calls == ["ask", "run"] and rvcpass._server is srv
+
+
+def test_a_cancelled_download_stops_without_a_second_try(monkeypatch, tmp_path):
+    """The prefetch's progress raises once its job is cancelled; yt-dlp wraps it, the download ends."""
+    import engine
+    from songs import Source
+
+    tries: list[str] = []
+
+    class FakeYdl:
+        def __init__(self, opts):
+            self.hooks = opts["progress_hooks"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def _go(self, what):
+            tries.append(what)
+            try:
+                for h in self.hooks:
+                    h({"status": "downloading", "total_bytes": 10, "downloaded_bytes": 5})
+            except Exception as e:  # what yt-dlp does with a hook's error
+                raise RuntimeError("ERROR: download failed") from e
+
+        def process_ie_result(self, info, download=True):
+            self._go("answer")
+
+        def download(self, urls):
+            self._go("page")
+
+    b = object.__new__(engine.RealBackend)
+    b.max_s = 480
+    monkeypatch.setattr(b, "_ydl", lambda extra=None: FakeYdl(extra), raising=False)
+
+    def cancelled(_f):
+        raise engine.Cancelled()
+
+    info = {"id": "x", "formats": [{"format_id": "251", "url": "https://example.test/a"}]}
+    src = Source(key="yt-x", kind="youtube", title="T", url="https://youtu.be/x", info=info, info_at=time.monotonic())
+    with pytest.raises(engine.Cancelled):
+        b.fetch(src, tmp_path / "source.wav", cancelled)
+    assert tries == ["answer"]  # not read again from the page
+    tries.clear()
+    with pytest.raises(engine.Cancelled):
+        b.fetch(Source(key="yt-y", kind="youtube", title="T", url="https://youtu.be/y"), tmp_path / "s.wav", cancelled)
+    assert tries == ["page"]
+
+
+def test_the_lyrics_of_a_job_that_ended_ask_the_asr_nothing(sing):
+    """A failed or cancelled job's lookup stops before its spot check: it would run next to the next job."""
+    if not is_mock():
+        pytest.skip("mock only")
+    import types
+
+    server = _sing_server()
+    job = types.SimpleNamespace(converted=threading.Event(), cancel=threading.Event(), exclusive=None, aborted=False)
+    job.converted.set()
+    lookup = server.LyricsLookup(job, None, None, Path("."), None)
+    lookup.asr_wait()  # a job that goes on: the spot check runs
+    job.aborted = True
+    with pytest.raises(server.Cancelled):
+        lookup.asr_wait()
+
+
+def test_the_download_reuses_the_lookups_answer_while_it_is_fresh(monkeypatch):
+    import time as _time
+
+    import engine
+    from songs import Source
+
+    info = {"id": "x", "formats": [{"format_id": "251", "url": "https://example.test/a"}]}
+    src = Source(key="yt-x", kind="youtube", title="T", info=info, info_at=_time.monotonic())
+    got = engine.fresh_info(src)
+    assert got == info and got is not info  # a copy: the audio and the video threads each get one
+    got["formats"].clear()
+    assert info["formats"]  # what one thread does to its copy leaves the other's alone
+    assert "info" not in src.public() and "info_at" not in src.public()
+    monkeypatch.setenv("SING_INFO_REUSE_S", "5")
+    src.info_at = _time.monotonic() - 10
+    assert engine.fresh_info(src) is None  # links that may have expired: read the page again
+    monkeypatch.delenv("SING_INFO_REUSE_S")
+    assert engine.fresh_info(Source(key="k", kind="url", title="T")) is None
+    assert engine.fresh_info(Source(key="k", kind="url", title="T", info={"id": "x"}, info_at=_time.monotonic())) is None
+
+
+def test_her_rvc_model_picks_the_key_from_the_pitch_it_reads(sing, monkeypatch):
+    """SING_VOICE=rvc with the auto key: no pitch analysis in the worker, the RVC pass answers with it."""
+    if not is_mock():
+        pytest.skip("replaces the mock backend's conversion")
+    server = _sing_server()
+    b = server.state.backend
+    asked: list[tuple] = []
+
+    def convert_auto(vocal, out, choose, progress, cancelled):
+        shift = choose((220.0, 300.0), 440.0)  # an octave under her: up an octave
+        asked.append((vocal.name, shift))
+        server._write_wav(out, server._tone(1, 16000, 440), 16000)
+        progress(1.0)
+
+    monkeypatch.setattr(b, "voice", "rvc", raising=False)
+    monkeypatch.setattr(b, "convert_auto", convert_auto, raising=False)
+    f0_before = len(b.f0_inputs)
+    song = _job(sing, "rvc reads the pitch")["song"]
+    assert asked == [("lead.wav", 12)]
+    assert len(b.f0_inputs) == f0_before  # the worker read no pitch itself
+    p = song["pitch"]
+    assert p["auto"] is True and p["octave_shift"] == 12 and p["vocal_shift"] == 12
+    assert p["source_median_hz"] == 220.0 and p["ref_median_hz"] == 440.0
+    # An explicit pitch is the requester's: the plain conversion, no question asked.
+    _job(sing, "rvc reads the pitch", pitch=-3)
+    assert len(asked) == 1
+
+
+# ── what the request bodies take and refuse ──────────────────────────────────
+# Pinned with the hand-written request models, before they were generated from the JSON Schema:
+# the generated ones must take and refuse exactly the same, with the same status and error body.
+
+INVALID = "invalid request: "
+NOT_AN_OBJECT = INVALID + "body: Input should be a valid dictionary or object to extract fields from"
+ONE_SOURCE = {"error": "give exactly one of query, url or path"}
+
+# The model takes these; the handler then refuses them for their sources, before any job exists.
+JOB_TAKEN_BY_THE_MODEL = [
+    {},
+    {"query": None, "url": None, "path": None, "title": None, "artist": None, "pitch": None},
+    {"query": "  "},
+    {"query": "q" * 200, "url": "https://youtu.be/" + "u" * 483},
+    {"url": "https://youtu.be/" + "u" * 483, "path": "p" * 300},
+    {"title": "t" * 120, "artist": "a" * 120},
+    {"pitch": 24, "key": -12},
+    {"pitch": -24, "key": 12},
+    {"pitch": 2.0, "key": "3"},
+    {"backing": "acapella"},
+    {"backing": "drop", "force": True, "exclusive_ack": True},
+    {"backing": "convert", "force": "true", "exclusive_ack": 1},
+    {"unknown": {"a": 1}},
+]
+
+JOB_REFUSED = [
+    ({"query": "q" * 201}, "query: String should have at most 200 characters"),
+    ({"url": "u" * 501}, "url: String should have at most 500 characters"),
+    ({"path": "p" * 301}, "path: String should have at most 300 characters"),
+    ({"title": "t" * 121}, "title: String should have at most 120 characters"),
+    ({"artist": "a" * 121}, "artist: String should have at most 120 characters"),
+    ({"query": 5}, "query: Input should be a valid string"),
+    ({"pitch": 25}, "pitch: Input should be less than or equal to 24"),
+    ({"pitch": -25}, "pitch: Input should be greater than or equal to -24"),
+    ({"pitch": 1.5}, "pitch: Input should be a valid integer, got a number with a fractional part"),
+    ({"pitch": "up"}, "pitch: Input should be a valid integer, unable to parse string as an integer"),
+    ({"key": 13}, "key: Input should be less than or equal to 12"),
+    ({"key": -13}, "key: Input should be greater than or equal to -12"),
+    ({"key": None}, "key: Input should be a valid integer"),
+    ({"backing": "loud"}, "backing: Input should be 'keep', 'drop', 'convert' or 'acapella'"),
+    ({"backing": "KEEP"}, "backing: Input should be 'keep', 'drop', 'convert' or 'acapella'"),
+    ({"backing": None}, "backing: Input should be 'keep', 'drop', 'convert' or 'acapella'"),
+    ({"force": "maybe"}, "force: Input should be a valid boolean, unable to interpret input"),
+    ({"force": None}, "force: Input should be a valid boolean"),
+    ({"exclusive_ack": None}, "exclusive_ack: Input should be a valid boolean"),
+    ({"key": 13, "pitch": 25}, "pitch: Input should be less than or equal to 24"),
+    (b"[]", "body: Input should be a valid dictionary or object to extract fields from"),
+    (b"null", "body: Input should be a valid dictionary or object to extract fields from"),
+    (b"nope", "0: JSON decode error"),
+    (NO_BODY, "body: Field required"),
+]
+
+
+def test_job_request_bodies(sing):
+    for body in JOB_TAKEN_BY_THE_MODEL:
+        assert send(sing, "POST", "/jobs", body) == (400, ONE_SOURCE), body
+    for body, error in JOB_REFUSED:
+        assert send(sing, "POST", "/jobs", body) == (400, {"error": INVALID + error}), body
+
+
+def test_a_job_keeps_its_request_as_given_with_the_defaults(sing):
+    if not is_mock():
+        pytest.skip("makes songs")
+    status, a = send(sing, "POST", "/jobs", {"query": "pinned defaults"})
+    assert status == 200
+    status, b = send(sing, "POST", "/jobs", {"query": "pinned request", "url": None, "pitch": None, "key": "3",
+                                             "backing": "drop", "force": True, "unknown": 1})
+    assert status == 200
+    for job in (a["job"], b["job"]):
+        sing.delete(f"/jobs/{job['id']}")
+        wait(sing, job["id"])
+    assert a["job"]["request"] == {"query": "pinned defaults", "key": 0, "backing": "keep", "force": False,
+                                   "exclusive_ack": False}
+    assert b["job"]["request"] == {"query": "pinned request", "key": 3, "backing": "drop", "force": True,
+                                   "exclusive_ack": False}
+
+
+def test_lyrics_request_bodies(sing):
+    no_song = (404, {"error": "no song nosuchsong"})
+    for body in (NO_BODY, b"null", {}, {"title": None, "artist": None, "fresh": False},
+                 {"title": "t" * 200, "artist": "a" * 200, "fresh": True}, {"fresh": "yes"}, {"unknown": 1}):
+        assert send(sing, "POST", "/songs/nosuchsong/lyrics", body) == no_song, body
+    for body, error in (
+        ({"title": "t" * 201}, "title: String should have at most 200 characters"),
+        ({"artist": "a" * 201}, "artist: String should have at most 200 characters"),
+        ({"artist": 5}, "artist: Input should be a valid string"),
+        ({"fresh": "maybe"}, "fresh: Input should be a valid boolean, unable to interpret input"),
+        ({"fresh": None}, "fresh: Input should be a valid boolean"),
+        (b"[]", "body: Input should be a valid dictionary or object to extract fields from"),
+        (b"nope", "0: JSON decode error"),
+    ):
+        assert send(sing, "POST", "/songs/nosuchsong/lyrics", body) == (400, {"error": INVALID + error}), body
+
+
+def test_gpu_context_request_bodies(sing):
+    if not is_mock():
+        pytest.skip("tells the worker who listens")
+    server = sys.modules["sing_server"]
+    try:
+        for body in ({}, {"in_voice": True, "listeners": 3, "live": False, "urgent": ["j"] * 200},
+                     {"in_voice": "true", "listeners": "2", "live": 0}, {"unknown": 1}):
+            assert send(sing, "POST", "/gpu/context", body) == (200, {"ok": True}), body
+        for body, error in (
+            ({"listeners": -1}, "listeners: Input should be greater than or equal to 0"),
+            ({"listeners": 1.5}, "listeners: Input should be a valid integer, got a number with a fractional part"),
+            ({"listeners": None}, "listeners: Input should be a valid integer"),
+            ({"in_voice": None}, "in_voice: Input should be a valid boolean"),
+            ({"live": "maybe"}, "live: Input should be a valid boolean, unable to interpret input"),
+            ({"urgent": ["j"] * 201}, "urgent: List should have at most 200 items after validation, not 201"),
+            ({"urgent": "j"}, "urgent: Input should be a valid list"),
+            ({"urgent": [1]}, "urgent.0: Input should be a valid string"),
+            ({"urgent": None}, "urgent: Input should be a valid list"),
+            (b"[]", "body: Input should be a valid dictionary or object to extract fields from"),
+            (b"null", "body: Input should be a valid dictionary or object to extract fields from"),
+            (NO_BODY, "body: Field required"),
+        ):
+            assert send(sing, "POST", "/gpu/context", body) == (400, {"error": INVALID + error}), body
+    finally:
+        server.state.machine.audience = server.Audience()
+
+
+def test_prune_request_bodies(sing):
+    for body in (NO_BODY, b"null", {}, {"dry_run": True}, {"dry_run": False}, {"dry_run": "yes"}, {"unknown": 1}):
+        status, _ = send(sing, "POST", "/cache/prune?dry_run=true", body)
+        assert status == 200, body
+    for body, error in (
+        ({"dry_run": "maybe"}, "dry_run: Input should be a valid boolean, unable to interpret input"),
+        ({"dry_run": None}, "dry_run: Input should be a valid boolean"),
+        (b"[]", "body: Input should be a valid dictionary or object to extract fields from"),
+        (b"nope", "0: JSON decode error"),
+    ):
+        assert send(sing, "POST", "/cache/prune?dry_run=true", body) == (400, {"error": INVALID + error}), body

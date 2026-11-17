@@ -7,7 +7,7 @@
 // serial gets the site's own tags and nothing of anybody.
 
 import { FRAME_NAME } from "@miyoria/card-face";
-import type { IssuedCard } from "./types.js";
+import type { IssuedCard } from "@miyoria/contracts/api";
 
 export const SITE_NAME = "Miyoria";
 const SITE_DESCRIPTION =

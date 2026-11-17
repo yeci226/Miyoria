@@ -4,8 +4,6 @@ import {
   encodeCaptureFrame,
   encodeNodeMessage,
   encodePlaybackFrame,
-  encodeSnapshotFrame,
-  encodeWatchAudioFrame,
   FRAME_CAPTURE,
   FRAME_PLAYBACK,
   MAX_FADE_MS,
@@ -179,25 +177,5 @@ describe("encodeNodeMessage", () => {
       node: "voice-node",
       self_account: { platform: "discord", id: "123" },
     });
-  });
-});
-
-describe("watch messages", () => {
-  it("parses_watch_messages", () => {
-    expect(parseCoreMessage('{"type":"watch_start","guild":"1","user_id":"2"}')).toEqual({
-      ok: true,
-      value: { type: "watch_start", guild: "1", user_id: "2" },
-    });
-    expect(parseCoreMessage('{"type":"watch_stop","guild":"1"}').ok).toBe(true);
-    expect(parseCoreMessage('{"type":"watch_snapshot","id":7}').ok).toBe(true);
-    expect(parseCoreMessage('{"type":"watch_start","guild":"1"}').ok).toBe(false);
-    expect(parseCoreMessage('{"type":"watch_snapshot","id":-1}').ok).toBe(false);
-  });
-
-  it("encodes_snapshot_and_watch_audio_frames", () => {
-    const f = encodeSnapshotFrame(7, Buffer.from([1, 2]));
-    expect([...f]).toEqual([0x04, 7, 0, 0, 0, 1, 2]);
-    expect(encodeWatchAudioFrame(Buffer.from([1, 2]))[0]).toBe(0x05);
-    expect([...encodeWatchAudioFrame(Buffer.from([1, 2]))]).toEqual([0x05, 1, 2]);
   });
 });

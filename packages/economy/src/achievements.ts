@@ -11,9 +11,9 @@
 // the person's wallet; titles from her shop come with the shop (shop.ts). Nothing here ranks
 // anyone and no number or title reaches her feelings for the person (docs/design/v4-plan.md §15).
 
-import type { CoinEntry } from "@miyoria/store";
 import type { AccountRef } from "@miyoria/types";
 import { type EconomyService, localDay, type Member } from "./economy.js";
+import type { CoinEntry } from "./records.js";
 import type { AchievementsView, AchievementUnlocked, AchievementView } from "./v2-types.js";
 
 /** What an achievement is judged from. */

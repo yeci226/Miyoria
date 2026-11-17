@@ -7,9 +7,9 @@ import {
   ServiceRegistry,
   Supervisor,
   SupervisorKey,
-} from "@miyoria/kernel";
+} from "@miyoria/runtime/kernel";
 import { type AuditEntry, type AuditLog, AuditLogKey } from "@miyoria/store";
-import { type Authorizer, AuthorizerKey, type ModuleStateKind } from "@miyoria/types";
+import { type Authorizer, AuthorizerKey, Events, is, type ModuleStateKind } from "@miyoria/types";
 import { describe, expect, it, vi } from "vitest";
 import {
   type CardBlock,
@@ -353,8 +353,8 @@ describe("commands module", () => {
     await sup.startAll();
     for (;;) {
       const env = await states.recv();
-      if (env?.event.type === "module_state_changed" && env.event.data.state === "failed") {
-        expect(env.event.data.reason).toContain("invalid account `123`");
+      if (env !== null && is(Events.SystemModuleState, env) && env.data.state === "failed") {
+        expect(env.data.reason).toContain("invalid account `123`");
         break;
       }
     }

@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type { DirectiveRecord, LogEvent } from "@/api/types";
+import type { LogEvent } from "@/api/types";
+import type { DirectiveRecord } from "@miyoria/contracts/api";
 import { blocksOf, blocksPerRule, expiryLabel, inForce } from "@/lib/rules";
 import { mockFetch, renderRoute } from "@/test/render";
 

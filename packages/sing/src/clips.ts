@@ -2,14 +2,14 @@
 // short piece of a song she already covered, played in her voice channel through the same voice
 // player as her singing, but it is not her singing:
 //
-// * no `SONG_TOPIC` cue, so the activity does not become "singing" (that would end the game, see
+// * no `Events.SingCue`, so the activity does not become "singing" (that would end the game, see
 //   `PartyModule.#onActivity`), the stage shows no video and the economy counts no song;
 // * it takes no place in the set list and never touches the song `Singer` is singing;
 // * it starts only once her current line is spoken (`Singer.waitQuiet`), and a song that wants
 //   the channel waits for the clip (`Singer.clipping`);
 // * the abort signal fades it out.
 
-import { errorMessage, getLogger } from "@miyoria/kernel";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import type {
   ClipOutcome,
   Clock,

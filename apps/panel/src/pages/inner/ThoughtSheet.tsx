@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Brain, ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
-import type { IntentStatus, Thought, ThoughtEffects, ThoughtInput, ThoughtIntent } from "@/api/types";
+import type { Thought } from "@/api/types";
+import type { IntentStatus, ThoughtEffects, ThoughtInput, ThoughtIntent } from "@miyoria/contracts/api";
 import { useLlmCalls, useThought } from "@/app/queries";
 import { ErrorLine, SkeletonRows } from "@/components/query-state";
 import { Bipolar, Meter, StatusBadge } from "@/components/status";
@@ -217,7 +218,7 @@ function EffectsView({ e, changes }: { e: ThoughtEffects | null | undefined; cha
       <li key={`f${f.person}`}>
         <span className="text-muted-foreground">對</span>{" "}
         <Link to="/character" search={{ tab: "people", person: f.person }} className="font-medium hover:underline">{f.name}</Link>
-        {f.hint && <Badge variant={f.hint === "+" ? "success" : "destructive"} className="mx-1.5">好感 {f.hint}</Badge>}
+        {f.hint && <Badge variant={f.hint === "+" ? "success" : "destructive"} className="mx-1.5">羈絆 {f.hint}</Badge>}
         {f.note && <span>:{f.note}</span>}
       </li>,
     );

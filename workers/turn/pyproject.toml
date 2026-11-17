@@ -1,0 +1,19 @@
+# The turn worker's environment (workers/turn/server.py): Silero VAD and Smart Turn v3 on the CPU,
+# no PyTorch. Not a package: `uv sync --frozen` installs the locked dependencies only.
+# Keep in step with requirements.txt (workers/tests/test_projects.py checks it) while the old
+# install command and the Docker images still read that file.
+[project]
+name = "miyoria-worker-turn"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",   # [standard] brings the WebSocket implementation /vad needs
+    "numpy>=1.26",
+    "onnxruntime>=1.19,<2",
+]
+
+[tool.uv]
+package = false
+# Workers run on Windows and Linux; nothing is locked for macOS.
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]

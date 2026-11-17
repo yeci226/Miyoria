@@ -1,7 +1,7 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ChevronsUp, SkipForward } from "lucide-react";
 import { useId, useMemo } from "react";
-import type { QueueItem } from "@/api/types";
+import type { QueueItemInfo } from "@miyoria/contracts/api";
 import { useQueue, useQueueMutations } from "@/app/queries";
 import { READ_ONLY_HINT, useCanWrite } from "@/app/session";
 import { DataTable } from "@/components/data-table";
@@ -33,7 +33,7 @@ export function QueueCard() {
   const items = queue.data?.items ?? [];
   const paused = queue.data?.paused ?? false;
 
-  const columns = useMemo<ColumnDef<QueueItem>[]>(
+  const columns = useMemo<ColumnDef<QueueItemInfo>[]>(
     () => [
       {
         id: "pos",

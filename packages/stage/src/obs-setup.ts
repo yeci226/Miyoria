@@ -22,7 +22,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
-import { errorMessage, withTimeout } from "@miyoria/kernel";
+import { errorMessage, withTimeout } from "@miyoria/runtime/kernel";
 import OBSWebSocket from "obs-websocket-js/json";
 import { ObsError } from "./obs.js";
 
@@ -63,7 +63,6 @@ export const SOURCES = {
 
 /** The image mask filter that rounds the song video. */
 export const MASK_FILTER = "圓角";
-export const MASK_FILE = "mask-video-rounded.png";
 
 /** VTube Studio's window, as OBS's capture sources name it. */
 export const VTS_WINDOW = "VTube Studio:UnityWndClass:VTube Studio.exe";

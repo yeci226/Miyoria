@@ -3,7 +3,7 @@
 
 import type { Api } from "@/api/endpoints";
 import { isApiError } from "@/api/http";
-import type { AuthMethods, MemberSession, SessionInfo } from "@/api/types";
+import type { AuthMethods, MemberSession, SessionInfo } from "@miyoria/contracts/api";
 import { readStorage, writeStorage } from "@/lib/storage";
 import { TOKEN_SESSION } from "./session";
 
@@ -29,7 +29,7 @@ export interface Visitor {
  * too, and the login screen shows what is wrong.
  */
 async function publicVisitor(api: Api, signal: AbortSignal): Promise<{ member: MemberSession | null } | null> {
-  const [site, member] = await Promise.allSettled([api.publicStatus({ signal }), api.memberSession({ signal })]);
+  const [site, member] = await Promise.allSettled([api.rpc.public.status(undefined, { signal }), api.rpc.member.session(undefined, { signal })]);
   const open = site.status === "fulfilled" || (isApiError(site.reason) && site.reason.status === 429);
   if (!open) return null;
   return { member: member.status === "fulfilled" ? member.value : null };
@@ -37,7 +37,10 @@ async function publicVisitor(api: Api, signal: AbortSignal): Promise<{ member: M
 
 /** Asks the Core who this is (`token`: the saved one, `""` for none); `null` once aborted. */
 export async function checkVisitor(api: Api, token: string, signal: AbortSignal): Promise<Visitor | null> {
-  const [m, s] = await Promise.allSettled([api.authMethods({ signal }), api.session({ signal })]);
+  const [m, s] = await Promise.allSettled([
+    api.rpc.auth.methods(undefined, { signal }),
+    api.rpc.auth.session(undefined, { signal }),
+  ]);
   if (signal.aborted) return null;
   const methods = m.status === "fulfilled" ? m.value : null;
   if (s.status === "fulfilled") return { auth: { status: "signed_in", session: s.value }, methods };

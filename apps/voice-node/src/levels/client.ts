@@ -2,6 +2,7 @@
 // Sends `{"t": <ms>, "rms": 0..1, "bands": [..]}` text frames (`bands` only when measured).
 // The Stage being absent is normal: reconnect
 // quietly (one warning per outage) and drop points while disconnected.
+import type { LevelFrame } from "@miyoria/contracts/stage-link";
 import WebSocket from "ws";
 import type { Logger } from "../log.js";
 import { noopLogger } from "../log.js";
@@ -17,6 +18,19 @@ export interface LevelsClientOptions {
   maxBufferedBytes?: number;
 }
 
+// The frame is `LevelFrame` in `@miyoria/contracts/stage-link`. A point must be one: if the
+// contract changes a field in a way a point no longer fits, this stops compiling.
+type PointIsALevelFrame = LevelPoint extends LevelFrame ? true : never;
+const _pointIsALevelFrame: PointIsALevelFrame = true;
+void _pointIsALevelFrame;
+
+/**
+ * The wire text of one `LevelFrame`. Built by hand on purpose, not with `JSON.stringify`: this runs
+ * many times a second, and the stringified object would carry full-precision floats (`rms` to 15+
+ * digits, `t` unrounded) that the Stage does not need, which makes every frame
+ * noticeably larger. Outgoing frames are not validated against the schema for the same reason; the type
+ * above is the check. The bytes are pinned in test/levels-encode.test.ts.
+ */
 export function encodeLevel(p: LevelPoint): string {
   // 4 decimals is far below what a mouth shape can show; keeps the frames small.
   const head = `{"t":${Math.round(p.t)},"rms":${Math.round(p.rms * 10_000) / 10_000}`;

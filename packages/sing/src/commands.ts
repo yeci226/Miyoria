@@ -1,7 +1,6 @@
 // `/queue song request | list | skip | voteskip | stop`. Request, skip and stop go through the actuator
 // registry's gate (principal `command`, override: a commanded song is sung once it is ready).
 
-import { type ActuatorRegistry, deniedText } from "@miyoria/actions";
 import {
   ArgKind,
   argSpec,
@@ -20,6 +19,7 @@ import {
   notice,
   type RegisterOptions,
 } from "@miyoria/commands";
+import { type ActuatorRegistry, deniedText } from "@miyoria/gate/actions";
 import { type JsonObject, Principals } from "@miyoria/types";
 import type { SingPermissions } from "./config.js";
 import {

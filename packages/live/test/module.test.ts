@@ -1,13 +1,14 @@
 // Module `live` on a real supervisor and bus: it serves the feed, writes pat Observations to the
 // EventLog and nothing else, and publishes nothing.
 
-import { EventBus, ServiceRegistry, Supervisor } from "@miyoria/kernel";
+import { EventBus, ServiceRegistry, Supervisor } from "@miyoria/runtime/kernel";
 import { PeopleStoreKey } from "@miyoria/store";
 import {
   type ContextKey,
   type Envelope,
   type EventLog,
   EventLogKey,
+  Events,
   type JsonObject,
   type LiveEvent,
   type LiveFeed,
@@ -66,11 +67,8 @@ describe("module live", () => {
     const { bus, feed } = await boot({ channels: ["100"] });
     const seen: LiveEvent[] = [];
     feed.follow((e) => seen.push(e));
-    bus.publish("agent", { type: "agent_turn_started", data: { turn: "t", context: OPEN } });
-    bus.publish("agent", {
-      type: "agent_turn_completed",
-      data: { turn: "t", context: OPEN, text: "大家晚安" },
-    });
+    bus.publish("agent", Events.AgentTurnStarted, { turn: "t", context: OPEN });
+    bus.publish("agent", Events.AgentTurnCompleted, { turn: "t", context: OPEN, text: "大家晚安" });
     await expect.poll(() => feed.snapshot().line?.text).toBe("大家晚安");
     expect(seen.some((e) => e.type === "line")).toBe(true);
   });

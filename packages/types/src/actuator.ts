@@ -1,7 +1,7 @@
 // Who asks for an action, and the hook the scheduler uses to run gate-approved actions.
 //
 // Every action she can take (joining voice, going live, switching scenes, playing a game,
-// sending a DM, ...) is a capability of the actuator registry (`@miyoria/actions`). Every call
+// sending a DM, ...) is a capability of the actuator registry (`@miyoria/gate/actions`). Every call
 // carries a `Principal`: on whose behalf it runs. The gate decides on the principal, the
 // capability and its arguments only, never on chat text.
 
@@ -16,14 +16,6 @@ import { serviceKey } from "./service-key.js";
  * - `director`: the game director's slow loop.
  */
 export type PrincipalKind = "self" | "user" | "command" | "panel" | "director";
-
-export const PRINCIPAL_KINDS: readonly PrincipalKind[] = [
-  "self",
-  "user",
-  "command",
-  "panel",
-  "director",
-];
 
 /** On whose behalf an action runs (serialized into audit entries and `gate.decision`). */
 export interface Principal {

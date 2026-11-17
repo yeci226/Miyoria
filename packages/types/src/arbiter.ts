@@ -3,19 +3,17 @@
 // which limits apply (so she plans with the rules in view instead of hitting them blind).
 //
 // Every source sends an `Impulse` (directly through `ArbiterKey`, or as an
-// `ARBITER_IMPULSE_TOPIC` custom event for modules that only publish). The Arbiter applies the
+// `Events.ArbiterImpulse` for modules that only publish). The Arbiter applies the
 // floors (budget, rate, quiet hours, consent, pause), orders / merges / preempts (addressed >
 // ongoing conversation > her own wishes), records the result and publishes an
-// `ArbiterDecision` (`ARBITER_DECISION_TOPIC`).
+// `ArbiterDecision` (`Events.ArbiterDecided`).
 //
-// Until the Arbiter lands, sources keep publishing `agent_initiative` as today; the Arbiter
+// Until the Arbiter lands, sources keep publishing `agent.initiative` as today; the Arbiter
 // takes those over source by source (see docs/design/v2-implementation.md).
 
-import type { Priority } from "./action.js";
+import type { ArbiterDecisionData, ImpulseData, LedgerEntryData } from "@miyoria/contracts/events";
 import type { Handle } from "./handle.js";
 import type { TurnId } from "./ids.js";
-import type { JsonObject } from "./json.js";
-import type { FloorClaimKind } from "./mainline.js";
 import type { RaisedTopic } from "./mind.js";
 import type { AccountRef, ContextKey } from "./platform.js";
 import { serviceKey } from "./service-key.js";
@@ -87,39 +85,8 @@ export interface ImpulseTarget {
   account: AccountRef | null;
 }
 
-export interface Impulse {
-  /** ULID. */
-  id: string;
-  source: ImpulseSource;
-  kind: ImpulseKind;
-  target: ImpulseTarget;
-  /** `act`: the capability (`game.start`); `speak`: `null` (or `chat.start` / `chat.dm`). */
-  capability: string | null;
-  /** `act`: the capability arguments. */
-  args: JsonObject;
-  /** Reuses the scheduler's priority names: `direct` > `request` > `initiative` > `idle`. */
-  priority: Priority;
-  /** It no longer makes sense after this (dropped, recorded as `expired`). Mandatory. */
-  expires_at: Timestamp;
-  /** Why, in her words or the source's (shown in the ledger). */
-  why: string;
-  /** `speak`: what she might bring up (zh-TW; may quote others, so data). */
-  hint: string | null;
-  /** Accounts the hint is about. */
-  about: AccountRef[];
-  /** Impulses with the same key are merged (the newest wins). */
-  coalesce_key: string | null;
-  /** The Goal it executes, if any. */
-  goal: string | null;
-  created_at: Timestamp;
-  /**
-   * Set on narration only. A line someone waits for, or that cannot wait (a death, a result),
-   * has none, and nothing limits it as narration.
-   */
-  attention?: ImpulseAttention | null;
-  /** V3: which row of the claim order this is (§7.1). Default: from its source. */
-  claim?: FloorClaimKind;
-}
+/** Something that wants her to speak or act (contract: `ImpulseSchema`). */
+export type Impulse = ImpulseData;
 
 /** True once `impulse` is past `expires_at` (`now`: epoch ms). */
 export function isImpulseExpired(impulse: Impulse, now: number): boolean {
@@ -169,23 +136,8 @@ export type ArbiterReason =
   /** The gate refused the capability. */
   | "denied";
 
-export interface ArbiterDecision {
-  impulse: string;
-  source: ImpulseSource;
-  verdict: ArbiterVerdict;
-  /** `null` for `accepted` / `merged`. */
-  reason: ArbiterReason | null;
-  /** Short zh-TW explanation she can read (`"今天主動開了 5 次,下次 21:40 之後"`). */
-  detail: string;
-  /** `deferred` (or a rate-limited `rejected`): when it may work. */
-  retry_at: Timestamp | null;
-  merged_into: string | null;
-  /** The turn it opened, if any. */
-  turn: TurnId | null;
-  /** The task it started, if any. */
-  task: TaskId | null;
-  at: Timestamp;
-}
+/** The decision on one impulse (contract: `ArbiterDecisionSchema`). */
+export type ArbiterDecision = ArbiterDecisionData;
 
 // ---- ledger ---------------------------------------------------------------------------------
 
@@ -199,25 +151,7 @@ export type LedgerKind = "impulse" | "turn" | "task" | "notice";
 export type LedgerOutcome = "pending" | "ok" | "ignored" | "failed" | "denied";
 
 /** One thing she did or tried. Written by the Arbiter, the ActivityManager and the agent. */
-export interface LedgerEntry {
-  id: string;
-  at: Timestamp;
-  kind: LedgerKind;
-  source: ImpulseSource;
-  /** Counted as her own initiative (`isSelfInitiated(source)` at the time). */
-  self_initiated: boolean;
-  context: ContextKey | null;
-  person: Handle | null;
-  /** What it was, short zh-TW (`"開台"`, `"找 Owen 聊報告"`). */
-  summary: string;
-  outcome: LedgerOutcome;
-  /** Why (the verdict's detail, the task's failure, ...). */
-  detail: string | null;
-  impulse: string | null;
-  turn: TurnId | null;
-  task: TaskId | null;
-  updated_at: Timestamp;
-}
+export type LedgerEntry = LedgerEntryData;
 
 /** The limits that apply to her right now, for her prompts (and the panel). */
 export interface LedgerLimits {
@@ -263,13 +197,6 @@ export interface LedgerRecord {
 }
 
 // ---- service and topics ---------------------------------------------------------------------
-
-/** Payload: `Impulse`. For sources that only publish; the Arbiter subscribes. */
-export const ARBITER_IMPULSE_TOPIC = "arbiter.impulse";
-/** Payload: `ArbiterDecision`, for every impulse. */
-export const ARBITER_DECISION_TOPIC = "arbiter.decision";
-/** Payload: `LedgerEntry`, for every new or updated entry. */
-export const LEDGER_TOPIC = "arbiter.ledger";
 
 /** Provided by the `arbiter` module. Reads answer from memory. */
 export interface Arbiter {
