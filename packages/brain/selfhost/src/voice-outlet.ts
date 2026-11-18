@@ -9,9 +9,9 @@
 // channel's text chat (`[modules.agent.voice] text_aside`) and into the transcript at once.
 //
 // With `[modules.agent.voice] text_echo` the sentences of a run are also written in that chat as
-// one message once the last of them has played (`echo`): as she wrote them or as they were said
-// (`text_echo_text`). A copy for people to read, not a line of hers in the transcript, which has
-// them as spoken.
+// one message once the run is over (`echo`): as she wrote them, or as they were said
+// (`text_echo_text`), which is known once the last of them has started. A copy for people to read,
+// not a line of hers in the transcript, which has them as spoken.
 //
 // `PlaceOutlet` gives each line to the outlet of its place: voice channels here, the rest to the
 // text host's.
@@ -87,8 +87,8 @@ export class VoiceOutlet implements Outlet {
   }
 
   /**
-   * The run of `turn` is over and the last of it has played: what it said is written in the voice
-   * channel's chat, as one message (`text_echo`). Best effort: a failure is only logged.
+   * The run of `turn` is over: what it said is written in the voice channel's chat, as one
+   * message (`text_echo`). Best effort: a failure is only logged.
    */
   async echo(turn: string): Promise<void> {
     const said = this.#said.get(turn);

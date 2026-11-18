@@ -411,11 +411,21 @@ export class VoiceHost implements VoiceRunner {
     if (speech.ended >= speech.queued && !this.#turns.has(turn)) this.#speech.delete(turn);
   }
 
-  /** `text_echo`: once the run of `turn` is over and nothing of it is left to play. */
+  /**
+   * `text_echo`: once the run of `turn` is over. What was sent to TTS (`text_echo_text = "spoken"`)
+   * is known line by line as each starts, so that text waits for the last line to start.
+   */
   #echoWhenSaid(turn: string): void {
     if (this.#turns.has(turn)) return;
     const speech = this.#speech.get(turn);
-    if (speech !== undefined && speech.ended < speech.queued) return;
+    if (
+      this.#agent.config.voice.text_echo_text === "spoken" &&
+      speech !== undefined &&
+      speech.started < speech.queued &&
+      speech.ended < speech.queued
+    ) {
+      return;
+    }
     void this.#outlet.echo(turn);
   }
 

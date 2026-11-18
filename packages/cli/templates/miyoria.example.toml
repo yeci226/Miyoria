@@ -788,8 +788,8 @@ default_mode = "normal"    # off | mention-only | normal | always(語音沒有�
 debounce_ms = 700          # 對方講完後等多久(看他是不是還要繼續講)
 text_chat = true           # 她在語音頻道裡時,那個頻道文字區打的字她也用說的回
 text_aside = true          # 用說的回時,網址和程式碼改貼到語音頻道的文字區
-# text_echo = false        # true = 她用說的回完(最後一句播完)之後,把說的話整段貼到語音頻道的文字區
-# text_echo_text = "written"   # 貼哪一種:written = 她寫的原文;spoken = 實際念出來的(tts_translate 讓她講別的語言時是譯文)
+# text_echo = false        # true = 她用說的回時,把說的話整段也貼到語音頻道的文字區(寫完就貼,她可能還在講)
+# text_echo_text = "written"   # 貼哪一種:written = 她寫的原文;spoken = 實際念出來的(tts_translate 讓她講別的語言時是譯文;等最後一句開始念才貼)
 keep_in_voice = true       # 她在語音時,自己的事(做事的結果、遊戲實況)用說的,不發到文字頻道;回別人的話還是留在原處
 direct_debounce_ms = 400   # 有人叫她(名字、她剛講完就問她)時只等這麼久
 # turn_debounce_ms = 100   # Smart Turn 判定講完時只等這麼久(turn_engine = "smart-turn" 才會用到)

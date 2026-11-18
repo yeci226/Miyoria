@@ -826,16 +826,14 @@ describe("text_echo: what she said is also written in the voice channel's chat",
   };
   const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
-  it("writes a spoken reply once, whole, when the last of it has played", async () => {
+  it("writes a spoken reply once, whole, as soon as the run is over", async () => {
     const { rig, turn } = await reply({ text_echo: true });
-    play(rig, turn, "started", "好喔。");
-    play(rig, turn, "finished", "好喔。");
-    play(rig, turn, "started", "我去看看。");
-    await settle();
-    // Still speaking: not yet.
-    expect(chat(rig)).toEqual([]);
-    play(rig, turn, "finished", "我去看看。");
+    // Nothing has played yet: the text is there for people to read while she says it.
     await until(() => chat(rig).length > 0, 3_000, "the echo");
+    for (const line of ["好喔。", "我去看看。"]) {
+      play(rig, turn, "started", line);
+      play(rig, turn, "finished", line);
+    }
     await settle();
     expect(chat(rig)).toEqual([["vc", "好喔。我去看看。"]]);
     // Said once in the conversation: the written copy is not a second line of hers.
@@ -846,10 +844,14 @@ describe("text_echo: what she said is also written in the voice channel's chat",
     const { rig, turn } = await reply({ text_echo: true, text_echo_text: "spoken" });
     play(rig, turn, "started", "好喔。", { said: "いいよ。" });
     play(rig, turn, "finished", "好喔。");
+    await settle();
+    // What the last line is said as is not known before it starts.
+    expect(chat(rig)).toEqual([]);
     // A line said as it was written carries no `said`.
     play(rig, turn, "started", "我去看看。");
-    play(rig, turn, "finished", "我去看看。");
     await until(() => chat(rig).length > 0, 3_000, "the echo");
+    play(rig, turn, "finished", "我去看看。");
+    await settle();
     expect(chat(rig)).toEqual([["vc", "いいよ。我去看看。"]]);
   });
 
