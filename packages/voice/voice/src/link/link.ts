@@ -422,6 +422,12 @@ export class VoiceLink {
     return conn;
   }
 
+  /** Whether the node of `guild` can watch a stream; `false` too when no node is connected. */
+  canWatch(guild: string): boolean {
+    const conn = this.#conns.findLast((c) => c.state.guilds.has(guild)) ?? this.#conns.at(-1);
+    return conn?.capabilities.has(CAPABILITY_WATCH) === true;
+  }
+
   /**
    * Asks the node to watch `userId`'s Go Live stream in `guild`, while she stays in the voice
    * channel. One stream at a time: it replaces the watch going on. Progress arrives as

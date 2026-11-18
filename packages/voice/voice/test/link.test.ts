@@ -433,6 +433,7 @@ describe("voice.link", () => {
     const link = h.link();
     const events = h.subscribe([WATCH_TOPIC]);
 
+    expect(link.canWatch("g1")).toBe(true);
     await link.watchStart("g1", "u1");
     expect(await node.recvJson()).toEqual({ type: "watch_start", guild: "g1", user_id: "u1" });
     expect(link.watchStatus("g1")).toBeNull();
@@ -495,6 +496,7 @@ describe("voice.link", () => {
     const h = await start();
     const node = await h.node(SELF_ID);
     const link = h.link();
+    expect(link.canWatch("g1")).toBe(false);
     expect(await rejection(link.watchStart("g1", "u1"))).toContain("cannot watch");
     expect(await rejection(link.snapshot("g1", 2_000, new AbortController().signal))).toContain(
       "cannot watch",
