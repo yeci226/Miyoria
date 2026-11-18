@@ -67,6 +67,30 @@ export const VoiceGoLiveSchema = z
 export type VoiceGoLiveData = z.output<typeof VoiceGoLiveSchema>;
 
 /**
+ * Her watching of somebody's Go Live stream, as the voice node reports it: `starting`
+ * (connecting to the stream), `live` (pictures are arriving), `stopped`, `failed` (see `error`).
+ */
+export const WatchStateSchema = z
+  .enum(["starting", "live", "stopped", "failed"])
+  .meta({ id: "EventsWatchState" });
+
+/** Her watching of `user_id`'s stream in a guild changed: `voice.watch`. */
+export const VoiceWatchSchema = z
+  .object({
+    platform: PlatformIdSchema,
+    guild: z.string(),
+    /** Whose stream. */
+    user_id: z.string(),
+    state: WatchStateSchema,
+    /** Why it failed (`failed`). */
+    error: z.string().nullable(),
+    /** Why it ended (`stopped`), e.g. "stream ended". */
+    reason: z.string().nullable(),
+  })
+  .meta({ id: "EventsVoiceWatch" });
+export type VoiceWatchData = z.output<typeof VoiceWatchSchema>;
+
+/**
  * What an interruption did to her speech: `duck` (volume down), `pause` (the rest of her line
  * waits), `resume`, `stop` (the rest of the turn's speech is dropped).
  */
@@ -314,6 +338,14 @@ export const VoiceGoLive = defineEvent({
   tier: "short",
 });
 
+export const VoiceWatch = defineEvent({
+  type: "voice.watch",
+  v: 1,
+  data: VoiceWatchSchema,
+  scope: "space",
+  tier: "short",
+});
+
 export const VoiceBargeIn = defineEvent({
   type: "voice.barge_in",
   v: 1,
@@ -360,6 +392,7 @@ export const VOICE_EVENTS = [
   VoiceParticipants,
   VoiceSpeaking,
   VoiceGoLive,
+  VoiceWatch,
   VoiceBargeIn,
   VoiceUpcoming,
   VoiceSynthesis,

@@ -125,5 +125,6 @@ export {
   VoiceSynthesis,
   VoiceUpcoming,
   VoiceUtteranceEvent,
+  VoiceWatch,
   WorldSalient,
 } from "@miyoria/contracts/events";

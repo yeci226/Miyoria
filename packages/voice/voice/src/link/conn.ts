@@ -21,6 +21,23 @@ export interface GoLiveStatus {
  */
 export type GoLiveState = "starting" | "live" | "stopped" | "failed";
 
+/** Her watching of somebody's stream in a guild, as the node last reported it. */
+export interface WatchStatus {
+  /** Whose stream. */
+  user_id: string;
+  state: GoLiveState;
+  /** Why it failed (`failed`). */
+  error: string | null;
+  /** Why it ended (`stopped`). */
+  reason: string | null;
+}
+
+/** A `watch_snapshot` waiting for its picture. */
+export interface PendingSnapshot {
+  resolve(jpeg: Buffer): void;
+  reject(error: Error): void;
+}
+
 export interface GuildState {
   channel: string;
   participants: VoiceParticipant[];
@@ -41,6 +58,10 @@ export interface ConnState {
   streams: Map<number, { id: number; guild: string }>;
   /** Go Live state reported by the node, per guild. */
   golive: Map<string, GoLiveStatus>;
+  /** Watch state reported by the node, per guild. */
+  watch: Map<string, WatchStatus>;
+  /** Snapshots asked for and not answered yet, by request id. */
+  snapshots: Map<number, PendingSnapshot>;
 }
 
 export function newConnState(): ConnState {
@@ -50,6 +71,8 @@ export function newConnState(): ConnState {
     plays: new Map(),
     streams: new Map(),
     golive: new Map(),
+    watch: new Map(),
+    snapshots: new Map(),
   };
 }
 

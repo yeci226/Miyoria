@@ -10,7 +10,7 @@ import {
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AudioChunk, AudioStream } from "../../speech/src/index.js";
-import { type AudioEvent, GOLIVE_TOPIC, type GoLiveRequest } from "../src/index.js";
+import { type AudioEvent, GOLIVE_TOPIC, type GoLiveRequest, WATCH_TOPIC } from "../src/index.js";
 import type { BoundedQueue } from "../src/util.js";
 import { Harness, nextEvent, SELF_ID, sleepMs, TOKEN, waitUntil } from "./harness.js";
 
@@ -416,6 +416,109 @@ describe("voice.link", () => {
     const node = await h.node(SELF_ID);
     node.sendJson({ type: "ping" });
     expect(await node.recvJson()).toEqual({ type: "pong" });
+  });
+
+  /** A binary frame as the node sends it: `[tag][id: u32 LE][payload]`. */
+  const frame = (tag: number, id: number, payload: number[]): Buffer => {
+    const out = Buffer.alloc(5 + payload.length);
+    out[0] = tag;
+    out.writeUInt32LE(id, 1);
+    out.set(payload, 5);
+    return out;
+  };
+
+  it("watches a stream: start, state events, a snapshot, the stream's audio, stop", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID, ["watch"]);
+    const link = h.link();
+    const events = h.subscribe([WATCH_TOPIC]);
+
+    await link.watchStart("g1", "u1");
+    expect(await node.recvJson()).toEqual({ type: "watch_start", guild: "g1", user_id: "u1" });
+    expect(link.watchStatus("g1")).toBeNull();
+
+    node.sendJson({ type: "watch", guild: "g1", user_id: "u1", state: "live" });
+    const live = await nextEvent(events);
+    expect(live.type).toBe(WATCH_TOPIC);
+    expect(live.data).toEqual({
+      platform: "discord",
+      guild: "g1",
+      user_id: "u1",
+      state: "live",
+      error: null,
+      reason: null,
+    });
+    expect(link.watchStatus("g1")).toEqual({
+      user_id: "u1",
+      state: "live",
+      error: null,
+      reason: null,
+    });
+
+    // A snapshot is the frame that carries the request's id.
+    const picture = link.snapshot("g1", 2_000, new AbortController().signal);
+    const asked = await node.recvJson();
+    expect(asked.type).toBe("watch_snapshot");
+    node.ws.send(frame(0x04, asked.id as number, [0xff, 0xd8, 0xff]), { binary: true });
+    expect([...(await picture)]).toEqual([0xff, 0xd8, 0xff]);
+
+    // The node may have no picture.
+    const none = rejection(link.snapshot("g1", 2_000, new AbortController().signal));
+    const again = await node.recvJson();
+    node.sendJson({ type: "watch_snapshot_failed", id: again.id as number, error: "no frame yet" });
+    expect(await none).toContain("no frame yet");
+
+    // The stream's sound: PCM s16le, no stream id.
+    const audio = link.subscribeWatchAudio();
+    node.ws.send(frame(0x05, 0, [1, 0, 0xfe, 0xff]), { binary: true });
+    expect([...((await audio.recv()) ?? [])]).toEqual([1, -2]);
+
+    // A late stop of somebody she no longer watches does not end the watch going on.
+    node.sendJson({ type: "watch", guild: "g1", user_id: "u9", state: "stopped", reason: "old" });
+    await nextEvent(events);
+    expect(link.watchStatus("g1")?.user_id).toBe("u1");
+
+    await link.watchStop("g1");
+    expect(await node.recvJson()).toEqual({ type: "watch_stop", guild: "g1" });
+    node.sendJson({
+      type: "watch",
+      guild: "g1",
+      user_id: "u1",
+      state: "stopped",
+      reason: "stop requested",
+    });
+    await nextEvent(events);
+    expect(link.watchStatus("g1")?.state).toBe("stopped");
+  });
+
+  it("does not ask a node that cannot watch", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID);
+    const link = h.link();
+    expect(await rejection(link.watchStart("g1", "u1"))).toContain("cannot watch");
+    expect(await rejection(link.snapshot("g1", 2_000, new AbortController().signal))).toContain(
+      "cannot watch",
+    );
+    expect(await node.collect(100)).toEqual([]);
+  });
+
+  it("a watch ends when the node disconnects, and its pending snapshot fails", async () => {
+    const h = await start();
+    const node = await h.node(SELF_ID, ["watch"]);
+    const link = h.link();
+    const events = h.subscribe([WATCH_TOPIC]);
+    node.sendJson({ type: "watch", guild: "g1", user_id: "u1", state: "live" });
+    await nextEvent(events);
+    const picture = rejection(link.snapshot("g1", 5_000, new AbortController().signal));
+    await node.recvJson();
+    node.ws.close();
+    expect(await picture).toContain("disconnected");
+    const ended = await nextEvent(events);
+    expect(ended.data).toMatchObject({
+      user_id: "u1",
+      state: "stopped",
+      reason: "voice node disconnected",
+    });
   });
 
   it("golive_start_stop_and_state_events", async () => {

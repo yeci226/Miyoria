@@ -121,6 +121,7 @@ export {
   VoicePlaybackEvent,
   VoiceSpeaking,
   VoiceSynthesis,
+  VoiceWatch,
   VoiceUpcoming,
   VoiceUtteranceEvent,
   WorldSalient,

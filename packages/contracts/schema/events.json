@@ -8990,6 +8990,52 @@
         "emotion"
       ]
     },
+    "EventsVoiceWatch": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/EventsWatchState"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "platform",
+        "guild",
+        "user_id",
+        "state",
+        "error",
+        "reason"
+      ]
+    },
+    "EventsWatchState": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "live",
+        "stopped",
+        "failed"
+      ]
+    },
     "StageLinkKaraokeAir": {
       "type": "object",
       "properties": {

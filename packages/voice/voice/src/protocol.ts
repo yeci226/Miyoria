@@ -32,6 +32,12 @@ export const TAG_PLAYBACK = VOICE_LINK_FRAME.PLAYBACK;
  * what the lip-sync levels follow instead of the audio, sent before the `0x02` frame it goes with.
  */
 export const TAG_LEVELS = VOICE_LINK_FRAME.LEVELS;
+/** A picture of the watched stream (node → Core): the id is its `watch_snapshot`'s, then a JPEG. */
+export const TAG_SNAPSHOT = VOICE_LINK_FRAME.SNAPSHOT;
+/** The watched stream's sound (node → Core): PCM s16le mono 16 kHz; the id is not used. */
+export const TAG_WATCH_AUDIO = VOICE_LINK_FRAME.WATCH_AUDIO;
+/** The capability of a node that can watch a stream. */
+export const CAPABILITY_WATCH = "watch";
 
 export const SelfAccountSchema = VoiceLinkSelfAccountSchema;
 export type SelfAccount = z.output<typeof SelfAccountSchema>;

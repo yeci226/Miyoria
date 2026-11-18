@@ -2,6 +2,7 @@
 // protocol loop.
 
 import { timingSafeEqual } from "node:crypto";
+import { readFrameHeader, VOICE_LINK_FRAME_HEADER_BYTES } from "@miyoria/contracts/voice-link";
 import { errorMessage, type Logger } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
@@ -19,6 +20,7 @@ import type { RawData, WebSocket } from "ws";
 import { z } from "zod";
 import type { AudioStream } from "../../../speech/src/index.js";
 import {
+  CAPABILITY_WATCH,
   CLOSE,
   decodeAudio,
   type GoLiveEncoder,
@@ -26,15 +28,26 @@ import {
   type NodeMessage,
   NodeMessageSchema,
   TAG_CAPTURE,
+  TAG_SNAPSHOT,
+  TAG_WATCH_AUDIO,
   VERSION,
   type WireParticipant,
 } from "../protocol.js";
 import { BoundedQueue, deferred, Watch } from "../util.js";
-import { Conn, closeSocket, type GoLiveStatus, newConnState, VoiceLinkError } from "./conn.js";
+import {
+  Conn,
+  closeSocket,
+  type GoLiveStatus,
+  newConnState,
+  VoiceLinkError,
+  type WatchStatus,
+} from "./conn.js";
 import { type LeveledChunk, type Playback, startPlayback } from "./playback.js";
 
 /** Topic of Go Live state changes. */
 export const GOLIVE_TOPIC = Events.VoiceGoLive.type;
+/** Topic of the state of her watching a stream. */
+export const WATCH_TOPIC = Events.VoiceWatch.type;
 
 export const DEFAULT_BIND = "127.0.0.1:7879";
 
@@ -188,6 +201,9 @@ export class VoiceLink {
   readonly #helloTimeoutMs: number;
   #conns: Conn[] = [];
   #audioSubs: BoundedQueue<AudioEvent>[] = [];
+  #watchAudioSubs: BoundedQueue<Int16Array>[] = [];
+  #watchAudioDropped = 0;
+  #nextSnapshot = 1;
   #audioDropped = 0;
   readonly #knownSelf = new Map<string, AccountRef>();
   #nextConn = 1;
@@ -395,6 +411,109 @@ export class VoiceLink {
   isStreaming(guild: string): boolean {
     const s = this.golive(guild)?.state;
     return s === "starting" || s === "live";
+  }
+
+  /** The connection of `guild`, when its node can watch a stream. */
+  #watcherFor(guild: string): Conn {
+    const conn = this.#connFor(guild);
+    if (!conn.capabilities.has(CAPABILITY_WATCH)) {
+      throw new VoiceLinkError("this voice node cannot watch streams");
+    }
+    return conn;
+  }
+
+  /**
+   * Asks the node to watch `userId`'s Go Live stream in `guild`, while she stays in the voice
+   * channel. One stream at a time: it replaces the watch going on. Progress arrives as
+   * `voice.watch` events and in `watchStatus()`.
+   */
+  async watchStart(guild: string, userId: string): Promise<void> {
+    await this.#watcherFor(guild).sendJson({ type: "watch_start", guild, user_id: userId });
+  }
+
+  /** Asks the node to stop watching in `guild`. */
+  async watchStop(guild: string): Promise<void> {
+    await this.#watcherFor(guild).sendJson({ type: "watch_stop", guild });
+  }
+
+  /** The last watch state the node reported for `guild`. */
+  watchStatus(guild: string): WatchStatus | null {
+    for (const c of this.#conns.toReversed()) {
+      const s = c.state.watch.get(guild);
+      if (s) return { ...s };
+    }
+    return null;
+  }
+
+  /**
+   * Asks the node for a JPEG of the stream watched in `guild`. Rejects after `timeoutMs`, when
+   * `signal` aborts, when the node has no picture and when it disconnects; a picture that
+   * arrives after that is dropped.
+   */
+  async snapshot(guild: string, timeoutMs: number, signal: AbortSignal): Promise<Buffer> {
+    const conn = this.#watcherFor(guild);
+    signal.throwIfAborted();
+    const id = this.#nextSnapshot;
+    this.#nextSnapshot = (this.#nextSnapshot + 1) >>> 0;
+    const answer = deferred<Buffer>();
+    // The state is replaced when the node disconnects: keep the map the entry went into.
+    const snapshots = conn.state.snapshots;
+    snapshots.set(id, { resolve: answer.resolve, reject: answer.reject });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    const interrupted = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new VoiceLinkError("the voice node did not send a snapshot in time")),
+        Math.max(1, timeoutMs),
+      );
+      onAbort = () => reject(new VoiceLinkError("snapshot aborted"));
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    // Either can settle while the send is pending, before anything listens to it.
+    answer.promise.catch(() => undefined);
+    interrupted.catch(() => undefined);
+    try {
+      await conn.sendJson({ type: "watch_snapshot", id });
+      return await Promise.race([answer.promise, interrupted]);
+    } finally {
+      clearTimeout(timer);
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+      snapshots.delete(id);
+    }
+  }
+
+  /**
+   * Receives the sound (PCM s16le mono 16 kHz) of the watched stream from now on. The queue is
+   * bounded; frames are dropped (with a warning) while it is full.
+   */
+  subscribeWatchAudio(signal?: AbortSignal): BoundedQueue<Int16Array> {
+    const queue = new BoundedQueue<Int16Array>(this.#audioBuffer, signal);
+    this.#watchAudioSubs.push(queue);
+    return queue;
+  }
+
+  #emitWatchAudio(samples: Int16Array): void {
+    this.#watchAudioSubs = this.#watchAudioSubs.filter((q) => {
+      if (q.closed) return false;
+      if (!q.push(samples)) {
+        const n = this.#watchAudioDropped++;
+        if (n % 100 === 0) {
+          this.#log.warn({ dropped: n + 1 }, "watch audio subscriber is full, dropping frames");
+        }
+      }
+      return true;
+    });
+  }
+
+  #publishWatch(platform: PlatformId, guild: string, status: WatchStatus): void {
+    this.#publishEvent(Events.VoiceWatch, {
+      platform,
+      guild,
+      user_id: status.user_id,
+      state: status.state,
+      error: status.error,
+      reason: status.reason,
+    });
   }
 
   #publishGolive(platform: PlatformId, guild: string, status: GoLiveStatus): void {
@@ -688,6 +807,32 @@ export class VoiceLink {
         st.plays.get(msg.play)?.set(msg.state);
         return;
       }
+      case "watch": {
+        const status: WatchStatus = {
+          user_id: msg.user_id,
+          state: msg.state,
+          error: msg.error,
+          reason: msg.reason,
+        };
+        const current = st.watch.get(msg.guild);
+        // A stop of somebody she no longer watches must not end the watch going on.
+        const stale =
+          current !== undefined &&
+          current.user_id !== msg.user_id &&
+          (msg.state === "stopped" || msg.state === "failed");
+        if (!stale) st.watch.set(msg.guild, status);
+        this.#log.info(
+          { guild: msg.guild, state: status.state, error: status.error, stale },
+          "watch state",
+        );
+        this.#publishWatch(platform, msg.guild, status);
+        return;
+      }
+      case "watch_snapshot_failed": {
+        st.snapshots.get(msg.id)?.reject(new VoiceLinkError(`snapshot failed: ${msg.error}`));
+        st.snapshots.delete(msg.id);
+        return;
+      }
       case "golive": {
         const status: GoLiveStatus = { state: msg.state, error: msg.error, reason: msg.reason };
         st.golive.set(msg.guild, status);
@@ -707,8 +852,22 @@ export class VoiceLink {
   }
 
   #handleAudio(conn: Conn, data: Uint8Array): void {
+    if (data[0] === TAG_SNAPSHOT) {
+      const header = readFrameHeader(data);
+      const pending = header === null ? undefined : conn.state.snapshots.get(header.id);
+      if (header !== null && pending !== undefined) {
+        conn.state.snapshots.delete(header.id);
+        const all = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+        pending.resolve(all.subarray(VOICE_LINK_FRAME_HEADER_BYTES));
+      }
+      return;
+    }
     const frame = decodeAudio(data);
     if (!frame) return;
+    if (frame.tag === TAG_WATCH_AUDIO) {
+      this.#emitWatchAudio(frame.samples);
+      return;
+    }
     if (frame.tag !== TAG_CAPTURE) {
       this.#log.debug({ tag: frame.tag }, "unexpected binary frame from voice node");
       return;
@@ -729,6 +888,17 @@ export class VoiceLink {
       this.#emitAudio({ type: "stream_close", stream: id });
     const platform = conn.account.platform;
     if (conn.closeCode() !== CLOSE.REPLACED) {
+      // The node stops its watch when its link drops.
+      for (const [guild, status] of state.watch) {
+        if (status.state === "starting" || status.state === "live") {
+          this.#publishWatch(platform, guild, {
+            ...status,
+            state: "stopped",
+            error: null,
+            reason: "voice node disconnected",
+          });
+        }
+      }
       // A Go Live stream belongs to the node; Core can no longer see it.
       for (const [guild, status] of state.golive) {
         if (status.state === "starting" || status.state === "live") {
@@ -748,6 +918,9 @@ export class VoiceLink {
     }
     this.#log.info({ account: conn.account.id, code: conn.closeCode() }, "voice node disconnected");
     for (const p of state.pendingJoins) p.reject("voice node disconnected");
+    for (const p of state.snapshots.values()) {
+      p.reject(new VoiceLinkError("voice node disconnected"));
+    }
   }
 }
 
