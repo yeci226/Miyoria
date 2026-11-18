@@ -1,7 +1,9 @@
 """The song cache cleans up after itself: least recently used songs and their downloads go first.
 
-What counts as the cache (songs.py has the layout): every song dir under the data dir and every
-download under ``_sources``. Nothing else is ever removed: ``library/``, ``queries.json`` (only the
+What counts as the cache (songs.py has the layout): every song dir under the data dir, every karaoke
+song under ``_karaoke`` (karaoke.py) and every download under ``_sources``. A karaoke song goes by
+the same rules as a song (it is called a song below) and holds on to its download the same way.
+Nothing else is ever removed: ``library/``, ``queries.json`` (only the
 entries of a removed download), ``_ytdlp-cache``, ``_lyrics``, ``_gpu-profile.json`` and any dir
 that does not look like a song stay as they are.
 
@@ -53,6 +55,10 @@ USAGE_FILE = "_usage.json"
 TRASH_PREFIX = "_trash-"
 # Files that make a dir under the data dir a song (songs.SONG_FILES, and what a job leaves while it runs).
 SONG_MARKERS = ("meta.json", "play_mix.pcm", "mix.wav", "vocals.wav", "_converted.wav")
+KARAOKE_DIR = "_karaoke"  # karaoke.KARAOKE_DIR (not imported: karaoke.py is not needed to clean up)
+KARAOKE_FILES = ("karaoke.m4a", "reference.json")
+# Unit kind -> its table in _usage.json.
+TABLES = {"song": "songs", "source": "sources", "karaoke": "karaoke"}
 # A song's own use is written at most this often (Core fetches two tracks per song at once).
 TOUCH_EVERY_S = 60.0
 
@@ -91,9 +97,9 @@ class CacheLimits:
 
 @dataclass
 class Unit:
-    """One song dir or one download dir."""
+    """One song dir, karaoke song dir or download dir."""
 
-    kind: str  # song | source
+    kind: str  # song | karaoke | source
     id: str
     path: Path
     last_used: float
@@ -109,6 +115,10 @@ class Protected:
 
     songs: set[str] = field(default_factory=set)
     sources: set[str] = field(default_factory=set)
+    karaoke: set[str] = field(default_factory=set)
+
+    def has(self, u: "Unit") -> bool:
+        return u.id in {"song": self.songs, "source": self.sources, "karaoke": self.karaoke}[u.kind]
 
 
 def _iso(t: float | None) -> str | None:
@@ -145,6 +155,14 @@ class Inventory:
                 continue
             out += self.size[ident]
         return out
+
+
+def _read_meta(d: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads((d / "meta.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
 
 
 def _files(d: Path) -> list[tuple[Any, int, int]]:
@@ -187,7 +205,7 @@ class Cache:
             raw = json.loads((self.root / USAGE_FILE).read_text("utf-8"))
         except (OSError, ValueError):
             raw = {}
-        out: dict[str, dict[str, float]] = {"songs": {}, "sources": {}}
+        out: dict[str, dict[str, float]] = {table: {} for table in TABLES.values()}
         for kind in out:
             for k, v in (raw.get(kind) or {}).items() if isinstance(raw, dict) else ():
                 if isinstance(v, (int, float)):
@@ -202,13 +220,13 @@ class Cache:
         except OSError as e:
             log.warning("cannot write %s: %s", USAGE_FILE, e)
 
-    def touch(self, song: str | None = None, source: str | None = None) -> None:
+    def touch(self, song: str | None = None, source: str | None = None, karaoke: str | None = None) -> None:
         """Records a use. Blocks while that song or download is being removed, so after it returns
         the song is either still there (and now protected) or already gone."""
         now = self.clock()
         with self._lock:
             changed = False
-            for kind, raw in (("songs", song), ("sources", source)):
+            for kind, raw in (("songs", song), ("sources", source), ("karaoke", karaoke)):
                 key = safe_id(raw, 96) if raw else None
                 if key and now - self._usage[kind].get(key, 0.0) >= TOUCH_EVERY_S:
                     self._usage[kind][key] = now
@@ -218,7 +236,7 @@ class Cache:
 
     def last_used(self, kind: str, key: str, path: Path) -> float:
         with self._lock:
-            t = self._usage["songs" if kind == "song" else "sources"].get(key)
+            t = self._usage[TABLES[kind]].get(key)
         if t is not None:
             return t
         try:
@@ -246,6 +264,10 @@ class Cache:
         src = self.root / "_sources"
         return sorted(d for d in src.iterdir() if d.is_dir()) if src.exists() else []
 
+    def _karaoke_dirs(self) -> list[Path]:
+        k = self.root / KARAOKE_DIR
+        return sorted(d for d in k.iterdir() if d.is_dir()) if k.exists() else []
+
     def inventory(self) -> Inventory:
         sources = self._source_dirs()
         keys = sorted((d.name for d in sources), key=len, reverse=True)
@@ -263,6 +285,15 @@ class Cache:
                 src = next((k for k in keys if d.name == k or d.name.startswith(k + "-")), None)
             u = Unit("song", d.name, d, self.last_used("song", d.name, d), source=src, title=meta.get("title"),
                      complete=bool(meta) and (d / "play_mix.pcm").exists())
+            found.append((u, _files(d)))
+        for d in self._karaoke_dirs():
+            meta = _read_meta(d)
+            src_info = meta.get("source")
+            src = safe_id(str(src_info["key"]), 96) if isinstance(src_info, dict) and src_info.get("key") else None
+            if not src:  # no meta yet: ``k-<source key>`` (karaoke.karaoke_id)
+                src = next((k for k in keys if d.name == f"k-{k}"), None)
+            u = Unit("karaoke", d.name, d, self.last_used("karaoke", d.name, d), source=src, title=meta.get("title"),
+                     complete=bool(meta) and all((d / f).exists() for f in KARAOKE_FILES))
             found.append((u, _files(d)))
         for d in sources:
             found.append((Unit("source", d.name, d, self.last_used("source", d.name, d)), _files(d)))
@@ -283,17 +314,19 @@ class Cache:
     def status(self, inv: Inventory | None = None) -> dict[str, Any]:
         inv = inv or self.inventory()
         songs = [u for u in inv.units if u.kind == "song"]
+        karaoke = [u for u in inv.units if u.kind == "karaoke"]
         sources = [u for u in inv.units if u.kind == "source"]
-        oldest = min((u.last_used for u in songs), default=None)
+        oldest = min((u.last_used for u in songs + karaoke), default=None)
         return {"bytes": inv.total(), "gb": round(inv.total() / GB, 2), "songs": len(songs),
-                "incomplete_songs": sum(1 for u in songs if not u.complete), "sources": len(sources),
+                "incomplete_songs": sum(1 for u in songs if not u.complete), "karaoke": len(karaoke),
+                "sources": len(sources),
                 "oldest_use": _iso(oldest), "limits": CacheLimits.from_env().public(),
                 "running": self._run.locked(), "last": self.last}
 
     # ── the cleanup ──────────────────────────────────────────────────────────
 
     def _is_protected(self, u: Unit, now: float, limits: CacheLimits, p: Protected) -> bool:
-        if (u.id in p.songs) if u.kind == "song" else (u.id in p.sources):
+        if p.has(u):
             return True
         last = self.last_used(u.kind, u.id, u.path)
         return now - last < limits.protect_hours * 3600
@@ -302,15 +335,15 @@ class Cache:
         """What goes, in order, and why (``age``, ``size``, ``unused``: a download no song needs)."""
         if not limits.on:
             return []
-        songs = sorted((u for u in inv.units if u.kind == "song"), key=lambda u: u.last_used)
+        songs = sorted((u for u in inv.units if u.kind in ("song", "karaoke")), key=lambda u: u.last_used)
         sources = {u.id: u for u in inv.units if u.kind == "source"}
         gone: set[tuple[str, str]] = set()
         out: list[tuple[Unit, str]] = []
         total = inv.total()
-        users: dict[str, set[str]] = {}
+        users: dict[str, set[tuple[str, str]]] = {}
         for s in songs:
             if s.source:
-                users.setdefault(s.source, set()).add(s.id)
+                users.setdefault(s.source, set()).add((s.kind, s.id))
 
         def remove(u: Unit, why: str) -> None:
             nonlocal total
@@ -328,7 +361,7 @@ class Cache:
         def drop_song(s: Unit, why: str) -> None:
             remove(s, why)
             if s.source:
-                users.get(s.source, set()).discard(s.id)
+                users.get(s.source, set()).discard((s.kind, s.id))
             release_source(s.source, why)
 
         # Downloads no song is made from (any more): nothing needs them.
@@ -342,7 +375,7 @@ class Cache:
             for s in songs:
                 if total <= limits.max_bytes:
                     break
-                if ("song", s.id) in gone or self._is_protected(s, now, limits, p):
+                if (s.kind, s.id) in gone or self._is_protected(s, now, limits, p):
                     continue
                 drop_song(s, "size")
         return out
@@ -397,6 +430,7 @@ class Cache:
                 "at": _iso(now), "dry_run": dry_run, "limits": limits.public(),
                 "before_bytes": before, "after_bytes": after, "freed_bytes": freed,
                 "removed_songs": sum(1 for r in removed if r["kind"] == "song"),
+                "removed_karaoke": sum(1 for r in removed if r["kind"] == "karaoke"),
                 "removed_sources": sum(1 for r in removed if r["kind"] == "source"),
                 "removed": removed, "errors": errors, "protected": protected,
                 "over_cap": limits.max_bytes > 0 and after > limits.max_bytes,
@@ -436,7 +470,7 @@ class Cache:
         with self._lock:
             changed = False
             for kind, key in gone:
-                if self._usage["songs" if kind == "song" else "sources"].pop(key, None) is not None:
+                if self._usage[TABLES[kind]].pop(key, None) is not None:
                     changed = True
             if changed:
                 self._write_usage()
@@ -446,8 +480,8 @@ class Cache:
         are not there, once they are older than ``before``."""
         there = {(u.kind, u.id) for u in inv.units}
         with self._lock:
-            stale = [(kind, key) for kind, table in (("song", self._usage["songs"]), ("source", self._usage["sources"]))
-                     for key, t in table.items() if t < before and (kind, key) not in there]
+            stale = [(kind, key) for kind, name in TABLES.items()
+                     for key, t in self._usage[name].items() if t < before and (kind, key) not in there]
         self._forget_usage(stale)
 
 

@@ -13,6 +13,13 @@ import { pipeline } from "node:stream/promises";
 import {
   type WORKERS_SING_PCM_TRACKS,
   WorkersHealthSchema,
+  type WorkersKaraokeKeyReply,
+  WorkersKaraokeKeyReplySchema,
+  type WorkersKaraokeStreamAnswer,
+  WorkersKaraokeStreamAnswerSchema,
+  type WorkersKaraokeStreamRequest,
+  type WorkersKaraokeVoicePitch,
+  WorkersKaraokeVoicePitchSchema,
   type WorkersSingGpuContext,
   WorkersSingGpuStatusSchema,
   type WorkersSingJob,
@@ -106,6 +113,28 @@ export interface SingWorker {
   audio(song: string, track: SongTrack, signal?: AbortSignal): Promise<Int16Array>;
   /** Saves one of the song's files (its video) to `dest`; the worker may be on another machine. */
   download(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void>;
+  /** Saves one of a karaoke song's files (`GET /karaoke/{id}/files/{name}`) to `dest`. */
+  karaokeFile(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void>;
+  /** Has a karaoke song's backing made in another key (`POST /karaoke/{id}/keys`). */
+  karaokeKey(
+    song: string,
+    semitones: number,
+    signal?: AbortSignal,
+  ): Promise<WorkersKaraokeKeyReply>;
+  /**
+   * The pitch of a singer's recording (`POST /karaoke/voice`, the raw recording as the body): any
+   * worker can read it; it deletes the recording before it answers.
+   */
+  karaokeVoice(
+    bytes: Uint8Array,
+    type: string,
+    signal?: AbortSignal,
+  ): Promise<WorkersKaraokeVoicePitch>;
+  /** One batch of a karaoke room's live voice streams (`POST /karaoke/stream`). */
+  karaokeStream(
+    request: WorkersKaraokeStreamRequest,
+    signal?: AbortSignal,
+  ): Promise<WorkersKaraokeStreamAnswer>;
   /** `null` when healthy, else why not. */
   health(signal?: AbortSignal): Promise<string | null>;
 }
@@ -282,14 +311,86 @@ export class HttpSingWorker implements SingWorker {
     return out;
   }
 
-  async download(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void> {
+  download(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void> {
     // A video is far bigger than the audio (up to `SING_VIDEO_MAX_MB`): allow it a long time.
-    const res = await this.#call(
+    return this.#save(
       `/songs/${encodeURIComponent(song)}/files/${encodeURIComponent(file)}`,
-      {},
       Math.max(this.#timeoutMs * 60, 600_000),
+      dest,
       signal,
     );
+  }
+
+  karaokeFile(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void> {
+    // A backing track is a few MB of AAC.
+    return this.#save(
+      `/karaoke/${encodeURIComponent(song)}/files/${encodeURIComponent(file)}`,
+      this.#timeoutMs * 10,
+      dest,
+      signal,
+    );
+  }
+
+  async karaokeKey(
+    song: string,
+    semitones: number,
+    signal?: AbortSignal,
+  ): Promise<WorkersKaraokeKeyReply> {
+    // Rubber Band on a whole song takes a while on the worker's CPU.
+    const res = await this.#call(
+      `/karaoke/${encodeURIComponent(song)}/keys`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ semitones }),
+      },
+      Math.max(this.#timeoutMs * 20, 180_000),
+      signal,
+    );
+    const parsed = WorkersKaraokeKeyReplySchema.safeParse(await res.json());
+    if (!parsed.success) throw new SingWorkerError("song worker sent a malformed key answer");
+    return parsed.data;
+  }
+
+  async karaokeVoice(
+    bytes: Uint8Array,
+    type: string,
+    signal?: AbortSignal,
+  ): Promise<WorkersKaraokeVoicePitch> {
+    // Reading the pitch of a song-long recording takes seconds on the card, more on the CPU.
+    const res = await this.#call(
+      "/karaoke/voice",
+      { method: "POST", headers: { "content-type": type }, body: bytes as Uint8Array<ArrayBuffer> },
+      Math.max(this.#timeoutMs * 20, 180_000),
+      signal,
+    );
+    const parsed = WorkersKaraokeVoicePitchSchema.safeParse(await res.json());
+    if (!parsed.success) throw new SingWorkerError("song worker sent a malformed pitch");
+    return parsed.data;
+  }
+
+  async karaokeStream(
+    request: WorkersKaraokeStreamRequest,
+    signal?: AbortSignal,
+  ): Promise<WorkersKaraokeStreamAnswer> {
+    // The caller bounds it (a batch every half second): a slow answer is dropped by its signal.
+    const res = await this.#call(
+      "/karaoke/stream",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+      },
+      this.#timeoutMs,
+      signal,
+    );
+    const parsed = WorkersKaraokeStreamAnswerSchema.safeParse(await res.json());
+    if (!parsed.success) throw new SingWorkerError("song worker sent a malformed stream answer");
+    return parsed.data;
+  }
+
+  async #save(path: string, timeoutMs: number, dest: string, signal?: AbortSignal): Promise<void> {
+    const res = await this.#call(path, {}, timeoutMs, signal);
     if (res.body === null) throw new SingWorkerError("song worker sent an empty file");
     await mkdir(dirname(dest), { recursive: true });
     const part = `${dest}.part`;

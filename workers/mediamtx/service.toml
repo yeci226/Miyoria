@@ -8,7 +8,8 @@ summary = "影像中轉(OBS 推流,語音節點與網頁現場拉流)"
 [install]
 runtime = "binary"
 
-# The executable is not in git (workers/mediamtx/README.md).
+# The executable is not in git (workers/mediamtx/README.md). It stays a manual item:
+# install.files never fetches a program that runs, and it comes in a zip.
 [[install.manual]]
 path = "workers/mediamtx/mediamtx.exe"
 what = "MediaMTX 執行檔(GitHub releases 的 mediamtx_v1.21.3_windows_amd64.zip,用 checksums.sha256 核對)"

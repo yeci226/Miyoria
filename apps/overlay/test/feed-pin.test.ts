@@ -211,28 +211,15 @@ describe("parseMessage, every message type", () => {
   });
 
   it("screen", () => {
-    expect(
-      parseMessage(frame({ type: "screen", kind: "dedication", name: "Owen", text: "給你", song: "春日影" })),
-    ).toStrictEqual({ type: "screen", kind: "dedication", name: "Owen", text: "給你", song: "春日影" });
-    expect(parseMessage(frame({ type: "screen", kind: "message", name: "Owen", text: "加油" }))).toStrictEqual({
+    expect(parseMessage(frame({ type: "screen", name: "Owen", text: "加油" }))).toStrictEqual({
       type: "screen",
-      kind: "message",
       name: "Owen",
       text: "加油",
-      song: null,
-    });
-    expect(parseMessage(frame({ type: "screen", kind: "dedication", name: "A", text: "x", song: null }))).toStrictEqual({
-      type: "screen",
-      kind: "message",
-      name: "A",
-      text: "x",
-      song: null,
     });
     expect(
-      parseMessage(frame({ type: "screen", kind: "message", name: "n".repeat(40), text: "t".repeat(300) })),
+      parseMessage(frame({ type: "screen", name: "n".repeat(40), text: "t".repeat(300) })),
     ).toMatchObject({ name: "n".repeat(32), text: "t".repeat(200) });
-    expect(parseMessage(frame({ type: "screen", kind: "x", name: "A", text: "x" }))).toBeNull();
-    expect(parseMessage(frame({ type: "screen", kind: "message", name: "A" }))).toBeNull();
+    expect(parseMessage(frame({ type: "screen", name: "A" }))).toBeNull();
   });
 
   it("touch", () => {

@@ -83,6 +83,13 @@ const ManifestSchema = z.object({
   version: z.string(),
   name: z.string().nullable().default(null),
   description: z.string().nullable().default(null),
+  /** The icon of its card on the panel: a lucide icon name in kebab case (`gamepad-2`). */
+  icon: z
+    .string()
+    .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "a lucide icon name in kebab case, like `gamepad-2`")
+    .max(40)
+    .nullable()
+    .default(null),
   /** Accepts a string or a list. */
   kind: z
     .union([z.string(), z.array(z.string())])
@@ -149,6 +156,8 @@ export class ExtensionManifest {
   /** Human-readable name; defaults to the id. */
   name: string | null;
   description: string | null;
+  /** A lucide icon name for its card on the panel; `null`: the panel's default. */
+  icon: string | null;
   /** What the extension contributes. */
   kind: string[];
   /**
@@ -171,6 +180,7 @@ export class ExtensionManifest {
     this.version = data.version;
     this.name = data.name;
     this.description = data.description;
+    this.icon = data.icon;
     this.kind = data.kind;
     this.game = data.game;
     this.runtime = data.runtime;

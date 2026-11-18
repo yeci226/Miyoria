@@ -36,6 +36,8 @@ export const MAX_V2_TEXT = 4000;
 export const MAX_V2_COMPONENTS = 40;
 /** Leave room for headings and muted lines when splitting plain text. */
 const TEXT_CHUNK = 3800;
+/** A media gallery item's description (its alt text) is at most this long. */
+const MAX_ALT_CHARS = 1024;
 
 /** Mentions in command replies never ping anyone. */
 export const NO_MENTIONS = { parse: [] as never[] };
@@ -203,6 +205,18 @@ export function renderCard(card: Card, files: readonly string[] = []): APIContai
       case "file":
         shownFiles.add(block.name);
         inner.push({ type: ComponentType.File, file: { url: `attachment://${block.name}` } });
+        break;
+      case "image":
+        shownFiles.add(block.name);
+        inner.push({
+          type: ComponentType.MediaGallery,
+          items: [
+            {
+              media: { url: `attachment://${block.name}` },
+              ...(block.alt ? { description: truncate(block.alt, MAX_ALT_CHARS) } : {}),
+            },
+          ],
+        });
         break;
     }
   }

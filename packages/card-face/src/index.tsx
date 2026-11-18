@@ -28,6 +28,12 @@ export interface CardData {
   fields?: { label: string; text: string }[];
   frame?: string | null;
   foil?: boolean;
+  /** A daily card's rarity; none on an older card. */
+  rarity?: string | null;
+  /** The parts drawn onto a daily card, printed as words until her picture shows them. */
+  parts?: { name: string }[];
+  /** Her expression on a daily card, in words. */
+  expression?: string | null;
 }
 
 /** Every word of the bond's bands (`bondBand`), lowest first: the meter has a step for each. */
@@ -405,8 +411,92 @@ function Foil({ id }: { id: string }) {
   );
 }
 
+/** A one-of-a-kind frame won at the weekly auction: `one-<lot id>` (docs/design/v5-play.md §11.4). */
+export function isUniqueFrame(frame: string | null | undefined): boolean {
+  return typeof frame === "string" && frame.startsWith("one-");
+}
+
+/** The frame's name for the card's page: the shop's names, and 只此一件 for a won one. */
+export function frameName(frame: string | null | undefined): string | null {
+  if (isUniqueFrame(frame)) return "只此一件";
+  return frame ? (FRAME_NAME[frame] ?? null) : null;
+}
+
+/** A number in [0, 1) from `text` and `salt`: the same frame always looks the same. */
+function seeded(text: string, salt: number): number {
+  let h = 2166136261 ^ salt;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+  return ((h >>> 0) % 10_000) / 10_000;
+}
+
+/** `hsl()` as a literal hex colour (the PNG export takes no CSS functions). */
+function hex(h: number, s: number, l: number): string {
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+  const to = (x: number) =>
+    Math.round(x * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return `#${to(f(0))}${to(f(8))}${to(f(4))}`;
+}
+
+/**
+ * The one-of-a-kind frame: two hues and a pattern drawn from its id, so no two won frames look
+ * alike and the same one always looks the same, with a small 一 seal at the bottom corner.
+ */
+function UniqueFrame({ frame, id }: { frame: string; id: string }) {
+  const hue = Math.floor(seeded(frame, 1) * 360);
+  const other = (hue + 40 + Math.floor(seeded(frame, 2) * 140)) % 360;
+  const tilt = Math.floor(seeded(frame, 3) * 90) - 45;
+  const stripe = 6 + Math.floor(seeded(frame, 4) * 10);
+  const light = hex(hue, 0.7, 0.78);
+  const mid = hex(hue, 0.55, 0.5);
+  const deep = hex(other, 0.6, 0.32);
+  return (
+    <g>
+      <defs>
+        <linearGradient
+          id={`one-${id}`}
+          gradientUnits="userSpaceOnUse"
+          x1="0"
+          y1="0"
+          x2={W}
+          y2={H}
+        >
+          <stop offset="0" stopColor={light} />
+          <stop offset="0.45" stopColor={mid} />
+          <stop offset="0.7" stopColor={light} />
+          <stop offset="1" stopColor={deep} />
+        </linearGradient>
+        <pattern
+          id={`one-print-${id}`}
+          width={stripe}
+          height={stripe}
+          patternUnits="userSpaceOnUse"
+          patternTransform={`rotate(${tilt})`}
+        >
+          <rect width={stripe / 2} height={stripe} fill="#ffffff" />
+        </pattern>
+      </defs>
+      <path d={BAND_PATH} fillRule="evenodd" fill={`url(#one-${id})`} />
+      <path d={BAND_PATH} fillRule="evenodd" fill={`url(#one-print-${id})`} opacity={0.12} />
+      <Glitter id={id} tint="#ffffff" />
+      <BandEdges rim={deep} lip={light} />
+      <circle cx={W - BAND / 2 - 1} cy={H - BAND / 2 - 1} r={11} fill={deep} stroke={light} />
+      <path
+        d={`M${W - BAND / 2 - 7} ${H - BAND / 2 - 1}H${W - BAND / 2 + 5}`}
+        stroke={light}
+        strokeWidth={2}
+        strokeLinecap="round"
+      />
+    </g>
+  );
+}
+
 /** The border of the card, drawn over the picture. Literal colours only: it is exported to PNG. */
 function Frame({ frame, id }: { frame: string | null | undefined; id: string }) {
+  if (frame && isUniqueFrame(frame)) return <UniqueFrame frame={frame} id={id} />;
   if (frame === "sakura") {
     // Pearl pink, blossoms printed faintly across the band, and one blossom at two opposite corners.
     return (
@@ -645,11 +735,20 @@ export const CardFace = forwardRef<SVGSVGElement, CardFaceProps>(function CardFa
   const fieldsTop = QUOTE_Y - lift + quoteBlock;
   const titleY = (known && card.call_name ? 566 : 590) - lift;
   const initial = [...card.name.trim()][0] ?? "?";
+  // A daily card says what was drawn onto it: its rarity, her expression and the parts.
+  const drawn =
+    card.rarity || (card.parts ?? []).length > 0
+      ? [card.rarity, card.expression, ...(card.parts ?? []).map((p) => p.name)]
+          .filter((s): s is string => typeof s === "string" && s !== "")
+          .join("・")
+      : null;
+  const number = `No.${String(card.number).padStart(3, "0")}`;
   const id = card.serial.replace(/[^A-Z0-9]/gi, "");
   const label = [
     `${card.name} 的卡,${title}`,
     card.call_name ? `她叫你${card.call_name}` : null,
     card.foil ? "閃卡" : null,
+    drawn,
     card.stamp ? `蓋了「${card.stamp}」` : null,
     feeling ? `她說「${feeling}」` : null,
     ...fields.map((f) => `${f.label}:${f.text}`),
@@ -724,28 +823,33 @@ export const CardFace = forwardRef<SVGSVGElement, CardFaceProps>(function CardFa
         <rect width={W} height={H} fill={`url(#sheen-${id})`} />
         {card.foil && <Foil id={id} />}
 
-        <text
-          x={PAD}
-          y={56}
-          fontSize={15}
-          fontWeight={600}
-          letterSpacing={5}
-          fill="#ffffff"
-          opacity={0.9}
-        >
-          MIYORIA
-        </text>
-        <text
-          x={W - PAD}
-          y={56}
-          fontSize={15}
-          fontFamily={MONO}
-          textAnchor="end"
-          fill="#ffffff"
-          opacity={0.85}
-        >
-          No.{String(card.number).padStart(3, "0")}
-        </text>
+        {/* A daily card's strip (below) carries the number instead: nothing shows through it. */}
+        {!drawn && (
+          <text
+            x={PAD}
+            y={56}
+            fontSize={15}
+            fontWeight={600}
+            letterSpacing={5}
+            fill="#ffffff"
+            opacity={0.9}
+          >
+            MIYORIA
+          </text>
+        )}
+        {!drawn && (
+          <text
+            x={W - PAD}
+            y={56}
+            fontSize={15}
+            fontFamily={MONO}
+            textAnchor="end"
+            fill="#ffffff"
+            opacity={0.85}
+          >
+            {number}
+          </text>
+        )}
 
         <text x={PAD} y={titleY} fontSize={46} fontWeight={700} fill="#ffffff" letterSpacing={1}>
           {title}
@@ -843,6 +947,25 @@ export const CardFace = forwardRef<SVGSVGElement, CardFaceProps>(function CardFa
         <rect x={W - PAD - 104} y={742} width={104} height={104} rx={10} fill="#ffffff" />
         <Qr text={verifyUrl} x={W - PAD - 96} y={750} size={88} />
       </g>
+      {drawn && (
+        <g>
+          <rect x={PAD - 10} y={30} width={W - 2 * PAD + 20} height={30} rx={8} fill="rgba(11,13,20,0.62)" />
+          <text x={PAD} y={50} fontSize={13} fill="rgba(255,255,255,0.86)">
+            {wrap(drawn, 34, 1)[0]}
+          </text>
+          <text
+            x={W - PAD}
+            y={50}
+            fontSize={13}
+            fontFamily={MONO}
+            textAnchor="end"
+            fill="#ffffff"
+            opacity={0.8}
+          >
+            {number}
+          </text>
+        </g>
+      )}
       <Frame frame={card.frame} id={id} />
     </svg>
   );

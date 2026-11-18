@@ -25,10 +25,10 @@ export type PartyPlayerView = z.output<typeof PartyPlayerViewSchema>;
 export const PartySessionViewSchema = z
   .object({
     id: z.string(),
-    /** `quiz`, `song`, `chain`, `soup`. */
+    /** `song` or `soup`. */
     game: z.string(),
     title: z.string(),
-    /** The voice channel it runs in. */
+    /** The voice channel it runs in, or the text channel of a turtle soup. */
     context: ContextKeySchema,
     /** The only state a listed game is in: one that ended moves to `recent`. */
     state: z.literal("running"),

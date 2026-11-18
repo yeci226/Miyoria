@@ -567,6 +567,66 @@
   opacity: calc(var(--on, 0) * (0.2 + var(--hyp, 0) * 0.6));
 }
 
+/* Foil on her rendered picture. That picture is opaque (its background is drawn), so it cannot mask
+   the foil off her; instead the foil is printed over the whole picture the way a holographic card
+   is: a pale rainbow in color-dodge, so it rises out of the light parts of the picture (her hair,
+   the sky, the highlights) and leaves the dark parts alone, plus one soft band of light that
+   crosses with the pointer. Both fade out before the words, as the picture does (the SVG's fade
+   starts at 340 of 880 and is solid by 609). At rest, and under reduced motion, a faint sheen
+   stays, so a foil card still reads as foil on a still page. */
+.holo-card[data-art="opaque"] .holo-foil,
+.holo-card[data-art="opaque"] .holo-glitter,
+.holo-card[data-art="opaque"] .holo-sheen {
+  mask-image:
+    radial-gradient(
+      farthest-corner circle at var(--mx, 50%) var(--my, 50%),
+      #000 0%,
+      rgba(0, 0, 0, 0.6) 35%,
+      rgba(0, 0, 0, 0.22) 80%
+    ),
+    linear-gradient(to bottom, #000 0%, #000 40%, transparent 68%);
+  mask-size: 100% 100%;
+  mask-position: 0 0;
+  mask-repeat: no-repeat;
+  mask-composite: intersect;
+}
+
+.holo-card[data-art="opaque"] .holo-foil {
+  background-image: repeating-linear-gradient(
+    115deg,
+    hsl(330 80% 62%) 0%,
+    hsl(40 80% 58%) 3.5%,
+    hsl(150 60% 55%) 7%,
+    hsl(195 80% 60%) 10.5%,
+    hsl(265 75% 64%) 14%,
+    hsl(330 80% 62%) 17.5%
+  );
+  background-size: 260% 260%;
+  background-position: calc(var(--px, 50) * 1%) calc(var(--py, 50) * 1%);
+  mix-blend-mode: color-dodge;
+  filter: brightness(0.62) saturate(0.9);
+  opacity: calc(0.3 + var(--on, 0) * (0.14 + var(--hyp, 0) * 0.24));
+}
+
+.holo-card[data-art="opaque"] .holo-sheen {
+  background-image: linear-gradient(
+    115deg,
+    transparent calc(var(--mx, 50%) - 28%),
+    rgba(255, 255, 255, 0.16) calc(var(--mx, 50%) - 6%),
+    rgba(255, 255, 255, 0.34) var(--mx, 50%),
+    rgba(255, 255, 255, 0.16) calc(var(--mx, 50%) + 6%),
+    transparent calc(var(--mx, 50%) + 28%)
+  );
+  background-size: 100% 100%;
+  background-position: 0 0;
+  mix-blend-mode: overlay;
+  opacity: calc(0.25 + var(--on, 0) * 0.55);
+}
+
+.holo-card[data-art="opaque"] .holo-glitter {
+  opacity: calc(var(--on, 0) * (0.1 + var(--hyp, 0) * 0.35));
+}
+
 /* A bought frame's band (18 of 630, so the same share of the width on every side). */
 .holo-band {
   padding: 2.857%;

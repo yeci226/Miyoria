@@ -65,6 +65,8 @@ const FILLER_RETRY_MS = 60_000;
 export class VoiceModule implements Module {
   static readonly ID = "voice";
   readonly manifest = defineManifest(VoiceModule.ID, "Voice", {
+    icon: "mic",
+    category: "platform",
     description: "Listens and speaks in voice channels",
     requires: [VoiceLinkModule.ID, "speech"],
     optional: ["commands", "llm"],

@@ -38,7 +38,7 @@
 | 來源 | 給多少(暫定) | 上限 | 備註 |
 |---|---|---|---|
 | 每日簽到(面板或 Discord `/me i` 按一下,或 `/me checkin`) | 10 | 一天一次,兩邊合計 | 最簡單的回訪理由 |
-| 當天和她說過話(Discord 文字或語音) | 10 | 一天一次 | 只看有沒有,不看幾句;用現有的 `message_log` 判斷 |
+| 當天和她說過話(Discord 文字或語音) | 5(原本 10,2026-11-17 降;`talked`) | 一天一次 | 只看有沒有,不看幾句;用現有的 `message_log` 判斷 |
 | 在她的語音頻道裡 | 每 10 分鐘 2 | 一天 20 | 她在場才算,掛機要防:這段時間至少開口一次 |
 | 看她直播 | 每 10 分鐘 2 | 一天 20 | Discord Go Live 的觀看者名單拿得到才做,拿不到先不做 |
 | 點的歌她唱完了 | 5 | 一天 3 次 | 鼓勵點她會唱的歌 |
@@ -49,10 +49,10 @@
 
 | 東西 | 價格(暫定) | 對她的效果 | 她的反應 |
 |---|---|---|---|
-| 一碗白飯 | 10 | `hunger` −0.15 | 主要的互動。吃飽(`hunger` < 0.15)就退回 |
+| 一碗白飯 | 10 | `hunger` −0.15 | 主要的互動。這個人今天已經讓她少餓 `feed_hunger_cap`(0.85)就吃不下 |
 | 大碗白飯(鋼盆) | 40 | `hunger` −0.5 | 直播中會出現 `钢盆` 表情幾秒 |
 | 甜點 | 25 | 喜一點,`hunger` −0.05 | 她喜不喜歡某種甜點可以變成她的記憶和偏好 |
-| 一封信 | 15 | 一則給她的短訊息(120 字),排進她的待讀 | 她有空時讀,可能在直播或私訊回;過內容安全(v3 §16) |
+
 | 送她一個表情 | 20 | 直播中觸發一個指定表情(愛心眼、臉紅、＞＜) | 她可以不給:不在直播、正在唱歌、心情不好時退回;每人每 10 分鐘一次 |
 | 卡框 | 100 起 | 不影響她 | 「她給你的卡」換外框;純外觀,讓錢有地方去 |
 
@@ -75,7 +75,7 @@
 ```
 
 - **遞減**:同一人當天第 n 次送禮,情緒強度乘 `0.6^(n-1)`,到很小就只剩 `hunger` 的效果。`hunger` 不遞減,因為那是她真的吃到了。
-- **吃不下**:`hunger` 低於門檻時,`feed` 直接回「她吃飽了」,不扣錢。這是規則,不需要問 LLM,反應才不會慢。
+- **吃不下**:一個人一天最多讓她少餓 `feed_hunger_cap`(0.85,以前是整體「`hunger` < 0.15 就吃飽」的同一個範圍,2026-11-17 改成每人一份):超過了,`feed` 直接回「你今天餵得夠多了,她吃不下」,不扣錢,不管她自己的 `hunger` 是多少;別人照樣餵得了。這是規則,不需要問 LLM,反應才不會慢。錢包的 `hungry` 對這個人是 `full`,商店的餵食項目標「你今天餵夠了」。
 - **記得**:禮物進 EventLog,Reflect 會看到,所以「誰常常餵她」會自然變成她的記憶,不用另外寫。
 - **白飯梗**:餵食會讓「白飯」變多。repeat guard 要把餵食事件產生的記憶也算進去,另外加一個量測:每小時她自己講「白飯」幾次(§8)。
 
@@ -158,7 +158,7 @@ CREATE INDEX ... ON coin_ledger (profile_id, author_platform, author_id, ts);
 | 階段 | 內容 | 完成條件 |
 |---|---|---|
 | A | 帳本、簽到、「說過話」、餵白飯和鋼盆、面板錢包和 `/me i` 的錢包區塊、她的反應(走 `gift`) | 餵食會讓 `hunger` 下降、她會回應、遞減和吃不下有測試;§8 的量測開始記 |
-| B | 語音和直播時數、唱完點的歌、她給錢的工具、信、表情、直播 overlay | 她的 `give_coins` 有每日總額和稽核;表情在唱歌時會被擋 |
+| B | 語音和直播時數、唱完點的歌、她給錢的工具、直播 overlay | 她的 `give_coins` 有每日總額和稽核;表情在唱歌時會被擋 |
 | C | 卡框、甜點偏好、點歌券(如果要)、她自己的錢包(如果要) | 看 A、B 的量測再決定 |
 
 ## 11. 實作了什麼
@@ -168,31 +168,26 @@ A、B 階段的後端和 C 的卡框做好了;面板、直播 overlay 和 Discor
 - **模組**:`packages/economy`(`[modules.economy]`,預設值就是 §3 的數字)。提供 `EconomyKey`,面板路由和 Discord 指令都用它,同一本帳、同一組每日上限。
 - **帳本**:migration 0011 的 `coin_ledger`(只增不改,退錢也是一筆)和 `coin_wallets`(選了哪個卡框)。一個人連在一起的帳號是同一個錢包;冪等鍵、每日上限和餘額檢查都在同一個交易裡。資料頁放在「關係」分類,和 `member_cards` 一樣;「請她忘記我」不碰它。
 - **賺**:簽到(連續第 7 天多 20)、當天說過話、語音(每 10 分鐘一格,這格裡有開口、格子結束時還在才算)、點的歌唱完、她的 `give_coins`。都要她認識這個人,而且沒被封鎖(社交標記、她的卡、或角色沒有 `me.wallet`)。
-- **餵**:先看 `hunger`,低於 `full_below` 就回「吃飽了」不扣錢;一次點多份時只吃得下的部分才算錢。吃到的量直接從 `hunger` 扣,再發 `gift` 社交事件(帶 `hunger: 0`,不重複扣),強度是 `diminish^(n-1)`,n 是這個人今天第幾份禮物。
-- **她怎麼知道**:每份禮物和每封信都是一個安靜的 Observation(工作脈絡的 `economy` 桶,當資料給她看),她下次想事情或說話時看到,不會因此搶麥、打斷唱歌。沒有 EventLog 時,信改成一則不指定地點的 notice。信不發 `gift` 事件:信裡寫什麼要她自己讀。
+- **餵**:先看這個人今天的份(今天的 `feed` 列,沒退回的,每列的 `hunger` 量是食物的量乘份數),用完就回「吃不下」不扣錢;一次點多份時只吃得下的部分才算錢。吃到的量直接從 `hunger` 扣,再發 `gift` 社交事件(帶 `hunger: 0`,不重複扣),強度是 `diminish^(n-1)`,n 是這個人今天第幾份禮物。
+- **她怎麼知道**:每份禮物都是一個安靜的 Observation(工作脈絡的 `economy` 桶,當資料給她看),她下次想事情或說話時看到,不會因此搶麥、打斷唱歌。
 - **表情**:開台(有 `stage.expression`)且沒在唱歌才收錢,舞台失敗就退錢;每人每 10 分鐘一次。鋼盆會順便試一次 `钢盆` 表情,失敗不退。
 - **overlay**:每份收下的禮物發 `economy.gift`(名字、品項、數量、字樣),合併交給 overlay。
 - **她的工具**:`economy.give`(工具 `give_coins`),中風險走 gate 和稽核;每人每天、所有人每天的上限在帳本裡擋。別人開口要不算數(要 `economy.give` 權限,預設沒人有),是她自己決定(`on_own`)。
-- **API**:`GET /api/member/wallet`、`POST /api/member/{checkin,feed,letter,expression,frame}`(`packages/api/src/wallet.ts`),匯出多了 `wallet`,卡片多了 `frame`(發卡時選的框,舊卡是 null)。
+- **API**:`GET /api/member/wallet`、`POST /api/member/{checkin,feed,frame}`(`packages/api/src/wallet.ts`),匯出多了 `wallet`,卡片多了 `frame`(發卡時選的框,舊卡是 null)。
 
-## 12. 約定
+## 12. 約定、信、買表情、委託、每週商店(2026-11-17 已移除)
 
-有人拿零食收買她:「你喵喵叫我就給你零食」。這是**別人對她的承諾**,和她自己的承諾(`claims.ts`)是鏡像。要不要答應由她決定,系統只記帳、擋不該做的事、認帳。
+信(給她一則短訊息)、買表情送她、委託(付錢請她寫詩、取名、做小工具、唱歌、說一句話)和每週商店在 v5 第 5 期一起拿掉了(`v5-play.md` §10):各自的工具、指令、面板、API 路由、設定和成就都沒了,新增的設定進 `removed-config.ts`。舊的帳本行在帳單裡還讀得出來(`letter`、`expression`、`commission_*`、`shop`)。她自己的錢包仍然能給自己買表情(`buy_for_self`)。委託的 migration 3(`retire_commissions`)把還在託管裡的錢退回給付款的人(帳本一行,原因 `refund_removed`)。
 
-- **她的工具**(付錢的永遠是正在跟她說話的人,沒有「誰」的參數):`make_deal`(獎勵 `rice` / `big_bowl` / `dessert` 1 到 5 份、一句短任務、可選 `prepaid`)、`deal_done`(她說做完了)、`cancel_deal`(她反悔)。語音裡和 `accept_food` 一樣:第一次呼叫只記下來,同一個人下一句說好,再用 `confirm: true` 才算數。
-- **她怎麼決定**:看對這個人的信任和好感、餓不餓、獎勵值不值、多不想做、心情。信任低就可以要對方先付(`prepaid: true`,錢放進託管,是帳本上的一筆 `deal_escrow`,還不是她的)。
-- **只能是她自己能決定的事**:工具說明這樣寫,閘門也擋。任務內容要過審查;主人規則(`directive`)禁止的詞擋掉;任務對應到受管制的動作(唱歌、開台、進語音、玩遊戲、私訊、表情、場景)時,動作不存在、被設定禁止、暫停中、需要審核(高風險)、規則要核准或拒絕,或對方本來就沒有這個權限,都不能約定。零食買不到規則、權限和安全。
-- **限制**:同一個人同時一個約定,每天最多 `deals_per_day`(5);陌生人和被封鎖的人和其他經濟動作一樣被拒。約定存在 `deals` 表(migration 0012),重啟後還在;語音裡等確認的約定只在記憶體。
-- **怎麼算付了**:看帳本,不看她的記憶,也不看模型。她說做完(`deal_done`)到期限之間,這個人的錢包餵她的總額(沒被退回的 `feed`)達到獎勵的價值就算付了,不管是面板、Discord 指令還是對她說話,都經過 `Economy.feed`。預付的約定在 `deal_done` 時把託管當一份普通的禮物給她(hunger 下降、情緒、一點好感)。
-- **時間**:做完後 `deal_due_s`(600 秒)內要付;她沒在 `deal_timeout_s`(900 秒)內做完,約定作廢,託管退回。每 `deal_sweep_s`(30 秒)掃一次;到期前最後再看一次帳本。
-- **付了**:信任 +`deal_kept_trust`(0.3,算進每日上限),她的脈絡裡多一則高興的紀錄。
-- **食言**:她做了、沒收到。信任 −`broken_trust`(4)、好感 −`broken_affinity`(1.5),**不受每日增加上限限制**;對這個人生氣、不爽(`broken_promise` 社交事件);寫一則記憶「X 答應給我…,我照做了卻沒給」,走一般的記憶路徑,下次見面她想得起來。同一個人之後每次食言 ×`broken_growth`(1.5),最多到 `broken_cap`(3)倍。她的脈絡(工作脈絡的 `deals` 桶)看得到欠她的人、食言的人和今天結束了幾個約定,所以她可以要對方先付。反悔(`cancel_deal`)沒有代價,但看得到次數。
-- **付錢的禮物和好感**:餵食和表情(信不算,內容才算)經社交引擎讓 affinity +`gift_affinity`(0.4)、trust +`gift_trust`(0.1),再乘上引擎自己的每日遞減(同一種事每多一次減半);禮物本身另有每人每天 `gift_affinity_cap`(1.5)、`gift_trust_cap`(0.5)的上限,同時也算進一般的每日上限(8 / 5)。情緒反應不變,不會重複。
-- **錢包**:`WalletView.deals` 列出最近 10 個(任務、獎勵、狀態 `open` / `owed` / `settled` / `broken` / `refunded`、下一個期限);面板之後再做。
+約定:
+
+約定(拿零食收買她做一件小事)在 v5 第 5 期拿掉了(`v5-play.md` §10):工具 `make_deal` / `deal_done` / `cancel_deal`、設定 `deal_*` / `broken_*` / `owe_days`、`WalletView.deals`、食言的信任和好感扣分、「欠她一餐」都沒了。資料庫的 migration 2(`retire_deals`)把還在託管裡的預付約定退回給付款的人(帳本一行,原因 `refund_removed`),然後刪掉 `economy_deals`;已經付清的約定留在帳本裡,贊助排行榜照舊算(`deal_escrow`)。心裡的證據種類 `deal_kept` / `deal_broken` 留著讓舊的紀錄還讀得出來,不再寫新的。
+
+- **付錢的禮物和好感**:餵食經社交引擎讓 affinity +`gift_affinity`(0.4)、trust +`gift_trust`(0.1),再乘上引擎自己的每日遞減(同一種事每多一次減半);禮物本身另有每人每天 `gift_affinity_cap`(1.5)、`gift_trust_cap`(0.5)的上限,同時也算進一般的每日上限(8 / 5)。情緒反應不變,不會重複。
 
 ## 13. 更多能花的地方(2026-11-08)
 
-一個人一天大約賺 55,原本只能花在餵食、信、表情、卡框。這一節加上卡片、點歌、直播、她自己的錢和人與人之間的東西。owner 決定:轉帳和排行榜要做,原則 1(不能轉給別人)和 5(沒有排行榜)照下面的限制改;競猜(押注)不做。
+一個人一天大約賺 55,原本只能花在餵食和卡框。這一節加上卡片、點歌、直播、她自己的錢和人與人之間的東西。owner 決定:轉帳和排行榜要做,原則 1(不能轉給別人)和 5(沒有排行榜)照下面的限制改;競猜(押注)不做。
 
 **共用的收費**:別的部分賣的東西都走 `Economy.purchase(account, item, key, ref)`:扣 `[modules.economy]` 同名的價格、檢查同名 `*_per_day` 的每日上限(退錢的不算)、冪等鍵、稽核;`Economy.refund(account, entry_id)` 退一次。買到的東西是賣的那邊的事,經濟只管錢。`*_per_day = 0` 就是下架。
 
@@ -201,35 +196,33 @@ A、B 階段的後端和 C 的卡框做好了;面板、直播 overlay 和 Discor
 | 抽卡重製券 `card_reroll` | 30 | 2 | 卡片 | 今天最新那張作廢(驗證頁顯示已作廢),她重新發一張:重寫那句話、重挑立繪;不算進每天的張數。發不出來就退錢 |
 | 指定立繪 `card_pose` | 20 | 5 | 卡片 | 發卡時自己從好感區間允許的立繪挑一張;她就不挑了 |
 | 閃卡加工 `card_foil` | 50 | 5 | 卡片 | 這張卡加一層箔,純外觀 |
-| 點歌加點券 `song_ticket` | 25 | 3 | 點歌 | 同時點歌數到上限時多點一首;這首沒唱(被丟掉、失敗、她不唱)就退錢 |
-| 歌曲獻詞 `dedication` | 15 | 3 | 點歌 | 點歌附一句獻詞(過審查、不點名別人);唱之前她知道「這首是 X 點給 Y 的」,overlay 顯示;沒唱就退錢 |
 | 留言上大螢幕 `screen_message` | 30 | 10 | 直播 | 開台時 overlay 顯示 60 字內的留言;過審查;每人每 10 分鐘一則;她看得到,有空可能念 |
-| 今日籤詩 `fortune` | 10 | 1 | 籤詩 | 她現寫一張籤(籤等、四句、幾個欄位),可以下載;寫不出來就退錢 |
+| 今日籤詩 `fortune` | 10 | 1 | 籤詩 | 只能在每日簽到時加買(2026-11-17 起,不再有單獨的指令、工具和路由):她現寫一張籤(籤等、四句、幾個欄位),可以下載;寫不出來就退錢,簽到照算 |
 
-overlay 的新東西走 `economy.screen`(`ScreenEvent`:留言或獻詞)。
+overlay 的新東西走 `economy.screen`(`ScreenEvent` 只有 `name` 和 `text`:一則付費留言)。
+
+點歌加點券和歌曲獻詞(2026-11-17 已移除,`v5-play.md` §10):設定 `song_ticket` / `song_tickets_per_day` / `dedication` / `dedications_per_day`、點歌指令的 `ticket` / `dedication` 參數、歌手的付款介面 `SongPaymentsKey`、overlay 的獻詞卡(`economy.screen` 的 `kind` 和 `song`)都沒了。migration 5(`retire_song_extras`)把還排在歌單裡(準備中、準備好、正在唱)的點歌加點券和獻詞退給付款的人(帳本一行,原因 `refund_removed`);已經唱完的留在帳本裡,贊助排行榜照舊算。
 
 **她自己的錢(§3.3 開始做)**:她有一個錢包。別人餵她、送她東西,有一部分進她的錢包;她可以用來送人、買給自己(例如自己換表情)、開懸賞。她錢包裡有多少、在存什麼,她自己看得到。
 
-- **群眾募資目標**:她提一個目標(要多少、到了她會做什麼、幾天內),一次一個;大家投錢,錢先託管;到了就變成她的承諾,錢進她的錢包;時間到沒達成全部退回。承諾的內容和約定一樣要是她自己能決定的事(§12 的閘門)。
+- **群眾募資目標**(2026-11-17 已移除,`v5-play.md` §10):設定 `goal_*`、工具 `propose_goal` / `cancel_goal` / `goal_done`、`/me goals` / `/me pledge`、`/api/member/goals`、`/api/economy/goals`、面板「經濟 → 目標」都沒了。migration 4(`retire_goals`)把沒湊滿的目標還在託管裡的投入退給投的人(帳本一行,原因 `refund_removed`),然後刪掉 `goals`、`goal_pledges`;湊滿的目標的投入已經是她的,留在帳本裡,贊助排行榜照舊算(`goal_pledge`)。
 - **懸賞**:她用自己的錢貼一個懸賞(任務、獎金),誰完成由她判定,獎金付給正在跟她說話的人。這是多一種賺錢的方法,錢從她的錢包出,不是憑空生。
 
 **實作(她自己的錢)**:
 
-- **錢包**:帳本上的一個合成帳號 `{ platform: "self", id: <profile> }`。每筆付費禮物(餵食、信、表情、留言上大螢幕、歌曲獻詞)的 `her_share`(0.2,無條件捨去)進她的錢包(`her_share`,`ref` 是那筆扣款);退款時按她還剩的拿回(`her_share_back`)。她的工作脈絡有 `purse`(餘額、在存的目標、貼著的懸賞、答應過大家的事)和 `purse_news`(剛發生的事)兩個桶。
-- **她的工具**(中風險,要 `economy.agency`,沒有人有,所以她用 `on_own` 呼叫):`treat_from_purse`(請正在跟她說話的人,每人每天 `treat_per_person`、所有人 `treat_total`,不算進 `give_coins` 的上限)、`buy_for_self`(花 `expression` 買自己的表情,每天 `self_expressions_per_day`,沒做出來就退回錢包)、`propose_goal` / `cancel_goal`、`post_bounty` / `award_bounty` / `cancel_bounty`。
-- **目標**:一次一個,名稱 30 字、承諾 60 字,目標最多 `goal_max_target`(2000),最多 `goal_max_days`(7)天;承諾和懸賞任務過約定的同一道閘門(`guardTask`)。投的錢是 `goal_pledge`(託管,每人每個目標最多 `goal_pledge_max`);湊滿就變成她的(`goal_funds` 進錢包),她被告知「大家湊到了…你答應過要…」,承諾留在 `purse` 桶 `goal_keep_days` 天,直到記成做到了。
-- **做到了**(2026-11-12):湊滿的目標在記成做到了之前都算欠著(`goals.fulfilled_at` / `fulfilled_by`,migration 0017)。主人在面板「經濟 → 目標」按「記成做到了」(`POST /api/economy/goals/:id/fulfill`,`admin.economy.goals`;`GET /api/economy/goals` 列出湊滿的目標),或她自己用 `goal_done`(最新一個還欠著的)。第一次記的算數,之後再記是 409。記下之後 `purse` 桶不再提醒,`purse_news` 告訴她一聲,`/me goals` 和會員頁顯示「她做到了」。沒有用她的承諾簿(`CommitmentBook`):那是給幾分鐘內就做的事,預設 120 秒到期、逾期 30 分鐘記成沒做到,只在說出口的頻道顯示。時間到沒湊滿或她取消,每筆退一次。
+- **錢包**:帳本上的一個合成帳號 `{ platform: "self", id: <profile> }`。每筆付費禮物(餵食、留言上大螢幕)的 `her_share`(0.2,無條件捨去)進她的錢包(`her_share`,`ref` 是那筆扣款);退款時按她還剩的拿回(`her_share_back`)。她的工作脈絡有 `purse`(餘額、在存的目標、貼著的懸賞、答應過大家的事)和 `purse_news`(剛發生的事)兩個桶。
+- **她的工具**(中風險,要 `economy.agency`,沒有人有,所以她用 `on_own` 呼叫):`treat_from_purse`(請正在跟她說話的人,每人每天 `treat_per_person`、所有人 `treat_total`,不算進 `give_coins` 的上限)、`buy_for_self`(花 `expression` 買自己的表情,每天 `self_expressions_per_day`,沒做出來就退回錢包)、`post_bounty` / `award_bounty` / `cancel_bounty`。
 - **懸賞**:`bounty_max`(50)以內,同時最多 `bounties_open`(3)個,獎金先從錢包扣下(`bounty_hold`),付給說話的人(`bounty`,一個懸賞只付一次,不付給自己),取消或 `bounty_days`(3)天沒人領就回到錢包。
-- **API**:`GET /api/member/goals`、`POST /api/member/goals/:id/pledge {amount}`(`Idempotency-Key`)、`GET /api/member/bounties`(`packages/api/src/agency.ts`)。陌生人看得到目標,不能投(403)。表:`goals`、`goal_pledges`、`bounties`(migration 0013)。
+- **API**:`GET /api/member/bounties`(`packages/api/src/agency.ts`)。表:`bounties`(migration 0013)。
 
 **人與人之間**:
 
-- **轉帳**:只能轉給她認識、沒被封鎖的人;每人每天轉出、收到都有上限;自己轉自己(連在一起的帳號)不行;收不到時的回答不透露對方被封鎖。轉帳不是給她的禮物,不影響她。
-- **贊助排行榜**:最近 `board_days`(30)天內所有花在她身上的錢都算(餵食、信、表情、卡框、商店買的東西、籤詩、獻詞、留言、目標投入、放給她的預付約定);預設在榜上,任何人隨時可以退出(也可以再加入);轉給別人的錢不算;不顯示餘額。
+- **轉帳**:只能轉給她認識、沒被封鎖的人;每人每天轉出、收到都有上限;自己轉自己(連在一起的帳號)不行;收不到時的回答不透露對方被封鎖。轉帳不是給她的禮物,不影響她。轉的人另付手續費(2026-11-17,`transfer_fee`,預設 5%,進位、至少 1),手續費燒掉,不到任何人手上。
+- **贊助排行榜**:最近 `board_days`(30)天內所有花在她身上的錢都算(餵食、卡框、商店買的東西、籤詩、留言;已移除的獻詞和已經付清的約定,舊的帳本行照舊算);預設在榜上,任何人隨時可以退出(也可以再加入);轉給別人的錢不算;不顯示餘額。
 - **實作(migration 0014)**:
-  - 轉帳 `Economy.transfer`:一次 1 到 `transfer_max`(50),每人每天轉出 `transfer_out_per_day`(100)、收到 `transfer_in_per_day`(100)。帳本沒有跨兩列的交易,所以先寫轉出那列(扣得起才寫),再寫收到那列(鍵由轉出那列的 id 推出);中間當掉,同一個冪等鍵重送會補完,不會付兩次;收的人到上限就把轉出那列退回。對方是陌生人、被封鎖、沒有 `me.wallet`、今天收滿了,一律回「對方現在收不到」。入口:Discord `/me give user amount`(預設只有本人看得到)和 `POST /api/member/transfer {to_discord_id, amount}`。
+  - 轉帳 `Economy.transfer`:一次 1 到 `transfer_max`(50,是對方收到的數量),另外轉的人付 `transfer_fee`(0.05)的手續費,進位、至少 1(30 → 2,100 → 5),在收到那列寫好之後再寫一列 `transfer_fee`(鍵由轉出那列的 id 推出,重送補完,不會扣兩次),這一列沒有對應的另一邊,錢就是燒掉;餘額要夠數量加手續費,收據(`TransferResult.fee`、`WalletView.transfer_fee`)、Discord 回覆和面板確認視窗都寫出來;每日上限只算數量不算手續費。每人每天轉出 `transfer_out_per_day`(100)、收到 `transfer_in_per_day`(100)。帳本沒有跨兩列的交易,所以先寫轉出那列(扣得起才寫),再寫收到那列(鍵由轉出那列的 id 推出);中間當掉,同一個冪等鍵重送會補完,不會付兩次;收的人到上限就把轉出那列退回。對方是陌生人、被封鎖、沒有 `me.wallet`、今天收滿了,一律回「對方現在收不到」。入口:Discord `/me give user amount`(預設只有本人看得到)和 `POST /api/member/transfer {to_discord_id, amount}`。
   - 排行榜 `Economy.board` / `setOnBoard`:退出記在 `coin_wallets.off_board`(migration 0015,舊的 `on_board` 不再讀),連在一起的帳號任一個退出就退出,`setOnBoard` 一次寫整個錢包;一個人一行、帳號的花費加總。算 `BOARD_REASONS`:`feed`、`letter`、`expression`、`frame`、全部 `PAID_ITEMS`(`card_reroll`、`card_pose`、`card_foil`、`song_ticket`、`dedication`、`screen_message`、`fortune`)、`goal_pledge`,以及已經放給她的預付約定(`deal_escrow` 且約定 `settled`);退回的不算(目標沒達成退回的投入也不算);`transfer_out`、懸賞託管、`purse_gift` 不算;`board_days`(30)天內。同額同名次。入口:Discord `/me board [join]`、`POST /api/member/board {on}`、`GET /api/public/board`(只有名字和數字)。
-  - 籤詩:`fortunes` 表,一人一天一張;`GET`/`POST /api/member/fortune`。她寫 {籤等、題、四句、最多三個欄位、一句話},籤等不在六種之內就依權重抽(大吉 10、吉 30、中吉 25、小吉 20、末吉 10、凶 5),每段文字過和卡片一樣的篩;寫不出來就退錢、回 503。匯出有 `fortunes`,「請她忘記我」會刪。
+  - 籤詩:`fortunes` 表,一人一天一張;`GET /api/member/fortune` 看今天的那張;要抽就在簽到時加買:`POST /api/member/checkin { fortune: true }`(答案多 `fortune`、`fortune_charged`,寫不出來是 `fortune_note`,簽到照算),Discord 是 `/me checkin fortune:true`(`/me fortune` 沒了)。已經簽到過的那天也能只買籤詩(`gained` 0,沒有第二份簽到獎勵,同價、同 `fortunes_per_day`),直到今天的籤詩存在;面板在簽到旁有開關,簽過到就變成「買今日籤詩」按鈕。Discord 的答案只說「抽好了」,籤詩本身用只有買的人看得到的 follow-up 送出(籤詩有她寫的私人一句);送不出去就請他到會員頁看。她寫 {籤等、題、四句、最多三個欄位、一句話},籤等不在六種之內就依權重抽(大吉 10、吉 30、中吉 25、小吉 20、末吉 10、凶 5),每段文字過和卡片一樣的篩;寫不出來就退錢、回 503。匯出有 `fortunes`,「請她忘記我」會刪。
 
 **不做**:競猜、押注,或任何拿魚幣賭結果的東西。
 

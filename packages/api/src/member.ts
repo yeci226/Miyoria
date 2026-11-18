@@ -10,10 +10,12 @@
 // * `GET /api/member/export`: the same as a file, with what `/me memory export` would give, minus
 //   what belongs to others.
 // * `POST /api/member/forget` `{ confirm: true }`: `/me memory forget all`.
-// * `POST /api/member/songs` `{ query }`: a song request, as if said in chat.
-// * `GET /api/member/card`, `POST /api/member/card` `{}`: the card she gives them, the card view
-//   below frozen with a serial (`card.ts`).
-// * `/api/member/wallet`, `checkin`, `feed`, `letter`, `expression`, `frame`: their coins
+// * `POST /api/member/songs` `{ query, priority? }`: a song request, as if said in chat; with
+//   `priority`, paid with a song priority ticket (`409` with the reason when it cannot be).
+// * `GET /api/member/card`, `POST /api/member/card` `{ foil? }`: the daily card she gives them,
+//   the card view below frozen with a serial and the parts drawn onto it (`card.ts`); the rest of
+//   their cards (the dex, the pity, the wishlist) is `cards-routes.ts`.
+// * `/api/member/wallet`, `checkin`, `feed`, `frame`: their coins
 //   (`wallet.ts`). Forgetting keeps the wallet: coins are not her memory of them.
 //
 // The person comes from the session and from nowhere else: no route takes an id, a query parameter
@@ -48,7 +50,7 @@ import {
   ownMemories,
   visibleToSelf,
 } from "@miyoria/memory/memory";
-import { SingerKey, type SongEntry } from "@miyoria/sing";
+import { SingerKey, type SongEntry, SongPriorityError } from "@miyoria/sing";
 import { type MemoryRecord, MessageLogKey, PeopleStoreKey, type Person } from "@miyoria/store";
 import {
   type AccountRef,
@@ -70,16 +72,8 @@ import {
   toTimestamp,
   trustBand,
 } from "@miyoria/types";
-import {
-  type CardHolder,
-  canIssue,
-  cardsOf,
-  deleteCards,
-  issueCard,
-  memberCards,
-  posesFor,
-  rerollCard,
-} from "./card.js";
+import { type CardHolder, cardsOf, deleteCards, issueCard, memberCards } from "./card.js";
+import { keepsakeFor } from "./card-faces.js";
 import { type CardWords, writeCard } from "./card-words.js";
 import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
@@ -404,7 +398,7 @@ async function exportMine(state: ApiState, c: ApiContext): Promise<Response> {
     withheld,
     songs: allowed ? ownSongs(state, who) : [],
     // Their cards are theirs whatever she thinks of them now: each holds what it held then.
-    cards: await cardsOf(state, accountsOf(who)),
+    cards: await cardsOf(state, accountsOf(who), who.person?.id ?? null),
     // A blocked person's wallet is a stranger's, like everywhere else.
     wallet: await walletExport(state, account),
     // Their fortune slips, like their cards.
@@ -426,7 +420,7 @@ async function forgetMine(state: ApiState, c: ApiContext): Promise<MemberForgetR
   if (wait !== null) throw ApiError.tooMany(wait);
   const who = await member(state, c);
   // Cards go for everyone, so a forget that finds nothing still leaves no card that checks out.
-  await deleteCards(state, accountsOf(who));
+  await deleteCards(state, accountsOf(who), who.person?.id ?? null);
   await deleteFortunes(state, accountsOf(who));
   const nothing: MemberForgetResult = { deleted: 0, about: 0, derived: 0, unverified: 0 };
   const allowed = !who.hidden && state.optional(AuthorizerKey)?.allows(account, NODE_FORGET);
@@ -479,7 +473,12 @@ export function acceptableQuery(query: string): boolean {
  * the gate runs it for a `user`, which means the rules, the permission and the rate limits apply,
  * and she may turn it down. `actAs` (the panel) would skip those, and force the song.
  */
-async function requestSong(state: ApiState, c: ApiContext, query: string): Promise<SongAccepted> {
+async function requestSong(
+  state: ApiState,
+  c: ApiContext,
+  query: string,
+  priority = false,
+): Promise<SongAccepted> {
   const session = record(c);
   const { account } = session;
   const wait = state.publicSide.admitMember(`song:${accountRefString(account)}`);
@@ -496,7 +495,8 @@ async function requestSong(state: ApiState, c: ApiContext, query: string): Promi
   const outcome = await actuators.invoke({
     principal: Principals.user(account, state.monitor.voiceContext()),
     capability: "sing.request",
-    args: by === "" ? { query } : { query, by },
+    // A song priority ticket is theirs to use here: their own request, with no turn of hers.
+    args: { query, ...(by === "" ? {} : { by }), ...(priority ? { priority: true } : {}) },
     why: "公開頁點歌",
     turn: null,
   });
@@ -505,7 +505,11 @@ async function requestSong(state: ApiState, c: ApiContext, query: string): Promi
     if (outcome.decision.stage === "rate") throw new ApiError(429, "今天點歌的次數到上限了");
     throw refused();
   }
-  if (outcome.status === "failed") throw new ApiError(502, "歌曲服務暫時無法使用");
+  if (outcome.status === "failed") {
+    // A ticket that could not be taken says why (their coins, the day's limit); nothing was charged.
+    if (outcome.cause instanceof SongPriorityError) throw new ApiError(409, outcome.error);
+    throw new ApiError(502, "歌曲服務暫時無法使用");
+  }
   return { accepted: true };
 }
 
@@ -520,8 +524,9 @@ export function cardHolder(session: CardHolder["session"], who: Member): CardHol
 
 async function cardsMine(state: ApiState, c: ApiContext): Promise<MemberCards> {
   const who = await member(state, c);
-  const view = cardView(state, who, null);
-  return memberCards(state, holderOf(c, who), view);
+  // Someone from before the cards finds their keepsake the first time they look.
+  await keepsakeFor(state, who, record(c).name, record(c).avatar_url);
+  return memberCards(state, holderOf(c, who));
 }
 
 /**
@@ -533,7 +538,6 @@ export async function cardWords(
   name: string,
   who: Member,
   view: MemberCard,
-  poses: readonly string[],
 ): Promise<CardWords | null> {
   if (who.hidden || view.relationship === null) return null;
   const names = await namesFor(state, who);
@@ -543,16 +547,17 @@ export async function cardWords(
       name,
       view,
       memories: (await shownMemories(state, who, names)).slice(0, 5).map((m) => m.text),
-      poses,
+      poses: [],
+      names,
     },
     (text) => shown(state, text, names),
   );
 }
 
 /**
- * A card of what the page shows them now, with a picture of their choosing (`card_pose`) and a
- * foil finish (`card_foil`) if they pay for them. A hidden person gets a stranger's card, stored
- * and counted like anyone's, so neither the card nor the limit says anything.
+ * A daily card of what the page shows them now, with a foil finish if they pay for it. A hidden
+ * person gets a stranger's card with no words, and pays and counts like anyone, so neither the card
+ * nor the limit says anything. She writes only once the day and the coins allow the card.
  */
 async function issueMine(
   state: ApiState,
@@ -560,51 +565,20 @@ async function issueMine(
   request: IssueCardRequest,
   idempotencyKey: string | undefined,
 ): Promise<IssuedCard> {
-  const { pose = null, foil = false } = request;
+  const { foil = false } = request;
   const who = await member(state, c);
   const names = who.hidden ? null : await namesFor(state, who);
-  const holder = holderOf(c, who);
   const view = cardView(state, who, names);
-  // She writes only on a card that will be issued, and knows the picture when it was chosen.
   const card = await issueCard(
-    state,
-    holder,
-    view,
-    async () =>
-      (await canIssue(state, holder))
-        ? cardWords(
-            state,
-            record(c).name,
-            who,
-            view,
-            pose !== null ? [pose] : posesFor(view.affinity),
-          )
-        : null,
-    { pose, foil, key: keyOf(idempotencyKey) },
-  );
-  const actor = accountRefString(record(c).account);
-  await state.auditAs(actor, "member.card", actor, { serial: card.serial }, true);
-  return card;
-}
-
-/** Today's newest card is voided and she writes a new one (`card_reroll`). */
-async function rerollMine(
-  state: ApiState,
-  c: ApiContext,
-  idempotencyKey: string | undefined,
-): Promise<IssuedCard> {
-  const who = await member(state, c);
-  const names = who.hidden ? null : await namesFor(state, who);
-  const view = cardView(state, who, names);
-  const card = await rerollCard(
     state,
     holderOf(c, who),
     view,
-    () => cardWords(state, record(c).name, who, view, posesFor(view.affinity)),
-    keyOf(idempotencyKey),
+    () => cardWords(state, record(c).name, who, view),
+    { foil, key: keyOf(idempotencyKey) },
+    who.hidden,
   );
   const actor = accountRefString(record(c).account);
-  await state.auditAs(actor, "member.card.reroll", actor, { serial: card.serial }, true);
+  await state.auditAs(actor, "member.card", actor, { serial: card.serial }, true);
   return card;
 }
 
@@ -628,25 +602,26 @@ export const memberRpc = {
   me: os.member.me.handler(({ context }) => memberView(context.state, context.c)),
   forget: os.member.forget.handler(({ context }) => forgetMine(context.state, context.c)),
   requestSong: os.member.requestSong.handler(({ input, context }) =>
-    requestSong(context.state, context.c, input.body.query),
+    requestSong(context.state, context.c, input.body.query, input.body.priority === true),
   ),
   cards: os.member.cards.handler(({ context }) => cardsMine(context.state, context.c)),
   issueCard: os.member.issueCard.handler(({ input, context }) => {
     return issueMine(context.state, context.c, input.body, input.headers?.["idempotency-key"]);
   }),
-  rerollCard: os.member.rerollCard.handler(({ input, context }) => {
-    return rerollMine(context.state, context.c, input.headers["idempotency-key"]);
-  }),
 };
 
-// What `fortune-routes.ts` builds a slip from: the same views the page and the cards use.
+// What `fortune-routes.ts` builds a slip from and `pictures.ts` draws someone's own pictures from:
+// the same views the page and the cards use.
 export type { Member as MemberContext };
 export {
   accountsOf,
+  activity,
+  bondView,
   cardView,
   member as loadMember,
   memberOf as loadMemberOf,
   namesFor,
+  ownSongs,
   shown,
   shownMemories,
 };

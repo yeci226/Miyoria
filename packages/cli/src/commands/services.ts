@@ -19,6 +19,9 @@ import {
 import {
   type Catalog,
   type CatalogEntry,
+  checkServiceFiles,
+  type FileStatus,
+  formatBytes,
   HostdClient,
   HostRpcError,
   type InstallDeps,
@@ -36,6 +39,100 @@ export interface ServiceDeps {
   /** The installer's seams: the runner, the downloads, PATH, the platform. */
   install?: Omit<InstallDeps, "root">;
   confirm?: (message: string) => Promise<boolean>;
+  /** `--yes`: agree without asking. */
+  yes?: boolean;
+  /** A person is at a terminal to answer `confirm` (default: when there is a `confirm`). */
+  interactive?: boolean;
+}
+
+// ---- the model files to download ---------------------------------------------------------------
+
+/** A file of `[[install.files]]` that is missing or wrong, and its service. */
+export interface FileNeed {
+  service: string;
+  status: FileStatus;
+}
+
+/** The files of these services to download: missing, or the wrong size or checksum. */
+export async function filesToFetch(
+  entries: readonly CatalogEntry[],
+  host: LoadedHostConfig,
+): Promise<FileNeed[]> {
+  const out: FileNeed[] = [];
+  for (const entry of entries) {
+    for (const status of await checkServiceFiles(entry, host, "cached")) {
+      if (status.state === "missing" || status.state === "wrong") {
+        out.push({ service: entry.name, status });
+      }
+    }
+  }
+  return out;
+}
+
+/** What a file still costs to download: nothing for one adopted from where the machine has it. */
+const remaining = (s: FileStatus) => (s.adopt !== null ? 0 : Math.max(s.size - s.partBytes, 0));
+
+/** The list a person agrees to: each file with its size, licence and source, and the total. */
+export function printFileNeeds(needs: readonly FileNeed[], models: string): void {
+  section("要下載的模型檔");
+  for (const { service, status: s } of needs) {
+    if (s.adopt !== null) {
+      println(
+        `  ${bold(service)}  ${s.path}  ${formatBytes(s.size)}  沿用 ${s.adopt}(檢查碼相同,硬連結,不用下載)`,
+      );
+      println(dim(`      ${s.what}${s.optional ? "(沒有也能跑)" : ""}`));
+      continue;
+    }
+    const resume = s.partBytes > 0 ? `(續傳,還要 ${formatBytes(remaining(s))})` : "";
+    println(
+      `  ${bold(service)}  ${s.path}  ${formatBytes(s.size)}${resume}  授權 ${s.licence}  來自 ${s.source}`,
+    );
+    const why = s.state === "wrong" ? `;現在的檔案不對(${s.detail ?? "檢查碼不符"}),會換掉` : "";
+    println(dim(`      ${s.what}${s.optional ? "(沒有也能跑)" : ""}${why}`));
+  }
+  const total = needs.reduce((n, { status }) => n + remaining(status), 0);
+  println(`  共 ${formatBytes(total)},放到 ${models}`);
+}
+
+/**
+ * Lists the files and asks once whether to download them. `--yes` agrees; without a terminal and
+ * without `--yes` it throws with the command to run (`again`).
+ */
+export async function confirmFiles(
+  needs: readonly FileNeed[],
+  host: LoadedHostConfig,
+  deps: ServiceDeps,
+  again: string,
+): Promise<boolean> {
+  if (needs.length === 0) return true;
+  printFileNeeds(needs, host.state.models);
+  // Only files already on this machine: nothing is downloaded, so there is nothing to agree to.
+  if (needs.every((n) => n.status.adopt !== null)) return true;
+  if (deps.yes === true) return true;
+  const canAsk = deps.interactive ?? deps.confirm !== undefined;
+  if (!canAsk || deps.confirm === undefined) {
+    throw new HostCommandError(`沒有終端機可以確認要不要下載上面的檔案;同意的話執行 \`${again}\``);
+  }
+  const total = needs.reduce((n, { status }) => n + remaining(status), 0);
+  const fetched = needs.filter((n) => n.status.adopt === null).length;
+  return deps.confirm(`下載這 ${fetched} 個檔案(共 ${formatBytes(total)})?`);
+}
+
+/** The lines about `install.files` of one install result. Returns whether one failed. */
+export function printFiles(result: HostServiceInstallResult): boolean {
+  const name = bold(result.service);
+  let failed = false;
+  for (const f of result.files) {
+    if (f.state === "downloaded") ok(`${name}  已下載並驗證 ${f.path}`);
+    else if (f.state === "present" && f.detail !== undefined) ok(`${name}  ${f.path}:${f.detail}`);
+    else if (f.state === "failed") {
+      failed = true;
+      fail(`${result.service}  ${f.path}:${f.detail ?? "下載失敗"}`);
+    } else if (f.state === "missing") {
+      warn(`${name}  還沒有 ${f.path}${f.detail !== undefined ? `(${f.detail})` : ""}`);
+    }
+  }
+  return failed;
 }
 
 // ---- progress output ---------------------------------------------------------------------------
@@ -149,6 +246,8 @@ export async function openInstaller(
         services.push(
           await installService(entry, loaded, installDeps, {
             onlyStale: params.force !== true,
+            // As the daemon's `host.update`: files only after the person agreed.
+            noFiles: true,
             onLine,
           }),
         );
@@ -274,11 +373,7 @@ export function printInstall(
       `${name}  PATH 上找不到 ${s.program}(不會替你安裝)${s.hint !== undefined ? `:${s.hint}` : ""}`,
     );
   }
-  for (const f of result.files) {
-    if (f.state === "downloaded") ok(`${name}  已下載 ${f.path}`);
-    else if (f.state === "failed") fail(`${result.service}  ${f.path}:${f.detail ?? "下載失敗"}`);
-    else if (f.state === "missing") warn(`${name}  還沒有 ${f.path}`);
-  }
+  printFiles(result);
   for (const m of result.manual) {
     if (!m.present) warn(`${name}  要你自己放:${m.what}(${m.path})`);
   }
@@ -324,6 +419,17 @@ export async function add(
   }
 
   const host = loadHost(target);
+  // The model files: listed with sizes and licences, one question for all of them.
+  const needs = await filesToFetch(entries, host);
+  const download = await confirmFiles(
+    needs,
+    host,
+    deps,
+    `miyoria add ${entries.map((e) => e.name).join(" ")} --yes`,
+  );
+  if (needs.length > 0 && !download) {
+    note("不下載模型檔;之後 `miyoria doctor --fix` 可以補(缺必要檔案的服務 hostd 不會啟動)");
+  }
   const installer = await openInstaller(target, host, deps);
   note(installer.mode === "daemon" ? "交給執行中的 hostd 安裝" : "hostd 沒有在執行,在這裡安裝");
   const printed: HostServiceInstallResult[] = [];
@@ -336,6 +442,7 @@ export async function add(
         {
           service: entry.name,
           ...(options.extras !== undefined ? { extras: options.extras } : {}),
+          ...(download ? {} : { no_files: true }),
         },
         progressPrinter(),
       );
@@ -355,6 +462,7 @@ export async function add(
   const todo = printed.filter(
     (r) =>
       r.manual.some((m) => !m.present) ||
+      r.files.some((f) => f.state === "missing") ||
       r.system.some((s) => !s.found) ||
       r.models.some((m) => !m.present),
   );

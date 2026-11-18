@@ -306,3 +306,72 @@ describe("host.update", () => {
     rmSync(join(ws.root, "own-env"), { recursive: true, force: true });
   });
 });
+
+describe("install.files and starting", () => {
+  const FILE = [
+    "[[install.files]]",
+    'path = "m/model.bin"',
+    `url = "https://huggingface.co/o/r/resolve/${"a".repeat(40)}/model.bin"`,
+    `sha256 = "${"0".repeat(64)}"`,
+    "size = 4",
+    'what = "a model"',
+    'licence = "MIT"',
+  ].join("\n");
+
+  it("does not start a service whose file is missing, and says which", T, async () => {
+    const ws = workspace([fake("a", "health.cjs", { tables: FILE })]);
+    const daemon = daemonFor(ws);
+    await daemon.start();
+    const client = (await HostdClient.connect(ws.state)) as HostdClient;
+    const { services } = await client.call<HostServiceList>("service.list");
+    expect(services[0]).toMatchObject({
+      state: "disabled",
+      reason: expect.stringContaining("缺少必要的檔案:m/model.bin"),
+    });
+    await expect(client.call("service.start", { service: "a" })).resolves.toMatchObject({
+      state: "disabled",
+    });
+
+    writeIn(ws, "data/host/models/m/model.bin", "abcd");
+    await client.call("service.start", { service: "a" });
+    await until(async () => (await states(client)).a === "running", 20_000, "a running");
+
+    // The file goes while it is stopped: the next start is refused.
+    await client.call("service.stop", { service: "a" });
+    rmSync(ws.file("data/host/models/m/model.bin"));
+    await expect(client.call("service.start", { service: "a" })).resolves.toMatchObject({
+      state: "disabled",
+    });
+  });
+
+  it("host.update downloads no files; service.install does", T, async () => {
+    const ws = installable();
+    writeIn(
+      ws,
+      "workers/py/service.toml",
+      `${ws.read("workers/py/service.toml")}\n${FILE.replace('"m/model.bin"', '"m/py.bin"')}\n`,
+    );
+    const uv = fakeUv();
+    const asked: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      asked.push(String(input));
+      return new Response("abcd", { status: 200, headers: { "content-length": "4" } });
+    }) as typeof fetch;
+    const daemon = daemonFor(ws, {
+      installDeps: { runner: uv.runner, fetchImpl, freeBytes: () => 10 * 1024 ** 3 },
+    });
+    await daemon.start();
+    const updated = (await daemon.call("host.update", {}, OP)) as HostUpdateResult;
+    expect(updated.services[0]?.files).toEqual([{ path: "m/py.bin", state: "missing" }]);
+    expect(asked).toEqual([]);
+    const installed = (await daemon.call(
+      "service.install",
+      { service: "py", only_stale: true },
+      OP,
+    )) as HostServiceInstallResult;
+    // The checksum in FILE is not the one of "abcd": fetched, refused, not kept.
+    expect(installed.files[0]).toMatchObject({ path: "m/py.bin", state: "failed" });
+    expect(asked).toHaveLength(1);
+    expect(existsSync(join(ws.state, "models", "m", "py.bin"))).toBe(false);
+  });
+});

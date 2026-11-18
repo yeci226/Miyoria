@@ -6,12 +6,7 @@
 
 import { existsSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import type {
-  HostGpuPolicy,
-  HostService,
-  HostServiceConfig,
-  HostServiceStatus,
-} from "@miyoria/contracts/host";
+import type { HostGpuPolicy, HostServiceConfig, HostServiceStatus } from "@miyoria/contracts/host";
 import {
   type Catalog,
   type CatalogEntry,
@@ -21,8 +16,10 @@ import {
   type LinkPlaceholder,
   placeholdersIn,
 } from "./catalog.js";
+import type { ServiceDescriptor as HostService } from "./descriptor.js";
 import { mergeEnv, passEnv, workerBaseEnv } from "./env.js";
 import type { LoadedHostConfig } from "./host-config.js";
+import { missingRequiredFiles } from "./install/files.js";
 import { localAddress, urlHost } from "./ports.js";
 
 /** What the daemon knows that descriptors refer to. */
@@ -202,11 +199,24 @@ export function checkPlan(plan: ServicePlan, ctx: ResolveContext): string | null
       hostToken: "check",
       hostdUrl: "http://127.0.0.1:1",
     });
-    return null;
   } catch (error) {
     if (error instanceof ResolveError) return error.message;
     throw error;
   }
+  return filesProblem(plan, ctx);
+}
+
+/**
+ * Why a service cannot start for want of its `[[install.files]]`: a file it needs (not `optional`)
+ * that is missing or the wrong size. Reads no file, so it is cheap enough for every start;
+ * `miyoria doctor` verifies the checksums.
+ */
+export function filesProblem(plan: ServicePlan, ctx: ResolveContext): string | null {
+  const files = plan.entry?.descriptor.install.files ?? [];
+  if (files.length === 0) return null;
+  const missing = missingRequiredFiles(files, join(ctx.state, "models"));
+  if (missing.length === 0) return null;
+  return `缺少必要的檔案:${missing.join("、")}(\`miyoria add ${plan.name}\` 或 \`miyoria doctor --fix\` 下載)`;
 }
 
 /** Topological order over `after` among the plans, stable in catalog order. */

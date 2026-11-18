@@ -87,10 +87,10 @@ describe("ApiClient", () => {
   it("calls a member route by cookie alone, with its Idempotency-Key and a JSON body", async () => {
     const fetch = mockFetch(() => ({ body: { serial: "MYR-AAAA-BBBB-CCCC" } }));
     const api = createApi(new ApiClient({ baseUrl: "", token: "t" }));
-    await api.rpc.member.rerollCard({ headers: { "idempotency-key": "k-1" }, body: {} });
+    await api.rpc.member.issueCard({ headers: { "idempotency-key": "k-1" }, body: {} });
     await api.rpc.public.card({ params: { serial: "MYR AAAA/1" } });
     const [reroll, check] = fetch.mock.calls;
-    expect(String(reroll?.[0])).toBe("/api/member/card/reroll");
+    expect(String(reroll?.[0])).toBe("/api/member/card");
     expect(headersOf(reroll?.[1]).Authorization).toBeUndefined();
     expect(headersOf(reroll?.[1])["Idempotency-Key"]).toBe("k-1");
     expect(JSON.parse(String(reroll?.[1]?.body))).toEqual({});

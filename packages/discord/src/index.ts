@@ -77,6 +77,13 @@ export {
   SHUTDOWN_GRACE_MS,
 } from "./module.js";
 export {
+  type ChannelView,
+  DiscordPlaces,
+  type GuildView,
+  guildViews,
+  placeRooms,
+} from "./places.js";
+export {
   ACCENT_COLORS,
   disableComponents,
   hasControls,

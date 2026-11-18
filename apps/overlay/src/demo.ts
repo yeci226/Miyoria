@@ -1,6 +1,7 @@
 // Scripted feed for `?demo=1`: lets the overlay be designed, previewed in OBS and screenshotted
 // without the Stage. It speaks the same messages the Stage sends, and walks through every activity
-// (thinking, getting a line ready, preparing a song stage by stage, singing it) and queue change.
+// (thinking, getting a line ready, preparing a song stage by stage, singing it) and queue change,
+// with danmaku lines crossing the top (bursts larger than the lanes, so some wait and some drop).
 import type { Activity, FeedMessage, QueueItem } from "./feed.js";
 
 interface Line {
@@ -20,7 +21,7 @@ const SONGS = ["夜に駆ける", "残酷な天使のテーゼ (Director's Edit 
 /** How a song's preparation goes: the worker's stages, end progress, seconds. */
 const PREPARE: [label: string, upTo: number, seconds: number][] = [
   ["下載中", 0.16, 2],
-  ["讓出顯示卡中", 0.16, 1.4],
+  ["等待中", 0.16, 1.4],
   ["分離人聲", 0.46, 2.5],
   ["轉換歌聲", 0.9, 3],
   ["混音", 0.97, 1],
@@ -35,6 +36,26 @@ const LATER: QueueItem[] = [
   { title: "Minecraft:挖到鑽石", by: "小明" },
   { title: "講一個鬼故事", by: "阿翔" },
 ];
+
+/** Paid danmaku lines (at most 30 characters, like the default limit). */
+const DANMAKU_TEXTS = [
+  "來了來了",
+  "晚安~今天也辛苦了",
+  "這首歌好好聽!!!",
+  "草",
+  "剛下班,剛好趕上",
+  "她剛剛是不是在偷笑",
+  "88888888",
+  "第一次來,請多指教",
+  "可以再唱一次副歌嗎?拜託拜託拜託",
+  "今天的聲音特別有精神耶",
+  "白飯配什麼最好吃,大家投票",
+  "w",
+  "從台南來的,大家好",
+  "Minecraft 那座塔後來蓋好了嗎",
+];
+/** Who sent them; `null` is a line with the names hidden. */
+const DANMAKU_NAMES: (string | null)[] = ["Mia", "小明", null, "阿翔", "Owen", "Kai", "一隻路過的貓", null];
 
 const busy = (kind: string, label: string): Activity => ({
   kind,
@@ -89,9 +110,11 @@ export function startDemo(emit: (m: FeedMessage) => void): () => void {
 
   const speak = async (turn: string, line: Line) => {
     // Her turn: thinking, then the line at TTS, then she speaks (the capsule goes away).
-    activity(busy("thinking", "思考中…"));
+    // A song prepared in the background shows beside her, never in place of what she does.
+    const side = { label: "準備歌曲", detail: SONGS[1] as string, progress: Math.min(0.85, 0.25 + (turn.length % 5) * 0.12) };
+    activity({ ...busy("thinking", "思考中…"), secondary: side });
     await wait(1500);
-    activity(busy("synthesizing", "產生語音…"));
+    activity({ ...busy("synthesizing", "產生語音…"), secondary: { ...side, progress: side.progress + 0.05 } });
     await wait(900);
     activity(null);
     emit({ type: "emotion", name: line.emotion, intensity: line.emotion === "neutral" ? 0.6 : 1 });
@@ -119,7 +142,8 @@ export function startDemo(emit: (m: FeedMessage) => void): () => void {
       const from = progress;
       for (let i = 1; i <= steps && !stopped; i++) {
         progress = from + ((upTo - from) * i) / steps;
-        activity({ kind: "song_prepare", label, detail: song, progress, elapsedMs: null, durationMs: null });
+        // Waiting has no bar (a shimmer), like the real worker's `gpu_wait`.
+        activity({ kind: "song_prepare", label, detail: song, progress: label === "等待中" ? null : progress, elapsedMs: null, durationMs: null });
         await wait(250);
       }
     }
@@ -160,6 +184,36 @@ export function startDemo(emit: (m: FeedMessage) => void): () => void {
     emit({ type: "touch", x: Math.min(Math.max(x + jitter(), 0), 1), y: Math.min(Math.max(y + jitter(), 0), 1), part });
   }, 900);
 
+  // Danmaku: a line now and then, and every so often a burst bigger than the lanes and the queue,
+  // so lines wait, and some are dropped (queue full, or waited too long). Some come without a name.
+  let danmakuSeq = 0;
+  const danmaku = (): void => {
+    const i = danmakuSeq++;
+    emit({
+      type: "danmaku",
+      id: `demo-dm-${i}`,
+      name: DANMAKU_NAMES[i % DANMAKU_NAMES.length] ?? null,
+      text: DANMAKU_TEXTS[(i * 5) % DANMAKU_TEXTS.length] as string,
+      max_on_screen: 12,
+      queue_max: 6,
+      max_wait_ms: 8000,
+    });
+  };
+  const burst = (n: number): void => {
+    for (let k = 0; k < n; k++) {
+      const t = setTimeout(() => {
+        timers.delete(t);
+        danmaku();
+      }, k * 90);
+      timers.add(t);
+    }
+  };
+  burst(16);
+  const trickle = setInterval(() => {
+    if (Math.random() < 0.55) danmaku();
+  }, 1400);
+  const bursts = setInterval(() => burst(18), 30_000);
+
   void (async () => {
     status("Game");
     setQueue(queue);
@@ -171,11 +225,11 @@ export function startDemo(emit: (m: FeedMessage) => void): () => void {
       emit({ type: "gift", text: turn % 2 === 1 ? "Owen 餵了她一碗白飯" : "Owen 和另外 3 人餵了她 5 碗白飯" });
       await wait(2600);
       emit({ type: "gift", text: null });
-      // A paid message every other round, a dedication on the others (they queue, one at a time).
-      if (turn % 2 === 1) emit({ type: "screen", kind: "message", name: "Mia", text: "今天的直播也太棒了吧", song: null });
+      // A paid message every other round, two on the others (they queue, one at a time).
+      if (turn % 2 === 1) emit({ type: "screen", name: "Mia", text: "今天的直播也太棒了吧" });
       else {
-        emit({ type: "screen", kind: "dedication", name: "Owen", text: "給正在加班的你", song: "春日影" });
-        emit({ type: "screen", kind: "message", name: "Kai", text: "晚安大家,明天見", song: null });
+        emit({ type: "screen", name: "Owen", text: "給正在加班的你" });
+        emit({ type: "screen", name: "Kai", text: "晚安大家,明天見" });
       }
       if (turn % 2 === 0 && !stopped) {
         await sing(turn / 2);
@@ -188,6 +242,8 @@ export function startDemo(emit: (m: FeedMessage) => void): () => void {
     stopped = true;
     clearInterval(levels);
     clearInterval(touches);
+    clearInterval(trickle);
+    clearInterval(bursts);
     for (const t of timers) clearTimeout(t);
     timers.clear();
   };

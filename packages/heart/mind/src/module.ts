@@ -85,6 +85,8 @@ export const MIND_TOPICS = [
 export class MindModule implements Module {
   static readonly ID = "mind";
   readonly manifest = defineManifest(MindModule.ID, "Mind", {
+    icon: "brain",
+    category: "her",
     description: "Her thought journal, her goals, her life log and her old timers",
     optional: ["llm", "world", "agent", "actions", "memory", "activity", "facts"],
     configSchema: MindConfigSchema,

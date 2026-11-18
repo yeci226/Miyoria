@@ -5,7 +5,8 @@
 // Tiers (v5-data §2.5): the status and a touch are ticks of the stage (`ambient`, folded into
 // daily counts after 14 days); an error and a saved clip are kept 90 days (`short`). The Stage
 // node's status, errors and file paths are for the owner (`owner`). A touch is drawn on the public
-// stage and says where and on what, never who (`public`).
+// stage and says where and on what, never who (`public`). How a danmaku line ended on the overlay
+// is a tick too (`ambient`), for the owner: the money it settles is in the ledger.
 
 import { z } from "zod";
 import { defineEvent } from "./registry.js";
@@ -27,6 +28,10 @@ const StageStatusConnectedSchema = z.object({
   hotkeys: z.array(z.string()),
   /** URL of the node's overlay page (an OBS browser source), if it serves one. */
   overlay_url: z.string().nullable(),
+  /** OBS's current scene collection, as the node last read it. */
+  obs_collection: z.string().nullable(),
+  /** Something about OBS the owner should fix (OBS is not on Miyoria's scene collection). */
+  obs_warning: z.string().nullable(),
 });
 
 /** The Stage node connected or reported a change, or went away (`connected: false`): `stage.status`. */
@@ -47,6 +52,18 @@ export const StageClipSchema = z
   .object({ reason: z.string(), path: z.string() })
   .meta({ id: "EventsStageClip" });
 export type StageClipData = z.output<typeof StageClipSchema>;
+
+/**
+ * How a danmaku line (`economy.danmaku`, by its `id`) ended on the stage: `stage.danmaku`. Every
+ * outcome but `shown` means nobody saw it (the economy gives its price back).
+ */
+export const StageDanmakuSchema = z
+  .object({
+    id: z.string(),
+    outcome: z.enum(["shown", "no_overlay", "queue_full", "too_late", "cleared", "lost"]),
+  })
+  .meta({ id: "EventsStageDanmaku" });
+export type StageDanmakuData = z.output<typeof StageDanmakuSchema>;
 
 /** What a touch landed on, judged from where it fell on the video frame. */
 export const LivePartSchema = z
@@ -91,5 +108,13 @@ export const LiveTouch = defineEvent({
   tier: "ambient",
 });
 
+export const StageDanmaku = defineEvent({
+  type: "stage.danmaku",
+  v: 1,
+  data: StageDanmakuSchema,
+  scope: "owner",
+  tier: "ambient",
+});
+
 /** Every stage and live type. */
-export const STAGE_EVENTS = [StageStatus, StageError, StageClip, LiveTouch] as const;
+export const STAGE_EVENTS = [StageStatus, StageError, StageClip, LiveTouch, StageDanmaku] as const;

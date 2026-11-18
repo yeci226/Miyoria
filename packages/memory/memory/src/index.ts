@@ -272,7 +272,14 @@ export {
   Threads,
   visibleQuestion,
 } from "./threads.js";
-export { normalizeForCompare, textSimilarity, tokenize, tokenString } from "./tokenize.js";
+export {
+  nameLikeWords,
+  normalizeForCompare,
+  simplify,
+  textSimilarity,
+  tokenize,
+  tokenString,
+} from "./tokenize.js";
 export {
   MemoryToolError,
   RECALL,

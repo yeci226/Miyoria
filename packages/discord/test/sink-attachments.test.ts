@@ -1,7 +1,9 @@
 // Outgoing attachments: a message names artifacts by id; the sink resolves them through the app's
 // `AttachmentSource` when it sends, uploads the bytes with the first chunk of the text, and posts
-// nothing when one is refused.
+// nothing when one is refused. A card (`sendCard`) uploads the files of its reply, the picture its
+// image block shows.
 
+import { cardReply } from "@miyoria/commands";
 import {
   AttachmentError,
   type AttachmentFile,
@@ -144,6 +146,37 @@ describe("DiscordSink attachments", () => {
     const { sink } = make(5_000_000);
     expect(sink.attachmentLimit(channel)).toBe(5_000_000);
     expect(sink.attachmentLimit({ ...channel, platform: "cli" })).toBeNull();
+  });
+
+  test("a_card_uploads_the_picture_it_shows_and_a_card_without_files_posts_none", async () => {
+    const { rest, sink } = make();
+    const png = new Uint8Array([137, 80, 78, 71]);
+    await sink.sendCard(
+      channel,
+      cardReply(
+        [
+          { type: "image", name: "miyoria-auction.png", alt: "拍賣的一行摘要" },
+          { type: "text", text: "每週拍賣" },
+        ],
+        { files: [{ name: "miyoria-auction.png", data: png, contentType: "image/png" }] },
+      ),
+    );
+    const request = rest.posts[0]?.options;
+    expect(request?.files).toEqual([
+      { name: "miyoria-auction.png", data: Buffer.from(png), contentType: "image/png" },
+    ]);
+    expect(request?.body).toMatchObject({
+      attachments: [{ id: 0, filename: "miyoria-auction.png" }],
+      allowed_mentions: { parse: [] },
+    });
+    const gallery = JSON.stringify(
+      (request?.body as { components?: unknown } | undefined)?.components,
+    );
+    expect(gallery).toContain("attachment://miyoria-auction.png");
+    expect(gallery).toContain("拍賣的一行摘要");
+    await sink.sendCard(channel, cardReply([{ type: "text", text: "只有字" }]));
+    expect(rest.posts[1]?.options?.files).toBeUndefined();
+    expect(rest.posts[1]?.options?.body).not.toHaveProperty("attachments");
   });
 
   test("discords_own_refusal_of_the_upload_becomes_a_clear_attachment_error", async () => {

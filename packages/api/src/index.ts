@@ -72,7 +72,7 @@
 //   person's own data; see `member.ts`, `card.ts`)
 
 export { type ApiRpc, contract } from "@miyoria/contracts/api";
-export { CARD_POSES, CARDS_PER_DAY } from "./card.js";
+export { CARDS_PER_DAY } from "./card.js";
 export {
   ClientError,
   type ClientErrorKind,

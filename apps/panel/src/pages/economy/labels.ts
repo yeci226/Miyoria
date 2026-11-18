@@ -23,14 +23,28 @@ export const SPEND_REASON_LABEL: Record<string, string> = {
   expression: "送她表情",
   screen_message: "留言上大螢幕",
   dedication: "歌曲獻詞",
+  transfer_fee: "轉帳手續費",
   bet: "押預測",
   bet_win: "預測猜中了",
   draw: "抽收藏",
+  card_daily: "每日卡",
+  card_refund: "每日卡退回",
   room: "一起佈置她的房間",
   shop: "她的小店",
   shop_pay: "小店的收入",
   commission: "委託她",
   commission_pay: "委託做完了",
+  // the weekly market
+  song_priority: "點歌優先券",
+  song_priority_refund: "優先券退回",
+  lottery_ticket: "樂透彩券",
+  lottery_refund: "彩券退回",
+  lottery_prize: "樂透中獎",
+  auction_hold: "拍賣出價押住",
+  auction_release: "拍賣押款還回",
+  auction_won: "拍賣得標",
+  danmaku: "直播彈幕",
+  danmaku_refund: "彈幕沒顯示,退回",
 };
 
 /** A ledger reason in words; an unknown one stays as it is. */
@@ -38,15 +52,7 @@ export const reasonLabel = (reason: string): string => (EARN_REASON_LABEL as Rec
 
 /** What the health table counts as issued (nothing was spent for it) and as recovered. */
 export const ISSUED_REASONS = ["checkin", "talked", "voice", "song", "her_gift", "quest", "play", "achievement"] as const;
-export const RECOVERED_REASONS = ["feed", "letter", "expression", "screen_message", "dedication", "draw", "shop", "room", "commission"] as const;
-
-export const COMMISSION_KIND_LABEL: Record<string, string> = {
-  poem: "寫詩",
-  name: "取名",
-  tool: "小工具",
-  song: "唱歌",
-  voice: "錄一句話",
-};
+export const RECOVERED_REASONS = ["feed", "screen_message", "dedication", "draw", "shop", "room", "commission", "transfer_fee", "card_daily", "danmaku"] as const;
 
 export const PREDICTION_STATUS_LABEL = {
   open: "可以下注",

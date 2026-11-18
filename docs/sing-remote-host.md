@@ -54,9 +54,16 @@ pnpm dev add sing
 
 - 用 uv 把 `workers/sing/pyproject.toml` 和 `uv.lock` 裝成一個環境(放在 `data/host/envs/sing`),包括 CUDA 12.8 版的 torch。第一次要下載很多東西,要等一陣子;失敗了重新執行同一個指令,做完的會跳過;
 - 檢查 ffmpeg 在不在 PATH;
+- 下載 `workers/sing/service.toml` 的 `[[install.files]]` 列的公開模型檔:先列出每個檔案的大小、授權和來源,問你一次(`-y` 不問),同意後下載到 `data/host/models/`,SHA-256 對了才留下;
 - 列出**要你自己放的東西**。
 
-### 要自己放的模型和資料
+### 自動下載的和要自己放的
+
+**自動下載的**:只有公開、可以自由下載、`service.toml` 寫了 SHA-256 和固定版本的模型檔。目前是兩個分離模型(下表第 3、4 列的模型檔):`vocal-split/MelBandRoformer.ckpt`(約 913 MB,MIT)、`lead-split/becruily-bs/bs_roformer_karaoke_frazer_becruily.ckpt`(約 204 MB,來源沒有標授權,Owen 決定自動下載)和它的設定檔(1.9 KB)。它們放在 `data/host/models/`,不是 `workers/models/`。
+
+**舊的手動位置繼續有效,不會下載兩次。**worker 先找 `data/host/models/`,沒有就退回 `workers/models/`;所以在 `update` 抓檔案之前,你原本放的檔案照常使用。`update` 看到 `workers/models/` 裡有檔案、大小和 SHA-256 都對,就用**硬連結**把它接到 `data/host/models/`(不下載、不多佔硬碟空間,原本的檔案不動;兩個資料夾在不同磁碟時才會改成複製)。你**不用**刪掉或搬動舊檔案。
+
+**一直要自己放的**:Owen 的聲音資產(下表前兩列,私人的,不會自動下載),和 Seed-VC 原始碼(是程式碼,自動下載只抓模型權重,從不抓會被執行的東西)。
 
 路徑從 repository 根目錄算起。前兩項是 Owen 的聲音資產,**請 Owen 提供**,只放在你的本機,不要上傳或再分享。
 
@@ -64,11 +71,12 @@ pnpm dev add sing
 |---|---|---|
 | `workers/models/applio/` | Applio 原始碼 + 它自己的 `venv/`(RVC 在子程序裡跑)+ 她的 RVC 模型 `logs/miyoria-deepseek-48k/miyoria-deepseek-48k_40e_11000s.pth` | Owen 提供(用別的路徑就設 `SING_APPLIO_DIR` / `SING_RVC_MODEL`) |
 | `workers/voices/deepseek-chan/ref.wav`(和 `ref.txt`) | 她的參考音;worker 啟動時會檢查這個檔在不在 | Owen 提供(或設 `SING_REF`) |
-| `workers/models/lead-split/becruily-bs/` | 主唱 / 伴唱分離模型 | Hugging Face `becruily/bs-roformer-karaoke`;沒有就不切主唱 |
-| `workers/models/vocal-split/MelBandRoformer.ckpt` + `.yaml` | 人聲分離 | Hugging Face `KimberleyJSN/melbandroformer`;沒有就退回 Demucs(第一次自動下載) |
+| `data/host/models/lead-split/becruily-bs/`(舊位置 `workers/models/lead-split/becruily-bs/`) | 主唱 / 伴唱分離模型 | **自動下載**(Hugging Face `becruily/bs-roformer-karaoke`);沒有就不切主唱 |
+| `data/host/models/vocal-split/MelBandRoformer.ckpt`(舊位置 `workers/models/vocal-split/`) | 人聲分離模型 | **自動下載**(Hugging Face `KimberleyJSN/melbandroformer`);沒有就退回 Demucs |
+| `workers/models/vocal-split/MelBandRoformer.yaml`(或放在 `data/host/models/vocal-split/`) | 人聲分離模型的設定檔 | **仍然手動**(沒有固定來源):沒有它就退回 Demucs。已經有的話不用動 |
 | `workers/models/seed-vc/` | Seed-VC 原始碼(要有 `modules/` 這個資料夾) | github.com/Plachtaa/seed-vc。**不能略過**:worker 啟動時就檢查它在不在,沒有就啟動失敗(`Seed-VC not found at ...`),即使預設轉換鏈 `rvc` 用不到它 |
 
-第一首歌還會自動下載約 2 GB 的模型。檢查還缺什麼:
+第一首歌還會自動下載約 2 GB 的其他模型(worker 自己從 Hugging Face 抓的,不經過上面的清單)。檢查還缺什麼(`doctor` 也會驗證已經下載的模型檔的 SHA-256):
 
 ```powershell
 pnpm dev doctor
@@ -124,6 +132,27 @@ pnpm dev logs sing -f    # 看 log,Ctrl+C 離開
 | 看狀態 / log | `pnpm dev status`、`pnpm dev logs sing -f` |
 
 `update` 不會動到 `workers/models/`、`workers/voices/` 和歌曲快取(`data/songs`):這些不在 git 裡。
+
+### `git pull` 之後(分離模型改成自動下載)
+
+在 repository 根目錄執行:
+
+```powershell
+git pull
+```
+
+```powershell
+pnpm dev update
+```
+
+它會依序做這些事,你只要看提示:
+
+1. 同步環境(`uv.lock` 沒變就跳過),需要時重啟正在跑的 sing(忙的話會說「還在忙所以沒有重啟」,等她不忙再執行它列的 `miyoria restart sing`);
+2. 列出「要下載的模型檔」。你原本放在 `workers/models/` 的兩個模型檔會寫成「沿用 …(檢查碼相同,硬連結,不用下載)」,**不問、不下載**(讀一次檢查碼,約 1.1 GB,幾秒到十幾秒);
+3. 唯一會問你的是 `lead-split/becruily-bs/config_karaoke_frazer_becruily.yaml`(1.9 KB,新檔名,舊的設定檔不是這個名字):「下載這 1 個檔案(共 1.9 KB)?」回答 `y`。授權欄會寫「未標示」,這是 Owen 決定可以自動下載的。要不問就 `pnpm dev update --yes`;
+4. 如果你**沒有**舊位置的模型檔,同一個提問會列出三個檔案:約 913 MB + 204 MB + 1.9 KB,共約 1.1 GB,下載後驗證 SHA-256,才放進 `data/host/models/`;磁碟要留約 0.5 GB 的餘裕。
+
+之後不必再做什麼:不用移動檔案、不用改設定,`pnpm dev up` / 既有的 sing 會自己找到新位置或舊位置的檔案。**仍然要自己放的**只有:Applio、`ref.wav`、Seed-VC 原始碼,和人聲分離的設定檔 `MelBandRoformer.yaml`(沒有固定來源;你已經有就不用動)。要看狀況:`pnpm dev doctor`(會驗證 SHA-256),`pnpm dev doctor --fix` 補缺的。
 
 ## 6. Owen 這邊怎麼用
 

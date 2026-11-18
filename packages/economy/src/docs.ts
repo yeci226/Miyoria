@@ -1,5 +1,6 @@
-// What economy 2.0 keeps besides the ledger: collection items, predictions and their bets,
-// commissions and what the audience has funded of her room (docs/design/v4-plan.md §10). The
+// What economy 2.0 keeps besides the ledger: predictions and their bets, what the audience has
+// funded of her room, and what retired features left (collectibles, commissions)
+// (docs/design/v4-plan.md §10). The
 // types and the service key are in `records.ts`; the economy plugin's `economy_docs` table
 // implements them (`tables.ts`). The in-memory `MemoryDocs` here is what the tests run against and
 // what the module falls back to (with a warning) when no store provides `EconomyDocsKey`.

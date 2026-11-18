@@ -51,6 +51,7 @@ import { agencyRpc } from "./agency.js";
 import { boardRpc } from "./board.js";
 import { activityRpc, arbiterRpc } from "./body.js";
 import { cardCheckRpc } from "./card.js";
+import { cardsAdminRpc, cardsRpc } from "./cards-routes.js";
 import { channelRpc } from "./channels.js";
 import { clusterRpc } from "./cluster.js";
 import { os, type RpcContext } from "./contract.js";
@@ -64,12 +65,13 @@ import { evalRpc } from "./eval/route.js";
 import { jsonRequest } from "./extract.js";
 import { factsRpc } from "./facts.js";
 import { fortuneRpc } from "./fortune-routes.js";
-import { goalAdminRpc } from "./goals-admin.js";
 import { selfRpc, worldRpc } from "./inner.js";
+import { karaokeAdminRpc, karaokeRoomsRpc, karaokeRpc } from "./karaoke-routes.js";
 import { digestRpc, knowledgeRpc, reflectionRpc } from "./learning.js";
 import { lifeRpc } from "./life.js";
 import { livePatRpc } from "./live.js";
 import { llmCallsRpc, thoughtRpc } from "./llmcalls.js";
+import { marketAdminRpc, marketRpc } from "./market-routes.js";
 import { memberRpc } from "./member.js";
 import { memoryRpc } from "./memory.js";
 import { turnMetricsRpc } from "./metrics-turns.js";
@@ -87,6 +89,7 @@ import { limitMember, publicRpc } from "./public.js";
 import { roleRpc } from "./roles.js";
 import type { Method, Route } from "./route.js";
 import { sandboxRpc } from "./sandbox.js";
+import { placesRpc, settingsRpc } from "./settings.js";
 import type { ApiContext, ApiState } from "./state.js";
 import { telemetryRpc } from "./telemetry.js";
 import { walletRpc } from "./wallet.js";
@@ -118,14 +121,24 @@ export const router = os.router({
   skills: skillsRpc,
   public: { ...publicRpc, ...boardRpc, ...cardCheckRpc },
   member: { ...memberRpc, ...livePatRpc },
+  cards: cardsRpc,
+  cardsAdmin: cardsAdminRpc,
   wallet: walletRpc,
   agency: agencyRpc,
   fortune: fortuneRpc,
+  market: marketRpc,
+  marketAdmin: marketAdminRpc,
+  karaoke: karaokeRpc,
+  karaokeAdmin: karaokeAdminRpc,
+  karaokeRooms: karaokeRoomsRpc,
   people: { ...peopleRpc, ...personWalletRpc, ...personQuestsRpc },
   ...coreRpc,
+  // The settings routes before `POST /api/modules/{id}/{action}` (see the contract).
+  modules: { list: coreRpc.modules.list, ...settingsRpc, action: coreRpc.modules.action },
+  places: placesRpc,
   events: eventsRpc,
   llm: { ...coreRpc.llm, ...llmCallsRpc },
-  economy: { ...economyRpc, ...goalAdminRpc },
+  economy: economyRpc,
   channels: channelRpc,
   cluster: clusterRpc,
   mind: { ...mindRpc, ...thoughtRpc, ...digestRpc, ...planRpc },
@@ -154,8 +167,18 @@ export function defaultResponseCheck(env: NodeJS.ProcessEnv = process.env): Resp
   return FROM_SOURCE ? "strict" : "production";
 }
 
-/** The groups of the public side (`[modules.api.public]`): the public views and the member pages (the wallet, goals and fortune are member pages too). */
-const PUBLIC_SIDE = new Set(["public", "member", "wallet", "agency", "fortune"]);
+/** The groups of the public side (`[modules.api.public]`): the public views and the member pages (the cards, the wallet, fortune, the market, karaoke and its rooms are member pages too). */
+const PUBLIC_SIDE = new Set([
+  "public",
+  "member",
+  "cards",
+  "wallet",
+  "agency",
+  "fortune",
+  "market",
+  "karaoke",
+  "karaokeRooms",
+]);
 
 /** Whether a route is served at all: the public side's routes go away with its switch. */
 function served(state: ApiState, path: readonly string[]): boolean {

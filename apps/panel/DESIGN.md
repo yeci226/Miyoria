@@ -54,6 +54,13 @@ Text on the content surface carries `0 1px 2px` shadow and a lighter `--muted-fo
 brightest part of a picture and secondary text about 4:1. Raising see-through lowers this, so the
 controls exist and the owner decides. Solid controls drop the text shadow.
 
+**The one exception (owner, 2026-11-17): the system page's subsystem cards.** 系統 / 子系統 opens as a
+grid of cards, one per module, because there are 40-odd of them and each has a different set of
+facts. Each card is a `.glass-well` fill with a 1 px `--border` hairline (`--line-strong` on hover
+and focus), 10 px radius, no shadow and no blur of its own: the panel's frosted glass is what sits
+behind every card (a backdrop filter of its own would only see the sheet). Nothing else in the
+panel becomes a card because of this.
+
 The login screen is the one card in the panel, two columns (shadcn `login-04`): the form on overlay
 glass and a clear pane that lifts the picture behind it, so it follows the chosen background. Under
 `md` the pane goes and the form stands alone.
@@ -197,7 +204,7 @@ answer is one plain line. Nothing here is invented: a number the Core does not s
   the Core sends.
   - 健康度: 這七天回收率 as one `ChartBlock` with a `TimeChart` of what went out and came back,
     怎麼算 as a `dl`, and 每天 as a table.
-  - 委託: 等她做的委託 as a table. 預測: each question with its bets. 房間: 她的房間 as a table
+  - 預測: each question with its bets. 房間: 她的房間 as a table
     with a `Meter` for how much of the price is funded.
   - No ranking of people. Someone's own quests show in their page under 角色 / 人.
 - 評測 (`/eval`): the participation metrics under 參與度指標, `ChartBlock`s 回合怎麼結束 and
@@ -210,6 +217,35 @@ answer is one plain line. Nothing here is invented: a number the Core does not s
   with why it ended and the final standings. "現在沒有人在玩" is an empty snapshot; the module being
   off is the `OffLine` row. It never shows what a game keeps hidden (an answer, the soup's bottom).
   The recent list lives in memory, so a restart empties it.
+
+## Subsystems and their settings
+
+- 系統 / 子系統 (`pages/system/SystemPage.tsx`): the cards above, in sections 她, 玩, 平台, 系統 (section
+  title 15 with a muted count), three columns from `xl`, two from `md`, one on phones. A card, top
+  down: the module's icon (`lib/module-icons.ts`: a lucide name the module chose; any other name or
+  none is `Box`) in a 28 px neutral square, the name (15 semibold, links to the module) over its id
+  in mono, the state as a dot and its word at the right; up to four facts, label 12 over value 14
+  (never a big number); one line of what waits (a save waiting for her to finish singing), else the
+  last error or why it is not running (primary, `role="alert"`), else the next thing; then 設定 ›
+  (or 詳情 ›) and up to two quick actions as small neutral buttons. An off module dims and keeps
+  only 啟用. A `Segmented` with two icons (格子 / 清單) at the toolbar's right switches to the table,
+  remembered per browser (`miyoria.panel.system.view`); the filter has 有設定.
+- 一個子系統 (`/system/$id`, `pages/system/ModulePage.tsx`): the header keeps 運作 / 系統 and carries
+  重新啟動 / 停用. The page: a line with back, icon, name 15, state and id; 依賴 and what restarts with
+  it; the card's facts in four columns, its note and actions. Then 設定: a 13 semibold title per
+  group, a field per row (label in a 12 rem column on `md`, stacked on phones; the control; help
+  under it; 「面板改過 · 檔案:X」 with 還原成檔案的值; Core's refusal in primary under the field). A
+  changed field gets a 6 px primary dot by its label. While anything is unsaved, a band sticks to the
+  bottom of the sheet (`--line-strong` border, a darker fill with a blur of what scrolls under it):
+  「有 N 項沒存」, 取消 and the one primary button 「儲存並重新啟動 X」, which confirms first when the
+  restart will wait for a guard or a field is marked dangerous. Then 變更紀錄: when and who in the
+  label column, `label 舊 → 新` per change, 復原這次 / 回到這次之前 behind a confirm.
+- Controls per kind (`setting-fields.tsx`): `Switch`; numbers in a 8 rem box with the unit (小時,
+  分鐘, the currency, %) beside it; `Segmented` for a select of up to four and for weekdays (日 一 …
+  六), `Select` beyond; `type="time"`; the channel picker is a `Popover` + `Command` grouped by server
+  and category, picked channels as chips with ×, a channel she cannot use shown disabled with why, a
+  stored one that is gone shown as 找不到這個頻道 and its id. Read only without
+  `admin.settings.<id>`, with one line saying so.
 
 ## People
 
@@ -232,7 +268,11 @@ the laps done, a heart in the middle. Primary only, no colour of its own.
     when the day's cap took it, her quote. 20 at a time, 載入更多 for older ones.
   - 證據, 分級的共同記憶 (tier, date, quote; 新增共同記憶 in a `Dialog`, 拿掉 in `RowActions` behind a
     `ConfirmDialog`), 她怎麼看這個人 (稱呼, 標籤, 印象, 相處方式, 還沒聊完的事, 共同的梗, 不喜歡的地方,
-    會員頁上的話, one 儲存), then 魚幣, 今天的任務 and 帳號 as before.
+    會員頁上的話, one 儲存), then 魚幣, 今天的任務, 卡片 and 帳號. 卡片 (`GET /api/people/{id}/cards`,
+    read only) is 張數 by kind, 保底, 願望單 and 圖鑑 as `Facts`, the newest eight cards as rows (a
+    small thumbnail, rarity, kind, 閃卡 / 保底 / 已作廢, what was drawn, the price or 不用錢, the date
+    linking to its check page; 顯示全部 for the rest), then the series as meters. Left out when the
+    cards module is off.
   - Sections without anything to show are left out; someone without a row has 還沒有關係紀錄.
 
 ## Public site
@@ -261,10 +301,35 @@ token form stays at `#/login`, with no link to it from the page.
   step. The header says 關係 with the same tier. A Core without the ring keeps the six steps.
 - No ranking of people, anywhere.
 - The logged-in page also holds the keepsakes (`CardSection`, `FortuneSlip`, `HoloCard`): the member
-  card and today's fortune slip, the same things `/me card` and `/me fortune` give on Discord,
+  card and today's fortune slip, the same things `/me card` and `/me checkin fortune:true` give on Discord,
   through the same service, so both read alike. The card and the slip are the only decorated
   surfaces on the site; the rest stays flat, and the card's motion stops under reduced motion.
-  Letters to her are written from the shop (`Wallet`) or with `/me letter`.
+  The rail's 她給你的卡 shows, under the newest card, a strip of facts (一張, 今天還能抽, 你有, 保底)
+  and, under the button, the Core's own sentence when it would not give a card (in the primary,
+  `role="alert"`); short coins disable the button with the same kind of line before asking.
+- 卡冊 (`pages/public/cards/`), a block of the main column after 一起的回憶, holds everything else
+  about the cards as an inline tab row (`TabsList variant="inline"`: the page tab row's underline,
+  without glass or stickiness, first tab flush with the block title), remembered per browser:
+  - 我的卡: every card, newest first, as 3:4 thumbnails of her picture (`/api/public/card-art`,
+    then the fixed portrait, then a blank) with the rarity tag, the kind (每日卡, 里程碑卡, 紀念卡,
+    掉落的卡, 舊卡) and the date; a `Segmented` filters by kind once there are two. A card opens in a
+    `Dialog` (`sm:max-w-4xl`): the `HoloCard` beside its parts (slot, name, rarity, 願望 on a wished
+    part), then 表情, 關係, 發卡日, 第幾張, 卡面, 花了, 保底 and 編號, download, share and its check page.
+  - 圖鑑: 系列 (a `Meter` each, `owned/total`, the title once complete), 稱號, 部件 by slot or by
+    series (a `Segmented`); a part they do not have keeps its name and rarity behind a lock icon and
+    muted text. 舊收藏 last, marked 不再增加.
+  - 機率表: price and per-day as facts, 你的保底 (「再 N 張保證 SR 以上」 and a `Meter`), the
+    rarity table (with the pity's column) and each slot's parts as bars with a fixed value column,
+    in the Core's order and its two-decimal figures.
+  - 願望單: the saved list (remove per row), 儲存 / 清空 / 還原, the Core's sentence on a refusal,
+    then every collectable part as chips by slot, disabled once three are picked.
+  - Rarity is a tag of fixed width in the two accents, rising in weight: N quiet, R neutral bright,
+    SR primary text, SSR solid primary. Always the letters.
+  - Foil on her rendered picture: that picture is opaque, so the old mask (the cut-out portrait's
+    alpha) cannot keep the foil off her. On an opaque picture (`data-art="opaque"`, read from the
+    picture's top row) the foil is a pale rainbow in `color-dodge` over the whole picture, rising
+    from its light parts, and a soft band of light crossing with the pointer; both fade before the
+    words. A faint sheen stays at rest and under reduced motion. Cut-out portraits keep the old foil.
 - 她 (the public live page at `/watch`, `LIVE_PAGE` in `pages/public/live`; `/live` stays the admin 直播 page): anyone with the link may watch, and
   patting her head needs a Discord login that returns there. No admin shell, no admin route. While
   OBS publishes (`snapshot.video.on`) the stage is the real OBS picture, never a model the page

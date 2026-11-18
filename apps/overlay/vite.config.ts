@@ -10,6 +10,11 @@ export default defineConfig({
       // The feed contract, from source like the panel does. The page imports it as types only,
       // so nothing of it (and no zod) is in the bundle.
       "@miyoria/contracts/overlay": fileURLToPath(new URL("../../packages/contracts/overlay/src/index.ts", import.meta.url)),
+      // The karaoke lyrics as a page shows them, shared with the member page (plain TS with no
+      // imports outside its folder but the song reference's types, so no zod either).
+      "@miyoria/play/karaoke/lyrics": fileURLToPath(
+        new URL("../../packages/play/karaoke/src/lyrics/index.ts", import.meta.url),
+      ),
     },
   },
   build: { outDir: "dist", emptyOutDir: true, target: "es2022", sourcemap: false },

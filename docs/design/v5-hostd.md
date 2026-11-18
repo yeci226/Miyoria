@@ -174,10 +174,16 @@ system = ["ffmpeg"]              # programs that must be on PATH: checked, insta
 [[install.models]]               # fetched by `models pull`, into the host's model folder
 repo = "Qwen/Qwen3-ASR-0.6B"
 revision = "<commit>"
-[[install.files]]                # a single file with a checksum
-url = "https://huggingface.co/..."
+[[install.files]]                # a public model file, downloaded after one question (§9.1)
+path = "smart-turn/smart-turn-v3.2-cpu.onnx"   # relative to <state>/models
+hf = "pipecat-ai/smart-turn-v3"  # or url = "https://..." on the host allowlist
+file = "smart-turn-v3.2-cpu.onnx"
+revision = "<40-character commit>"
 sha256 = "<hex>"
-path = "models/smart-turn/smart-turn-v3.2-cpu.onnx"
+size = 8_900_000                 # bytes
+what = "Smart Turn v3.2(判斷講完)"
+licence = "BSD-2-Clause"
+optional = true                  # the service runs without it; default false
 [[install.manual]]               # placed by a person: checked, never fetched
 path = "voices/{voice}"
 what = "參考聲音的資料夾"
@@ -633,17 +639,59 @@ a voice call with the owner listening.
   declared as conflicting where they cannot share an environment. The CUDA build of torch is set
   through an index in the project file with platform markers (v5-research §6).
 - `miyoria add <service>...`: `uv sync --frozen` into `<state>/envs/<service>`, fetch
-  `install.models` and `install.files`, check `install.system` and `install.manual`, write the
-  `[services.<name>]` table. `remove` deletes the environment and the table, never models.
+  `install.files` after asking (§9.1), check `install.system` and `install.manual`, write the
+  `[services.<name>]` table. `install.models` are fetched by `models pull` or by the service. `remove` deletes the environment and the table, never models.
 - `miyoria models pull | ls | gc`: models are shared by revision in `<state>/models`; `gc` lists
   what no installed service names and deletes only after a confirmation.
 - `miyoria update`: pull or upgrade the package, then for each installed service whose lock,
   descriptor or sources changed: reinstall, and restart one at a time through the guard.
 - A `[services.<name>] python = "<path>"` environment is never touched by `add`, `update` or
   `remove`.
-- Downloads use the host allowlist and resume logic of `stack/downloads.ts`. A machine whose
-  antivirus inspects TLS sets its certificate bundle in `host.toml` (`[paths] ca_bundle`), which
-  hostd passes as `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`.
+- A machine whose antivirus inspects TLS sets its certificate bundle in `host.toml`
+  (`[paths] ca_bundle`), which hostd passes as `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`.
+
+### 9.1 Model files (`[[install.files]]`, owner 2026-11-17)
+
+Only public, freely downloadable weights are fetched automatically. A private asset (her RVC
+model, the reference audio), an executable (MediaMTX) and source code that runs (Seed-VC) stay
+`[[install.manual]]`.
+
+- **Schema** (hostd's own, `packages/hostd/src/descriptor.ts`, on top of the contract's
+  `HostServiceSchema`; unknown keys are rejected): `path` (relative to `<state>/models`; no `..`,
+  no absolute or drive path, no `\`, not under `hf/`, not `.part`), exactly one source: `url`
+  (https, no credentials, a host on the allowlist; a github.com URL must be a release asset) or
+  `hf` + `file` + `revision` (a 40-character commit; a branch or tag is refused), `sha256`
+  (required), `size` (bytes, required), `what` (zh-TW, shown), `licence` (SPDX id or a short note,
+  shown), `optional` (default `false`). No `when` and no `extract`: no existing item needed them.
+  A broken entry is a catalog problem for that service, with the field and the reason.
+- **Where**: `<state>/models/<path>`, the state folder of `host.toml` (`[paths] state`, relative
+  to the workspace). A packaged install keeps them in the user's folder, not the package's, which
+  is what `install.manual` paths still get wrong (backlog).
+- **Downloader** (`install/download.ts`, Node's fetch and streams, no new dependency): https only;
+  allowlist `huggingface.co`, `*.huggingface.co`, `*.hf.co`, `github.com` (release assets),
+  `objects.githubusercontent.com`, `release-assets.githubusercontent.com`,
+  `raw.githubusercontent.com`. Redirects are followed by hand, at most 5, each hop checked like
+  the first URL. Into `<file>.part` with `Range` to continue; 60 s without data aborts the attempt;
+  a dropped connection, a timeout, 408/425/429 and 5xx are retried after 2, 8 and 30 s. A
+  transfer that outgrows `size` is stopped. The `.part` is hashed and renamed into place only when
+  the SHA-256 matches; otherwise it is deleted. One file at a time. Before the first byte the
+  drive must have the remaining bytes plus 512 MB, or nothing starts and the message gives the
+  numbers. Nothing downloaded is run.
+- **Asking**: `add`, `update` and `doctor --fix` list each missing or wrong file with its size,
+  licence and source, then ask once; `--yes` agrees; without a terminal and without `--yes` they
+  print the list and the command and exit non-zero. `host.update` (the daemon's re-sync) never
+  downloads; `update` asks and then calls `service.install` for the services that need files.
+- **Checking**: `doctor` reports each file as verified, missing (a failure unless `optional`) or
+  wrong (size or checksum). Hashes are remembered in `<state>/models.verified.json` with the size
+  and modification time, so only a new or changed file is hashed again; `doctor --deep` hashes
+  every file. `doctor --print-hashes <service>` prints the SHA-256 and size of the service's files
+  on this machine (its `install.files` and what its `install.manual` items hold) in `service.toml`
+  syntax.
+- **Starting**: hostd does not start a service whose non-optional file is missing or the wrong
+  size (no hashing at start); its status is `disabled` and the reason names the files. A start
+  after the file appeared re-checks.
+- `install.files` is left out of the install-record hash: adding or pinning a file does not make
+  the environment stale.
 
 ## 10. CLI
 
@@ -656,7 +704,7 @@ a voice call with the owner listening.
 | `up --foreground` | the supervisor in this terminal, no daemon | `up` |
 | `status [--all]` | this host's services, or every host's through Core | `status` (Core only) |
 | `logs <service> [-f] [--host NAME]` | tail the rotated log | none |
-| `doctor [--fix]` | today's checks, driven by descriptors, plus hostd, link and token | `doctor`, `role-checks.ts` |
+| `doctor [--fix] [--print-hashes <service>]` | today's checks, driven by descriptors, plus hostd, link, token and the model files (§9.1) | `doctor`, `role-checks.ts` |
 | `update` | §9 | `update` |
 | `models pull / ls / gc` | §9 | `downloads.ts` use in `install` |
 

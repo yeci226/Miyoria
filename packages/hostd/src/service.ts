@@ -26,6 +26,7 @@ import { type ExitInfo, type ServiceProcess, spawnService } from "./process.js";
 import {
   checkPlan,
   expandService,
+  filesProblem,
   type LiveValues,
   localUrl,
   type ResolveContext,
@@ -314,6 +315,13 @@ export class ManagedService {
       }
     }
     if (this.#state === "starting" || this.#state === "running") return this.#state;
+    // A file it needs may have gone since it was planned (`models gc`, a hand): it is not started.
+    const files = filesProblem(this.plan, this.#host.ctx);
+    if (files !== null) {
+      this.plan.disabled = files;
+      this.#set("disabled", files);
+      return this.#state;
+    }
     this.#clearTimer();
     this.#failures = [];
     const generation = ++this.#generation;

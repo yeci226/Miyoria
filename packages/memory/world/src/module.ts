@@ -110,6 +110,8 @@ interface Running {
 export class WorldModule implements Module {
   static readonly ID = "world";
   readonly manifest = defineManifest(WorldModule.ID, "World", {
+    icon: "globe",
+    category: "her",
     description: "What she perceives: who is online, in voice and doing what; salient changes",
     optional: ["heart"],
     configSchema: WorldConfigSchema,

@@ -17,17 +17,17 @@ export interface SkillIndex {
 
 export const SkillIndexKey = serviceKey<SkillIndex>("SkillIndex");
 
-/** A party game running in one voice channel. */
+/** A party game running in one voice channel or (turtle soup) one text channel. */
 export interface PartyGameStatus {
-  /** The game's id (`quiz`, `song`, `chain`, `soup`). */
+  /** The game's id (`song` or `soup`). */
   game: string;
-  /** Its name as people know it (`問答`). */
+  /** Its name as people know it (`猜歌`). */
   title: string;
 }
 
 /** Provided by the `party` module. */
 export interface PartyStatus {
-  /** The game in `context` (a voice channel, or its text chat), `null` when none runs. */
+  /** The game in `context` (a voice channel, its text chat, or a text channel), `null` when none runs. */
   running(context: ContextKey): PartyGameStatus | null;
 }
 

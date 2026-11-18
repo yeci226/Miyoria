@@ -2,13 +2,15 @@
 // file per run and one summary line appended to `history.jsonl` beside it, so runs of different
 // subjects and commits can be put next to each other.
 
+import type { Completer } from "@miyoria/llm/llm";
 import type { Judge } from "./judge.js";
 import type { Meter } from "./meter.js";
 import type { ModelUsage, Subject } from "./subject.js";
-import { SuiteRegistry, type SuiteResult } from "./suite.js";
+import { type PersonaParts, SuiteRegistry, type SuiteResult } from "./suite.js";
 import { runCorrections } from "./suites/corrections.js";
 import { runFeel } from "./suites/feel.js";
 import { runPersona } from "./suites/persona.js";
+import { runPlay } from "./suites/play.js";
 import { runRelationship } from "./suites/relationship.js";
 import { runTools } from "./suites/tools.js";
 
@@ -29,11 +31,15 @@ export function defaultSuites(): SuiteRegistry {
     .register("relationship", (ctx) => runRelationship(ctx))
     .register("memory", null)
     .register("corrections", (ctx) => runCorrections(ctx))
-    .register("feel", (ctx) => runFeel(ctx));
+    .register("feel", (ctx) => runFeel(ctx))
+    .register("play", (ctx) => runPlay(ctx));
 }
 
-/** Suites that run only when named: `corrections` is for comparing brains, not the nightly. */
-const OPT_IN: ReadonlySet<string> = new Set(["corrections"]);
+/**
+ * Suites that run only when named: `corrections` is for comparing brains, not the nightly, and
+ * `play` is a few hundred model calls at 8 repeats.
+ */
+const OPT_IN: ReadonlySet<string> = new Set(["corrections", "play"]);
 
 /** The suites a run takes when none is named: the ones that have a runner, but not the opt-in ones. */
 export function runnableSuites(registry: SuiteRegistry): string[] {
@@ -44,10 +50,14 @@ export interface LiveRunOptions {
   subject: Subject;
   judge: Judge;
   meter: Meter;
+  /** The router the suites that call the model themselves use (`play`). */
+  router?: Completer;
   registry: SuiteRegistry;
   /** Suite names, in the order to run. */
   suites: readonly string[];
   persona: string;
+  /** Her persona as her chat reads it (`SuiteContext.handle`). */
+  handle?: PersonaParts;
   repeat?: number;
   seed?: string;
   /** The git commit the run is of (`null`: unknown). */
@@ -107,7 +117,9 @@ export async function runLive(options: LiveRunOptions): Promise<LiveRun> {
       subject: options.subject,
       judge: options.judge,
       meter: options.meter,
+      ...(options.router === undefined ? {} : { router: options.router }),
       persona: options.persona,
+      ...(options.handle === undefined ? {} : { handle: options.handle }),
       repeat,
       seed,
       log,

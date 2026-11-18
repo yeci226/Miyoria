@@ -2,13 +2,13 @@ import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { ECONOMY_TABS, type EconomyTab } from "@/app/nav";
 import { Page, PageHeader } from "@/components/page";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { GoalsTab } from "./GoalsTab";
 import { HealthTab } from "./HealthTab";
-import { CommissionsTab, PredictionsTab, RoomTab } from "./OpenTabs";
+import { MarketTab } from "./MarketTab";
+import { PredictionsTab, RoomTab } from "./OpenTabs";
 
 const route = getRouteApi("/economy");
 
-/** The coin economy as a whole (economy 2.0): health, commissions, predictions, her room, goals. */
+/** The coin economy as a whole (economy 2.0): health, predictions, her room, the weekly market. */
 export function EconomyPage() {
   const tab = route.useSearch().tab ?? "health";
   const navigate = useNavigate();
@@ -26,17 +26,14 @@ export function EconomyPage() {
         <TabsContent value="health">
           <HealthTab />
         </TabsContent>
-        <TabsContent value="commissions">
-          <CommissionsTab />
-        </TabsContent>
         <TabsContent value="predictions">
           <PredictionsTab />
         </TabsContent>
         <TabsContent value="room">
           <RoomTab />
         </TabsContent>
-        <TabsContent value="goals">
-          <GoalsTab />
+        <TabsContent value="market">
+          <MarketTab />
         </TabsContent>
       </Page>
     </Tabs>

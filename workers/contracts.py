@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, conint, constr
+from pydantic import BaseModel, ConfigDict, Field, RootModel, confloat, conint, constr
 
 
 class WorkersAsrHealth(BaseModel):
@@ -61,6 +61,213 @@ class WorkersHealth(BaseModel):
         extra="ignore",
     )
     status: str
+
+
+class WorkersKaraokeChar(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    text: str
+    start: float
+    end: float
+
+
+class WorkersKaraokeKeyReply(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    file: str
+    semitones: conint(ge=-9007199254740991, le=9007199254740991)
+    cached: bool
+    method: str
+
+
+class WorkersKaraokeKeyRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    semitones: conint(ge=-6, le=6)
+
+
+class WorkersKaraokeLine(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    start: float
+    end: float | None
+    text: str
+    check: Literal["unchecked", "matched", "uncertain", "failed"]
+    confidence: float | None
+    chars: list[WorkersKaraokeChar] | None
+
+
+class WorkersKaraokeLyrics(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    provider: str | None
+    timing: Literal["line", "char"]
+    lines: list[WorkersKaraokeLine]
+
+
+class WorkersKaraokeLyricsCheck(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    matched: conint(ge=-9007199254740991, le=9007199254740991)
+    uncertain: conint(ge=-9007199254740991, le=9007199254740991)
+    failed: conint(ge=-9007199254740991, le=9007199254740991)
+    verdict: Literal["kept", "doubtful", "wrong_song", "unchecked"]
+
+
+class WorkersKaraokeLyricsOptions(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    aligner: Literal["w2v", "mms"] = "mms"
+    matched: confloat(ge=0.0, le=1.0) = 0.75
+    uncertain: confloat(ge=0.0, le=1.0) = 0.5
+    keep_share: confloat(ge=0.0, le=1.0) = 0.5
+    wrong_share: confloat(ge=0.0, le=1.0) = 0.2
+
+
+class WorkersKaraokeMade(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    pitch: str
+    notes: str
+    lyrics: str
+
+
+class WorkersKaraokeMadeV2(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    pitch: str
+    notes: str
+    lyrics: str
+    asr: str | None
+    aligner: str | None
+
+
+class WorkersKaraokeNote(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    start: float
+    end: float
+    midi: float
+    source: Literal["pitch", "lyric"]
+    line: conint(ge=-9007199254740991, le=9007199254740991) | None
+    char: conint(ge=-9007199254740991, le=9007199254740991) | None
+
+
+class WorkersKaraokePiece(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    text: str
+    sung: bool
+    start: float | None
+    end: float | None
+    reading: str | None
+    roman: str | None
+
+
+class WorkersKaraokePitch(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    hz: conint(le=9007199254740991, gt=0)
+    start: float
+    midi: list[float | None]
+
+
+class WorkersKaraokeQuality(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    ok: bool
+    reason: str | None
+    voiced_ratio: float
+    notes: conint(ge=-9007199254740991, le=9007199254740991)
+    lead_split: bool
+
+
+class WorkersKaraokeReferenceV1(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    format: Literal["miyoria.karaoke.reference"]
+    version: Literal[1]
+    id: str
+    title: str
+    artist: str | None
+    duration_s: float
+    backing: str
+    pitch: WorkersKaraokePitch
+    notes: list[WorkersKaraokeNote]
+    lyrics: WorkersKaraokeLyrics | None
+    quality: WorkersKaraokeQuality
+    made: WorkersKaraokeMade
+
+
+class WorkersKaraokeSong(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    id: str
+    title: str
+    artist: str | None
+    duration_s: float | None
+    quality: WorkersKaraokeQuality | None
+    video: bool = False
+
+
+class WorkersKaraokeStreamChunk(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    stream: constr(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    at: conint(ge=0, le=9007199254740991)
+    audio: str
+    end: bool = False
+
+
+class WorkersKaraokeStreamFrames(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    stream: str
+    from_: conint(ge=0, le=9007199254740991) = Field(..., alias="from")
+    midi: list[float | None]
+    final: bool
+    seconds: float
+    level_db: float | None
+    floor_db: float | None
+
+
+class WorkersKaraokeStreamRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    room: constr(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    chunks: list[WorkersKaraokeStreamChunk] = Field(..., max_length=8)
+    drop: list[constr(pattern=r"^[A-Za-z0-9_-]{1,64}$")] = Field([], max_length=8)
+
+
+class WorkersKaraokeVoicePitch(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    hz: Literal[50]
+    midi: list[float | None]
+    seconds: float
+    level_db: float | None
+    floor_db: float | None
+    device: str
+    method: str
 
 
 class WorkersLyricsHealth(BaseModel):
@@ -250,6 +457,9 @@ class WorkersSingJobRequest(BaseModel):
     backing: Literal["keep", "drop", "convert", "acapella"] = "keep"
     force: bool = False
     exclusive_ack: bool = False
+    purpose: Literal["cover", "karaoke"] = "cover"
+    karaoke_lyrics: WorkersKaraokeLyricsOptions | None = None
+    karaoke_video: bool = True
 
 
 class WorkersSingLibraryEntry(BaseModel):
@@ -468,6 +678,63 @@ class WorkersTurnReply(BaseModel):
     inference_ms: float | None = None
 
 
+class WorkersKaraokeLineV2(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    start: float
+    end: float | None
+    text: str
+    status: Literal["matched", "uncertain", "failed", "unchecked"]
+    source: Literal["found", "heard"]
+    similarity: float | None
+    heard: str | None
+    aligned: bool
+    pieces: list[WorkersKaraokePiece] | None
+    edited: bool
+
+
+class WorkersKaraokeLyricsV2(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    provider: str | None
+    source: Literal["found", "heard"]
+    language: str | None
+    timing: Literal["line", "char"]
+    check: WorkersKaraokeLyricsCheck | None
+    lines: list[WorkersKaraokeLineV2]
+
+
+class WorkersKaraokeReferenceV2(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    format: Literal["miyoria.karaoke.reference"]
+    version: Literal[2]
+    id: str
+    title: str
+    artist: str | None
+    duration_s: float
+    backing: str
+    pitch: WorkersKaraokePitch
+    notes: list[WorkersKaraokeNote]
+    lyrics: WorkersKaraokeLyricsV2 | None
+    quality: WorkersKaraokeQuality
+    made: WorkersKaraokeMadeV2
+
+
+class WorkersKaraokeStreamAnswer(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    hz: Literal[50]
+    streams: list[WorkersKaraokeStreamFrames]
+    lost: list[str] = []
+    device: str
+    method: str
+
+
 class WorkersLyricsReply(BaseModel):
     model_config = ConfigDict(
         extra="ignore",
@@ -494,6 +761,7 @@ class WorkersSingJob(BaseModel):
         Literal["waiting", "offloading", "active", "reloading", "done", "shared"] | None
     )
     gpu: WorkersSingGpuStatus | None
+    karaoke: WorkersKaraokeSong | None = None
 
 
 class WorkersSingJobReply(BaseModel):
@@ -515,3 +783,9 @@ class WorkersSingLibrary(BaseModel):
         extra="ignore",
     )
     entries: list[WorkersSingLibraryEntry]
+
+
+class WorkersKaraokeReference(
+    RootModel[WorkersKaraokeReferenceV1 | WorkersKaraokeReferenceV2]
+):
+    root: WorkersKaraokeReferenceV1 | WorkersKaraokeReferenceV2

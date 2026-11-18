@@ -68,10 +68,39 @@ export const ExtContributionsSchema = z
     subscriptions: z.array(z.string()).default([]),
     /** The extension's task executor, if it has one. */
     executor: ExtExecutorDeclSchema.nullable().default(null),
+    /**
+     * It answers the host's `status` request (`ExtStatusResult`): its card on the panel's system
+     * page. An extension without it shows only its state. Optional, so no protocol bump.
+     */
+    status: z.boolean().default(false),
   })
   .meta({ id: "ExtContributions" });
 export type ExtContributions = z.output<typeof ExtContributionsSchema>;
 export type ExtContributionsIn = z.input<typeof ExtContributionsSchema>;
+
+/**
+ * The result of the host's `status` request (params `{}`), asked while the panel draws the
+ * system page, with a 500 ms deadline: at most four facts (a label over a short value), the next
+ * scheduled thing, the last error. Labels are the words the owner reads (zh-TW for her panel).
+ */
+export const ExtStatusResultSchema = z
+  .object({
+    facts: z
+      .array(
+        z.object({
+          label: z.string().min(1).max(40),
+          value: z.union([z.string().max(80), z.number()]),
+          unit: z.string().max(16).optional(),
+        }),
+      )
+      .max(4)
+      .default([]),
+    next: z.object({ label: z.string().max(40), at: z.string() }).optional(),
+    last_error: z.object({ at: z.string(), message: z.string().max(400) }).optional(),
+  })
+  .meta({ id: "ExtStatusResult" });
+export type ExtStatusResult = z.output<typeof ExtStatusResultSchema>;
+export type ExtStatusResultIn = z.input<typeof ExtStatusResultSchema>;
 
 /** `initialize` result (extension to host). */
 export const ExtInitializeResultSchema = z

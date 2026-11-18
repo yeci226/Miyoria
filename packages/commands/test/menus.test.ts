@@ -224,7 +224,7 @@ describe("regrouped slash paths", () => {
   function withEconomy() {
     const registry = new CommandRegistry(Permissions.fromStrings([`discord:${OWNER}`]));
     const calls: string[][] = [];
-    for (const path of ["me wallet", "me quests", "me shop"]) {
+    for (const path of ["me wallet", "me quests", "me room"]) {
       registry.register(commandSpec(path, `${path} desc`), (i) => {
         calls.push(i.path);
         return notice("info", i.path.join(" "));
@@ -237,13 +237,13 @@ describe("regrouped slash paths", () => {
     const { registry } = withEconomy();
     expect(registry.slashSpecs().map((s) => s.path.join(" "))).toEqual([
       "me play quests",
-      "me play shop",
+      "me play room",
       "me wallet",
     ]);
     // The real paths are untouched.
     expect(registry.specs().map((s) => s.path.join(" "))).toEqual([
       "me quests",
-      "me shop",
+      "me room",
       "me wallet",
     ]);
     expect(registry.slashPath(splitPath("me quests"))).toEqual(["me", "play", "quests"]);
@@ -269,7 +269,7 @@ describe("regrouped slash paths", () => {
       ["me", "quests"],
       ["me", "quests"],
     ]);
-    expect(registry.get(["me", "play", "shop"])?.path).toEqual(["me", "shop"]);
+    expect(registry.get(["me", "play", "room"])?.path).toEqual(["me", "room"]);
   });
 
   it("visibility_overrides_keep_using_the_real_path", () => {

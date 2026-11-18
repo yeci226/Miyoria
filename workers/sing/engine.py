@@ -1,4 +1,5 @@
-"""The real song pipeline: yt-dlp / library → Demucs → lead / backing split → Seed-VC (singing, F0) → mix.
+"""The real song pipeline: yt-dlp / library → Demucs → lead / backing split → Seed-VC (singing, F0) → mix;
+for karaoke, RMVPE on the lead (``karaoke_f0``) instead of the conversion.
 
 Everything heavy is imported lazily so the server (and its mock mode) starts without torch. Models
 are loaded per stage and freed right after (``SING_KEEP_MODELS=1`` keeps them): the GPU is shared
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+import modelpaths
 from songs import PLAY_RATE, Source, Store, safe_id, short_hash
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -42,7 +44,10 @@ MELBAND = "melband"
 
 def vocal_model_path(env: dict[str, str] | None = None) -> Path:
     e = env if env is not None else os.environ
-    return Path(e.get("SING_VOCAL_MODEL") or Path(__file__).resolve().parent.parent / "models" / "vocal-split" / VOCAL_CKPT)
+    if e.get("SING_VOCAL_MODEL"):
+        return Path(e["SING_VOCAL_MODEL"])
+    # The host's model folder (miyoria update), else workers/models, else where it belongs.
+    return modelpaths.locate(Path("vocal-split") / VOCAL_CKPT, e)
 
 
 VOICE_CHAINS = ("rvc", "ying+rvc", "ying", "seedvc+rvc", "seedvc")
@@ -94,7 +99,7 @@ def default_separator(env: dict[str, str] | None = None) -> str:
     if e.get("SING_SEPARATOR_MODEL"):
         return e["SING_SEPARATOR_MODEL"]
     ckpt = vocal_model_path(e)
-    return MELBAND if ckpt.is_file() and leadsplit.config_path(ckpt) is not None else "htdemucs"
+    return MELBAND if ckpt.is_file() and leadsplit.config_path(ckpt, e) is not None else "htdemucs"
 
 
 class JobError(Exception):
@@ -396,6 +401,11 @@ class RealBackend:
         self._vc: Any = None
         self._demucs: Any = None  # the vocal separator, whichever it is
         self._lead: Any = None
+        self._pitch: Any = None  # RMVPE alone, for a karaoke reference (karaoke_f0)
+        # RMVPE for the live streams of karaoke rooms (karaoke_f0_audio): (device, extractor), kept
+        # while streams are open; its lock serialises the calls on it.
+        self._stream_pitch: tuple[str, Any] | None = None
+        self._stream_lock = threading.Lock()
         self.gate: Callable[[], None] | None = None  # sharing the GPU: runs before every step
         self._ref: Any = None
         self._ref_f0: float | None = None
@@ -852,6 +862,62 @@ class RealBackend:
 
         return f0_stats(self._load_vc().f0(mono, sr, clean=self.f0_clean))
 
+    def karaoke_f0(self, wav: Path, device: str | None = None):
+        """RMVPE's F0 of ``wav`` (its channels averaged): Hz per 10 ms frame, 0 unvoiced, not cleaned
+        (melody.py gates and cleans it). Only the pitch tracker is loaded for it, on ``device`` (where
+        gpu.py placed the stage; ``cpu`` or the worker's device), unless the converter that has one
+        is already loaded there."""
+        dev = "cpu" if device == "cpu" else self.device
+        x, sr = read_audio(wav)
+        vc = getattr(self, "_vc", None)
+        try:
+            if vc is not None and str(getattr(vc, "device", "")) == str(dev):
+                return vc.f0(x.mean(axis=1), sr, clean=False)
+            code = self.ying_dir if self.voice.startswith("ying") else self.seedvc_dir
+            if str(code) not in sys.path:
+                sys.path.insert(0, str(code))  # its ``modules`` package has RMVPE (see ``_load_vc``)
+            from seedvc_runtime import PitchExtractor
+
+            self._pitch = PitchExtractor(self.seedvc_dir, dev)
+            return self._pitch.f0(x.mean(axis=1), sr, clean=False)
+        finally:
+            vc = None
+            if not self.keep:
+                self._pitch = None
+                free_cuda()
+
+    def karaoke_f0_audio(self, x, sr: int, device: str | None = None):
+        """RMVPE's F0 of the mono samples ``x`` (a window of a karaoke room's live stream): Hz per
+        10 ms frame, 0 unvoiced, not cleaned, as ``karaoke_f0``. Its own pitch tracker stays loaded
+        between calls (one every half second while a room sings) until ``karaoke_stream_release``;
+        one device at a time: asked for another (a job started, so the CPU), the old one goes."""
+        import numpy as np
+
+        dev = "cpu" if device == "cpu" else self.device
+        with self._stream_lock:
+            held = self._stream_pitch
+            if held is None or held[0] != str(dev):
+                self._stream_pitch = None
+                if held is not None:
+                    held = None
+                    free_cuda()
+                code = self.ying_dir if self.voice.startswith("ying") else self.seedvc_dir
+                if str(code) not in sys.path:
+                    sys.path.insert(0, str(code))  # its ``modules`` package has RMVPE (see ``_load_vc``)
+                from seedvc_runtime import PitchExtractor
+
+                held = (str(dev), PitchExtractor(self.seedvc_dir, dev))
+                self._stream_pitch = held
+            return held[1].f0(np.asarray(x, dtype=np.float32).reshape(-1), sr, clean=False)
+
+    def karaoke_stream_release(self) -> None:
+        """The last live stream is gone: its pitch tracker too."""
+        with self._stream_lock:
+            held, self._stream_pitch = self._stream_pitch, None
+        if held is not None:
+            held = None
+            free_cuda()
+
     def reference(self):
         """Her reference voice, mono: one file, or several clips joined with short pauses (a
         longer reference gives the model more of her), at most REF_MAX_S."""
@@ -1066,6 +1132,13 @@ class RealBackend:
         self._vc = None
         self._demucs = None
         self._lead = None
+        self._pitch = None  # karaoke_f0's pitch tracker
+        # A live stream's, when it is on the card (on the CPU it stays). Not under its lock: a job
+        # never waits for a stream's window to end.
+        held = getattr(self, "_stream_pitch", None)
+        if held is not None and held[0] != "cpu":
+            self._stream_pitch = None
+        held = None
         free_cuda()
 
     def unload(self) -> None:

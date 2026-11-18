@@ -145,6 +145,47 @@ describe("TomlDocument.set", () => {
     expect(profile.replaceStringInArrays(["llm", "purposes"], "nope", "x")).toBe(false);
   });
 
+  it("puts_a_new_table_after_the_trailing_comments_of_its_group", () => {
+    // `miyoria config set modules.karaoke.enabled true` once landed between [modules.sing] and
+    // the commented-out lines that belong to it.
+    const live =
+      "[modules.agent]\na = 1\n\n[modules.sing]\nb = 2\n# [modules.old]\n# c = 3\n\n[other]\nd = 4\n";
+    const d = TomlDocument.parse(live);
+    d.set(key("modules.karaoke.enabled"), true);
+    expect(d.toString()).toBe(
+      "[modules.agent]\na = 1\n\n[modules.sing]\nb = 2\n# [modules.old]\n# c = 3\n\n[modules.karaoke]\nenabled = true\n\n[other]\nd = 4\n",
+    );
+    expect(d.get(key("modules.karaoke.enabled"))).toBe(true);
+
+    // At the end of the file: after the comments that close it.
+    const tail = TomlDocument.parse("[modules.a]\nx = 1\n# x = 2\n# note\n");
+    tail.set(key("modules.b.y"), 1n);
+    expect(tail.toString()).toBe("[modules.a]\nx = 1\n# x = 2\n# note\n\n[modules.b]\ny = 1\n");
+  });
+
+  it("keeps_the_comment_block_above_the_next_table_with_that_table", () => {
+    const text = "[modules.a]\nx = 1\n\n# about other\n# more\n[other]\nd = 4\n";
+    const d = TomlDocument.parse(text);
+    d.set(key("modules.b.y"), 1n);
+    expect(d.toString()).toBe(
+      "[modules.a]\nx = 1\n\n[modules.b]\ny = 1\n\n# about other\n# more\n[other]\nd = 4\n",
+    );
+    // A comment that touches the entries is the table's own, even right above the next table.
+    const touching = TomlDocument.parse("[modules.a]\nx = 1\n# x = 2\n[other]\nd = 4\n");
+    touching.set(key("modules.b.y"), 1n);
+    expect(touching.toString()).toBe(
+      "[modules.a]\nx = 1\n# x = 2\n\n[modules.b]\ny = 1\n[other]\nd = 4\n",
+    );
+  });
+
+  it("writes_crlf_files_the_same_way", () => {
+    const d = TomlDocument.parse("[modules.a]\r\nx = 1\r\n# note\r\n\r\n[other]\r\nd = 4\r\n");
+    d.set(key("modules.b.y"), 1n);
+    expect(d.toString()).toBe(
+      "[modules.a]\r\nx = 1\r\n# note\r\n\r\n[modules.b]\r\ny = 1\r\n\r\n[other]\r\nd = 4\r\n",
+    );
+  });
+
   it("never_writes_invalid_toml", () => {
     const d = doc();
     d.set(key("core.weird"), 'quote " and \\ backslash\nnewline');

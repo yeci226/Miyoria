@@ -1,8 +1,10 @@
 // Achievements and titles: paid once off the ledger, found again after a daily cap, per person and
 // not per account, and never ranking anybody.
 
+import { type AccountRef, toTimestamp } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { longestStreak } from "../src/achievements.js";
+import { ledgerOf, walletOf } from "./ledger.js";
 import { ALICE, ALICE_TWO, BOB, balance, CAROL, DAVE, DAY, fund, rig } from "./rig.js";
 
 describe("achievements", () => {
@@ -70,30 +72,38 @@ describe("achievements", () => {
     }
   });
 
-  it("pays a big reward and a title for a complete series", async () => {
-    const r = await rig({
-      achievement_cap: 1000,
-      collection_series: [
-        {
-          id: "s",
-          label: "小系列",
-          title: "小收藏家",
-          items: [
-            { id: "x", label: "X", rarity: "N" },
-            { id: "y", label: "Y", rarity: "R" },
-          ],
-        },
-      ],
-    });
-    await r.economy.v2.recordCard(BOB, "c1", ["x"]);
-    expect((await r.economy.v2.achievements(BOB)).titles).not.toContain("小收藏家");
-    const before = await balance(r, BOB);
-    await r.economy.v2.recordCard(BOB, "c2", ["y"]);
+  it("keeps the ones of drawing collectibles for whoever has them, and pays them no more", async () => {
+    const r = await rig({ achievement_cap: 1000 });
+    const post = (who: AccountRef, reason: string, delta: number, ref: string) =>
+      ledgerOf(r.store).post({
+        id: `${who.id}-${reason}-${ref}`,
+        person: walletOf(r.store, who),
+        delta,
+        reason,
+        ref,
+        idem_key: null,
+        ts: toTimestamp(r.clock.at - DAY),
+      });
+    await fund(r, BOB, 100);
+    await post(BOB, "draw", -30, "glasses_black");
+    await post(BOB, "achievement", 10, "first_draw");
+    await post(BOB, "achievement", 30, "series:glasses");
+    await post(BOB, "achievement", 30, "series:custom");
     const view = await r.economy.v2.achievements(BOB);
-    expect(view.titles).toContain("小收藏家");
-    expect(view.achievements.find((a) => a.id === "series:s")).toMatchObject({ reward: 30 });
-    // 30 for the series, plus whatever else the two cards reached (first draw does not count).
-    expect(await balance(r, BOB)).toBeGreaterThanOrEqual(before + 30);
+    expect(view.achievements.filter((a) => a.unlocked_at !== null)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "first_draw", label: "第一次抽收藏", title: "抽卡新手" }),
+        expect.objectContaining({ id: "series:glasses", title: "眼鏡收藏家", reward: 30 }),
+        expect.objectContaining({ id: "series:custom", label: "集齊一個收藏系列" }),
+      ]),
+    );
+    expect(view.titles).toEqual(expect.arrayContaining(["抽卡新手", "眼鏡收藏家", "收藏家"]));
+    // Someone who never had them is not shown them, and an old draw no longer reaches one.
+    await fund(r, ALICE, 100);
+    await post(ALICE, "draw", -30, "glasses_round");
+    const alice = await r.economy.v2.achievements(ALICE);
+    expect(alice.achievements.map((a) => a.id)).not.toContain("first_draw");
+    expect(alice.achievements.some((a) => a.id.startsWith("series:"))).toBe(false);
   });
 
   it("is reached by playing games", async () => {
@@ -101,5 +111,24 @@ describe("achievements", () => {
     await r.economy.v2.play.award(BOB, "game_join", "g1");
     await r.economy.v2.achievements(BOB);
     expect((await r.economy.v2.achievements(BOB)).titles).toContain("玩家");
+  });
+
+  it("still lists a title her shop sold before it went", async () => {
+    const r = await rig();
+    expect(
+      await r.economy.docs().create({
+        id: "title:old",
+        kind: "title",
+        owner: ALICE,
+        status: "held",
+        version: 1,
+        data: { title: "常客", source: "x" },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }),
+    ).toBe(true);
+    expect((await r.economy.v2.achievements(ALICE)).titles).toContain("常客");
+    expect((await r.economy.v2.achievements(ALICE_TWO)).titles).toContain("常客");
+    expect((await r.economy.v2.achievements(BOB)).titles).not.toContain("常客");
   });
 });

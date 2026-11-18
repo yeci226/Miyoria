@@ -46,6 +46,8 @@ export function logFileFor(dir: string, nowMs: number): string {
 export class ReplayRecorderModule implements Module {
   static readonly ID = "replay";
   readonly manifest = defineManifest(ReplayRecorderModule.ID, "Replay recorder", {
+    icon: "history",
+    category: "system",
     description: "Records what she perceives to JSONL for the replay harness (opt-in)",
     configSchema: ReplayConfigSchema,
   });

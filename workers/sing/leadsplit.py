@@ -14,11 +14,12 @@ harmonies (櫻ノ詩). Only the lead is converted (pitch statistics and the auto
 too); what happens to the backing is the request's ``backing`` (server.py).
 
 Model: ``SING_LEAD_MODEL`` is the checkpoint (``.ckpt``, a state dict), default
-``workers/models/lead-split/becruily-bs/bs_roformer_karaoke_frazer_becruily.ckpt`` when it is there,
-else the aufr33 & viperx one; its config is the ``.yaml`` of the same name beside it (or
+``lead-split/becruily-bs/bs_roformer_karaoke_frazer_becruily.ckpt`` of the host's model folder
+(``SING_MODELS_DIR``, filled by ``miyoria update``) or of ``workers/models`` when it is there, else
+the aufr33 & viperx one (``modelpaths.py``); its config is the ``.yaml`` of the same name beside it (or
 ``config.yaml``), which also says the architecture (``freqs_per_bands``: BS-RoFormer, else
 Mel-Band). ``SING_LEAD_INPUT`` = ``mix`` (default) or ``vocals``: what the model reads. CUDA runs in
-fp16 unless ``SING_LEAD_FP16=0``. Nothing downloads the files: with none the split is off and the
+fp16 unless ``SING_LEAD_FP16=0``. ``miyoria update`` downloads the BS-RoFormer files; with none the split is off and the
 pipeline is the plain one. ``SING_LEAD_SPLIT=0`` turns it off with the files there.
 """
 
@@ -27,6 +28,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, Callable
+
+import modelpaths
 
 CKPT_NAME = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
 BS_CKPT = Path("becruily-bs") / "bs_roformer_karaoke_frazer_becruily.ckpt"
@@ -44,7 +47,13 @@ def model_path(env: dict[str, str] | None = None) -> Path:
     e = env if env is not None else os.environ
     if e.get("SING_LEAD_MODEL"):
         return Path(e["SING_LEAD_MODEL"])
-    return DEFAULT_DIR / BS_CKPT if (DEFAULT_DIR / BS_CKPT).is_file() else DEFAULT_DIR / CKPT_NAME
+    # The BS-RoFormer in the host's model folder, else in the old workers/models, else the older
+    # model; nothing there: where the BS-RoFormer belongs.
+    best = modelpaths.locate(Path("lead-split") / BS_CKPT, e)
+    if best.is_file():
+        return best
+    older = modelpaths.locate(Path("lead-split") / CKPT_NAME, e)
+    return older if older.is_file() else best
 
 
 def reads_mix(env: dict[str, str] | None = None) -> bool:
@@ -57,11 +66,8 @@ def tag(env: dict[str, str] | None = None) -> str:
     return f"{model_path(env).stem}@{'mix' if reads_mix(env) else 'vocals'}"
 
 
-def config_path(ckpt: Path) -> Path | None:
-    for c in (ckpt.with_suffix(".yaml"), ckpt.parent / "config.yaml"):
-        if c.exists():
-            return c
-    return None
+def config_path(ckpt: Path, env: dict[str, str] | None = None) -> Path | None:
+    return modelpaths.config_beside(ckpt, env)
 
 
 def available(env: dict[str, str] | None = None) -> bool:
@@ -69,7 +75,7 @@ def available(env: dict[str, str] | None = None) -> bool:
     if not enabled(env):
         return False
     ckpt = model_path(env)
-    return ckpt.is_file() and config_path(ckpt) is not None
+    return ckpt.is_file() and config_path(ckpt, env) is not None
 
 
 class LeadSplitter:

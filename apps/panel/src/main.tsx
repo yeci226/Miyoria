@@ -33,8 +33,17 @@ initAppearance();
 // Links from before clean addresses (QR codes on cards people already have) still land.
 cleanHashAddress();
 
-createRoot(root).render(
-  <StrictMode>
-    <Boot />
-  </StrictMode>,
-);
+const start = () =>
+  createRoot(root).render(
+    <StrictMode>
+      <Boot />
+    </StrictMode>,
+  );
+
+// The karaoke page without a Core or a microphone (`/karaoke?karaoke-demo`), on the dev server
+// only: a production build drops this branch and the demo with it.
+if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("karaoke-demo")) {
+  void import("./pages/public/karaoke/demo").then((m) => m.installDemo()).finally(start);
+} else {
+  start();
+}

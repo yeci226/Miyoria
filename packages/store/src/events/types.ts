@@ -44,12 +44,22 @@
 // and someone that the nightly reflection weighs is one `heart.evidence`, kept a year
 // (`HEART_LOG_EVENTS`, docs/design/v5-heart.md §2.2).
 //
+// Every card she gives is one `cards.drawn`, appended with its `cards_card` row, and a series of the
+// dex completed one `cards.titled` (`CARDS_EVENTS`): in the person's DM scope, kept a year.
+//
+// An auction lot that closed is one `market.lot_closed`, a lottery week drawn or refunded one
+// `market.lottery_drawn` (`MARKET_EVENTS`): money records, for the owner, kept.
+//
+// A karaoke singing that Core scored is one `karaoke.scored` (`KARAOKE_EVENTS`), appended with its
+// result: in the singer's DM scope, kept a year like the cards.
+//
 // A definition named `<prefix>.*` is a family: it gives its scope and tier to every type under
 // `<prefix>.` that has no definition of its own (`audit.module.disable` takes `audit.*`'s).
 
 import {
   ARTIFACT_EVENTS,
   AuditRecorded,
+  CARDS_EVENTS,
   CHAT_EVENTS,
   defineEvent,
   EconomyPosted,
@@ -63,7 +73,9 @@ import {
   HeartEvidence,
   type HeartEvidenceData,
   IdentityImported,
+  KARAOKE_EVENTS,
   LlmCall,
+  MARKET_EVENTS,
   TURN_EVENTS,
 } from "@miyoria/contracts/events";
 import { JsonValueSchema } from "@miyoria/contracts/wire";
@@ -238,6 +250,9 @@ export function coreEventRegistry(): EventRegistry {
     IdentityImported,
     EconomyPosted,
     ...HEART_LOG_EVENTS,
+    ...CARDS_EVENTS,
+    ...MARKET_EVENTS,
+    ...KARAOKE_EVENTS,
   );
 }
 

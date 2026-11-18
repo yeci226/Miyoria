@@ -228,6 +228,8 @@ export function discover(config: Config, baseDir: string = process.cwd()): Disco
 export class ExtensionsModule implements Module {
   static readonly ID = EXTENSIONS_MODULE_ID;
   readonly manifest: ModuleManifest = defineManifest(ExtensionsModule.ID, "Extensions", {
+    icon: "puzzle",
+    category: "system",
     description: "Runs out-of-process extensions over JSON-RPC",
     configSchema: HostConfigSchema,
   });

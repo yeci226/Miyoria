@@ -121,6 +121,8 @@ function hostTargetOf(ctx: RunContext): host.HostTarget {
 /** The installer's confirmation: `--yes` agrees, a script without a terminal refuses. */
 function serviceDepsOf(ctx: RunContext): servicesCmd.ServiceDeps {
   return {
+    yes: ctx.yes,
+    interactive: isInteractive(),
     confirm: async (message) => {
       if (ctx.yes) return true;
       if (!isInteractive()) return false;
@@ -277,6 +279,16 @@ export const COMMANDS: CommandSpec = {
           help: "用編輯器開啟 miyoria.toml($VISUAL / $EDITOR,Windows 預設記事本)",
           run: (ctx) => configCmd.edit(ctx.config, ctx.yes),
         },
+        {
+          name: "overrides",
+          help: "列出面板改過的設定(存在資料庫,蓋過 miyoria.toml 的值)、檔案的值和誰改的",
+          run: (ctx) => configCmd.overrides(ctx.config),
+        },
+        {
+          name: "bake",
+          help: "把面板改過的設定寫進 miyoria.toml(保留註解),再清掉資料庫裡的這些值",
+          run: (ctx) => configCmd.bake(ctx.config, ctx.yes, ctx.yes ? null : interactivePrompter()),
+        },
       ],
     },
     {
@@ -290,7 +302,12 @@ export const COMMANDS: CommandSpec = {
         { name: "deep-only", help: "只做 --deep 的部署檢查(不連 LLM、Discord、資料庫)" },
         {
           name: "fix",
-          help: "只做安全的修復:同步缺的或過期的環境、下載缺的 install.files;不裝系統程式、不改任何系統設定",
+          help: "只做安全的修復:同步缺的或過期的環境、下載缺的或不對的模型檔(install.files,先列出大小和授權問一次,-y 不問);不裝系統程式、不改任何系統設定",
+        },
+        {
+          name: "print-hashes",
+          value: "SERVICE",
+          help: "只印出這個服務在這台電腦上現有檔案(install.files 和 install.manual)的 SHA-256 和大小,用 service.toml 的寫法,方便填進 [[install.files]]",
         },
         HOST_CONFIG_OPTION,
       ],
@@ -300,6 +317,7 @@ export const COMMANDS: CommandSpec = {
           stackOnly: flag(ctx, "deep-only"),
           fix: flag(ctx, "fix"),
           ...optionalString("hostConfig", str(ctx, "host-config")),
+          ...optionalString("printHashes", str(ctx, "print-hashes")),
           services: serviceDepsOf(ctx),
         }),
     },
@@ -381,7 +399,7 @@ export const COMMANDS: CommandSpec = {
     },
     {
       name: "add",
-      help: "把服務加進這台電腦:寫進 host.toml,用 uv 建好環境、下載缺的檔案,並列出還缺什麼;不給名字就列出目錄",
+      help: "把服務加進這台電腦:寫進 host.toml,用 uv 建好環境、下載缺的模型檔(先列出大小和授權問一次,-y 不問),並列出還缺什麼;不給名字就列出目錄",
       args: [
         {
           name: "service",
@@ -718,11 +736,14 @@ export const COMMANDS: CommandSpec = {
             noRestart: flag(ctx, "no-restart"),
             ...optionalString("hostConfig", str(ctx, "host-config")),
           },
-          update.defaultUpdateDeps(async (message) => {
-            if (ctx.yes) return true;
-            if (!isInteractive()) return false;
-            return interactivePrompter().confirm(message, false);
-          }),
+          {
+            ...update.defaultUpdateDeps(async (message) => {
+              if (ctx.yes) return true;
+              if (!isInteractive()) return false;
+              return interactivePrompter().confirm(message, false);
+            }),
+            services: serviceDepsOf(ctx),
+          },
         ),
     },
     {
@@ -737,13 +758,37 @@ export const COMMANDS: CommandSpec = {
       subcommands: [
         {
           name: "obs-setup",
-          help: "在 OBS 建好 Miyoria 的場景和來源(背景、唱歌版面、透明立繪、overlay)",
+          help: "在 OBS 建好 Miyoria 的場景和來源(背景、唱歌版面、透明立繪、overlay),放在她自己的場景集合和設定檔裡,不動你原本的",
           options: [
             { name: "dry-run", help: "只列出會做的事,不改 OBS" },
             { name: "relayout", help: "已經有的項目也重新擺回預設位置" },
+            {
+              name: "collection",
+              value: "NAME",
+              help: "建在哪個場景集合(沒有就建立;預設 [stage.obs] collection,沒設是 Miyoria)",
+            },
+            { name: "here", help: "直接建在 OBS 目前的場景集合裡(以前的做法)" },
+            {
+              name: "profile",
+              value: "NAME",
+              help: "用哪個設定檔(沒有就建立;預設 [stage.obs] profile,沒設是 Miyoria)",
+            },
+            { name: "no-profile", help: "不換設定檔,用 OBS 目前的" },
+            {
+              name: "profile-settings",
+              help: "已經有的設定檔也把畫面設成 1920x1080、打開重播緩衝(新建的一定會設)",
+            },
           ],
           run: (ctx) =>
-            nodeCmd.stageObsSetup(ctx.config, flag(ctx, "dry-run"), flag(ctx, "relayout")),
+            nodeCmd.stageObsSetup(ctx.config, {
+              dryRun: flag(ctx, "dry-run"),
+              relayout: flag(ctx, "relayout"),
+              here: flag(ctx, "here"),
+              noProfile: flag(ctx, "no-profile"),
+              profileSettings: flag(ctx, "profile-settings"),
+              collection: str(ctx, "collection") ?? null,
+              profile: str(ctx, "profile") ?? null,
+            }),
         },
       ],
     },

@@ -1,6 +1,5 @@
 // What people see when they earn something they did not ask for in that moment: an achievement on
-// the answer of the command that unlocked it, one card per song or game for everyone in it, a card
-// where a goal was met, and nothing at all when there is no place to say it.
+// the answer of the command that unlocked it, one card per song or game for everyone in it.
 
 import { CommandRegistry, type CommandReply, Permissions, ReplySinkKey } from "@miyoria/commands";
 import { getLogger } from "@miyoria/runtime/kernel";
@@ -14,15 +13,13 @@ import {
   eventEnvelope,
   type JsonValue,
   type PublishMetaArgs,
-  toTimestamp,
 } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { EconomyCommands } from "../src/commands.js";
 import { Earnings } from "../src/earn.js";
-import { GoalStoreKey } from "../src/records.js";
 import { v2Capabilities } from "../src/v2-tools.js";
-import { economyOf, ledgerOf, walletOf } from "./ledger.js";
-import { ALICE, BOB, DAY, ERIN, fund, type Rig, rig, say, T0, TEXT } from "./rig.js";
+import { ledgerOf, walletOf } from "./ledger.js";
+import { ALICE, BOB, DAY, ERIN, type Rig, rig, say, T0, TEXT } from "./rig.js";
 
 /** An event of `definition` as the bus delivers it. */
 const ev = <D extends AnyEventDefinition>(
@@ -225,51 +222,5 @@ describe("game notices", () => {
     expect(blocks(posted[0]?.reply as CommandReply)).toEqual([
       ["**🎮 玩完「問答」**", "這場拿到:<@1> +30 <@2> +20", "每日任務:<@1> <@2> 各 +10"].join("\n"),
     ]);
-  });
-});
-
-describe("goal notices", () => {
-  async function goal(r: Rig, target = 50): Promise<string> {
-    r.services.provide("test", GoalStoreKey, economyOf(r.store).goals);
-    const id = `g${target}`;
-    await economyOf(r.store).goals.create({
-      id,
-      title: "新麥克風",
-      promise: "學三種貓叫",
-      target,
-      status: "open",
-      created_at: toTimestamp(T0),
-      deadline: toTimestamp(T0 + 3 * DAY),
-      closed_at: null,
-    });
-    return id;
-  }
-
-  it("posts a card where the pledge that met the target was made", async () => {
-    const r = await rig();
-    const posted = sink(r);
-    await fund(r, ALICE, 100);
-    await fund(r, BOB, 100);
-    const id = await goal(r);
-    await r.economy.pledge(ALICE, id, 30, "a1", TEXT);
-    expect(posted).toEqual([]);
-    await r.economy.pledge(BOB, id, 40, "b1", TEXT);
-    expect(posted).toHaveLength(1);
-    expect(posted[0]?.context).toEqual(TEXT);
-    expect(blocks(posted[0]?.reply as CommandReply)).toEqual([
-      "**🎯「新麥克風」湊滿了!**\n她答應的:學三種貓叫",
-      "大家湊了 50 魚幣",
-    ]);
-    // She is still told, silently.
-    expect(r.observed.some((o) => o.summary.includes("你答應過要:學三種貓叫"))).toBe(true);
-  });
-
-  it("posts nothing for a pledge made where there is no place to post", async () => {
-    const r = await rig();
-    const posted = sink(r);
-    await fund(r, ALICE, 100);
-    const id = await goal(r, 20);
-    expect(await r.economy.pledge(ALICE, id, 20, "a1")).toMatchObject({ reached: true });
-    expect(posted).toEqual([]);
   });
 });

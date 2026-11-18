@@ -165,44 +165,9 @@ const STOP_PHRASES = [
 
 /**
  * Someone asks for the game to end. Only an utterance that is mostly the phrase counts ("好啦不玩
- * 了"), so a story line that mentions a game ending does not stop one.
+ * 了"), so a line that only mentions a game ending does not stop one.
  */
 export function asksToStop(text: string): boolean {
   const f = fold(text);
   return STOP_PHRASES.some((p) => f.includes(p) && [...f].length <= [...p].length + 4);
-}
-
-/** Han characters (one code point each in the sense the chains need). */
-export function isHan(c: string): boolean {
-  return /\p{Script=Han}/u.test(c);
-}
-
-/** Particles a spoken word may trail ("天空啊"), not part of it. */
-const TRAILING = new Set([..."了啊吧呢嗎吗喔哦耶呀啦唷欸诶嘛"]);
-
-/** The Han runs of `text`, in order, each with its folded form beside the original. */
-export function hanRuns(text: string): string[] {
-  const out: string[] = [];
-  let run = "";
-  for (const c of text.normalize("NFKC")) {
-    if (isHan(c)) run += c;
-    else {
-      if (run !== "") out.push(run);
-      run = "";
-    }
-  }
-  if (run !== "") out.push(run);
-  return out;
-}
-
-/** Drops the particles a run ends with. */
-export function trimParticles(word: string): string {
-  const chars = [...word];
-  while (chars.length > 0 && TRAILING.has(chars.at(-1) ?? "")) chars.pop();
-  return chars.join("");
-}
-
-/** Whether two single characters are the same once folded (台 / 臺, 吗 / 嗎). */
-export function sameChar(a: string, b: string): boolean {
-  return a === b || (a !== "" && fold(a) === fold(b));
 }

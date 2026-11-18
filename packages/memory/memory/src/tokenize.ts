@@ -387,6 +387,108 @@ export function normalizeForCompare(text: string): string {
   return out;
 }
 
+// ---- words that may be somebody's name ------------------------------------------------------
+
+/** The Taiwanese surnames common enough that a jieba person name starting with one is a name. */
+const SURNAMES = new Set([
+  ..."陈林黄张李王吴刘蔡杨许郑谢洪郭邱曾廖赖徐周叶苏庄吕江何萧罗高潘简朱钟彭游詹胡施沈余卢梁赵颜柯翁魏孙戴范方宋邓杜傅侯曹薛丁卓马阮董唐温蓝蒋石古纪姚连冯欧程汤田康姜白汪邹尤巫",
+]);
+/** jieba's tags for a person's name. */
+const PERSON_TAGS = new Set(["nr", "nrt", "nrfg"]);
+/** Tags a name can come out with: a person, an unknown word (`x`: most nicknames), a noun. */
+const NAMEABLE_TAGS = new Set(["nr", "nrt", "nrfg", "x", "n", "nz", "eng"]);
+/** Words right before someone (simplified): 跟阿凱、和志明、找小芸. */
+const BEFORE_PERSON = new Set([..."跟和与同找陪帮给对叫被让向约"]);
+/** Words right after someone: 阿凱說、Kevin 推薦、志豪一起. */
+const AFTER_PERSON = new Set([
+  "说",
+  "讲",
+  "说过",
+  "推荐",
+  "推",
+  "借",
+  "问",
+  "问过",
+  "送",
+  "送给",
+  "约",
+  "教",
+  "告诉",
+  "觉得",
+  "以为",
+  "一起",
+  "也",
+]);
+/** Common words that stand where a name would and are not one. */
+const NOT_NAMES = new Set([
+  "朋友",
+  "大家",
+  "我们",
+  "你们",
+  "他们",
+  "她们",
+  "自己",
+  "别人",
+  "人家",
+  "东西",
+  "时候",
+  "一起",
+  "音乐",
+  "游戏",
+  "直播",
+  "频道",
+  "鲸鱼",
+]);
+/** A nickname's shape: 阿凱, 小美, 老王; 凱哥, 小芸姐. */
+const NICK_HEAD = /^[阿小老]\p{Script=Han}/u;
+const NICK_TAIL = /^\p{Script=Han}{1,2}[哥姐弟妹仔酱君桑兄嫂叔姨]$/u;
+const HAN = /^\p{Script=Han}+$/u;
+const LATIN = /^[A-Za-z][A-Za-z0-9_.'-]*$/;
+
+/**
+ * Words in `text` that may be somebody's name, simplified (compare them with `simplify` of the
+ * other text): a nickname's shape (阿凱, 小美, 凱哥) jieba cannot place or tags as a name, a jieba
+ * person name that starts with a common surname (王小明), and a short word or a Latin word standing
+ * where a person stands (跟志明…, Kevin 推薦…). A guess, made to catch more than it misses: what
+ * it finds is only ever kept off a text, never put on one.
+ */
+export function nameLikeWords(text: string): string[] {
+  const tagged = segmenter()
+    .tag(simplify(text), true)
+    .filter((t) => t.word.trim() !== "");
+  const found = new Set<string>();
+  const add = (word: string) => {
+    if ([...word].length >= 2 && !NOT_NAMES.has(word)) found.add(word);
+  };
+  tagged.forEach(({ word, tag }, i) => {
+    const length = [...word].length;
+    const han = HAN.test(word);
+    const nameable = NAMEABLE_TAGS.has(tag);
+    const unplaced = tag === "x" || PERSON_TAGS.has(tag);
+    if (han && unplaced && NICK_HEAD.test(word)) add([...word].slice(0, 2).join(""));
+    if (han && unplaced && NICK_TAIL.test(word)) add(word);
+    const surname = han && PERSON_TAGS.has(tag) && SURNAMES.has([...word][0] ?? "");
+    if (surname && length >= 2 && length <= 4) add(word);
+    // A single surname jieba split from the given name after it: 陈 + 志豪.
+    const next = tagged[i + 1];
+    if (surname && length === 1 && next && HAN.test(next.word) && [...next.word].length <= 2) {
+      add(word + next.word);
+    }
+    if (!nameable || (!han && !LATIN.test(word)) || (han && length > 3)) return;
+    const before = tagged[i - 1]?.word ?? "";
+    const after = tagged[i + 1]?.word ?? "";
+    const lastBefore = [...before].at(-1) ?? "";
+    if (
+      BEFORE_PERSON.has(before) ||
+      (HAN.test(before) && BEFORE_PERSON.has(lastBefore) && [...before].length > 1) ||
+      AFTER_PERSON.has(after)
+    ) {
+      add(word);
+    }
+  });
+  return [...found];
+}
+
 /** Dice coefficient of character bigrams of two normalized strings (0..1). */
 export function textSimilarity(a: string, b: string): number {
   const na = normalizeForCompare(a);

@@ -1872,9 +1872,9 @@ def test_a_job_keeps_its_request_as_given_with_the_defaults(sing):
         sing.delete(f"/jobs/{job['id']}")
         wait(sing, job["id"])
     assert a["job"]["request"] == {"query": "pinned defaults", "key": 0, "backing": "keep", "force": False,
-                                   "exclusive_ack": False}
+                                   "exclusive_ack": False, "purpose": "cover", "karaoke_video": True}
     assert b["job"]["request"] == {"query": "pinned request", "key": 3, "backing": "drop", "force": True,
-                                   "exclusive_ack": False}
+                                   "exclusive_ack": False, "purpose": "cover", "karaoke_video": True}
 
 
 def test_lyrics_request_bodies(sing):

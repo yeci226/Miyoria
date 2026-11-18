@@ -9,6 +9,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TokenGate } from "@/pages/login/TokenGate";
 import { CardVerify, cardSerialIn } from "@/pages/public/CardVerify";
 import { PublicSite } from "@/pages/public/PublicSite";
+import { isKaraokePath } from "@/pages/public/karaoke/path";
 import { isLivePath, LivePage } from "@/pages/public/live/LivePage";
 import { Backdrop } from "./Backdrop";
 import { ConnectionProvider, useConnection } from "./connection";
@@ -26,6 +27,9 @@ import {
 
 /** Her tank: the landing for someone not logged in. Split out with its fonts and water. */
 const Landing = lazy(() => import("@/pages/public/landing/Landing"));
+
+/** Singing on the member's own (`/karaoke`): its screens and its audio, loaded when opened. */
+const KaraokePage = lazy(() => import("@/pages/public/karaoke/KaraokePage"));
 
 /** The admin panel (shell, router, pages, event stream): only an admin downloads it. */
 const AdminApp = lazy(() => import("./AdminApp"));
@@ -166,6 +170,20 @@ function Authenticated({ router, history, initial }: { router?: AppRouter; histo
 
   if (auth.status === "checking") {
     return <div className="min-h-svh" aria-busy="true" aria-label="確認登入狀態中" />;
+  }
+
+  // Singing, for someone logged in with Discord: a member, or an admin as a member. Anyone else
+  // gets what `/` would show.
+  const discordAdmin = auth.status === "signed_in" && auth.session.method === "discord";
+  const member = auth.status === "public" ? auth.member : null;
+  if (isKaraokePath(path) && (member !== null || discordAdmin)) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <Suspense fallback={<div className="min-h-svh" aria-busy="true" aria-label="讀取中" />}>
+          <KaraokePage member={member ?? undefined} home={discordAdmin ? OWN_PAGE : "/"} />
+        </Suspense>
+      </QueryClientProvider>
+    );
   }
 
   // An admin who logged in with Discord is a member too, with a page of their own.

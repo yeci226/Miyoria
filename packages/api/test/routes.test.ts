@@ -808,6 +808,8 @@ describe("routes", () => {
       scenes: ["Talk", "Game"],
       hotkeys: ["Wave", "Blush"],
       overlay_url: "http://127.0.0.1:7884/overlay/",
+      obs_collection: "我的場景",
+      obs_warning: "OBS 不在「Miyoria」這份場景集合上(現在是「我的場景」)",
     };
     const hotkeys: string[] = [];
     const fake = {
@@ -825,6 +827,7 @@ describe("routes", () => {
     expect(stage.scenes).toEqual(["Talk", "Game"]);
     expect(stage.expressions).toEqual(["Wave", "Blush"]);
     expect(stage.overlay_url).toBe("http://127.0.0.1:7884/overlay/");
+    expect(stage.obs_warning).toBe("OBS 不在「Miyoria」這份場景集合上(現在是「我的場景」)");
     expect(stage.emotions).toEqual(["angry", "happy", "neutral"]);
     expect((await c.stageExpression("Blush")).expression).toBe("Blush");
     expect(hotkeys).toEqual(["Blush"]);
@@ -833,7 +836,7 @@ describe("routes", () => {
     status.obs = false;
     status.vts = false;
     const down = await c.stage();
-    expect([down.scenes, down.expressions]).toEqual([[], []]);
+    expect([down.scenes, down.expressions, down.obs_warning]).toEqual([[], [], null]);
     expect(down.overlay_url).toBe("http://127.0.0.1:7884/overlay/");
 
     // Say checks the emotion against the avatar's.

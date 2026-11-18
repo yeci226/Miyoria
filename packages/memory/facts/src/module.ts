@@ -78,6 +78,8 @@ interface Running {
 export class FactsModule implements Module {
   static readonly ID = "facts";
   readonly manifest = defineManifest(FactsModule.ID, "Facts", {
+    icon: "book-open",
+    category: "her",
     description: "The EventLog and what is built on it: Working Context, the DeliveryLedger",
     configSchema: FactsConfigSchema,
   });

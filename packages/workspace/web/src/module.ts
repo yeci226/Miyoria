@@ -15,6 +15,8 @@ import { WebService } from "./web.js";
 export class WebModule implements Module {
   static readonly ID = "web";
   readonly manifest = defineManifest(WebModule.ID, "Web", {
+    icon: "search",
+    category: "system",
     description: "Web search and a page reader for her; results are untrusted data",
     optional: ["actions"],
     configSchema: WebConfigSchema,

@@ -370,7 +370,10 @@ export class DiscordSink implements PlatformSink, ReplySink {
     return { context, id: first as string };
   }
 
-  /** `ReplySink`: a command-style card (Components V2, no pings) into `context`. */
+  /**
+   * `ReplySink`: a command-style card (Components V2, no pings) into `context`, with the reply's
+   * files (a picture the card shows) uploaded with it.
+   */
   async sendCard(
     context: ContextKey,
     reply: CommandReply,
@@ -382,15 +385,23 @@ export class DiscordSink implements PlatformSink, ReplySink {
     const channel = channelOf(context);
     let first: string | null = null;
     for (const payload of renderReply(reply, false)) {
+      const files = payload.files ?? [];
+      const body: Record<string, unknown> = {
+        components: payload.components,
+        flags: payload.flags,
+        allowed_mentions: { parse: [] },
+      };
+      const request: RestRequest = { body, signal };
+      if (files.length > 0) {
+        body.attachments = files.map((f, id) => ({ id, filename: f.name }));
+        request.files = files.map((f) => ({
+          name: f.name,
+          data: f.attachment,
+          ...(f.contentType ? { contentType: f.contentType } : {}),
+        }));
+      }
       const sent = await inContext(`sending a card to ${contextKeyString(context)}`, () =>
-        this.#rest.post(Routes.channelMessages(channel), {
-          body: {
-            components: payload.components,
-            flags: payload.flags,
-            allowed_mentions: { parse: [] },
-          },
-          signal,
-        }),
+        this.#rest.post(Routes.channelMessages(channel), request),
       );
       first ??= messageId(sent);
     }

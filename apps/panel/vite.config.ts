@@ -40,6 +40,22 @@ const config = defineConfig({
       // The route table: its types from source like the card, and at run time the table without
       // its schemas (`pnpm contracts:gen`), so zod stays out of the bundle.
       "@miyoria/contracts/api": fileURLToPath(new URL("../../packages/contracts/api/src/index.ts", import.meta.url)),
+      // Karaoke: the score is shared with the Core (plain TS, no imports outside its folder); the
+      // reference format is read for its types only (`import type`), so zod never loads here.
+      "@miyoria/play/karaoke/score": fileURLToPath(
+        new URL("../../packages/play/karaoke/src/score/index.ts", import.meta.url),
+      ),
+      // The lyrics as a page shows them, shared with the stream's karaoke scene the same way.
+      "@miyoria/play/karaoke/lyrics": fileURLToPath(
+        new URL("../../packages/play/karaoke/src/lyrics/index.ts", import.meta.url),
+      ),
+      // The reference editor's edits and the rules a save must hold, shared with the Core the same way.
+      "@miyoria/play/karaoke/edit": fileURLToPath(
+        new URL("../../packages/play/karaoke/src/edit/index.ts", import.meta.url),
+      ),
+      "@miyoria/contracts/workers/karaoke": fileURLToPath(
+        new URL("../../packages/contracts/workers/src/karaoke.ts", import.meta.url),
+      ),
       "@miyoria/contracts/schema/api.routes.json": fileURLToPath(
         new URL("../../packages/contracts/schema/api.routes.json", import.meta.url),
       ),

@@ -50,6 +50,28 @@
   --video-h: 52.875rem;
   --video-r: 0.875rem;
 
+  /*
+   * The karaoke scene (docs/design/karaoke.md §7.1): the round's screen from 48,40, 1392x940 at
+   * 1080p (its lyrics in the low band, 820 to 980), the board from 1470 at the right; her model's
+   * corner, bottom right, stays clear. The wipe is the member page's primary colour, the members'
+   * marks its five category colours.
+   */
+  --k-screen-x: 3rem;
+  --k-screen-y: 2.5rem;
+  --k-screen-w: 87rem;
+  --k-screen-h: 58.75rem;
+  --k-inset: 1.25rem;
+  --k-board-x: 91.875rem;
+  --k-board-w: 25rem;
+  --k-primary: #f29dc4;
+  --k-secondary-line: #a593f0;
+  --k-c1: #d9609a;
+  --k-c2: #8a68ee;
+  --k-c3: #c9c8d1;
+  --k-c4: #b4427f;
+  --k-c5: #6b4ee0;
+  --k-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+
   --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft JhengHei UI", "Noto Sans TC", "PingFang TC",
     system-ui, sans-serif;
 }
@@ -317,17 +339,92 @@ body {
   text-wrap: pretty;
 }
 
-.shout__song {
-  color: var(--ink-dim);
-  font-size: 1.3rem;
-  letter-spacing: 0.03em;
-  overflow-wrap: anywhere;
-}
-
 /* Over the song video's top edge, centred on it. */
 [data-layout="sing"] .shout {
   left: calc(var(--pad) + var(--video-w) / 2);
   top: calc(var(--pad) + 1.25rem);
+}
+
+/* ── danmaku (paid lines crossing the top third) ──────────────────────── */
+
+/*
+ * The band the lines cross, clipped at its edges. Default: the frame's width, from just under the
+ * top edge to a third of the way down. danmaku-view.ts moves each line with a transform from the
+ * frame clock (one gentle speed) and sets `top` to its lane (--dm-lane high).
+ */
+.danmaku {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 1.5rem;
+  height: calc(100% / 3 - 1.5rem);
+  overflow: hidden;
+}
+
+/* Over the song video only, in its top third: the lines never cross her on the right. */
+[data-layout="sing"] .danmaku {
+  left: var(--pad);
+  right: auto;
+  width: var(--video-w);
+  top: calc(var(--pad) + 0.75rem);
+  height: calc(var(--video-h) / 3 - 0.75rem);
+}
+
+/*
+ * One line, never wrapped. No full plate (it would hide the picture as it crosses): the ink sits on
+ * a faint glass pill and carries a dark outline of layered shadows, so it reads over a white sky
+ * as well as over a night scene.
+ */
+.danmaku__line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  height: calc(var(--dm-lane) - 0.4rem);
+  margin-top: 0.2rem;
+  padding: 0 0.85rem;
+  border-radius: 999px;
+  background: rgb(18 18 22 / 0.38);
+  color: var(--ink);
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: calc(var(--dm-lane) - 0.4rem);
+  white-space: nowrap;
+  text-shadow:
+    0 0 0.08em rgb(0 0 0 / 0.95),
+    0.06em 0.06em 0 rgb(0 0 0 / 0.75),
+    -0.06em 0.06em 0 rgb(0 0 0 / 0.75),
+    0.06em -0.06em 0 rgb(0 0 0 / 0.75),
+    -0.06em -0.06em 0 rgb(0 0 0 / 0.75),
+    0 0.1em 0.35em rgb(0 0 0 / 0.6);
+  will-change: transform;
+  transition: opacity var(--t-exit) var(--ease-exit);
+}
+
+/* Laid out to be measured before it gets a lane, never seen. */
+.danmaku__line.is-measuring {
+  visibility: hidden;
+}
+
+/* Cleared: the lines fade where they are. */
+.danmaku__line.is-leaving {
+  opacity: 0;
+}
+
+/* Who sent it: small and dimmer, before the words. */
+.danmaku__name {
+  color: var(--ink-dim);
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  /* A lighter outline: the full one muddies text this small. */
+  text-shadow:
+    0 0 0.12em rgb(0 0 0 / 0.95),
+    0 0 0.3em rgb(0 0 0 / 0.75);
 }
 
 /* ── voice waveform (left edge) ───────────────────────────────────────── */
@@ -351,12 +448,22 @@ body {
 
 /* ── activity capsule (bottom left, right of the voice bars) ──────────── */
 
-.activity {
-  --dot: var(--ink-faint);
-  --label-max: 18rem;
+/* Holds the capsule and the small line beside it; the capsule keeps its own size and look. */
+.activity-dock {
   position: absolute;
   left: 10rem;
   bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  pointer-events: none;
+}
+
+.activity {
+  --dot: var(--ink-faint);
+  --label-max: 18rem;
+  position: relative;
+  flex: none;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -486,6 +593,107 @@ body {
   animation: shimmer 1.9s var(--ease-in-out) infinite;
 }
 
+/* The song being prepared while she does something else: smaller and quieter than the capsule. */
+.activity-side {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  height: 2.2rem;
+  max-width: 17rem;
+  padding: 0 0.9rem 0.4rem;
+  overflow: hidden;
+  background: var(--plate);
+  border: 1px solid var(--plate-edge);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  font-size: 0.88rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.activity-side.is-out {
+  opacity: 0;
+  transform: translateY(var(--shift));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+.activity-side__text {
+  min-width: 0;
+}
+
+.activity-side__text .swap__item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35em;
+  white-space: nowrap;
+}
+
+.activity-side__verb {
+  flex: none;
+}
+
+.activity-side__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+}
+
+.activity-side__track {
+  position: absolute;
+  left: 0.9rem;
+  right: 0.9rem;
+  bottom: 0.38rem;
+  height: 0.2rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: oklch(1 0 0 / 0.1);
+}
+
+.activity-side__fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--ink-dim);
+  opacity: 0.75;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition:
+    transform var(--t-progress) var(--ease-out),
+    opacity var(--t-change) var(--ease-out);
+}
+
+.activity-side__track::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 34%;
+  background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.42), transparent);
+  opacity: 0;
+  transform: translateX(-100%);
+  transition: opacity var(--t-change) var(--ease-out);
+}
+
+.activity-side__track.is-indeterminate .activity-side__fill {
+  opacity: 0;
+}
+
+.activity-side__track.is-indeterminate::after {
+  opacity: 1;
+  animation: shimmer 1.9s var(--ease-in-out) infinite;
+}
+
 @keyframes shimmer {
   to {
     transform: translateX(295%);
@@ -512,7 +720,7 @@ body {
 }
 
 /* The capsule sits just under the video, flush with its left edge. */
-[data-layout="sing"] .activity {
+[data-layout="sing"] .activity-dock {
   top: calc(var(--pad) + var(--video-h) + 1.25rem);
   bottom: auto;
   left: var(--pad);
@@ -803,11 +1011,13 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .status__pulse,
   .activity.is-busy .activity__dot,
+  .activity-side__track.is-indeterminate::after,
   .activity__track.is-indeterminate::after {
     animation: none;
   }
 
   /* Still says "busy" without moving: a faint, still highlight. */
+  .activity-side__track.is-indeterminate::after,
   .activity__track.is-indeterminate::after {
     transform: translateX(95%);
     opacity: 0.6;
@@ -908,5 +1118,823 @@ body {
     100% {
       opacity: 0;
     }
+  }
+}
+
+/* ── karaoke: the room on the stream (src/karaoke-view.ts) ────────────── */
+
+/* Two layers: the round's screen under everything on the page, the plates over the danmaku lane. */
+.karaoke-under,
+.karaoke {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.k-back,
+.k-stage {
+  position: absolute;
+  inset: 0;
+  opacity: 1;
+  transition: opacity var(--t-enter) var(--ease-out);
+}
+
+.k-back.is-out,
+.k-stage.is-out {
+  opacity: 0;
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+.k-plate {
+  box-sizing: border-box;
+  background: var(--plate);
+  border: 1px solid var(--plate-edge);
+  border-radius: var(--radius);
+  box-shadow: var(--plate-shadow);
+}
+
+/* Small rounded labels: 唱 K, 聽寫, 預估, 第一名. */
+.k-tag {
+  flex: none;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.k-tag--win {
+  border-color: color-mix(in oklab, var(--k-primary) 55%, transparent);
+  color: var(--k-primary);
+}
+
+/* A member's colour: filled for the first five, a ring for the three after. */
+.k-swatch {
+  --k-c: var(--k-c1);
+  flex: none;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--k-c);
+}
+
+.k-swatch--2 { --k-c: var(--k-c2); }
+.k-swatch--3 { --k-c: var(--k-c3); }
+.k-swatch--4 { --k-c: var(--k-c4); }
+.k-swatch--5 { --k-c: var(--k-c5); }
+
+.k-swatch.is-hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 0.15rem var(--k-c);
+}
+
+/* The round's screen: grey-black glass, the video under a shade that keeps the words readable. */
+.k-screen {
+  position: absolute;
+  left: var(--k-screen-x);
+  top: var(--k-screen-y);
+  box-sizing: border-box;
+  width: var(--k-screen-w);
+  height: var(--k-screen-h);
+  overflow: hidden;
+  border: 1px solid var(--plate-edge);
+  border-radius: var(--radius);
+  background: rgb(24 24 27 / 0.72);
+  box-shadow: 0 1.125rem 3.125rem rgb(0 0 0 / 0.35);
+}
+
+.k-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(0.62);
+  opacity: 0;
+  transition: opacity 300ms var(--ease-out);
+}
+
+.k-video.is-shown {
+  opacity: 1;
+}
+
+.k-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgb(0 0 0 / 0.42) 0%, rgb(0 0 0 / 0) 32%),
+    linear-gradient(0deg, rgb(0 0 0 / 0.72) 0%, rgb(0 0 0 / 0.42) 26%, rgb(0 0 0 / 0) 52%);
+}
+
+/* ── karaoke: the lobby plate (top left) ──────────────────────────────── */
+
+.k-lobby {
+  position: absolute;
+  left: var(--k-screen-x);
+  top: var(--k-screen-y);
+  display: grid;
+  gap: 0.55rem;
+  width: 26rem;
+  padding: 1rem 1.2rem 1.05rem;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.k-lobby.is-out {
+  opacity: 0;
+  transform: translateY(calc(var(--shift) * -1));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+.k-lobby__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  color: var(--ink-faint);
+  font-size: 0.95rem;
+  white-space: nowrap;
+}
+
+.k-lobby__label {
+  color: var(--ink-dim);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.k-lobby__code {
+  font-family: var(--k-mono);
+  font-size: 3.1rem;
+  font-weight: 650;
+  letter-spacing: 0.16em;
+  line-height: 1.1;
+}
+
+.k-lobby__song {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  min-width: 0;
+  font-size: 1.2rem;
+  white-space: nowrap;
+}
+
+.k-lobby__title,
+.k-lobby__artist {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.k-lobby__title {
+  font-weight: 600;
+}
+
+.k-lobby__artist {
+  flex: 0 1 auto;
+  color: var(--ink-dim);
+}
+
+.k-lobby__key,
+.k-lobby__dim {
+  flex: none;
+  color: var(--ink-faint);
+}
+
+.k-lobby__people {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.15rem 0 0;
+  padding: 0.65rem 0 0;
+  border-top: 1px solid var(--rule);
+  list-style: none;
+}
+
+.k-person {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  font-size: 1.1rem;
+}
+
+.k-person__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.k-person__tag,
+.k-person__ready,
+.k-person--more {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 0.95rem;
+}
+
+.k-person__ready {
+  min-width: 4.5rem;
+  text-align: right;
+  transition: color var(--t-change) var(--ease-out);
+}
+
+.k-person__ready.is-ready {
+  color: var(--k-primary);
+}
+
+.k-lobby__foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-dim);
+  font-size: 1rem;
+}
+
+/* ── karaoke: the round (title, countdown, lyrics, board, results) ────── */
+
+/* The song, top left inside the screen: what, who, the key, and how far it is. */
+.k-title {
+  position: absolute;
+  left: calc(var(--k-screen-x) + var(--k-inset));
+  top: calc(var(--k-screen-y) + var(--k-inset));
+  display: grid;
+  gap: 0.3rem;
+  min-width: 24rem;
+  max-width: 52rem;
+  padding: 0.85rem 1.2rem 0.95rem;
+}
+
+.k-title__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--ink-faint);
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.k-title__song,
+.k-title__by {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.k-title__song {
+  font-size: 2rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+}
+
+.k-title__by {
+  color: var(--ink-dim);
+  font-size: 1.15rem;
+}
+
+.k-title__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-top: 0.35rem;
+}
+
+.k-title__bar {
+  flex: 1 1 auto;
+  height: 0.3rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: oklch(1 0 0 / 0.1);
+}
+
+.k-title__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: oklch(1 0 0 / 0.7);
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+.k-title__time {
+  flex: none;
+  min-width: 6.5rem;
+  color: var(--ink-faint);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The seconds before the round starts, large in the middle of the screen. */
+.k-count {
+  position: absolute;
+  left: var(--k-screen-x);
+  top: var(--k-screen-y);
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 0.4rem;
+  width: var(--k-screen-w);
+  height: calc(var(--k-screen-h) * 0.7);
+  text-shadow: 0 0.15rem 0.6rem rgb(0 0 0 / 0.7);
+  opacity: 1;
+  transition: opacity var(--t-enter) var(--ease-out);
+}
+
+.k-count.is-out {
+  opacity: 0;
+  transition-duration: var(--t-exit);
+}
+
+.k-count__n {
+  font-size: 9rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.k-count__label {
+  color: var(--ink-dim);
+  font-size: 1.4rem;
+}
+
+/*
+ * The lyrics, low on the screen: the line being sung over the next one, white with a dark outline
+ * so any frame behind stays clear, wiped in the primary colour as each piece is sung.
+ */
+.k-lyrics {
+  position: absolute;
+  left: calc(var(--k-screen-x) + 3rem);
+  bottom: calc(100% - var(--k-screen-y) - var(--k-screen-h) + 1.75rem);
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  width: calc(var(--k-screen-w) - 6rem);
+  text-align: center;
+  opacity: 1;
+  transition: opacity var(--t-enter) var(--ease-out);
+}
+
+.k-lyrics.is-out {
+  opacity: 0;
+  transition-duration: var(--t-exit);
+}
+
+.k-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  height: 0.6rem;
+  opacity: 0;
+}
+
+.k-dots.is-on {
+  opacity: 1;
+}
+
+.k-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--k-primary);
+  box-shadow: 0 0 0 0.1rem rgb(0 0 0 / 0.7);
+  opacity: 0.2;
+}
+
+.k-dot.is-lit {
+  opacity: 1;
+}
+
+.k-line {
+  max-width: 100%;
+  min-height: 1.45em;
+  margin: 0;
+  color: #fff;
+  -webkit-text-stroke: 0.25rem rgb(0 0 0 / 0.82);
+  paint-order: stroke fill;
+  text-shadow: 0 0.125rem 0.25rem rgb(0 0 0 / 0.85);
+  letter-spacing: 0.02em;
+  line-height: 1.45;
+  line-break: strict;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.k-line--main {
+  font-size: 3.25rem;
+  font-weight: 650;
+}
+
+.k-line--next {
+  color: rgb(255 255 255 / 0.88);
+  font-size: 2.4rem;
+  font-weight: 550;
+}
+
+/* Readings above the words take their room. */
+.has-ruby .k-line {
+  min-height: 2.2em;
+  line-height: 2;
+}
+
+/* A looked-up line that did not match what was heard. */
+.k-line.is-doubtful {
+  text-decoration: underline dotted rgb(255 255 255 / 0.55) 0.125rem;
+  text-underline-offset: 0.3em;
+}
+
+.k-piece {
+  position: relative;
+  display: inline-block;
+  white-space: pre;
+}
+
+.k-piece__lit {
+  position: absolute;
+  inset: 0;
+  color: var(--k-primary);
+  white-space: pre;
+  transition: clip-path 100ms linear;
+}
+
+.k-ruby {
+  ruby-position: over;
+}
+
+.k-ruby rt {
+  color: rgb(255 255 255 / 0.85);
+  -webkit-text-stroke: 0.125rem rgb(0 0 0 / 0.82);
+  font-size: max(0.75rem, 0.36em);
+  font-weight: 500;
+  letter-spacing: normal;
+}
+
+/* The live ranking, at the right above her: place, colour, name, score, which way it went. */
+.k-board {
+  position: absolute;
+  left: var(--k-board-x);
+  top: var(--k-screen-y);
+  display: grid;
+  gap: 0.6rem;
+  width: var(--k-board-w);
+  padding: 0.95rem 1.1rem 1rem;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.k-board.is-out {
+  opacity: 0;
+  transform: translateY(calc(var(--shift) * -1));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+.k-board__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.k-board__title {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.k-board__list {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.k-board__empty {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 1rem;
+}
+
+.k-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.35rem 0.55rem;
+  border-radius: 0.6rem;
+  font-size: 1.3rem;
+  transition:
+    transform var(--t-move) var(--ease-out),
+    background-color var(--t-change) var(--ease-out);
+}
+
+.k-row.is-first {
+  background: oklch(1 0 0 / 0.06);
+}
+
+.k-row__rank {
+  flex: none;
+  width: 1.4rem;
+  color: var(--ink-faint);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.k-row__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.k-row__score {
+  flex: none;
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.k-row__move {
+  flex: none;
+  width: 1rem;
+  font-size: 1rem;
+  text-align: center;
+}
+
+.k-row__move[data-move="up"] {
+  color: var(--k-primary);
+}
+
+.k-row__move[data-move="down"] {
+  color: var(--k-secondary-line);
+}
+
+/* A row that just changed place lights up for a moment and its arrow comes in. */
+.k-row.is-flash {
+  animation: k-row-flash 900ms var(--ease-out);
+}
+
+.k-row.is-flash .k-row__move {
+  animation: k-move-in 600ms var(--ease-out);
+}
+
+@keyframes k-row-flash {
+  from {
+    background-color: oklch(1 0 0 / 0.14);
+  }
+}
+
+@keyframes k-move-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.4rem);
+  }
+}
+
+/* Whose voice the stream plays now: a small primary mark beside the name. */
+.k-tag--air {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-color: color-mix(in oklab, var(--k-primary) 50%, transparent);
+  color: var(--k-primary);
+}
+
+.k-air-mark {
+  width: 0.75rem;
+  height: 0.75rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.4;
+}
+
+/* The demo (or `debug`) in a browser that holds sound back until a click. Never on air. */
+.k-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 1.5rem;
+  padding: 0.45rem 1rem;
+  color: var(--ink-dim);
+  font-size: 1rem;
+  opacity: 1;
+  transform: translateX(-50%);
+  transition: opacity var(--t-enter) var(--ease-out);
+}
+
+.k-hint.is-out {
+  opacity: 0;
+  transition-duration: var(--t-exit);
+}
+
+/* What the stream plays of the round (this scene's own sound), under the board. */
+.k-air {
+  margin: 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-dim);
+  font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* After the round: the final ranking in the middle of the screen, the winner marked. */
+.k-results {
+  position: absolute;
+  left: calc(var(--k-screen-x) + var(--k-screen-w) / 2);
+  top: calc(var(--k-screen-y) + var(--k-screen-h) * 0.46);
+  display: grid;
+  gap: 0.9rem;
+  width: 46rem;
+  max-width: calc(var(--k-screen-w) - 4rem);
+  padding: 1.4rem 1.6rem 1.3rem;
+  opacity: 1;
+  transform: translate(-50%, -50%);
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.k-results.is-out {
+  opacity: 0;
+  transform: translate(-50%, calc(-50% + var(--shift)));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+.k-results__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.k-results__title {
+  flex: none;
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 650;
+}
+
+.k-results__song {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-dim);
+  font-size: 1.2rem;
+  text-overflow: ellipsis;
+}
+
+.k-results__list {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.k-result {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.7rem;
+  font-size: 1.45rem;
+}
+
+.k-result.is-winner {
+  background: color-mix(in oklab, var(--k-primary) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--k-primary) 42%, transparent);
+}
+
+.k-result__rank {
+  flex: none;
+  width: 1.6rem;
+  color: var(--ink-faint);
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.k-result__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.k-result__score {
+  flex: none;
+  font-size: 1.6rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.k-result__tail {
+  flex: none;
+  min-width: 7.5rem;
+  color: var(--ink-faint);
+  font-size: 1.15rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.k-result__tail.is-coins {
+  color: var(--ink);
+}
+
+.k-result.is-winner .k-result__tail {
+  color: var(--k-primary);
+}
+
+.k-result.is-unfinished .k-result__name,
+.k-result.is-unfinished .k-result__score {
+  color: var(--ink-dim);
+}
+
+.k-results__empty,
+.k-results__note,
+.k-results__left {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.k-results__empty,
+.k-results__note {
+  color: var(--ink-dim);
+}
+
+.k-results__left {
+  color: var(--ink-faint);
+}
+
+/* ── karaoke: the page's own pieces make room while a round is on ───── */
+
+/* The board takes the side panel's corner. */
+[data-karaoke="stage"] .panel {
+  opacity: 0 !important;
+}
+
+/* Her speech is held while a round is sung; nothing sits on the lyrics then. */
+[data-karaoke-state="countdown"] .subtitle,
+[data-karaoke-state="singing"] .subtitle {
+  opacity: 0 !important;
+}
+
+/* Her words after the round (and on the karaoke scene's page) sit low on the screen. */
+[data-karaoke="stage"] .subtitle,
+[data-layout="karaoke"] .subtitle {
+  left: calc(var(--k-screen-x) + var(--k-screen-w) / 2);
+  bottom: calc(100% - var(--k-screen-y) - var(--k-screen-h) + 1.5rem);
+  max-width: calc(var(--k-screen-w) - 6rem);
+}
+
+/* The gift line and the paid messages go under the song's plate, centred on the screen. */
+[data-karaoke="stage"] .gift,
+[data-layout="karaoke"] .gift {
+  left: calc(var(--k-screen-x) + var(--k-screen-w) / 2);
+  top: calc(var(--k-screen-y) + 11rem);
+}
+
+[data-karaoke="stage"] .shout,
+[data-layout="karaoke"] .shout {
+  left: calc(var(--k-screen-x) + var(--k-screen-w) / 2);
+  top: calc(var(--k-screen-y) + 15.25rem);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .k-piece__lit {
+    transition: none;
+  }
+
+  .k-row.is-flash,
+  .k-row.is-flash .k-row__move {
+    animation: none;
   }
 }

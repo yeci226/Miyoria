@@ -131,6 +131,20 @@ export const AgentToolSchema = z
   .meta({ id: "EventsAgentTool" });
 export type AgentToolData = z.output<typeof AgentToolSchema>;
 
+/**
+ * A tool call of a turn started or ended (`agent.tool.running`), while the turn runs: the overlay
+ * says she is using a tool. Only the tool's name, never its arguments or result.
+ */
+export const AgentToolRunningSchema = z
+  .object({
+    turn: TurnIdSchema,
+    context: ContextKeySchema,
+    tool: z.string(),
+    state: z.enum(["started", "ended"]),
+  })
+  .meta({ id: "EventsAgentToolRunning" });
+export type AgentToolRunningData = z.output<typeof AgentToolRunningSchema>;
+
 /** An emotion tag in her reply: `agent.emotion`. */
 export const AgentEmotionSchema = z
   .object({
@@ -232,6 +246,13 @@ export const AgentTool = defineEvent({
   tier: "short",
 });
 
+export const AgentToolRunning = defineEvent({
+  type: "agent.tool.running",
+  v: 1,
+  data: AgentToolRunningSchema,
+  tier: "ambient",
+});
+
 export const AgentEmotion = defineEvent({
   type: "agent.emotion",
   v: 1,
@@ -262,6 +283,7 @@ export const AGENT_EVENTS = [
   AgentTurnFocus,
   AgentPrompt,
   AgentTool,
+  AgentToolRunning,
   AgentEmotion,
   AgentMessageExcluded,
   AgentNotice,

@@ -31,6 +31,8 @@ interface Running {
 export class QueueModule implements Module {
   static readonly ID = "queue";
   readonly manifest = defineManifest(QueueModule.ID, "Request queue", {
+    icon: "list-ordered",
+    category: "play",
     description: "Fair request queue with voting mode",
     optional: ["commands", "heart"],
     configSchema: QueueConfigSchema,

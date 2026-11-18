@@ -4,7 +4,7 @@
 import { eventIterator } from "@orpc/contract";
 import { z } from "zod";
 import { BusEnvelopeSchema } from "../../events/src/envelope.js";
-import { ContextKeySchema, TimestampSchema } from "../../wire/src/index.js";
+import { ContextKeySchema, JsonObjectSchema, TimestampSchema } from "../../wire/src/index.js";
 import { route } from "./route.js";
 import { DigitsQuery, FlagQuery, UsizeQuery } from "./shared.js";
 
@@ -13,7 +13,51 @@ export const ModuleStateKindSchema = z
   .meta({ id: "ApiModuleStateKind" });
 export type ModuleStateKind = z.output<typeof ModuleStateKindSchema>;
 
-/** One module as the supervisor reports it. */
+/**
+ * What a module tells the system page about itself (docs/design/v5-settings.md §3): at most four
+ * facts, the next scheduled thing, its last error, at most two quick actions.
+ */
+export const ModuleCardSchema = z
+  .object({
+    facts: z
+      .array(
+        z.object({
+          label: z.string(),
+          value: z.union([z.string(), z.number()]),
+          unit: z.string().optional(),
+        }),
+      )
+      .max(4),
+    next: z.object({ label: z.string(), at: TimestampSchema }).optional(),
+    last_error: z.object({ at: TimestampSchema, message: z.string() }).optional(),
+    actions: z
+      .array(
+        z.object({
+          id: z.string(),
+          label: z.string(),
+          /** Ask this first. */
+          confirm: z.string().optional(),
+          /** Run through the actuator gate as the panel. */
+          capability: z.string().optional(),
+          args: JsonObjectSchema.optional(),
+        }),
+      )
+      .max(2)
+      .optional(),
+  })
+  .meta({ id: "ApiModuleCard" });
+export type ModuleCard = z.output<typeof ModuleCardSchema>;
+
+/** The sections of the system page. */
+export const ModuleCategorySchema = z
+  .enum(["her", "platform", "play", "system"])
+  .meta({ id: "ApiModuleCategory" });
+export type ModuleCategory = z.output<typeof ModuleCategorySchema>;
+
+/**
+ * One module as the supervisor reports it. `GET /api/modules` adds what the system page draws the
+ * module's card with (`icon` .. `pending`); the answer of an action leaves those out.
+ */
 export const ModuleInfoSchema = z
   .object({
     id: z.string(),
@@ -25,6 +69,15 @@ export const ModuleInfoSchema = z
     reason: z.string().nullable(),
     /** Restarts in the recent window. */
     recent_restarts: z.number(),
+    /** A lucide icon name the module chose (`null`: the panel's default). */
+    icon: z.string().nullable().optional(),
+    category: ModuleCategorySchema.optional(),
+    /** It has fields the panel may change. */
+    settings: z.boolean().optional(),
+    /** Its card; `null` when it has none or did not answer in time. */
+    card: ModuleCardSchema.nullable().optional(),
+    /** A saved change waits for this guarded state (`singing`, `live`). */
+    pending: z.string().nullable().optional(),
   })
   .meta({ id: "ApiModuleInfo" });
 export type ModuleInfo = z.output<typeof ModuleInfoSchema>;

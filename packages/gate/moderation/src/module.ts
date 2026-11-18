@@ -21,6 +21,8 @@ export function secretsFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
 export class ModerationModule implements Module {
   static readonly ID = "moderation";
   readonly manifest = defineManifest(ModerationModule.ID, "Moderation", {
+    icon: "shield",
+    category: "system",
     description: "Content safety: output review that does not depend on the model, input defence",
     configSchema: ModerationConfigSchema,
   });

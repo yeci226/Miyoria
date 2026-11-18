@@ -42,12 +42,22 @@ export {
   REQUIRED_MODULES,
 } from "./module-ids.js";
 export {
+  DEFERRED_CHECK_MS,
+  type Effective,
+  effectiveSection,
+  GUARDED_MODULES,
+  layerSection,
+  ModuleSettings,
+  type ModuleSettingsOptions,
+} from "./module-settings.js";
+export {
   buildCore,
   defaultCatalog,
   extensionsCli,
   llmModule,
   openStore,
   runStageNode,
+  type StageObsSetupResult,
   setupStageObs,
 } from "./modules.js";
 export {

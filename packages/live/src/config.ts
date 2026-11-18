@@ -1,3 +1,4 @@
+import { setting, settingGroups } from "@miyoria/runtime/kernel";
 import { z } from "zod";
 
 /** `[x0, y0, x1, y1]` on the video frame, each 0..1, origin top-left; `[]` = never chosen. */
@@ -66,36 +67,58 @@ export type LiveVideoConfig = z.output<typeof LiveVideoConfigSchema>;
  * pats = true
  * ```
  */
-export const LiveConfigSchema = z.object({
-  /**
-   * Channel ids (Discord snowflakes) whose lines may be shown. A line from anywhere else (another
-   * channel, a thread not listed by its own id, a DM) never reaches the page. Empty: no words at
-   * all, only her place, activity and face.
-   */
-  channels: z
-    .array(z.string().regex(/^\d{1,24}$/))
-    .max(50)
-    .default([]),
-  /** Most pages watching at once; one more is turned away until someone leaves. */
-  max_viewers: z.number().int().min(1).max(10_000).default(500),
-  /**
-   * Members may pat her from the page. Off: the page shows the hand as closed and nothing a
-   * visitor does reaches her.
-   */
-  pats: z.boolean().default(false),
-  /**
-   * How a batch of pats is written. `ambient`: she knows (her working context), and may bring it
-   * up when she talks anyway. `notable`: a batch may also ask for the mic, which needs the
-   * arbiter to take observations of `live.pat` (see the module's integration note).
-   */
-  pat_salience: z.enum(["ambient", "notable"]).default("ambient"),
-  /** Pats arriving this close after the first one of a batch go into the same Observation. */
-  coalesce_secs: z.number().int().min(2).max(600).default(20),
-  /** Pats one person may give per minute. */
-  per_person_per_minute: z.number().int().min(1).max(120).default(10),
-  /** Pats everyone together may give per minute. */
-  per_minute: z.number().int().min(1).max(10_000).default(120),
-  video: LiveVideoConfigSchema.prefault({}),
-});
+export const LiveConfigSchema = z
+  .object({
+    /**
+     * Channel ids (Discord snowflakes) whose lines may be shown. A line from anywhere else (another
+     * channel, a thread not listed by its own id, a DM) never reaches the page. Empty: no words at
+     * all, only her place, activity and face.
+     */
+    channels: z
+      .array(z.string().regex(/^\d{1,24}$/))
+      .max(50)
+      .default([])
+      .meta(
+        setting({
+          kind: "channel",
+          multiple: true,
+          ref: "id",
+          label: "顯示的頻道",
+          help: "這些頻道裡的話會出現在直播頁上,任何人都看得到;沒選就只顯示她在哪、在做什麼",
+          group: "page",
+        }),
+      ),
+    /** Most pages watching at once; one more is turned away until someone leaves. */
+    max_viewers: z.number().int().min(1).max(10_000).default(500),
+    /**
+     * Members may pat her from the page. Off: the page shows the hand as closed and nothing a
+     * visitor does reaches her.
+     */
+    pats: z
+      .boolean()
+      .default(false)
+      .meta(
+        setting({
+          kind: "switch",
+          label: "摸頭",
+          help: "登入的人可以從直播頁摸她的頭",
+          group: "page",
+        }),
+      ),
+    /**
+     * How a batch of pats is written. `ambient`: she knows (her working context), and may bring it
+     * up when she talks anyway. `notable`: a batch may also ask for the mic, which needs the
+     * arbiter to take observations of `live.pat` (see the module's integration note).
+     */
+    pat_salience: z.enum(["ambient", "notable"]).default("ambient"),
+    /** Pats arriving this close after the first one of a batch go into the same Observation. */
+    coalesce_secs: z.number().int().min(2).max(600).default(20),
+    /** Pats one person may give per minute. */
+    per_person_per_minute: z.number().int().min(1).max(120).default(10),
+    /** Pats everyone together may give per minute. */
+    per_minute: z.number().int().min(1).max(10_000).default(120),
+    video: LiveVideoConfigSchema.prefault({}),
+  })
+  .meta(settingGroups([{ id: "page", label: "直播頁" }]));
 
 export type LiveConfig = z.output<typeof LiveConfigSchema>;

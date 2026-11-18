@@ -39,6 +39,16 @@ export {
   type LinkHandle,
   readHostKey,
 } from "./daemon.js";
+export {
+  type InstallFile,
+  InstallFileSchema,
+  relativePathProblem,
+  type ServiceDescriptor,
+  ServiceDescriptorSchema,
+  type ServiceInstall,
+  sourceLabel,
+  sourceUrl,
+} from "./descriptor.js";
 export { matchesPassEnv, mergeEnv, passEnv, workerBaseEnv } from "./env.js";
 export {
   CardReader,
@@ -91,7 +101,9 @@ export {
 } from "./ports.js";
 export { httpHealthy } from "./probe.js";
 export {
+  checkPlan,
   expandService,
+  filesProblem,
   type LiveValues,
   offloadUrls,
   planServices,

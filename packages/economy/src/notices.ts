@@ -1,6 +1,6 @@
 // What people see when they earned something they did not ask for in that moment: an achievement
 // unlocked, a daily quest done by sitting through a song or playing a game, coins for a song they
-// requested, a goal they pledged to that got met.
+// requested.
 //
 // * Earned through something they did (a command, her tool): a muted line on that answer, never a
 //   second card (`unlockLines`, `bonusLine`).

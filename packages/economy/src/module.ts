@@ -5,16 +5,29 @@ import {
   errorMessage,
   interval,
   type Module,
+  type ModuleCard,
+  type ModuleCardAction,
+  type ModuleCardFact,
   type ModuleContext,
 } from "@miyoria/runtime/kernel";
-import { SongPaymentsKey } from "@miyoria/sing";
-import { Events, ParticipationKey, PartyRewardsKey, type ProfileId } from "@miyoria/types";
+import {
+  CardWalletKey,
+  Events,
+  KaraokeWalletKey,
+  MarketWalletKey,
+  ParticipationKey,
+  PartyRewardsKey,
+  type Principal,
+  type ProfileId,
+} from "@miyoria/types";
 import { agencyCapabilities } from "./agency-tools.js";
+import { EconomyCardWallet } from "./card-wallet.js";
 import { EconomyCommands } from "./commands.js";
 import { EconomyConfigSchema } from "./config.js";
 import { Earnings } from "./earn.js";
 import { EconomyService } from "./economy.js";
-import { songPayments } from "./songs.js";
+import { EconomyKaraokeWallet } from "./karaoke-wallet.js";
+import { EconomyMarketWallet } from "./market-wallet.js";
 import { giveCapability, speakerCapabilities } from "./tools.js";
 import { EconomyKey } from "./types.js";
 import { v2Capabilities } from "./v2-tools.js";
@@ -22,24 +35,34 @@ import { Economy2Key } from "./v2-types.js";
 
 /** How often a finished voice window is paid when nobody speaks to end it. */
 const VOICE_TICK_MS = 30_000;
+/** How often danmaku left in the middle are settled and her note is due. */
+const DANMAKU_TICK_MS = 5_000;
+/** The card's action that takes every danmaku line off the overlay. */
+export const CLEAR_DANMAKU = "danmaku_clear";
+const CLEAR_DANMAKU_ACTION: ModuleCardAction = {
+  id: CLEAR_DANMAKU,
+  label: "清空彈幕",
+  confirm: "畫面上的彈幕會全部拿掉,還在排隊、沒顯示的會退回。要清空嗎?",
+};
 
 /**
  * Module `economy` (docs/design/economy.md): coins people earn by being with her and spend on
  * feeding her and small gifts. Provides `EconomyKey` (the member routes and the Discord commands
  * use it) and registers `economy.give` (her tool `give_coins`) and the speaker's own
- * `economy.accept_food` / `economy.checkin` / `economy.look` and her deals `economy.make_deal` /
- * `economy.deal_done` / `economy.cancel_deal` (tools.ts, deals.ts), and her own money's tools
- * (`economy.treat`, `buy_self`, `propose_goal`, `cancel_goal`, `post_bounty`, `award_bounty`,
- * `cancel_bounty`; agency-tools.ts, purse.ts, goals.ts, bounties.ts). Also provides `Participation`
- * (the web page's head-pats) and `PartyRewards` (party games, party.ts). Uses `EconomyDocs` (collection,
- * bets, commissions, her room) and `LedgerStats` (the health table) when the app provides them, and `CoinLedgerStore`,
- * `DealStore`, `RelationshipEffects` (a hair of affinity per gift), `PersonNoteWriter`, `Directives`,
+ * `economy.accept_food` / `economy.checkin` / `economy.look` and her own money's tools
+ * (`economy.treat`, `buy_self`, `post_bounty`, `award_bounty`,
+ * `cancel_bounty`; agency-tools.ts, purse.ts, bounties.ts). Also provides `Participation`
+ * (the web page's head-pats) and `PartyRewards` (party games, party.ts). Uses `EconomyDocs` (bets,
+ * her room) and `LedgerStats` (the health table) when the app provides them, and `CoinLedgerStore`,
+ * `RelationshipEffects` (a hair of affinity per gift), `PersonNoteWriter`, `Directives`,
  * `PeopleStore`, `SocialSignals` / `AffectState` (who is blocked), `SelfState` (her hunger),
  * `Singer`, `CommandRegistry`, `ActuatorRegistry` (`stage.expression`), `Moderation` and `EventLog` when present.
  */
 export class EconomyModule implements Module {
   static readonly ID = "economy";
   readonly manifest = defineManifest(EconomyModule.ID, "Economy", {
+    icon: "coins",
+    category: "play",
     description: "Coins earned by being with her, spent on feeding her and small gifts",
     optional: [
       "memory",
@@ -57,6 +80,8 @@ export class EconomyModule implements Module {
   readonly #profile: ProfileId;
   #unregister: (() => void) | null = null;
   readonly #commands = new EconomyCommands();
+  /** The running economy, for the card on the panel. */
+  #economy: EconomyService | null = null;
 
   constructor(profile: ProfileId) {
     this.#profile = profile;
@@ -84,15 +109,19 @@ export class EconomyModule implements Module {
       for (const f of off) f();
     };
     ctx.provide(EconomyKey, economy);
+    this.#economy = economy;
+    // Her cards are paid through it (`@miyoria/play/cards`).
+    ctx.provide(CardWalletKey, new EconomyCardWallet(economy));
+    // The weekly market is paid through it (`@miyoria/play/market`).
+    ctx.provide(MarketWalletKey, new EconomyMarketWallet(economy));
+    // Karaoke rooms are paid through it (`@miyoria/play/karaoke`).
+    ctx.provide(KaraokeWalletKey, new EconomyKaraokeWallet(economy));
     ctx.provide(ParticipationKey, economy.v2.play);
     ctx.provide(Economy2Key, economy.v2);
     ctx.provide(PartyRewardsKey, economy.v2.party);
     if (!economy.docsAreDurable) {
-      ctx.log.warn(
-        "no store provides EconomyDocs: collection, bets, commissions and the room are kept in memory only",
-      );
+      ctx.log.warn("no store provides EconomyDocs: bets and the room are kept in memory only");
     }
-    ctx.provide(SongPaymentsKey, songPayments(economy));
     const mount = () => {
       const registry = ctx.services.get(CommandRegistryKey);
       if (registry) this.#commands.install(registry, ctx.services);
@@ -111,32 +140,21 @@ export class EconomyModule implements Module {
     ctx.spawn("earn", async () => {
       for await (const env of events) await earnings.onEvent(env, ctx.clock.now());
     });
-    // Deals she is owed run out here: a promise not kept becomes broken, escrow times out.
-    // Her goals and bounties run out here too; her purse note is written once at the start.
+    // Her bounties run out here; her purse note is written once at the start.
     ctx.spawn("agency", async (signal) => {
       await economy.purse.refresh().catch((error: unknown) => {
         ctx.log.warn({ err: errorMessage(error) }, "cannot write her purse note");
       });
       for await (const _ of interval(Math.max(config.agency_sweep_s, 1) * 1000, signal)) {
         try {
-          await economy.goalDesk.sweep();
           await economy.bountyDesk.sweep();
         } catch (error) {
-          ctx.log.warn({ err: errorMessage(error) }, "the goal and bounty sweep failed");
+          ctx.log.warn({ err: errorMessage(error) }, "the bounty sweep failed");
         }
         try {
           await economy.v2.sweep();
         } catch (error) {
           ctx.log.warn({ err: errorMessage(error) }, "the economy 2.0 sweep failed");
-        }
-      }
-    });
-    ctx.spawn("deals", async (signal) => {
-      for await (const _ of interval(Math.max(config.deal_sweep_s, 1) * 1000, signal)) {
-        try {
-          await economy.deals.sweep();
-        } catch (error) {
-          ctx.log.warn({ err: errorMessage(error) }, "the deal sweep failed");
         }
       }
     });
@@ -146,9 +164,82 @@ export class EconomyModule implements Module {
         mount(); // the commands module may have been restarted with a new registry
       }
     });
+    // Danmaku (danmaku.ts): the stage's answers settle the charges; her broadcast ending clears the
+    // overlay; what a restart left in the middle is settled at once and then every few seconds,
+    // and she gets her note of the lines shown.
+    const danmaku = economy.danmakuDesk;
+    const stage = ctx.subscribe([
+      Events.StageDanmaku.type,
+      Events.StageStatus.type,
+      Events.ActivityChanged.type,
+    ]);
+    ctx.spawn("danmaku", async () => {
+      for await (const env of stage) await danmaku.onEvent(env);
+    });
+    ctx.spawn("danmaku-tick", async (signal) => {
+      const tick = async () => {
+        try {
+          await danmaku.sweep(ctx.clock.now());
+        } catch (error) {
+          ctx.log.warn({ err: errorMessage(error) }, "the danmaku sweep failed");
+        }
+        danmaku.note(ctx.clock.now());
+      };
+      await tick();
+      for await (const _ of interval(DANMAKU_TICK_MS, signal)) await tick();
+    });
+  }
+
+  /**
+   * The health table's numbers (`health.ts`): the last seven days' recovery rate, and today's
+   * coins issued and recovered, in the economy's currency; none without a store of ledger totals.
+   * Next: the first of her open bounties to run out, which the sweep then settles.
+   */
+  async card(): Promise<ModuleCard> {
+    const economy = this.#economy;
+    if (economy === null) return { facts: [] };
+    const currency = economy.config.currency;
+    const facts: ModuleCardFact[] = [];
+    const health = await economy.v2.health();
+    if (health.available) {
+      const today = health.days.at(-1);
+      if (health.week.ratio !== null) {
+        facts.push({ label: "七天回收率", value: Math.round(health.week.ratio * 100), unit: "%" });
+      }
+      facts.push({ label: "今天發出", value: today?.issued ?? 0, unit: currency });
+      facts.push({ label: "今天收回", value: today?.recovered ?? 0, unit: currency });
+    }
+    // Danmaku shown today and what they took (lines given back are neither), while they are on.
+    const danmakuOn = economy.config.danmaku_on;
+    if (danmakuOn) {
+      const today = await economy.danmakuDesk.today();
+      facts.push({
+        label: "今天彈幕",
+        value: `${today.lines} 則 · ${today.coins}`,
+        unit: currency,
+      });
+    }
+    const due = (await economy.bountyDesk.view())
+      .map((b) => b.expires_at)
+      .sort()
+      .at(0);
+    return {
+      facts,
+      ...(due === undefined ? {} : { next: { label: "懸賞到期", at: due } }),
+      ...(danmakuOn ? { actions: [CLEAR_DANMAKU_ACTION] } : {}),
+    };
+  }
+
+  /** `danmaku_clear`: every danmaku line off the overlay (the waiting ones are given back). */
+  async act(action: string, _by: Principal): Promise<void> {
+    if (action !== CLEAR_DANMAKU) throw new Error(`unknown action ${action}`);
+    const economy = this.#economy;
+    if (economy === null) throw new Error("the economy is not running");
+    economy.danmakuDesk.clear();
   }
 
   async stop(): Promise<void> {
+    this.#economy = null;
     this.#commands.uninstall();
     this.#unregister?.();
     this.#unregister = null;

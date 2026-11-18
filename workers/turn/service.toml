@@ -12,13 +12,27 @@ check_imports = ["onnxruntime"]
 
 # Without these two files the worker still runs and Core falls back to silence length.
 # Paths are under the host's model folder (<state>/models); [run] env points the worker there.
+#
+# Both are pinned to the commit the files on the owner's machine came from, with their checksums.
 [[install.files]]
-url = "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/smart-turn-v3.2-cpu.onnx?download=true"
 path = "smart-turn/smart-turn-v3.2-cpu.onnx"
+hf = "pipecat-ai/smart-turn-v3"
+file = "smart-turn-v3.2-cpu.onnx"
+revision = "f766f81d3cfdf7737ac64aad813d91bbfd56bf93"
+sha256 = "2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f"
+size = 8679182
+what = "Smart Turn v3.2(判斷講完,CPU;沒有也能跑,Core 退回看安靜多久)"
+licence = "BSD-2-Clause"
+optional = true
 
 [[install.files]]
-url = "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx"
 path = "silero-vad/silero_vad.onnx"
+url = "https://raw.githubusercontent.com/snakers4/silero-vad/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx"
+sha256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+size = 2327524
+what = "Silero VAD(語音活動偵測;沒有也能跑,Core 用能量偵測)"
+licence = "MIT"
+optional = true
 
 [run]
 command = ["{python}", "server.py"]
@@ -26,8 +40,9 @@ cwd = "."
 port = 8006
 host_env = "HOST"
 port_env = "PORT"
-# `miyoria add` puts the two model files in the host's model folder; the worker's own default is
-# workers/models, which a source checkout used before.
+# The two model files live in the host's model folder (placed by hand until the entries above have
+# their checksums, then `miyoria add` downloads them); the worker's own default is workers/models,
+# which a source checkout used before.
 env = { TURN_SMART_MODEL = "{models}/smart-turn/smart-turn-v3.2-cpu.onnx", TURN_SILERO_MODEL = "{models}/silero-vad/silero_vad.onnx" }
 
 [run.health]

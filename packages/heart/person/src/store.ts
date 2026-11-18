@@ -7,8 +7,13 @@
 // `economy.posted`. `upsert` writes a row as it is given, for her words and tags; it records no
 // change, so it is not the way to move a number.
 //
+// A bond that enters a tier never reached before (`tier_floor` goes up) is told to whoever listens
+// (`onTierEntered`) once the write is committed: the cards plugin gives a milestone card for it
+// (docs/design/v5-play.md §6.1). The migration's rows and a merge are no rise, and tell nothing.
+//
 // Core's store opens this plugin (`STORE_PLUGINS`); the module `heart` (`module.ts`) owns it.
 
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import {
   type CategoryData,
   type Db,
@@ -25,6 +30,8 @@ import {
   tablePart,
 } from "@miyoria/store";
 import {
+  BOND_LADDER,
+  type BondTier,
   type Clock,
   HEART_TEXT_FIELDS,
   type HeartActivity,
@@ -88,8 +95,23 @@ import { recordOf } from "./view.js";
 
 const P = heartPerson;
 
+const log = getLogger("heart.store");
+
 /** At most this many people per page of `list`. */
 const MAX_PAGE = 200;
+
+/** A bond that entered tiers she had never reached with someone (`tier_floor` went up). */
+export interface TierEntered {
+  person: PersonId;
+  /** The tiers entered, lowest first: every `BOND_LADDER` tier above the old floor up to the new. */
+  tiers: BondTier[];
+  /** Why the bond moved (the last change of the write). */
+  cause: HeartChange["cause"];
+  at: Timestamp;
+}
+
+/** Told of every `TierEntered` once its write is committed; it must not throw. */
+export type TierListener = (entered: TierEntered) => void;
 
 /** Options of a write that moves a number. */
 export interface HeartApplyOptions {
@@ -202,6 +224,7 @@ export class HeartStore {
   readonly #clock: Clock;
   #rules: HeartPersonConfig;
   #log: HeartLog;
+  readonly #tierListeners = new Set<TierListener>();
 
   constructor(
     db: Db,
@@ -229,6 +252,31 @@ export class HeartStore {
   /** The changes and evidence on the event log: a person's history, the day's ledger. */
   get log(): HeartLog {
     return this.#log;
+  }
+
+  /**
+   * Tells `listener` of every bond that enters a tier never reached before, after the write is
+   * committed (never for one that rolls back). The way to stop listening is the returned function.
+   */
+  onTierEntered(listener: TierListener): () => void {
+    this.#tierListeners.add(listener);
+    return () => {
+      this.#tierListeners.delete(listener);
+    };
+  }
+
+  /** Queues `entered` for the listeners, once the outermost transaction commits. */
+  #tellTiers(entered: TierEntered): void {
+    if (entered.tiers.length === 0 || this.#tierListeners.size === 0) return;
+    this.#db.afterCommit(() => {
+      for (const listener of this.#tierListeners) {
+        try {
+          listener(entered);
+        } catch (error) {
+          log.warn({ err: errorMessage(error), person: entered.person }, "a tier listener failed");
+        }
+      }
+    });
   }
 
   #now(now: number | undefined): number {
@@ -285,6 +333,26 @@ export class HeartStore {
       total: n,
       next: offset + rows.length < n ? offset + rows.length : null,
     };
+  }
+
+  /**
+   * How many people have a row, and how many of them had a number change from `since` (epoch ms)
+   * on, the daily pass and the migration left out: for the module's card on the panel. Two indexed
+   * reads of the log: where `since` starts in commit order (`events_at_idx`, the index alone), then
+   * the heart's changes from there (`events_type_idx`).
+   */
+  summary(since: number): { people: number; changed: number } {
+    this.#db.ensureOpen();
+    const people = this.#db.orm.select({ n: count() }).from(P).get();
+    const from = since * 1000;
+    const changed = this.#db.orm.all<{ n: number }>(sql`
+      SELECT COUNT(DISTINCT e.person_id) AS n FROM events e
+      WHERE e.type = ${HeartChanged.type}
+        AND e.seq >= (SELECT MIN(seq) FROM events WHERE at >= ${from})
+        AND e.at >= ${from}
+        AND json_extract(e.data, '$.cause') NOT IN ('decay', 'migrate')
+        AND e.person_id IN (SELECT ${P.person_id} FROM ${P})`);
+    return { people: Number(people?.n ?? 0), changed: Number(changed[0]?.n ?? 0) };
   }
 
   /**
@@ -465,6 +533,16 @@ export class HeartStore {
         });
       }
       if (out.length > 0) this.upsert(current);
+      const floor = stored?.tier_floor ?? 0;
+      const last = out.at(-1);
+      if (last !== undefined && current.tier_floor > floor && last.change.cause !== "migrate") {
+        this.#tellTiers({
+          person,
+          tiers: BOND_LADDER.filter((t) => t.min > floor && t.min <= current.tier_floor),
+          cause: last.change.cause,
+          at,
+        });
+      }
       return out;
     });
   }

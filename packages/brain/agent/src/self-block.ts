@@ -123,8 +123,8 @@ const WANTS: Readonly<Record<string, string>> = {
   longing: "很想見那個人、想被他注意",
 };
 const STRONG_DRIVE = 0.65;
-/** Under this hunger she is full (`[modules.economy] full_below`). */
-const FULL_BELOW = 0.15;
+/** Under this hunger she is not hungry at all. */
+const NOT_HUNGRY_BELOW = 0.15;
 
 /** `self.mood`: one mood line, her strongest 2–3 emotions, what she shows, what she wants. */
 export function moodBlock(src: SelfSources): string {
@@ -154,10 +154,11 @@ export function moodBlock(src: SelfSources): string {
     }
   }
   // The affect snapshot has no drives, so hunger went unsaid: at 15:32 she asked for a bowl while
-  // full, and the feed was refused. The economy refuses under `full_below` (0.15 by default).
+  // full, and the feed was refused. Feeding is limited per person now, not by her hunger, so she
+  // is only told she is not hungry (she may still take a bowl).
   const hunger = src.self?.drives().hunger;
   if (hunger !== undefined) {
-    if (hunger < FULL_BELOW) lines.push("你吃飽了,現在吃不下;有人要餵你也會被擋。");
+    if (hunger < NOT_HUNGRY_BELOW) lines.push("你現在不餓。");
     else if (snap !== null && hunger >= STRONG_DRIVE) lines.push(`你現在${WANTS.hunger}。`);
   }
   const hint = shown ? shownHint(shown) : "";
@@ -244,7 +245,7 @@ export function activityBlock(src: SelfSources): string {
   const singing = a.type === "singing" && (a.phase === "running" || a.phase === "starting");
   const apart =
     textHere && singing
-      ? "唱歌只佔語音,不影響這裡:文字頻道的事(查錢包、收食物、簽到、約定…)現在就用工具做,不用等唱完。"
+      ? "唱歌只佔語音,不影響這裡:文字頻道的事(查錢包、收食物、簽到…)現在就用工具做,不用等唱完。"
       : "";
   return `你現在${voice}、${live}、${doing}。${apart}`;
 }

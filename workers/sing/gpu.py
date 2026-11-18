@@ -50,6 +50,7 @@ takes the card (the old behaviour).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -77,6 +78,11 @@ SPILL_MARGIN_MB = 256  # over the free VRAM at which a spill was seen
 LOW_FREE_READS = 3  # readings in a row before low free VRAM counts
 RELOAD_PRIOR_S = 30.0
 RATE_PRIORS = {"separate": 0.05, "lead": 0.25, "convert": 0.3}  # seconds of work per second of audio
+# What a stage is assumed to need until it was measured here, where it is known to need more than
+# SING_SHARE_MIN_FREE_MB: the karaoke lyrics' recogniser (Qwen3-ASR-1.7B in fp16 peaked at 4.8 GB in
+# the 2026-11-18 experiment) and aligner (MMS_FA 1.8 GB, 2.9 GB on a 30 s window; wav2vec2 large
+# 2.8–3.9 GB in fp32).
+STAGE_NEED_PRIORS_MB = {"lyrics_asr": 5200, "lyrics_align": 4096}
 # Stages that can run on the CPU instead, so they never take her voice's card: one that does not fit
 # is done there (a spill in one sends the rest of the job's such stages to the CPU as well).
 CPU_STAGES = ("separate", "lead")
@@ -601,9 +607,12 @@ class GpuJob:
     """One job's decisions, made before every GPU stage and again while it runs."""
 
     def __init__(self, machine: Machine, job_id: str, urls: list[str], *, core_expected: bool,
-                 urgent: Callable[[], bool], audio_s: float | None = None) -> None:
+                 urgent: Callable[[], bool], audio_s: float | None = None, share_only: bool = False) -> None:
         self.machine = machine
         self.job_id = job_id
+        # Never takes her voice offline (a karaoke job): where the rules would, it waits for room
+        # instead, and gives up after SING_WAIT_MAX_S; a spill waits too.
+        self.share_only = share_only
         self.limits = Limits.from_env()
         self.policy, self.policy_source = policy_from_env()
         self.speech = Speech(urls, machine.get, clock=machine.clock)
@@ -667,7 +676,7 @@ class GpuJob:
         waited = self.waiting_s()
         speech = self.speech.read()
         freed = m.profile.freed_mb()
-        need, _ = m.profile.need(stage, limits.prior_need_mb)
+        need, _ = m.profile.need(stage, max(limits.prior_need_mb, STAGE_NEED_PRIORS_MB.get(stage, 0)))
         return Facts(
             policy=self.policy, stage=stage, limits=limits, cuda=card.cuda, on_gpu=on_gpu, pauses=pauses,
             total_mb=card.total_mb,
@@ -683,7 +692,15 @@ class GpuJob:
 
     def decide(self, stage: str, on_gpu: bool = True, pauses: bool = True) -> Decision:
         self.facts = self.gather(stage, on_gpu, pauses)
+        if self.share_only and self.facts.policy == "offload":
+            self.facts = dataclasses.replace(self.facts, policy="yield")  # ``offload`` would always ask
         d = decide(self.facts)
+        if self.share_only and d.mode in ("offload", "exclusive"):
+            if self.facts.waited_total_s >= self.limits.wait_max_s:
+                d = Decision("give_up", "no_room", f"等了 {self.facts.waited_total_s / 60:.0f} 分鐘顯示卡還是放不下,"
+                                                   "這個工作不讓語音離線")
+            else:
+                d = Decision("wait", "share_only", f"這個工作不讓語音離線,等空間({d.reason})")
         self._note(stage, d)
         if d.mode == "wait":
             if self._wait_from is None:
@@ -902,7 +919,7 @@ class GpuJob:
         gap = self.machine.gap_until - self.clock()
         loaded = self.speech.read().loaded
         if self.policy in ("auto", "yield") and loaded and not self.offload_useless and gap <= 0 and (
-                self.urgent() or self.people() is False):
+                self.urgent() or self.people() is False) and not self.share_only:
             return self._do(Action("offload", "spill_offload", "溢出了,這時候可以請語音讓出來"))
         self.crowded_mb = room
         return self._do(Action("suspend", "spill_wait", "溢出了,放掉顯存,等空間再從這裡接著做"))

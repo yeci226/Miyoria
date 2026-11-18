@@ -122,6 +122,9 @@ importers:
       lucide-react:
         specifier: ^0.515.0
         version: 0.515.0(react@19.3.1)
+      pitchy:
+        specifier: '4'
+        version: 4.1.0
       react:
         specifier: ^19.1.0
         version: 19.3.1
@@ -1112,6 +1115,9 @@ importers:
       '@miyoria/commands':
         specifier: workspace:*
         version: link:../commands
+      '@miyoria/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@miyoria/gate':
         specifier: workspace:*
         version: link:../gate
@@ -1130,6 +1136,9 @@ importers:
       '@miyoria/types':
         specifier: workspace:*
         version: link:../types
+      drizzle-orm:
+        specifier: 1.0.0-rc.5
+        version: 1.0.0-rc.5(zod@4.6.7)
       opencc-js:
         specifier: ^1.4.2
         version: 1.4.2
@@ -4308,6 +4317,9 @@ packages:
   fetch-cookie@3.2.0:
     resolution: {integrity: sha512-n61pQIxP25C6DRhcJxn7BDzgHP/+S56Urowb5WFxtcRMpU6drqXD90xjyAsVQYsNSNNVbaCcYY1DuHsdkZLuiA==}
 
+  fft.js@4.0.4:
+    resolution: {integrity: sha512-f9c00hphOgeQTlDyavwTtu6RiK8AIFjD6+jvXkNkpeQ7rirK3uFWVpalkoS4LAwbdX7mfZ8aoBfFVQX1Re/8aw==}
+
   figures@6.1.0:
     resolution: {integrity: sha512-d+l3qxjSesT4V7v2fh+QnmFnUWv9lSpjarhShNTgBOfA0ttejbQUAlHLitbjkoRiDulW0OPoQPYIGhIC8ohejg==}
     engines: {node: '>=18'}
@@ -4864,6 +4876,9 @@ packages:
   pino@10.4.0:
     resolution: {integrity: sha512-bk1ZMTwG/Vymx+zPoa28MhNzucFvXJWp3csrSuxuHPSMeUettaCoQ5Jvg07mtC4JGNpcfTwz41oVCnNgBK9+vA==}
     hasBin: true
+
+  pitchy@4.1.0:
+    resolution: {integrity: sha512-E8nQ8svBroGSMcc3qu2KvLHIuRYAIfrSkqDKWhjgj3WizseqWQXjQ+Q5t4g1CU73R5Euk+DAinyNFDK+KZw7zA==}
 
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
@@ -8117,6 +8132,8 @@ snapshots:
       set-cookie-parser: 2.7.3
       tough-cookie: 6.0.2
 
+  fft.js@4.0.4: {}
+
   figures@6.1.0:
     dependencies:
       is-unicode-supported: 2.1.0
@@ -8616,6 +8633,10 @@ snapshots:
       safe-stable-stringify: 2.5.0
       sonic-boom: 4.2.1
       thread-stream: 4.2.0
+
+  pitchy@4.1.0:
+    dependencies:
+      fft.js: 4.0.4
 
   pkce-challenge@5.0.1: {}
 

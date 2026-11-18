@@ -28,6 +28,8 @@ import { ImageGenService } from "./service.js";
 export class ImageGenModule implements Module {
   static readonly ID = "imagegen";
   readonly manifest = defineManifest(ImageGenModule.ID, "Image generation", {
+    icon: "image",
+    category: "system",
     description: "Pictures made on a ComfyUI server: Krea 2, MOSS-Image, Anima and workflow files",
     optional: ["sing"],
     configSchema: ImageGenConfigSchema,

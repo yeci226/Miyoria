@@ -14,6 +14,7 @@ import { Field } from "@/components/ui/label";
 import { Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { accountString, fmtDateTime, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
+import { CardsSection } from "./CardsSection";
 import { tierText } from "./heart";
 import { HeartSection, Section } from "./PersonHeart";
 import { AnchorsSection, EvidenceSection, HistorySection } from "./PersonLog";
@@ -290,6 +291,8 @@ function PersonBody({ profile }: { profile: PersonProfile }) {
         <WalletSection personId={profile.person.id} name={profile.person.display_name} />
 
         <QuestsSection personId={profile.person.id} />
+
+        <CardsSection personId={profile.person.id} />
 
         <Section title="帳號">
           <ul className="divide-y divide-line-soft rounded-md border">

@@ -1,0 +1,35 @@
+# The align environment of the sing worker: Qwen3-ASR-1.7B checks and transcribes a karaoke song's
+# lyrics, a wav2vec2 CTC model aligns them (run.py; docs/design/karaoke.md 「做了什麼第二步」).
+# Its own environment because qwen-asr pins transformers 4.57.6 and the worker's Seed-VC needs
+# 4.46.3. The worker runs `run.py` with this environment's Python (SING_ALIGN_PYTHON, default
+# .venv here); without it a karaoke song keeps its looked-up lyrics unchecked, as in step 1.
+# Not a package: `uv sync --frozen` installs the locked dependencies only.
+[project]
+name = "miyoria-worker-sing-align"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "torch==2.11.0",               # the CUDA build, see [tool.uv.sources]
+    "qwen-asr==0.0.6",             # brings transformers 4.57.6 (Wav2Vec2ForCTC is in there too)
+    "numpy>=1.26,<2.3",
+    # readings.py: Japanese readings (unidic-lite is the dictionary), romaji, pinyin, t2s
+    "fugashi>=1.5",
+    "unidic-lite>=1.0.8",
+    "pykakasi>=2.3",
+    "pypinyin>=0.55",
+    "opencc-python-reimplemented>=0.1.7",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]

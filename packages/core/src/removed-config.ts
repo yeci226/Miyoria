@@ -110,11 +110,72 @@ export const REMOVED_CONFIG_KEYS: readonly string[] = [
     "mood_drop",
     "game_share",
   ].map((key) => `modules.mind.${key}`),
+  // [modules.party]: the quiz, the word chain and the story chain are gone (phase 5 step 6).
+  ...[
+    "quiz_rounds",
+    "quiz_answer_secs",
+    "chain_idle_secs",
+    "story_turn_secs",
+    "story_max_lines",
+    "story_line_chars",
+  ].map((key) => `modules.party.${key}`),
   // [llm]: the model chain and the reasoning of the calls that are gone.
   "llm.purposes.mind",
   "llm.reasoning.appraise",
   "llm.reasoning.plan",
   "llm.reasoning.plan_daily",
+  // [modules.economy]: phase 5 slims what coins are for; each feature sold off takes its keys.
+  // Letters.
+  "modules.economy.letter",
+  // Buying an expression for her (her own purse still buys one for herself).
+  "modules.economy.expression_cooldown_s",
+  // Deals (a snack promised for a task), their trust cost and the owed meal that followed.
+  ...[
+    "deal_due_s",
+    "deal_timeout_s",
+    "deals_per_day",
+    "deal_sweep_s",
+    "deal_kept_trust",
+    "broken_trust",
+    "broken_affinity",
+    "broken_growth",
+    "broken_cap",
+    "owe_days",
+  ].map((key) => `modules.economy.${key}`),
+  // Commissions (paying her to write a poem, a name, a tool, a song, a line of voice).
+  ...[
+    "commission_prices",
+    "commissions_per_day",
+    "commissions_open",
+    "commission_days",
+    "commission_share",
+  ].map((key) => `modules.economy.${key}`),
+  // Her weekly shop (titles and collectibles on a shelf that changed every week).
+  ...["shop_catalog", "shop_slots", "shop_her_share"].map((key) => `modules.economy.${key}`),
+  // The global hunger limit for feeding, replaced by a per-person one (feed_hunger_cap).
+  "modules.economy.full_below",
+  // Song tickets and dedications (extras on a song request).
+  ...["song_ticket", "song_tickets_per_day", "dedication", "dedications_per_day"].map(
+    (key) => `modules.economy.${key}`,
+  ),
+  // Goal pledges (the crowdfunding goals people pledged coins to).
+  ...["goal_max_target", "goal_max_days", "goal_pledge_max", "goal_keep_days"].map(
+    (key) => `modules.economy.${key}`,
+  ),
+  // Drawing collectibles (the album, the odds, the pity and giving spares), replaced by the cards
+  // plugin's daily card and dex.
+  ...[
+    "draw_price",
+    "draws_per_day",
+    "rarity_weights",
+    "draw_pity",
+    "item_gifts_per_day",
+    "collection_series",
+  ].map((key) => `modules.economy.${key}`),
+  // Re-drawing a card and picking its picture (paid card extras).
+  ...["card_reroll", "card_rerolls_per_day", "card_pose", "card_poses_per_day"].map(
+    (key) => `modules.economy.${key}`,
+  ),
 ];
 
 /** The removed paths `config` still holds, in the order of `REMOVED_CONFIG_KEYS`. */

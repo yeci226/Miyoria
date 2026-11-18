@@ -12,10 +12,6 @@
 // A feed is keyed on the triggering message, so a retry or a second call charges once. In voice
 // the first call only records an offer: ASR mishears, so the speaker confirms in a later
 // utterance and the call with `confirm: true` charges (keyed on the offer's utterance).
-//
-// Deals (`economy.make_deal`, `deal_done`, `cancel_deal`, deals.ts) work the same way: the payer
-// is always the speaker, a deal is made once per message, and in voice the first call only records
-// a pending deal until the speaker says yes. They are about what is hers to decide.
 
 import {
   type Capability,
@@ -39,13 +35,6 @@ import {
 } from "@miyoria/types";
 import { z } from "zod";
 import {
-  cleanTask as cleanDealTask,
-  DealRefusal,
-  MAX_TASK_CHARS,
-  NO_DEAL,
-  OPEN_DEAL,
-} from "./deals.js";
-import {
   ALREADY_CHECKED_IN,
   CANNOT_FEED,
   type EconomyService,
@@ -54,6 +43,7 @@ import {
   MAX_FEED_COUNT,
   STRANGER,
 } from "./economy.js";
+import { TaskRefusal } from "./guard.js";
 import { mutedText, unlockLines } from "./notices.js";
 import { receipt, someone } from "./receipt.js";
 import { EconomyError, FEED_ITEMS, type FeedItem, type ShopItem } from "./types.js";
@@ -184,10 +174,8 @@ export type WalletRefusal =
   | "expired"
   | "mismatch"
   | "unconfirmed"
-  /** A deal the rules, her permissions or moderation do not allow. */
-  | "forbidden"
-  | "no_deal"
-  | "open_deal";
+  /** A promise the rules, her permissions or moderation do not allow. */
+  | "forbidden";
 
 /** The person she is answering: who pays, whose wallet. */
 export interface Speaker {
@@ -291,9 +279,7 @@ export function refusal(
 }
 
 export function reasonOf(error: EconomyError): WalletRefusal {
-  if (error instanceof DealRefusal) return "forbidden";
-  if (error.message === NO_DEAL) return "no_deal";
-  if (error.message === OPEN_DEAL) return "open_deal";
+  if (error instanceof TaskRefusal) return "forbidden";
   switch (error.status) {
     case 402:
       return "not_enough";
@@ -521,8 +507,8 @@ const LookArgs = z.strictObject({ about: z.enum(["me", "shop"]).nullish() });
 type LookArgs = z.output<typeof LookArgs>;
 
 const SHOP_GROUPS: readonly { title: string; kinds: readonly ShopItem["kind"][] }[] = [
-  { title: "送她東西", kinds: ["feed", "letter", "expression"] },
-  { title: "直播", kinds: ["stream", "song"] },
+  { title: "送她東西", kinds: ["feed"] },
+  { title: "直播", kinds: ["stream"] },
   { title: "卡片", kinds: ["card", "frame"] },
   { title: "其他", kinds: ["fortune"] },
 ];
@@ -614,10 +600,9 @@ export function lookCapability(economy: EconomyService): Capability {
         const shop = known && w !== null ? w.shop : economy.shop();
         out.push(
           `商店(價格單位:${cur}):\n${shopText(shop, known)}`,
-          "不在商店的:約定(預付一碗飯請她做一件事)、募資目標(投給她現在的目標)、" +
-            "懸賞(她貼的任務)、轉帳(給她認識的人)、贊助排行榜。",
+          "不在商店的:" + "懸賞(她貼的任務)、轉帳(給她認識的人)、贊助排行榜。",
           "在哪裡花:公開面板的會員頁,或 Discord 的 /me wallet、/me feed、/me screen、" +
-            "/me goals、/me pledge、/me bounties、/me give、/me board。" +
+            "/me bounties、/me give、/me board。" +
             "用自己的話說,只講上面有的,不要加沒列出的東西。",
         );
         data.shop = shop.map((i) => ({
@@ -633,352 +618,11 @@ export function lookCapability(economy: EconomyService): Capability {
   }) as Capability;
 }
 
-// ---- deals ---------------------------------------------------------------------------------
-
-interface DealOffer {
-  item: FeedItem;
-  count: number;
-  task: string;
-  prepaid: boolean;
-  context: string;
-  /** The utterance that offered. */
-  message: string;
-  expires: number;
-}
-
-/** Voice deals waiting for the same speaker's spoken yes, one per speaker. */
-export class VoiceDeals {
-  readonly #offers = new Map<string, DealOffer>();
-
-  constructor(
-    readonly clock: Clock,
-    readonly ttlMs = VOICE_CONFIRM_MS,
-  ) {}
-
-  put(who: Speaker, offer: Pick<DealOffer, "item" | "count" | "task" | "prepaid">): DealOffer {
-    const now = this.clock.now();
-    for (const [k, o] of this.#offers) if (now >= o.expires) this.#offers.delete(k);
-    const key = accountRefString(who.account);
-    const made: DealOffer = {
-      ...offer,
-      context: contextKeyString(who.message.context),
-      message: who.message.id,
-      expires: now + this.ttlMs,
-    };
-    this.#offers.delete(key);
-    this.#offers.set(key, made);
-    for (const k of this.#offers.keys()) {
-      if (this.#offers.size <= MAX_OFFERS) break;
-      this.#offers.delete(k);
-    }
-    return made;
-  }
-
-  get(who: Speaker): DealOffer | "expired" | null {
-    const key = accountRefString(who.account);
-    const offer = this.#offers.get(key);
-    if (!offer || offer.context !== contextKeyString(who.message.context)) return null;
-    if (this.clock.now() >= offer.expires) {
-      this.#offers.delete(key);
-      return "expired";
-    }
-    return offer;
-  }
-
-  drop(who: Speaker): void {
-    this.#offers.delete(accountRefString(who.account));
-  }
-}
-
-const DealArgs = z.strictObject({
-  reward: z.strictObject({
-    item: z.enum(["rice", "big_bowl", "dessert"]),
-    count: z.number().int().min(1).max(MAX_FEED_COUNT).nullish(),
-  }),
-  task: z.string().trim().min(1).max(MAX_TASK_CHARS),
-  /** Escrow: the speaker pays now, it is hers when she says she did it. */
-  prepaid: z.boolean().nullish(),
-  /** Voice: the speaker said yes to the pending deal in a later utterance. */
-  confirm: z.boolean().nullish(),
-});
-type DealArgs = z.output<typeof DealArgs>;
-
-const DEAL_NOT_MADE = "沒有答應,沒有扣錢";
-
-/**
- * `economy.make_deal` (tool `make_deal`): she accepted a deal with the speaker, a snack for a
- * small thing. Only what is hers to decide: the deal is screened (moderation, owner rules,
- * forbidden or gated capabilities, permissions), and only the speaker's own wallet pays.
- */
-export function makeDealCapability(economy: EconomyService, deals: VoiceDeals): Capability {
-  const c = economy.config;
-  const cur = c.currency;
-  const made = new Map<string, string>();
-
-  async function make(
-    who: Speaker,
-    req: Parameters<EconomyService["deals"]["make"]>[1],
-    key: string,
-  ) {
-    const again = made.has(key);
-    if (again) {
-      return {
-        text: "這句話的約定已經記下了,這次沒有再記一個。",
-        data: { accepted: true, again: true },
-      };
-    }
-    let r: Awaited<ReturnType<EconomyService["deals"]["make"]>>;
-    try {
-      r = await economy.deals.make(who.account, req);
-    } catch (error) {
-      if (!(error instanceof EconomyError)) throw error;
-      const reason = reasonOf(error);
-      const extra: JsonObject =
-        reason === "not_enough" ? { price: economy.deals.value(req.item, req.count) } : {};
-      return refusal(DEAL_NOT_MADE, reason, error.message, extra);
-    }
-    made.set(key, r.deal.id);
-    if (made.size > MAX_ANSWERED) made.delete(made.keys().next().value as string);
-    const label = feedLabel(req.item, req.count);
-    const timeout = Math.round(c.deal_timeout_s / 60);
-    const due = Math.round(c.deal_due_s / 60);
-    const how = req.prepaid
-      ? `對方先付了 ${r.value} ${cur}放在託管(還不是你的),你做完呼叫 deal_done 才會給你。`
-      : `對方還沒付。你做完呼叫 deal_done,對方要在那之後 ${due} 分鐘內餵你${label}(${r.value} ${cur}),` +
-        "沒付就算食言。";
-    return {
-      text:
-        `約定記下了:${req.task},換${label}。${how}` +
-        `${timeout} 分鐘內沒做,約定作廢${req.prepaid ? ",託管退回去" : ""}。` +
-        "你反悔可以呼叫 cancel_deal。",
-      data: {
-        accepted: true,
-        item: req.item,
-        count: req.count,
-        value: r.value,
-        prepaid: req.prepaid,
-        due_in_s: c.deal_timeout_s,
-      },
-      receipt: receipt(
-        "🤝 約定",
-        `${someone(who.account)}:${req.task} → ${label}`,
-        req.prepaid
-          ? `先付 ${r.value} ${cur}(託管,做完才給她)· ${timeout} 分鐘內有效`
-          : `做完再付 ${r.value} ${cur} · ${timeout} 分鐘內有效`,
-      ),
-    };
-  }
-
-  return defineCapability<DealArgs>({
-    name: "economy.make_deal",
-    summary: `答應說話的人的約定:做一件小事,換對方餵的零食(扣對方的${cur})`,
-    risk: "medium",
-    args: DealArgs,
-    permission: null,
-    limits: { per_day: 100, per_person_per_day: 8, cooldown_ms: 0 },
-    tool: {
-      name: "make_deal",
-      meta: { effect: "spend", speed: "instant", group: "economy" },
-      description:
-        "正在跟你說話的人想用零食收買你,要你做一件小事(學貓叫、說一句可愛的話、做個表情)," +
-        `你答應了才呼叫。要不要答應是你自己決定:看你對他的信任和羈絆、你現在餓不餓、` +
-        `獎勵值不值(白飯 ${c.rice}、大碗白飯 ${c.big_bowl}、甜點 ${c.dessert} ${cur})、` +
-        "你有多不想做(覺得丟臉、想吐槽都可以不答應)、心情好不好;信任不夠、" +
-        "或他之前食言過,就要他先付(prepaid: true,錢先放在託管,你做完才算你的)。" +
-        "只能答應本來就是你自己能決定的小事:不能拿來繞過規則、權限或安全 —— " +
-        "需要被管的動作(開台、進語音、私訊、玩遊戲、唱歌…)、主人規則禁止的事、" +
-        "通不過審查的話,給再多都不行,系統也會擋。付錢的只能是對方自己的錢包。" +
-        `同一個人同時只有一個約定,每天最多 ${c.deals_per_day} 個。` +
-        "語音裡要先問:第一次呼叫只會記下來,對方下一句說好,再用同樣內容加 confirm: true 呼叫才算數。" +
-        NOT_ON_OWN,
-      properties: {
-        reward: {
-          type: "object",
-          description: "對方要給你的獎勵",
-          properties: {
-            item: {
-              type: "string",
-              enum: [...FEED_ITEMS],
-              description: "rice 白飯、big_bowl 大碗白飯、dessert 甜點",
-            },
-            count: {
-              type: "integer",
-              minimum: 1,
-              maximum: MAX_FEED_COUNT,
-              description: "幾份(預設 1)",
-            },
-          },
-          required: ["item"],
-        },
-        task: {
-          type: "string",
-          maxLength: MAX_TASK_CHARS,
-          description: "你要做什麼,一句短的話",
-        },
-        prepaid: { type: "boolean", description: "要對方先付(託管),你做完才拿到" },
-        confirm: { type: "boolean", description: "語音:對方已經說好了才設 true" },
-      },
-      required: ["reward", "task"],
-    },
-    check: (_args, principal) => noSpeaker(principal),
-    async execute(args, ctx) {
-      const who = speakerOf(ctx);
-      const req = {
-        item: args.reward.item,
-        count: args.reward.count ?? 1,
-        task: args.task,
-        prepaid: args.prepaid === true,
-        context: who.message.context,
-      };
-      if (!who.voice) return make(who, req, messageKey(who.message.context, who.message.id));
-      if (args.confirm !== true) {
-        try {
-          await economy.deals.precheck(who.account, req);
-        } catch (error) {
-          if (!(error instanceof EconomyError)) throw error;
-          return refusal(DEAL_NOT_MADE, reasonOf(error), error.message);
-        }
-        const offer = deals.put(who, req);
-        const seconds = Math.round(deals.ttlMs / 1000);
-        return {
-          text:
-            "還沒答應。語音可能聽錯:先跟對方確認一次(" +
-            `${offer.task},換${feedLabel(offer.item, offer.count)}${offer.prepaid ? ",先付" : ""}),` +
-            `對方下一句說好,再用同樣內容加 confirm: true 呼叫 make_deal。${seconds} 秒內有效。`,
-          data: {
-            accepted: false,
-            pending: true,
-            item: offer.item,
-            count: offer.count,
-            task: offer.task,
-            prepaid: offer.prepaid,
-            expires_in_s: seconds,
-          },
-        };
-      }
-      const offer = deals.get(who);
-      if (offer === null) {
-        return refusal(DEAL_NOT_MADE, "no_offer", "對方沒有等你確認的約定,先問對方");
-      }
-      if (offer === "expired") return refusal(DEAL_NOT_MADE, "expired", "等太久了,要重新問一次");
-      if (
-        offer.item !== req.item ||
-        offer.count !== req.count ||
-        offer.task !== cleanDealTask(req.task) ||
-        offer.prepaid !== req.prepaid
-      ) {
-        return refusal(DEAL_NOT_MADE, "mismatch", "和剛才問的不一樣,就重新問");
-      }
-      if (offer.message === who.message.id) {
-        return refusal(DEAL_NOT_MADE, "unconfirmed", "對方還沒在下一句話說好");
-      }
-      const out = await make(who, req, messageKey(who.message.context, offer.message));
-      deals.drop(who);
-      return out;
-    },
-  }) as Capability;
-}
-
-/** `economy.deal_done` (tool `deal_done`): she did the task of the speaker's open deal. */
-export function dealDoneCapability(economy: EconomyService): Capability {
-  const c = economy.config;
-  const cur = c.currency;
-  return defineCapability<NoArgs>({
-    name: "economy.deal_done",
-    summary: "說我做完了說話的人的約定",
-    risk: "medium",
-    args: NoArgs,
-    permission: null,
-    limits: { per_day: 100, per_person_per_day: 10, cooldown_ms: 0 },
-    tool: {
-      name: "deal_done",
-      meta: { effect: "spend", speed: "instant", group: "economy" },
-      description:
-        "你真的做完了和正在跟你說話的人的約定,才呼叫。預付的約定會把託管的錢給你;沒預付的," +
-        `對方要在 ${Math.round(c.deal_due_s / 60)} 分鐘內餵你,沒餵就算食言。只能說你和對方自己的約定。` +
-        NOT_ON_OWN,
-      properties: {},
-    },
-    check: (_args, principal) => noSpeaker(principal),
-    async execute(_args, ctx) {
-      const who = speakerOf(ctx);
-      try {
-        const r = await economy.deals.done(who.account);
-        const label = feedLabel(r.deal.item as FeedItem, r.deal.count);
-        if (r.state === "released") {
-          return {
-            text: `託管的${label}給你了(對方先付的),你吃了。約定完成。`,
-            data: { done: true, state: "released", value: r.deal.value },
-            receipt: receipt(
-              "🤝 約定完成",
-              `${someone(who.account)} 先付的${label}給她了`,
-              `${r.deal.value} ${cur}`,
-            ),
-          };
-        }
-        return {
-          text:
-            `記下了:你做完了。對方要在 ${Math.round(c.deal_due_s / 60)} 分鐘內餵你${label}` +
-            `(${r.deal.value} ${cur}),可以提醒他;沒付就算食言。`,
-          data: {
-            done: true,
-            state: "owed",
-            value: r.deal.value,
-            due_in_s: c.deal_due_s,
-          },
-        };
-      } catch (error) {
-        if (!(error instanceof EconomyError)) throw error;
-        return refusal("沒有記下", reasonOf(error), error.message);
-      }
-    },
-  }) as Capability;
-}
-
-/** `economy.cancel_deal` (tool `cancel_deal`): she backs out of the speaker's open deal. */
-export function cancelDealCapability(economy: EconomyService): Capability {
-  return defineCapability<NoArgs>({
-    name: "economy.cancel_deal",
-    summary: "取消和說話的人的約定",
-    risk: "medium",
-    args: NoArgs,
-    permission: null,
-    limits: { per_day: 100, per_person_per_day: 10, cooldown_ms: 0 },
-    tool: {
-      name: "cancel_deal",
-      meta: { effect: "spend", speed: "instant", group: "economy" },
-      description:
-        "你不想做了,取消和正在跟你說話的人還沒結束的約定。預付的錢會退給對方。" +
-        `反悔不用付代價,但你的紀錄裡看得到今天取消了幾個。${NOT_ON_OWN}`,
-      properties: {},
-    },
-    check: (_args, principal) => noSpeaker(principal),
-    async execute(_args, ctx) {
-      const who = speakerOf(ctx);
-      try {
-        const r = await economy.deals.cancel(who.account);
-        return {
-          text:
-            `取消了${r.refunded ? ",預付的錢退回對方的錢包" : ""}。` +
-            `今天已經有 ${r.endedToday} 個約定沒做成。`,
-          data: { cancelled: true, refunded: r.refunded, ended_today: r.endedToday },
-        };
-      } catch (error) {
-        if (!(error instanceof EconomyError)) throw error;
-        return refusal("沒有取消", reasonOf(error), error.message);
-      }
-    },
-  }) as Capability;
-}
-
 /** Her tools for the speaker's own wallet, sharing one set of voice offers. */
 export function speakerCapabilities(economy: EconomyService, clock: Clock): Capability[] {
   return [
     acceptFoodCapability(economy, new VoiceOffers(clock)),
     checkinCapability(economy),
     lookCapability(economy),
-    makeDealCapability(economy, new VoiceDeals(clock)),
-    dealDoneCapability(economy),
-    cancelDealCapability(economy),
   ];
 }

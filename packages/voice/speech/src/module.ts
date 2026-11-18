@@ -131,6 +131,8 @@ export interface SpeechModuleOptions {
 export class SpeechModule implements Module {
   static readonly ID = "speech";
   readonly manifest = defineManifest(SpeechModule.ID, "Speech", {
+    icon: "audio-lines",
+    category: "platform",
     description: "ASR / TTS providers with fallback chains",
   });
   readonly #config: SpeechConfig;

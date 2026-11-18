@@ -1,9 +1,9 @@
 // The fortune slip on the member page: one per local day, written by her for the person logged in.
+// It is drawn with the check-in (`POST /api/member/checkin { fortune: true }`); this only shows it.
 // Only a person she knows and has not blocked may draw (403, as everywhere).
 
 import { z } from "zod";
-import { EmptyRequestSchema } from "./member.js";
-import { IdempotencyHeaders, route } from "./route.js";
+import { route } from "./route.js";
 
 /** A field on a fortune slip: its name and what she wrote. */
 export const FortuneFieldSchema = z
@@ -37,24 +37,9 @@ export const FortuneTodaySchema = z
   .meta({ id: "ApiFortuneToday" });
 export type FortuneToday = z.output<typeof FortuneTodaySchema>;
 
-/** `POST /api/member/fortune`: the slip (today's own when one existed: nothing charged then). */
-export const FortuneDrawSchema = z
-  .object({ fortune: IssuedFortuneSchema, charged: z.number(), balance: z.number() })
-  .meta({ id: "ApiFortuneDraw" });
-export type FortuneDraw = z.output<typeof FortuneDrawSchema>;
-
 export const fortune = {
   today: route
     .meta({ audience: "member", permission: null, limited: true })
     .route({ method: "GET", path: "/api/member/fortune" })
     .output(FortuneTodaySchema),
-  /**
-   * Pays for today's slip, she writes it and it is kept. She cannot write now and the payment is
-   * given back (`503`); a retry with the key of an attempt that did not finish is `409`.
-   */
-  draw: route
-    .meta({ audience: "member", permission: null, limited: true })
-    .route({ method: "POST", path: "/api/member/fortune" })
-    .input(z.object({ headers: IdempotencyHeaders, body: EmptyRequestSchema }))
-    .output(FortuneDrawSchema),
 };

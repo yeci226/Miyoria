@@ -12,7 +12,7 @@ const RiseSchema = z.object({
   curiosity: rate().default(0.05),
   esteem: rate().default(0.04),
   /**
-   * About 16 minutes from full (0) to wanting food again (`[modules.economy] full_below`, 0.15) and
+   * About 16 minutes from full (0) to wanting food again (0.15) and
    * about 20 more per bowl of rice after that, so a busy channel can feed her several times an
    * hour (2026-11-09: at 0.25 she was full after a bowl or two and stayed so for 40 minutes);
    * talking does not fill her (`turn_hunger`).

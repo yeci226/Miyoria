@@ -9,9 +9,9 @@
 
 import { errorMessage } from "@miyoria/runtime/kernel";
 import { type AccountRef, type ContextKey, newId, safeName, toTimestamp } from "@miyoria/types";
-import { cleanTask, guardTask } from "./deals.js";
 import type { EconomyService } from "./economy.js";
 import { STRANGER } from "./economy.js";
+import { cleanTask, guardTask } from "./guard.js";
 import { PURSE_PLATFORM, pickById } from "./purse.js";
 import { type Bounty, BountyStoreKey } from "./records.js";
 import { type BountyView, EconomyError } from "./types.js";
@@ -40,7 +40,7 @@ export class BountyBoard {
     return this.#store().list(this.e.profile, { statuses: ["open"], limit: 50 });
   }
 
-  /** She posts a bounty, paid from her purse. Throws `EconomyError` / `DealRefusal`. */
+  /** She posts a bounty, paid from her purse. Throws `EconomyError` / `TaskRefusal`. */
   async post(req: PostBountyRequest): Promise<Bounty> {
     const c = this.e.config;
     const task = cleanTask(req.task);

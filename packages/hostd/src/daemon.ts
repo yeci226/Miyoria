@@ -1120,6 +1120,9 @@ export class Daemon implements HostApi {
       results.push(
         await installService(entry, host, this.#installDeps(), {
           onlyStale: params.force !== true,
+          // Files are downloaded only after the person agreed: `miyoria update` asks, then
+          // installs each service that needs them with `service.install`.
+          noFiles: true,
           ...(onLine !== undefined ? { onLine } : {}),
           ...(signal !== undefined ? { signal } : {}),
         }),

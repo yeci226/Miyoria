@@ -7,7 +7,7 @@ import type { HostService } from "@miyoria/contracts/host";
 import type { Tenant } from "./state.js";
 
 export interface RunningService {
-  service: HostService;
+  service: Omit<HostService, "install">;
   /** Base URL, without a trailing slash. */
   url: string;
 }

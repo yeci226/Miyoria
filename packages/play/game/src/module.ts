@@ -148,6 +148,8 @@ interface Running {
 export class GameModule implements Module {
   static readonly ID = "game";
   readonly manifest = defineManifest(GameModule.ID, "Game director", {
+    icon: "gamepad-2",
+    category: "play",
     description: "Slow loop: picks game goals, acts through game adapters, comments live",
     optional: ["llm", "commands", "queue", "extensions"],
     configSchema: GameConfigSchema,

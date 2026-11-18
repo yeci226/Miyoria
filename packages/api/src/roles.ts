@@ -187,23 +187,33 @@ export const roleRpc = {
   list: os.roles.list.handler(({ context }) => allRoles(context.state)),
   get: os.roles.get.handler(({ input, context }) => role(context.state, input.params.name)),
   upsert: os.roles.upsert.handler(({ input, context }) =>
-    upsertRole(context.state, context.c, input.params.name, input.body),
+    recheck(context.state, upsertRole(context.state, context.c, input.params.name, input.body)),
   ),
   remove: os.roles.remove.handler(({ input, context }) =>
-    deleteRole(context.state, context.c, input.params.name),
+    recheck(context.state, deleteRole(context.state, context.c, input.params.name)),
   ),
   assignments: os.roles.assignments.handler(({ context }) => assignments(context.state)),
   assign: os.roles.assign.handler(({ input, context }) =>
-    assign(context.state, context.c, input.body),
+    recheck(context.state, assign(context.state, context.c, input.body)),
   ),
   revoke: os.roles.revoke.handler(({ input, context }) =>
-    revoke(context.state, context.c, input.body),
+    recheck(context.state, revoke(context.state, context.c, input.body)),
   ),
   mappings: os.roles.mappings.handler(({ input, context }) => mappings(context.state, input.query)),
   setMapping: os.roles.setMapping.handler(({ input, context }) =>
-    setMapping(context.state, context.c, input.body),
+    recheck(context.state, setMapping(context.state, context.c, input.body)),
   ),
   removeMapping: os.roles.removeMapping.handler(({ input, context }) =>
-    removeMapping(context.state, context.c, input.body),
+    recheck(context.state, removeMapping(context.state, context.c, input.body)),
   ),
 };
+
+/**
+ * After a change to who holds what: every panel session is checked again on its next request, so
+ * one whose tier no longer fits (a member granted panel access, an admin who lost it) ends then.
+ */
+async function recheck<T>(state: ApiState, change: Promise<T>): Promise<T> {
+  const result = await change;
+  state.auth.sessions.recheckAll();
+  return result;
+}

@@ -96,6 +96,8 @@ describe("only the main line acts", () => {
         "packages/play/game/src/chat.ts",
         "packages/play/game/src/commands.ts",
         "packages/play/game/src/director.ts",
+        // A slash command asking for a party game: a person, not her.
+        "packages/play/party/src/commands.ts",
         "packages/sing/src/commands.ts",
         "packages/stage/src/link/commands.ts",
         "packages/stage/src/link/module.ts",

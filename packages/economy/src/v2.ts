@@ -4,9 +4,7 @@
 import { errorMessage } from "@miyoria/runtime/kernel";
 import type { AccountRef } from "@miyoria/types";
 import { AchievementDesk } from "./achievements.js";
-import { Collection } from "./collection.js";
-import { CommissionDesk } from "./commissions.js";
-import type { EconomyConfig, Rarity } from "./config.js";
+import type { EconomyConfig } from "./config.js";
 import type { EconomyService, Member } from "./economy.js";
 import { Health } from "./health.js";
 import { PartyRewardDesk } from "./party.js";
@@ -15,20 +13,12 @@ import { PredictionDesk } from "./predictions.js";
 import { QuestDesk } from "./quests.js";
 import type { CoinEntry } from "./records.js";
 import { RoomDesk } from "./room.js";
-import { ShopDesk } from "./shop.js";
 import type {
   AchievementsView,
   AchievementUnlocked,
-  AlbumView,
   BetResult,
-  CommissionKind,
-  CommissionResult,
-  CommissionView,
-  DrawResult,
   Economy2,
-  GiveItemResult,
   HealthView,
-  OddsRow,
   PredictionView,
   QuestId,
   QuestResult,
@@ -36,8 +26,6 @@ import type {
   ResolveResult,
   RoomFundResult,
   RoomView,
-  ShopBuyResult,
-  ShopView,
 } from "./v2-types.js";
 
 const ACTIVITY_LABEL: Readonly<Record<string, string>> = {
@@ -61,18 +49,8 @@ export function labelV2(r: CoinEntry, _config: EconomyConfig): string | null {
       return "押預測";
     case "bet_win":
       return "預測猜中了";
-    case "draw":
-      return "抽收藏";
     case "room":
       return "一起佈置她的房間";
-    case "shop":
-      return "她的小店";
-    case "shop_pay":
-      return "小店的收入";
-    case "commission":
-      return "委託她";
-    case "commission_pay":
-      return "委託做完了";
     case "quest":
       return r.ref === "all" ? "今天的任務全部完成" : "每日任務";
     default:
@@ -85,24 +63,18 @@ export class V2 implements Economy2 {
   /** What party games pay when one ends (party.ts). */
   readonly party: PartyRewardDesk;
   readonly quest: QuestDesk;
-  readonly collection: Collection;
   readonly achievement: AchievementDesk;
   readonly prediction: PredictionDesk;
-  readonly commissionDesk: CommissionDesk;
   readonly roomDesk: RoomDesk;
-  readonly shopDesk: ShopDesk;
   readonly healthDesk: Health;
 
   constructor(readonly e: EconomyService) {
     this.play = new PlayDesk(e);
     this.party = new PartyRewardDesk(e);
     this.quest = new QuestDesk(e);
-    this.collection = new Collection(e);
     this.achievement = new AchievementDesk(e);
     this.prediction = new PredictionDesk(e);
-    this.commissionDesk = new CommissionDesk(e);
     this.roomDesk = new RoomDesk(e);
-    this.shopDesk = new ShopDesk(e);
     this.healthDesk = new Health(e);
   }
 
@@ -126,7 +98,6 @@ export class V2 implements Economy2 {
   /** Settles what ran out: predictions nobody called, stakes a crash left halfway. */
   async sweep(): Promise<void> {
     await this.prediction.sweep();
-    await this.commissionDesk.sweep();
   }
 
   /**
@@ -148,34 +119,6 @@ export class V2 implements Economy2 {
 
   completeQuest(account: AccountRef, quest: QuestId, topic?: string): Promise<QuestResult> {
     return this.quest.completeFor(account, quest, topic);
-  }
-
-  album(account: AccountRef): Promise<AlbumView> {
-    return this.collection.album(account);
-  }
-
-  odds(): OddsRow[] {
-    return this.collection.odds();
-  }
-
-  rarityOdds(): { rarity: Rarity; percent: number }[] {
-    return this.collection.rarityOdds();
-  }
-
-  rollRarity(): Rarity {
-    return this.collection.rollRarity();
-  }
-
-  draw(account: AccountRef, key: string): Promise<DrawResult> {
-    return this.collection.draw(account, key);
-  }
-
-  giveItem(from: AccountRef, to: AccountRef, item: string, key: string): Promise<GiveItemResult> {
-    return this.collection.give(from, to, item, key);
-  }
-
-  recordCard(account: AccountRef, serial: string, traits: readonly string[]): Promise<number> {
-    return this.collection.recordCard(account, serial, traits);
   }
 
   achievements(account: AccountRef): Promise<AchievementsView> {
@@ -212,35 +155,6 @@ export class V2 implements Economy2 {
     return this.prediction.cancel(ref);
   }
 
-  commissionMenu(): { kind: CommissionKind; label: string; price: number }[] {
-    return this.commissionDesk.menu();
-  }
-
-  commission(
-    account: AccountRef,
-    kind: CommissionKind,
-    brief: string,
-    key: string,
-  ): Promise<CommissionResult> {
-    return this.commissionDesk.ask(account, kind, brief, key);
-  }
-
-  commissions(account: AccountRef): Promise<CommissionView[]> {
-    return this.commissionDesk.mine(account);
-  }
-
-  commissionsWaiting(): Promise<CommissionView[]> {
-    return this.commissionDesk.waiting();
-  }
-
-  deliverCommission(ref: string, text: string): Promise<CommissionView> {
-    return this.commissionDesk.deliver(ref, text);
-  }
-
-  declineCommission(ref: string, why: string): Promise<CommissionView> {
-    return this.commissionDesk.decline(ref, why);
-  }
-
   room(): Promise<RoomView[]> {
     return this.roomDesk.view();
   }
@@ -252,14 +166,6 @@ export class V2 implements Economy2 {
     key: string,
   ): Promise<RoomFundResult> {
     return this.roomDesk.fund(account, item, amount, key);
-  }
-
-  shop(account: AccountRef): Promise<ShopView> {
-    return this.shopDesk.view(account);
-  }
-
-  buyFromShop(account: AccountRef, item: string, key: string): Promise<ShopBuyResult> {
-    return this.shopDesk.buy(account, item, key);
   }
 
   health(): Promise<HealthView> {

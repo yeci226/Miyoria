@@ -168,6 +168,8 @@ export {
   HeartStore,
   type HeartTables,
   heartTables,
+  type TierEntered,
+  type TierListener,
 } from "./store.js";
 export { MIN_TOGETHER_MS, type SongHeard, type StayEnded, Together } from "./together.js";
 export { recordOf, viewOf } from "./view.js";

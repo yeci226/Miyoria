@@ -18,7 +18,7 @@ import {
 } from "../src/client.js";
 import { SingConfigSchema } from "../src/config.js";
 import { FailoverSingWorker } from "../src/failover.js";
-import { SingModule, workerUrls } from "../src/module.js";
+import { karaokeWorker, SingModule, workerUrls } from "../src/module.js";
 import { FakeEndpoints } from "./endpoints.js";
 
 const RETRY = 30_000;
@@ -124,6 +124,61 @@ class FakeWorker implements SingWorker {
   async download(song: string): Promise<void> {
     this.#call(`download ${song}`);
     if (!this.cached.has(song)) throw new SingWorkerError(`no song ${song}`, { status: 404 });
+  }
+
+  /** Karaoke songs this worker made. */
+  readonly karaoke = new Set<string>();
+
+  finishKaraoke(id: string, song: string): void {
+    Object.assign(this.jobs.get(id) ?? {}, {
+      state: "done",
+      progress: 1,
+      karaoke: { id: song, title: "K", artist: null, duration_s: 10, quality: null },
+    });
+    this.karaoke.add(song);
+  }
+
+  async karaokeFile(song: string, file: string): Promise<void> {
+    this.#call(`karaoke ${song} ${file}`);
+    if (!this.karaoke.has(song)) throw new SingWorkerError(`no karaoke ${song}`, { status: 404 });
+  }
+
+  async karaokeKey(song: string, semitones: number) {
+    this.#call(`key ${song} ${semitones}`);
+    if (!this.karaoke.has(song)) throw new SingWorkerError(`no karaoke ${song}`, { status: 404 });
+    return { file: `karaoke.k+${semitones}.m4a`, semitones, cached: false, method: "fake" };
+  }
+
+  /** Recordings this worker read (their sizes). */
+  readonly voices: number[] = [];
+
+  async karaokeVoice(bytes: Uint8Array) {
+    this.#call("voice");
+    if (this.slow) {
+      throw new SingWorkerError(`song worker unreachable at ${this.name}: timeout`, {
+        unreachable: true,
+        maybeReceived: true,
+      });
+    }
+    this.voices.push(bytes.length);
+    return {
+      hz: 50 as const,
+      midi: [60, null],
+      seconds: 0.04,
+      level_db: -20,
+      floor_db: -60,
+      device: "cpu",
+      method: "fake",
+    };
+  }
+
+  /** Rooms whose stream batches this worker answered. */
+  readonly streamed: string[] = [];
+
+  async karaokeStream(request: { room: string }) {
+    this.#call(`stream ${request.room}`);
+    this.streamed.push(request.room);
+    return { hz: 50 as const, streams: [], lost: [], device: "cpu", method: "fake" };
   }
 
   async health(): Promise<string | null> {
@@ -342,6 +397,67 @@ describe("FailoverSingWorker", () => {
     expect(await worker.audio("yt-2", "play_mix.pcm")).toEqual(new Int16Array([5]));
     await worker.download("yt-2", "video.mp4", "x");
     expect(remote.calls).not.toContain("audio yt-2");
+  });
+
+  it("asks for a karaoke job and fetches its files from the worker that made it", async () => {
+    const { remote, local, worker } = setup();
+    const kw = karaokeWorker(worker);
+    const job = await kw.prepare({ url: "https://youtu.be/x" });
+    remote.finishKaraoke(job.id, "k-1");
+    expect((await kw.job(job.id)).karaoke?.id).toBe("k-1");
+    await kw.file("k-1", "reference.json", "x");
+    expect(remote.calls).toContain("karaoke k-1 reference.json");
+    await kw.file("k-1", "play_karaoke.pcm", "x");
+    await kw.file("k-1", "play_karaoke.k+3.pcm", "x");
+    expect(remote.calls).toContain("karaoke k-1 play_karaoke.pcm");
+    expect(remote.calls).toContain("karaoke k-1 play_karaoke.k+3.pcm");
+    expect(local.calls.some((c) => c.startsWith("karaoke"))).toBe(false);
+    // Never one of her covers.
+    expect((await worker.songs()).map((s) => s.id)).not.toContain("k-1");
+  });
+
+  it("reads a recording on the first worker that answers, never sending it twice", async () => {
+    const { remote, local, worker } = setup();
+    const kw = karaokeWorker(worker);
+    remote.up = false;
+    const pitch = await kw.voice({ bytes: new Uint8Array(10), type: "audio/webm" });
+    expect(pitch.midi).toEqual([60, null]);
+    expect(local.voices).toEqual([10]);
+    // One that timed out may be reading it: the next is not asked.
+    const again = setup();
+    again.remote.slow = true;
+    await expect(
+      karaokeWorker(again.worker).voice({ bytes: new Uint8Array(3), type: "audio/ogg" }),
+    ).rejects.toThrow(/timeout/);
+    expect(again.local.voices).toEqual([]);
+  });
+
+  it("keeps a karaoke room's voice streams on one worker, failing at once while it is away", async () => {
+    const { remote, local, worker } = setup();
+    const kw = karaokeWorker(worker);
+    const batch = { room: "R1", chunks: [], drop: [] };
+    await kw.stream?.(batch);
+    expect(remote.streamed).toEqual(["R1"]);
+    remote.up = false;
+    await expect(kw.stream?.(batch)).rejects.toThrow(/unreachable/);
+    // Not moved: the next batch fails too, at once, and the other worker never sees the room.
+    await expect(kw.stream?.(batch)).rejects.toThrow(/unreachable/);
+    expect(local.streamed).toEqual([]);
+    // Another room starts on the worker that answers.
+    await kw.stream?.({ room: "R2", chunks: [], drop: [] });
+    expect(local.streamed).toEqual(["R2"]);
+  });
+
+  it("asks for a karaoke job without a video when told so", async () => {
+    const { remote, worker } = setup();
+    const submitted: unknown[] = [];
+    const submit = remote.submit.bind(remote);
+    remote.submit = async (q) => {
+      submitted.push(q);
+      return submit(q);
+    };
+    await karaokeWorker(worker).prepare({ query: "a", video: false });
+    expect(submitted[0]).toMatchObject({ purpose: "karaoke", karaoke_video: false });
   });
 
   it("fetches a song from another worker that has it when its own is unreachable", async () => {
@@ -654,5 +770,19 @@ describe("HttpSingWorker through the registry", () => {
 
     source.linkError = relayError(true);
     expect((await rejection(worker.submit({ query: "a" }))).maybeReceived).toBe(true);
+  });
+});
+
+describe("a list that was empty when it was made", () => {
+  it("asks its owner again before it picks a worker", async () => {
+    let known: { name: string; worker: SingWorker }[] = [];
+    const failover: FailoverSingWorker = new FailoverSingWorker([], {
+      retryMs: 1000,
+      refresh: () => failover.update(known),
+    });
+    expect(failover.current()).toBeNull();
+    known = [{ name: "late", worker: new FakeWorker("late") }];
+    expect(failover.current()).toBe("late");
+    expect(await failover.health()).toBeNull();
   });
 });

@@ -187,13 +187,6 @@ export function socialEffects(kind: string, c: RuleContext): Effect[] | null {
         emo("sorrow", a(c.crush ? S.medium : S.weak)),
         { type: "toward", emotion: "resentment", amount: a(S.medium) },
       ];
-    // A deal she kept her side of, and they did not pay (the economy's `broken_promise`).
-    case "broken_promise":
-      return [
-        emo("anger", a(S.medium)),
-        emo("sorrow", a(S.weak)),
-        { type: "toward", emotion: "resentment", amount: a(S.strong) },
-      ];
     // Her song was cut off (skipped or stopped); she does not know it was not about her singing.
     case "song_cut":
       return [emo("sorrow", a(S.weak)), emo("frustration", a(S.medium)), drive("esteem", 0.1)];

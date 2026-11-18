@@ -394,5 +394,4 @@ const REASONS: Readonly<Record<string, string>> = {
   insult: "罵我",
   harassment: "威脅、騷擾我",
   flirt_too_far: "對我講噁心的話",
-  broken_promise: "答應給我零食卻沒給",
 };

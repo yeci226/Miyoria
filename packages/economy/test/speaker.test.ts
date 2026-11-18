@@ -329,12 +329,12 @@ describe("voice", () => {
     expect(short.data).toMatchObject({ accepted: false, reason: "not_enough" });
     const dave = await say(r, "accept_food", DAVE, "u2", { item: "rice" }, VOICE);
     expect(dave.data).toMatchObject({ reason: "stranger", message: STRANGER });
-    r.hunger.value = 0.1;
+    (r.economy.config as { feed_hunger_cap: number }).feed_hunger_cap = 0;
     await fund(r, ALICE, 100);
     const full = await say(r, "accept_food", ALICE, "u3", { item: "rice" }, VOICE);
     expect(full.data).toMatchObject({ reason: "full", message: FULL });
     // None of them left an offer to confirm.
-    r.hunger.value = 0.8;
+    (r.economy.config as { feed_hunger_cap: number }).feed_hunger_cap = 0.85;
     const yes = await say(r, "accept_food", ALICE, "u4", { item: "rice", confirm: true }, VOICE);
     expect(yes.data).toMatchObject({ reason: "no_offer" });
     expect(await balance(r, ALICE)).toBe(105);
@@ -354,11 +354,11 @@ describe("the panel's refusals, as data", () => {
   it("full, stranger, blocked and not enough charge nothing and say why", async () => {
     const r = await rig();
     await fund(r, ALICE, 15);
-    r.hunger.value = 0.1;
+    (r.economy.config as { feed_hunger_cap: number }).feed_hunger_cap = 0;
     const full = await say(r, "accept_food", ALICE, "m1", { item: "rice" });
     expect(full.data).toMatchObject({ accepted: false, reason: "full", message: FULL });
     expect(full.text).toContain("用你自己的話");
-    r.hunger.value = 0.8;
+    (r.economy.config as { feed_hunger_cap: number }).feed_hunger_cap = 0.85;
     const short = await say(r, "accept_food", ALICE, "m2", { item: "big_bowl" });
     expect(short.data).toMatchObject({
       accepted: false,
@@ -445,14 +445,14 @@ describe("check_coins", () => {
   it("marks what cannot be bought right now, with the reason", async () => {
     const r = await rig();
     await fund(r, ALICE, 5);
-    r.hunger.value = 0;
+    (r.economy.config as { feed_hunger_cap: number }).feed_hunger_cap = 0;
     const out = await say(r, "check_coins", ALICE, "m1");
-    expect(out.text).toContain("一碗白飯 10(現在不行:她吃飽了)");
+    expect(out.text).toContain("一碗白飯 10(現在不行:你今天餵夠了)");
     expect(out.text).toContain("魚幣不夠");
     const rice = (out.data.shop as { id: string; available: boolean; why: string }[]).find(
       (i) => i.id === "rice",
     );
-    expect(rice).toMatchObject({ available: false, why: "她吃飽了" });
+    expect(rice).toMatchObject({ available: false, why: "你今天餵夠了" });
   });
 
   it("gives only the shop to a stranger or a blocked person", async () => {

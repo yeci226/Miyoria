@@ -1,12 +1,36 @@
 // Installing services into a host (docs/design/v5-hostd.md §9).
 export {
+  checkDownloadUrl,
   DOWNLOAD_HOSTS,
   DownloadError,
   type DownloadOptions,
+  type DownloadOutcome,
   downloadFile,
   type Fetch,
   fileSha256,
+  formatBytes,
+  hostAllowed,
+  IDLE_TIMEOUT_MS,
+  MAX_REDIRECTS,
+  RETRY_DELAYS_MS,
 } from "./download.js";
+export {
+  adoptFile,
+  adoptSource,
+  bytesToFetch,
+  type CheckMode,
+  checkFiles,
+  checkFilesQuick,
+  type FileState,
+  type FileStatus,
+  fileDestIn,
+  freeBytes,
+  missingRequiredFiles,
+  SPACE_MARGIN_BYTES,
+  spaceProblem,
+  VerifiedCache,
+  verifiedCacheFile,
+} from "./files.js";
 export { hfCacheHas, hfCacheName, hfDir, hfRepoOf, hfRevisions } from "./hf.js";
 export {
   type GcResult,
@@ -35,6 +59,7 @@ export {
   type RunSpec,
 } from "./run.js";
 export {
+  checkServiceFiles,
   envDirOf,
   extrasOf,
   fileDest,
@@ -45,6 +70,8 @@ export {
   installService,
   managedEnvDir,
   manualPath,
+  type PresentFile,
+  presentFileHashes,
   type RemoveResult,
   removeService,
   userEnvDir,

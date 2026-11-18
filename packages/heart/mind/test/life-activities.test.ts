@@ -27,7 +27,6 @@ const TODAY = new Set([
   "sing.play",
   "game.start",
   "economy.post_bounty",
-  "economy.propose_goal",
   "chat.start",
   "chat.dm",
 ]);

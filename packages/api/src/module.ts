@@ -25,6 +25,7 @@ import { isIPv4, isIPv6 } from "node:net";
 import { createAdaptorServer, type ServerType } from "@hono/node-server";
 import { BondRingImagesKey } from "@miyoria/heart/person";
 import { tokenize } from "@miyoria/memory/memory";
+import { CardFacesKey } from "@miyoria/play/cards";
 import {
   defineManifest,
   errorMessage,
@@ -32,13 +33,16 @@ import {
   type Module,
   type ModuleContext,
 } from "@miyoria/runtime/kernel";
-import { SettingsStoreKey } from "@miyoria/store";
-import { ActivityManagerKey, Events, KeepsakesKey } from "@miyoria/types";
+import { ArtifactStoreKey, SettingsStoreKey } from "@miyoria/store";
+import { ActivityManagerKey, Events, KeepsakesKey, PicturesKey } from "@miyoria/types";
 import { z } from "zod";
+import { CardFaceService } from "./card-faces.js";
 import { KeepsakeService } from "./keepsakes.js";
 import { MONITOR_TOPICS, Monitor } from "./monitor.js";
 import { DiscordOAuthConfigSchema, OAuth, recheckMs, sessionTtlMs } from "./oauth.js";
 import { PANEL_DIR_ENV, pickDir } from "./panel.js";
+import { memberPicture } from "./picture-data.js";
+import { backgroundPath, PictureRenderer, PictureService } from "./pictures.js";
 import { PublicConfigSchema, PublicSide, STATS_EVERY_MS } from "./public.js";
 import { RingImages } from "./ring-image.js";
 import { createApp } from "./server.js";
@@ -74,6 +78,12 @@ export const ApiConfigSchema = z.object({
   metrics_public: z.boolean().default(false),
   /** The page anyone can see and the page of each logged-in person. On by default. */
   public: PublicConfigSchema.prefault({}),
+  /**
+   * The picture behind her picture messages (docs/design/v5-play.md §11.5), relative to the
+   * working directory. Empty: the public page's own (`background.local.jpg` in the panel's
+   * folder); without either the panel's 暮色 gradient.
+   */
+  picture_background: z.string().default(""),
 });
 export type ApiConfig = z.output<typeof ApiConfigSchema>;
 
@@ -175,6 +185,8 @@ async function close(server: ServerType): Promise<void> {
 export class ApiModule implements Module {
   static readonly ID = "api";
   readonly manifest = defineManifest(ApiModule.ID, "Admin API", {
+    icon: "server",
+    category: "platform",
     description: "HTTP + SSE API for the CLI and the admin panel",
     configSchema: ApiConfigSchema,
   });
@@ -250,8 +262,20 @@ export class ApiModule implements Module {
     );
     // The same cards and slips the member page gives, for a command in chat.
     ctx.provide(KeepsakesKey, new KeepsakeService(state));
+    // Her words on a milestone card, which the cards module issues with no page open.
+    ctx.provide(CardFacesKey, new CardFaceService(state));
     // The bond ring's picture for `/me profile` and `/admin person show`.
     ctx.provide(BondRingImagesKey, new RingImages());
+    // Her picture messages: the templates drawn to PNG, kept in the artifact store.
+    const background = backgroundPath(config.picture_background, panelDir);
+    const pictures = new PictureRenderer({
+      background: () => background,
+      store: () => ctx.services.get(ArtifactStoreKey),
+    });
+    ctx.provide(
+      PicturesKey,
+      new PictureService(pictures, (who, kind) => memberPicture(state, who, kind)),
+    );
     const app = createApp(state, { metricsPublic: config.metrics_public });
     const server = createAdaptorServer({ fetch: app.fetch });
     let address: AddressInfo;

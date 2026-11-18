@@ -1,5 +1,9 @@
 // `vite build`, but only where Live2D's files were fetched (vendor.md). They are not in git, so a
 // fresh checkout (CI, a machine that never renders cards) has nothing to build: say so and stop.
+//
+// Two builds: the page the headless browser opens (`dist/`), and `src/render.ts` for Node
+// (`dist/node/render.js`, playwright-core left as an import), which the Core loads from this folder
+// when `[modules.cards] portrait = "live2d"`.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -15,5 +19,16 @@ if (missing.length > 0) {
   );
   process.exit(0);
 }
-const vite = spawnSync("vite", ["build"], { cwd: root, stdio: "inherit", shell: true });
-process.exit(vite.status ?? 1);
+const vite = (args) => spawnSync("vite", args, { cwd: root, stdio: "inherit", shell: true });
+const page = vite(["build"]);
+if (page.status !== 0) process.exit(page.status ?? 1);
+const node = vite([
+  "build",
+  "--ssr",
+  "src/render.ts",
+  "--outDir",
+  "dist/node",
+  "--emptyOutDir",
+  "false",
+]);
+process.exit(node.status ?? 1);

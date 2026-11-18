@@ -438,6 +438,29 @@ def test_an_8_gb_card_with_people_defers_then_takes_a_short_silence(sing, machin
     assert any(d["code"] == "short_silence" for d in done["song"]["gpu"]["decisions"])
 
 
+@pytest.mark.parametrize("policy", ["auto", "yield", "offload"])
+def test_a_karaoke_job_never_takes_her_voice_and_gives_up_without_room(sing, machine, monkeypatch, policy):  # noqa: F811
+    monkeypatch.setenv("SING_GPU_POLICY", policy)
+    monkeypatch.setenv("SING_WAIT_MAX_S", "0.3")
+    card = machine(total=8 * GB, others=1000)
+    nobody(sing)  # a cover would take her voice at once here (test above)
+    job = sing.post("/jobs", json={"query": f"sim karaoke 8 gb {policy}", "purpose": "karaoke"}).json()["job"]["id"]
+    people(sing, 0, urgent=[job])  # and Core asking for it now changes nothing
+    done = wait(sing, job)
+    assert done["state"] == "failed" and "不讓語音離線" in done["error"], done
+    assert card.calls == [] and done["exclusive"] is None
+
+
+def test_a_karaoke_job_shares_the_card_when_it_fits(sing, machine):  # noqa: F811
+    card = machine(total=24 * GB, others=5000)
+    people(sing)
+    done = wait(sing, sing.post("/jobs", json={"query": "sim karaoke 24 gb", "purpose": "karaoke"}).json()["job"]["id"])
+    assert done["state"] == "done", done
+    assert card.calls == [] and done["exclusive"] == "shared" and done["karaoke"]["id"].startswith("k-")
+    # Its last GPU stage is the lyrics' aligner (the mock answers for the align environment).
+    assert done["gpu"]["mode"] == "share" and done["gpu"]["stage"] == "lyrics_align"
+
+
 def test_without_cuda_nothing_is_asked_of_anyone(sing, machine, monkeypatch):  # noqa: F811
     card = machine(total=8 * GB, others=0)
     monkeypatch.setattr(card.backend, "uses_cuda", lambda: False)

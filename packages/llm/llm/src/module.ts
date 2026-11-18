@@ -4,10 +4,19 @@ import {
   errorMessage,
   interval,
   type Module,
+  type ModuleCard,
+  type ModuleCardFact,
   type ModuleContext,
 } from "@miyoria/runtime/kernel";
 import { StoreKey } from "@miyoria/store";
-import { Events, type JsonValue, REASONING_LEVELS, serviceKey } from "@miyoria/types";
+import {
+  type Clock,
+  Events,
+  type JsonValue,
+  REASONING_LEVELS,
+  serviceKey,
+  toTimestamp,
+} from "@miyoria/types";
 import { z } from "zod";
 import { llmCallPayload } from "./call-event.js";
 import {
@@ -18,7 +27,7 @@ import {
   utcDay,
 } from "./call-writer.js";
 import { LlmCallLog, MAX_CALLS } from "./calls.js";
-import { BudgetConfigSchema, CostTracker, PricingSchema } from "./cost.js";
+import { BudgetConfigSchema, CostTracker, PricingSchema, periodStarts } from "./cost.js";
 import { LlmRouter } from "./router.js";
 import { type ChatProvider, LlmError, type ModelRef, ModelRefSchema } from "./types.js";
 
@@ -137,6 +146,8 @@ export interface LlmModuleOptions {
 export class LlmModule implements Module {
   static readonly ID = "llm";
   readonly manifest = defineManifest(LlmModule.ID, "LLM", {
+    icon: "cpu",
+    category: "system",
     description: "Model providers and purpose-based routing",
   });
   readonly #config: LlmConfig;
@@ -151,6 +162,8 @@ export class LlmModule implements Module {
   #preloaded = false;
   /** Spending today and this month; outlives restarts of the module. */
   #tracker: CostTracker | undefined;
+  /** The running router and its clock, for the card on the panel. */
+  #running: { router: LlmRouter; clock: Clock } | null = null;
 
   constructor(
     config: LlmConfig,
@@ -245,9 +258,44 @@ export class LlmModule implements Module {
     }
     router.announceBudget();
     ctx.provide(LlmRouterKey, router);
+    this.#running = { router, clock: ctx.clock };
+  }
+
+  /**
+   * Today's spending against the daily budget and today's calls (the cost tracker's, by
+   * `[llm.budget] timezone_offset_hours`), the share of today's finished calls that failed when the
+   * call inspector kept all of them, and the budget's state once it is not `ok`.
+   */
+  async card(): Promise<ModuleCard> {
+    const running = this.#running;
+    if (running === null) return { facts: [] };
+    const report = running.router.costReport();
+    const spent = report.today.total_usd.toFixed(2);
+    const facts: ModuleCardFact[] = [
+      {
+        label: "今天花費",
+        value: report.daily_usd === null ? spent : `${spent} / ${report.daily_usd.toFixed(2)}`,
+        unit: "USD",
+      },
+      { label: "今天呼叫", value: report.today.calls, unit: "次" },
+    ];
+    const [dayStart] = periodStarts(running.clock.now(), this.#config.budget.timezone_offset_hours);
+    const day = this.#calls.outcomes(toTimestamp(dayStart));
+    if (day.whole && day.finished > 0) {
+      facts.push({
+        label: "今天失敗率",
+        value: Math.round((day.errors / day.finished) * 1000) / 10,
+        unit: "%",
+      });
+    }
+    if (report.state !== "ok") {
+      facts.push({ label: "預算", value: report.state === "degraded" ? "快用完" : "用完了" });
+    }
+    return { facts };
   }
 
   async stop(): Promise<void> {
+    this.#running = null;
     const writer = this.#writer;
     this.#writer = undefined;
     await writer?.close();

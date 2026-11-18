@@ -1,6 +1,6 @@
-// The party table: one game at a time per voice channel, who plays, scores, timers, and how a
-// game ends (it is done, she ends it, someone says stop, nobody plays for a while, everyone
-// left, she left or went off to do something else).
+// The party table: one game at a time per channel (a voice channel, or a text channel for turtle
+// soup), who plays, scores, timers, and how a game ends (it is done, she ends it, someone says
+// stop, nobody plays for a while, everyone left, she left or went off to do something else).
 //
 // Everything here is synchronous and deterministic: the clock, the randomness and the timers are
 // injected, and input is handled in the order it arrives, so two calls at once (two starts, two
@@ -29,17 +29,17 @@ import type { PartyConfig } from "./config.js";
 import {
   type EndReason,
   GAME_TITLES,
+  GAMES_AVAILABLE,
   type Game,
   type GameId,
   type Host,
+  isGameId,
   type NoteOptions,
   PartyError,
   type Player,
   SELF_KEY,
   type StartOptions,
 } from "./game.js";
-import { ChainGame } from "./games/chain.js";
-import { QuizGame } from "./games/quiz.js";
 import { SongGame } from "./games/song.js";
 import { SoupGame } from "./games/soup.js";
 import type { SoupJudge } from "./judge.js";
@@ -137,18 +137,14 @@ function viewPlayers(players: readonly Player[]): PartyPlayerView[] {
 
 function createGame(id: GameId, host: Host, options: StartOptions): Game {
   switch (id) {
-    case "quiz":
-      return new QuizGame(host, options);
     case "song":
       return new SongGame(host, options);
-    case "chain":
-      return new ChainGame(host, options);
     case "soup":
       return new SoupGame(host, options);
   }
 }
 
-/** One game in one voice channel. */
+/** One game in one channel (voice, or text for turtle soup). */
 export class Session implements Host {
   readonly id: string;
   readonly context: ContextKey;
@@ -223,6 +219,13 @@ export class Session implements Host {
     if (exact) return exact;
     const partial = all.filter((p) => p.name.includes(wanted) || wanted.includes(p.name));
     return partial.length === 1 ? (partial[0] ?? null) : null;
+  }
+
+  /** The player of `account`, when they are in the game (a person her turn is about). */
+  byAccount(account: AccountRef | null): Player | null {
+    if (account === null) return null;
+    const player = this.#players.get(accountRefString(account));
+    return player && !player.her ? player : null;
   }
 
   /** The player for `speaker`, added when new (someone who joined or typed in the chat). */
@@ -463,11 +466,20 @@ export class Table {
     return { sessions, recent: this.#recent.map((r) => ({ ...r, players: [...r.players] })) };
   }
 
-  /** The game in `context`: the voice channel itself, or its text chat (same channel id). */
+  /**
+   * The game in `context`: the one played right there (a voice channel, or a text channel for
+   * turtle soup), else for a text chat the game of the voice channel with the same channel id.
+   */
   session(context: ContextKey): Session | null {
-    if (context.kind === "voice") return this.#sessions.get(contextKeyString(context)) ?? null;
+    const here = this.#sessions.get(contextKeyString(context));
+    if (here) return here;
     if (context.kind !== "channel" || context.scope === null) return null;
     return this.#sessions.get(contextKeyString({ ...context, kind: "voice" })) ?? null;
+  }
+
+  /** The text game in the channel a voice channel has its chat in (same channel id). */
+  #textSession(voice: ContextKey): Session | null {
+    return this.#sessions.get(contextKeyString({ ...voice, kind: "channel" })) ?? null;
   }
 
   sessions(): Session[] {
@@ -475,21 +487,35 @@ export class Table {
   }
 
   /**
-   * Starts `game` in the voice channel `context`. Returns what she should know to open it. One
-   * game per channel: a second start while one runs is refused, whoever asked first wins.
+   * Starts `game` in `context`: a voice channel she is in, or (turtle soup only) a text channel
+   * of a server. Returns what she should know to open it. One game per channel: a second start
+   * while one runs is refused, whoever asked first wins; a voice channel and its own text chat
+   * count as one channel.
    */
   start(context: ContextKey, game: GameId, options: StartOptions = {}): Session {
+    // A game that is gone (quiz, chains: an old tool call, a stale caller) is refused as a game.
+    if (!isGameId(game))
+      throw new PartyError(`沒有「${String(game)}」這個遊戲。${GAMES_AVAILABLE}`);
     const id = contextKeyString(context);
-    const running = this.#sessions.get(id);
+    const voice = context.kind === "voice";
+    const running = this.session(context) ?? (voice ? this.#textSession(context) : null);
     if (running) {
       throw new PartyError(`這裡已經在玩「${running.game.title}」了,要換遊戲先結束它。`);
     }
-    const room = this.#rooms.get(id);
-    if (!room) throw new PartyError("你不在這個語音頻道裡。");
+    const room = voice ? this.#rooms.get(id) : undefined;
+    if (voice) {
+      if (!room) throw new PartyError("你不在這個語音頻道裡。");
+    } else {
+      if (game !== "soup")
+        throw new PartyError(`${GAME_TITLES[game]}要在語音頻道玩,文字頻道只能玩海龜湯。`);
+      if (context.kind !== "channel" || context.scope === null) {
+        throw new PartyError("私訊裡不能開派對遊戲,要在伺服器的頻道裡。");
+      }
+    }
     const session = new Session(this, game, context, options);
     this.#sessions.set(id, session);
     try {
-      session.members(room.members, (a) => this.isSelf(a));
+      if (room) session.members(room.members, (a) => this.isSelf(a));
       session.touch();
       session.opening = session.game.begin();
     } catch (error) {
@@ -568,7 +594,6 @@ export class Table {
       // Only an end she did not see coming is worth a line: she ended it herself, left, or
       // nobody is there to hear it.
       speak: !quiet && (reason === "done" || reason === "stop" || reason === "idle"),
-      untrusted: session.game.id === "chain",
     });
     this.output.ended({
       session: session.id,

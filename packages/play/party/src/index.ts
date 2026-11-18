@@ -1,9 +1,9 @@
-// @miyoria/play/party: module `party`, voice party games she hosts and plays (docs/design/v4-plan.md
-// §9.1): turtle soup, song guessing, word and story chains, and quizzes. The framework (one game
-// per voice channel, players, rounds, timers, scores, a clean end) is `Table`; each game is a
+// @miyoria/play/party: module `party`, party games she hosts (docs/design/v4-plan.md §9.1,
+// v5-play.md §5): song guessing in voice, turtle soup in voice or in a text channel. The framework
+// (one game per channel, players, rounds, timers, scores, a clean end) is `Table`; each game is a
 // `Game`; her tools are `party_start` / `party_host` / `party_play` / `party_ask`.
 
-export { partyCapabilities, voiceOf } from "./actions.js";
+export { partyCapabilities, sessionOf, startPlace } from "./actions.js";
 export {
   defaultPartyConfig,
   type PartyConfig,
@@ -12,24 +12,16 @@ export {
   PartyPermissionsSchema,
   PartyRewardsConfigSchema,
 } from "./config.js";
+export { SOUP_PUZZLES, type SoupPuzzle } from "./content.js";
 export {
-  IDIOMS,
-  QUIZ_QUESTIONS,
-  type QuizQuestion,
-  SOUP_PUZZLES,
-  type SoupPuzzle,
-  STARTER_WORDS,
-} from "./content.js";
-export {
-  CHAIN_MODES,
-  CHAIN_TITLES,
-  type ChainMode,
   type EndReason,
   GAME_IDS,
   GAME_TITLES,
+  GAMES_AVAILABLE,
   type Game,
   type GameId,
   type Host,
+  isGameId,
   type NoteOptions,
   PartyError,
   type Player,
@@ -37,8 +29,6 @@ export {
   type StartOptions,
   shuffled,
 } from "./game.js";
-export { ChainGame } from "./games/chain.js";
-export { QuizGame } from "./games/quiz.js";
 export { bareTitle, SongGame } from "./games/song.js";
 export { SoupGame } from "./games/soup.js";
 export {

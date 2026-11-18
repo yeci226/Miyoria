@@ -6,15 +6,21 @@ import {
   HEALTHY,
   type Health,
   type Module,
+  type ModuleCard,
+  type ModuleCardFact,
   type ModuleContext,
   type ServiceLookup,
 } from "@miyoria/runtime/kernel";
 import {
   Events,
+  type KaraokeWorker,
+  KaraokeWorkerKey,
   type PromptContributors,
   PromptContributorsKey,
   SongClipsKey,
+  SongTicketsKey,
   SpeechPauseKey,
+  safeName,
   serviceKey,
   TaskSteerKey,
   VoiceFloorKey,
@@ -37,7 +43,7 @@ export const SingerKey = serviceKey<Singer>("Singer");
 interface Running {
   singer: Singer;
   clips: SingClips | null;
-  worker: SingWorker;
+  worker: FailoverSingWorker;
   commands: CommandMount;
   prompts: PromptContributors | null;
   capabilities: (() => void)[];
@@ -85,8 +91,21 @@ function endpointId(endpoint: Endpoint): string {
 export class SingModule implements Module {
   static readonly ID = "sing";
   readonly manifest = defineManifest(SingModule.ID, "Singing", {
+    icon: "music",
+    category: "play",
     description: "Song requests: AI covers in her voice, sung in voice with lyrics",
-    optional: ["voice.link", "arbiter", "queue", "commands", "actions", "agent", "activity"],
+    // `cluster`: its registry is where the song workers of other machines are listed, so it
+    // starts first (the list is asked again before every use as well, see `refresh` below).
+    optional: [
+      "cluster",
+      "voice.link",
+      "arbiter",
+      "queue",
+      "commands",
+      "actions",
+      "agent",
+      "activity",
+    ],
     configSchema: SingConfigSchema,
   });
   readonly #worker: SingWorkerFactory | null;
@@ -125,6 +144,9 @@ export class SingModule implements Module {
         const client = clients.get(id);
         if (client !== undefined) source?.failed(client.endpoint, error);
       },
+      // The registry is looked up again at every use: one that was not there when this module
+      // started (the `cluster` module restarted, or started later) is found then.
+      refresh: () => follow(),
     });
     const follow = () => {
       if (source === null) return;
@@ -181,6 +203,10 @@ export class SingModule implements Module {
     ctx.provide(SingerKey, singer);
     ctx.provide(VoiceFloorKey, singer);
     ctx.provide(SpeechPauseKey, singer);
+    // The market's pass asks whether a charged ticket's song is still in the set list.
+    ctx.provide(SongTicketsKey, { holds: (key) => singer.holdsTicket(key) });
+    // Karaoke prepares its songs on the same workers, through the same failover.
+    ctx.provide(KaraokeWorkerKey, karaokeWorker(worker));
     let clips: SingClips | null = null;
     if (cfg.clips) {
       clips = new SingClips({
@@ -239,6 +265,45 @@ export class SingModule implements Module {
     return why === null ? HEALTHY : { status: "degraded", reason: why };
   }
 
+  /**
+   * The set list (songs still open, the ones being prepared), what she is singing now, and whether
+   * a song worker takes work (the failover's last word on each, never a request from here). While
+   * a song plays, an action stops it (`sing.stop`, through the gate).
+   */
+  async card(): Promise<ModuleCard> {
+    const running = this.#running;
+    if (!running) return { facts: [] };
+    const { singer, worker } = running;
+    const playing = singer.playing();
+    const facts: ModuleCardFact[] = [
+      { label: "歌單", value: singer.list.open().length, unit: "首" },
+      { label: "準備中", value: singer.list.preparing().length, unit: "首" },
+    ];
+    if (playing !== null) {
+      facts.push({
+        label: "正在唱",
+        value: safeName(playing.song?.title?.trim() || playing.query, 40),
+      });
+    }
+    facts.push({ label: "worker", value: worker.current() === null ? "連不上" : "連得上" });
+    return {
+      facts,
+      ...(playing === null
+        ? {}
+        : {
+            actions: [
+              {
+                id: "stop",
+                label: "停下這首",
+                confirm: "停下她正在唱的歌?",
+                capability: "sing.stop",
+                args: {},
+              },
+            ],
+          }),
+    };
+  }
+
   async stop(): Promise<void> {
     const running = this.#running;
     this.#running = null;
@@ -252,6 +317,36 @@ export class SingModule implements Module {
     running.unroute?.();
     for (const unregister of running.capabilities) unregister();
   }
+}
+
+/**
+ * The karaoke port over the song workers (docs/design/karaoke.md §3): a job with
+ * `purpose: "karaoke"`, its state, and its files from the worker that made it; the pitch of a
+ * singer's recording from any worker that answers.
+ */
+export function karaokeWorker(worker: SingWorker): KaraokeWorker {
+  return {
+    prepare: (query, signal) =>
+      worker.submit(
+        {
+          ...(query.url === undefined ? {} : { url: query.url }),
+          ...(query.query === undefined ? {} : { query: query.query }),
+          ...(query.title === undefined ? {} : { title: query.title }),
+          ...(query.artist === undefined ? {} : { artist: query.artist }),
+          force: query.force ?? false,
+          purpose: "karaoke",
+          ...(query.lyrics === undefined ? {} : { karaoke_lyrics: query.lyrics }),
+          ...(query.video === undefined ? {} : { karaoke_video: query.video }),
+        },
+        signal,
+      ),
+    job: (id, signal) => worker.job(id, signal),
+    cancel: (id) => worker.cancel(id),
+    file: (song, name, dest, signal) => worker.karaokeFile(song, name, dest, signal),
+    key: (song, semitones, signal) => worker.karaokeKey(song, semitones, signal),
+    voice: (voice, signal) => worker.karaokeVoice(voice.bytes, voice.type, signal),
+    stream: (request, signal) => worker.karaokeStream(request, signal),
+  };
 }
 
 /**

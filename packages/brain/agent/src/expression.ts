@@ -51,6 +51,13 @@ const FEEL_CLOSE = "</feel";
  * this many characters is taken as the opening all the same (she forgot the `>`).
  */
 const MAX_FEEL_TAG = 64;
+/**
+ * The react tool imitated as a block (2026-11-17: `<react><emoji>🍚</emoji></react>` went out as
+ * `<emoji>🍚</emoji>` and `</react>`): from the opening tag to its closing one is a tool written
+ * as text, never words. The parser waits this many UTF-16 units for the closing tag.
+ */
+const MAX_TOOL_BLOCK_LEN = 200;
+const TOOL_BLOCK_OPEN = /^<(react|emoji)>/;
 export const DEFAULT_PAUSE_MS = 300;
 export const MAX_PAUSE_MS = 10_000;
 
@@ -211,6 +218,24 @@ export class ExpressionParser {
           return out;
         }
         // No closing tag in sight: the emotion it names.
+      }
+      const block = this.#checks.tagStrip ? TOOL_BLOCK_OPEN.exec(rest) : null;
+      if (block !== null) {
+        const from = start + block[0].length;
+        const closeTag = `</${block[1]}>`;
+        const close = lower.indexOf(closeTag, from);
+        if (close !== -1 && close - from <= MAX_TOOL_BLOCK_LEN) {
+          flush();
+          out.push({ type: "tool", name: "react" });
+          pos = close + closeTag.length;
+          continue;
+        }
+        if (close === -1 && !eof && input.length - from <= MAX_TOOL_BLOCK_LEN) {
+          flush();
+          this.#held = input.slice(start);
+          return out;
+        }
+        // No closing tag in sight: the opening tag alone is taken out below.
       }
       const scan = scanTag(input.slice(start));
       if (
@@ -427,6 +452,7 @@ function parseTag(raw: string): Segment | null {
   if (emotion !== null) return { type: "emotion", emotion: emotion[1] as string };
   if (HTML_TAG.test(tag)) return { type: "markup" };
   if (DSML_TAG.test(tag)) return { type: "markup" };
+  if (STRAY_TAG.test(tag)) return { type: "markup" };
   // `<react emoji="👍"/>`: the react tool imitated as a tag (2026-11-12). Hidden from the text and
   // logged as a tool written as text, so she is asked once to call it for real.
   if (REACT_TAG.test(tag)) return { type: "tool", name: "react" };
@@ -450,6 +476,11 @@ const HTML_TAG =
  */
 const DSML_TAG = /^\/?[｜|]+\s*dsml/;
 const DSML_OPEN = /^[｜|]+\s*dsml/;
+/**
+ * What is left of her own tags when they come apart: a closing tag without its opening one
+ * (`</react>`, `</emo>`), or the react tool's `<emoji>` on its own (2026-11-16/17).
+ */
+const STRAY_TAG = /^(?:\/(?:react|emoji|emo)|emoji)$/;
 const REACT_TAG = /^react(?:\s[^<>]*)?$/;
 /** Tool names are snake_case; an ordinary word in brackets stays text. */
 const TOOL_TAG = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
@@ -467,8 +498,9 @@ const TOOL_CALL_TAG =
 const MARKUP_PREFIX =
   /^\/?[a-z][a-z0-9_]*(?:\s(?:[a-z0-9_ =/-]|"[^"]*"|'[^']*')*(?:"[^"]*|'[^']*)?)?\/?$/u;
 
+/** A letter of any script: `<emo:開心>` is an emotion tag too, never words (2026-11-17). */
 function isNameChar(c: string): boolean {
-  return /^[A-Za-z0-9_-]$/.test(c);
+  return /^[\p{L}0-9_-]$/u.test(c);
 }
 
 const PREFIXES: readonly [string, (c: string) => boolean][] = [

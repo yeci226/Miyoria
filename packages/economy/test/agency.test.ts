@@ -34,7 +34,7 @@ import { agencyCapabilities } from "../src/agency-tools.js";
 import { EconomyConfigSchema } from "../src/config.js";
 import { EconomyService } from "../src/economy.js";
 import { shortId } from "../src/purse.js";
-import { BountyStoreKey, CoinLedgerStoreKey, GoalStoreKey, PURSE } from "../src/records.js";
+import { BountyStoreKey, CoinLedgerStoreKey, PURSE } from "../src/records.js";
 import { EconomyKey } from "../src/types.js";
 import { economyOf, ledgerOf, walletOf } from "./ledger.js";
 
@@ -77,7 +77,6 @@ async function rig(config: Record<string, JsonValue> = {}): Promise<Rig> {
   const services = new ServiceRegistry();
   const k = "test";
   services.provide(k, CoinLedgerStoreKey, ledgerOf(store));
-  services.provide(k, GoalStoreKey, economyOf(store).goals);
   services.provide(k, BountyStoreKey, economyOf(store).bounties);
   services.provide(k, PeopleStoreKey, store.people);
   const people = new Map<string, PersonId>();
@@ -236,7 +235,6 @@ async function say(
   return { text, data: (data ?? {}) as Record<string, JsonValue> };
 }
 
-const news = (r: Rig) => r.observed.filter((o) => o.writer === "purse_news").map((o) => o.summary);
 const lastNote = (r: Rig) => r.observed.filter((o) => o.writer === "purse").at(-1)?.summary ?? "";
 
 describe("her share of gifts", () => {
@@ -245,21 +243,19 @@ describe("her share of gifts", () => {
     await fund(r, ALICE, 500);
     await r.economy.feed(ALICE, "rice", 1, "k1");
     expect(await purse(r)).toBe(2);
-    await r.economy.letter(ALICE, "你好", "k2");
-    expect(await purse(r)).toBe(5);
     await r.economy.purchase(ALICE, "screen_message", "k3");
-    expect(await purse(r)).toBe(11);
+    expect(await purse(r)).toBe(8);
     // A fortune is not a gift to her; neither is a frame.
     await r.economy.purchase(ALICE, "fortune", "k4");
     await r.economy.frame(ALICE, { buy: "sakura" }, "k5");
-    expect(await purse(r)).toBe(11);
+    expect(await purse(r)).toBe(8);
     const rows = await ledgerOf(r.store).entries("p", PURSE, {
       reasons: ["her_share"],
       limit: 20,
     });
-    expect(rows.map((x) => x.delta).sort()).toEqual([2, 3, 6]);
+    expect(rows.map((x) => x.delta).sort()).toEqual([2, 6]);
     // Her share is not the person's loss: they paid the full price.
-    expect(await balance(r, ALICE)).toBe(500 - 10 - 15 - 30 - 10 - 100);
+    expect(await balance(r, ALICE)).toBe(500 - 10 - 30 - 10 - 100);
   });
 
   it("is paid once per gift and not at all when the share is off", async () => {
@@ -291,19 +287,12 @@ describe("her share of gifts", () => {
     expect(await balance(r, ALICE)).toBe(100);
   });
 
-  it("shows up in her working context, with what she is saving for", async () => {
+  it("shows up in her working context", async () => {
     const r = await rig();
     await fund(r, ALICE, 100);
     await r.economy.feed(ALICE, "rice", 1, "k");
     await r.economy.purse.refresh();
     expect(lastNote(r)).toContain("你的小錢包有 2 魚幣");
-    await say(r, "propose_goal", ALICE, "g", {
-      title: "新麥克風",
-      promise: "學三種貓叫",
-      target: 50,
-      days: 3,
-    });
-    expect(lastNote(r)).toContain("你在存的目標「新麥克風」:0/50,還有 3 天,湊到了你要:學三種貓叫");
   });
 });
 
@@ -421,238 +410,6 @@ describe("buying an expression for herself", () => {
     expect(out.data).toMatchObject({ done: false, reason: "not_enough" });
     expect(r.stage.calls).toEqual([]);
     expect(await purse(r)).toBe(5);
-  });
-});
-
-const GOAL = { title: "新麥克風", promise: "學三種貓叫", target: 50, days: 3 };
-
-async function propose(r: Rig, args: Record<string, JsonValue> = GOAL) {
-  const out = await say(r, "propose_goal", ALICE, newId(), args);
-  const [goal] = await economyOf(r.store).goals.list("p", { statuses: ["open"], limit: 1 });
-  return { out, goal };
-}
-
-describe("crowdfunding goals", () => {
-  it("collects pledges in escrow and turns into her promise when the target is met", async () => {
-    const r = await rig();
-    await fund(r, ALICE, 100);
-    await fund(r, BOB, 100);
-    const { goal } = await propose(r);
-    if (!goal) throw new Error("no goal");
-    const first = await r.economy.pledge(ALICE, goal.id, 30, "a1");
-    expect(first).toMatchObject({ pledged: 30, raised: 30, reached: false, balance: 70 });
-    expect(await purse(r)).toBe(0);
-    // The same key again is the same pledge.
-    expect(await r.economy.pledge(ALICE, goal.id, 30, "a1")).toMatchObject({
-      pledged: 30,
-      duplicate: true,
-    });
-    expect(await balance(r, ALICE)).toBe(70);
-    // Bob offers more than is needed: only 20 is held.
-    const second = await r.economy.pledge(BOB, goal.id, 40, "b1");
-    expect(second).toMatchObject({ pledged: 20, raised: 50, reached: true, balance: 80 });
-    expect(await purse(r)).toBe(50);
-    expect((await economyOf(r.store).goals.get(goal.id))?.status).toBe("reached");
-    const told = news(r).find((t) => t.includes("大家湊到了「新麥克風」"));
-    expect(told).toContain("你答應過要:學三種貓叫");
-    expect(lastNote(r)).toContain("你答應過大家、還沒做到的(目標「新麥克風」湊到了):學三種貓叫");
-    // It is over: nobody can add to it, and the money is hers once.
-    await expect(r.economy.pledge(ALICE, goal.id, 5, "a2")).rejects.toMatchObject({ status: 409 });
-    await r.economy.goalDesk.sweep();
-    await r.economy.goalDesk.sweep();
-    expect(await purse(r)).toBe(50);
-  });
-
-  it("a reached goal is owed until it is marked kept, once, by the owner or by her", async () => {
-    const r = await rig();
-    await fund(r, ALICE, 100);
-    const { goal } = await propose(r);
-    if (!goal) throw new Error("no goal");
-    // Nothing reached yet: nothing to mark.
-    await expect(r.economy.fulfillGoal(null, "self")).rejects.toMatchObject({ status: 409 });
-    await expect(r.economy.fulfillGoal(goal.id, "owner")).rejects.toMatchObject({ status: 409 });
-    await r.economy.pledge(ALICE, goal.id, 50, "a");
-    expect(await r.economy.reachedGoals()).toMatchObject([{ id: goal.id }]);
-    expect(lastNote(r)).toContain("還沒做到");
-    // Her own report (`goal_done`) marks the newest one owed.
-    expect((await say(r, "goal_done", ALICE, "k")).data).toMatchObject({
-      done: true,
-      goal: goal.id,
-    });
-    expect(await economyOf(r.store).goals.get(goal.id)).toMatchObject({ fulfilled_by: "self" });
-    expect((await say(r, "goal_done", ALICE, "k2")).data).toMatchObject({ done: false });
-    expect(news(r).at(-1)).toContain("你把目標「新麥克風」記成做到了");
-    expect(lastNote(r)).not.toContain("學三種貓叫");
-    expect((await r.economy.goals(ALICE))[0]).toMatchObject({ status: "reached", fulfilled: true });
-    // The first mark stands.
-    await expect(r.economy.fulfillGoal(goal.id, "owner")).rejects.toMatchObject({
-      status: 409,
-      message: "這個目標已經記成做到了",
-    });
-    await expect(r.economy.fulfillGoal(null, "self")).rejects.toMatchObject({ status: 409 });
-  });
-
-  it("shows the goal to anyone and the pledge to its owner, and not to strangers' pledging", async () => {
-    const r = await rig();
-    await fund(r, ALICE, 100);
-    const { goal } = await propose(r);
-    if (!goal) throw new Error("no goal");
-    await r.economy.pledge(ALICE, goal.id, 10, "a");
-    const mine = await r.economy.goals(ALICE);
-    expect(mine).toEqual([
-      {
-        id: goal.id,
-        title: "新麥克風",
-        promise: "學三種貓叫",
-        target: 50,
-        raised: 10,
-        my_pledge: 10,
-        deadline: toTimestamp(T0 + 3 * DAY),
-        status: "open",
-        fulfilled: false,
-      },
-    ]);
-    expect((await r.economy.goals(BOB))[0]).toMatchObject({ raised: 10, my_pledge: 0 });
-    expect((await r.economy.goals(DAVE))[0]).toMatchObject({ raised: 10, my_pledge: 0 });
-    for (const who of [DAVE, CAROL]) {
-      await expect(r.economy.pledge(who, goal.id, 5, "x")).rejects.toMatchObject({ status: 403 });
-    }
-    expect((await r.economy.goals(ALICE))[0]?.raised).toBe(10);
-  });
-
-  it("takes what one person may put in, a positive amount and a real goal", async () => {
-    const r = await rig({ goal_pledge_max: 25 });
-    await fund(r, ALICE, 100);
-    const { goal } = await propose(r);
-    if (!goal) throw new Error("no goal");
-    expect(await r.economy.pledge(ALICE, goal.id, 40, "a")).toMatchObject({ pledged: 25 });
-    await expect(r.economy.pledge(ALICE, goal.id, 1, "b")).rejects.toMatchObject({ status: 429 });
-    await expect(r.economy.pledge(ALICE, goal.id, 0, "c")).rejects.toMatchObject({ status: 400 });
-    await expect(r.economy.pledge(ALICE, goal.id, 1.5, "d")).rejects.toMatchObject({ status: 400 });
-    await expect(r.economy.pledge(ALICE, "nope", 5, "e")).rejects.toMatchObject({ status: 400 });
-    const poor = await rig();
-    const made = await propose(poor);
-    await expect(poor.economy.pledge(ALICE, made.goal?.id ?? "", 5, "f")).rejects.toMatchObject({
-      status: 402,
-    });
-  });
-
-  it("returns every pledge once when the deadline passes unreached", async () => {
-    const r = await rig();
-    await fund(r, ALICE, 100);
-    await fund(r, BOB, 100);
-    const { goal } = await propose(r, { ...GOAL, target: 100, days: 1 });
-    if (!goal) throw new Error("no goal");
-    await r.economy.pledge(ALICE, goal.id, 20, "a");
-    await r.economy.pledge(BOB, goal.id, 30, "b");
-    r.clock.at = T0 + DAY - 1;
-    await r.economy.goalDesk.sweep();
-    expect((await economyOf(r.store).goals.get(goal.id))?.status).toBe("open");
-    r.clock.at = T0 + 2 * DAY;
-    await r.economy.goalDesk.sweep();
-    await r.economy.goalDesk.sweep();
-    expect((await economyOf(r.store).goals.get(goal.id))?.status).toBe("expired");
-    expect(await balance(r, ALICE)).toBe(100);
-    expect(await balance(r, BOB)).toBe(100);
-    expect(await purse(r)).toBe(0);
-    const refunds = await ledgerOf(r.store).entries("p", walletOf(r.store, ALICE), {
-      reasons: ["refund"],
-      limit: 10,
-    });
-    expect(refunds).toHaveLength(1);
-    // Too late to pledge, and a new goal may be proposed.
-    await expect(r.economy.pledge(ALICE, goal.id, 5, "late")).rejects.toMatchObject({
-      status: 409,
-    });
-    expect((await propose(r)).goal).toBeDefined();
-  });
-
-  it("does not let a pledge in after the deadline even before the sweep", async () => {
-    const r = await rig();
-    await fund(r, ALICE, 100);
-    const { goal } = await propose(r, { ...GOAL, days: 1 });
-    r.clock.at = T0 + 2 * DAY;
-    await expect(r.economy.pledge(ALICE, goal?.id ?? "", 5, "a")).rejects.toMatchObject({
-      status: 409,
-    });
-    expect(await balance(r, ALICE)).toBe(100);
-  });
-
-  it("returns everything when she withdraws it", async () => {
-    const r = await rig();
-    await fund(r, ALICE, 100);
-    await fund(r, BOB, 100);
-    const { goal } = await propose(r);
-    if (!goal) throw new Error("no goal");
-    await r.economy.pledge(ALICE, goal.id, 20, "a");
-    await r.economy.pledge(BOB, goal.id, 10, "b");
-    const out = await say(r, "cancel_goal", ALICE, "c");
-    expect(out.data).toMatchObject({ done: true, refunded: 30 });
-    expect(await balance(r, ALICE)).toBe(100);
-    expect(await balance(r, BOB)).toBe(100);
-    expect((await economyOf(r.store).goals.get(goal.id))?.status).toBe("cancelled");
-    expect((await say(r, "cancel_goal", ALICE, "d")).data).toMatchObject({
-      done: false,
-      reason: "no_goal",
-    });
-  });
-
-  it("is one at a time, and within the limits", async () => {
-    const r = await rig();
-    await propose(r);
-    expect((await say(r, "propose_goal", ALICE, "x", GOAL)).data).toMatchObject({
-      done: false,
-      reason: "open_goal",
-    });
-    const other = await rig();
-    for (const bad of [{ target: 2001 }, { days: 8 }]) {
-      const { out } = await propose(other, { ...GOAL, ...bad });
-      expect(out.data, JSON.stringify(bad)).toMatchObject({ done: false });
-    }
-    expect(await economyOf(other.store).goals.list("p", { limit: 5 })).toEqual([]);
-    await expect(propose(other, { ...GOAL, days: 0 })).rejects.toBeTruthy();
-    // The title and the promise have their lengths.
-    await expect(propose(other, { ...GOAL, title: "題".repeat(31) })).rejects.toBeTruthy();
-    await expect(propose(other, { ...GOAL, promise: "答".repeat(61) })).rejects.toBeTruthy();
-  });
-
-  it("only promises what is hers to decide", async () => {
-    const r = await rig();
-    r.rules.words = ["壞事"];
-    for (const promise of ["開台", "BADWORD 一下", "做一件壞事"]) {
-      const { out } = await propose(r, { ...GOAL, promise });
-      expect(out.data, promise).toMatchObject({ done: false, reason: "forbidden" });
-    }
-    expect((await propose(r, { ...GOAL, title: "BADWORD" })).out.data).toMatchObject({
-      reason: "forbidden",
-    });
-    expect(await economyOf(r.store).goals.list("p", { limit: 5 })).toEqual([]);
-    // Singing is a capability she may use: it is hers to promise.
-    expect((await propose(r, { ...GOAL, promise: "唱一首歌" })).out.data).toMatchObject({
-      done: true,
-    });
-  });
-
-  it("finishes funding a reached goal that a restart cut short", async () => {
-    const r = await rig();
-    await fund(r, ALICE, 100);
-    const { goal } = await propose(r, { ...GOAL, target: 20 });
-    if (!goal) throw new Error("no goal");
-    await economyOf(r.store).goals.addPledge({
-      id: newId(),
-      goal: goal.id,
-      account: ALICE,
-      amount: 20,
-      created_at: toTimestamp(T0),
-    });
-    await economyOf(r.store).goals.transition(goal.id, ["open"], {
-      status: "reached",
-      closed_at: toTimestamp(T0),
-    });
-    expect(await purse(r)).toBe(0);
-    await r.economy.goalDesk.sweep();
-    await r.economy.goalDesk.sweep();
-    expect(await purse(r)).toBe(20);
   });
 });
 
@@ -778,21 +535,5 @@ describe("bounties", () => {
     await r.economy.purse.credit(100, "her_share", null, "seed");
     const { rows } = await post(r, { task: "猜謎", reward: 15 });
     expect(lastNote(r)).toContain(`你貼的懸賞[${shortId(rows[0]?.id ?? "")}]「猜謎」15 魚幣`);
-  });
-});
-
-describe("the stores", () => {
-  it("refuse to move a goal or a bounty twice", async () => {
-    const r = await rig();
-    const { goal } = await propose(r);
-    expect(
-      await economyOf(r.store).goals.transition(goal?.id ?? "", ["open"], { status: "cancelled" }),
-    ).toBe(true);
-    expect(
-      await economyOf(r.store).goals.transition(goal?.id ?? "", ["open"], { status: "expired" }),
-    ).toBe(false);
-    expect(await economyOf(r.store).goals.transition(goal?.id ?? "", [], { status: "open" })).toBe(
-      false,
-    );
   });
 });

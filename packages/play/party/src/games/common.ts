@@ -26,7 +26,7 @@ export interface NearMiss {
 }
 
 /**
- * One round of "guess the hidden answer" (quiz, song): who got it, near misses for her to rule
+ * One round of "guess the hidden answer" (song): who got it, near misses for her to rule
  * on, and the hints given. The answer never leaves this object while the round is open, except
  * through `reveal` once it is over.
  */

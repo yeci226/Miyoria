@@ -20,7 +20,7 @@ afterEach(() => {
 
 describe("turtle soup", () => {
   it("needs a referee", () => {
-    const { table } = rig();
+    const { table } = rig({ judge: () => null });
     expect(() => table.start(VOICE, "soup")).toThrow(/沒有裁判/);
     expect(table.session(VOICE)).toBeNull();
   });
@@ -44,6 +44,40 @@ describe("turtle soup", () => {
     const seen = [session.opening, ...game.view(), out.text()].join("\n");
     expect(seen).not.toContain(PUZZLE.bottom);
     expect(game.view().join("\n")).toContain("「跟天氣有關嗎?」→ 不重要");
+  });
+
+  it("keeps a word of the bottom nobody asked about out of her lines, saying the answer instead", async () => {
+    // The first puzzle (海龜湯): a well-known bottom she may remember.
+    const judge = new FakeJudge();
+    judge.verdict = "close";
+    const { table } = rig({ judge: () => judge });
+    const session = table.start(VOICE, "soup");
+    const game = session.game;
+    expect(game.leak?.("嗯嗯,大家慢慢想")).toBeNull();
+    // With no answer to give yet, a leaking line is only not said.
+    expect(game.leak?.("是不是遇到船難?")).toEqual({ word: "船難", instead: null });
+    await game.ask("他以前是不是吃過什麼不該吃的東西?", session.find("Amy"));
+    // The answer is said once in place of a leaking line; a second one is only not said.
+    expect(game.leak?.("很接近了,想想他的妻子")).toEqual({ word: "妻子", instead: "很接近了!" });
+    expect(game.leak?.("荒島上的事喔")).toEqual({ word: "荒島", instead: null });
+    // A word someone asked with, or a hint gave, is theirs to hear again.
+    judge.verdict = "yes";
+    await game.ask("他的妻子死了嗎?", session.find("Bob"));
+    expect(game.leak?.("是,妻子的事是關鍵")).toBeNull();
+    expect(game.hint()).toContain("海龜湯");
+    expect(game.leak?.("他曾經遇過船難沒錯")).not.toBeNull();
+    game.hint();
+    expect(game.leak?.("他曾經遇過船難沒錯")).toBeNull();
+    // Once it is over, nothing is hidden.
+    game.next();
+    expect(game.leak?.("荒島上的事")).toBeNull();
+  });
+
+  it("has words of every bottom to keep, none of them in its surface", () => {
+    for (const p of SOUP_PUZZLES) {
+      expect(p.keywords.length, p.id).toBeGreaterThan(2);
+      for (const k of p.keywords) expect(p.surface.includes(k), `${p.id}: ${k}`).toBe(false);
+    }
   });
 
   it("reveals the bottom once someone solves it, scores them, and ends", async () => {

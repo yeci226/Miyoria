@@ -44,6 +44,8 @@ export interface SandboxModuleOptions {
 export class SandboxModule implements Module {
   static readonly ID = "sandbox";
   readonly manifest = defineManifest(SandboxModule.ID, "Code sandbox", {
+    icon: "terminal",
+    category: "system",
     description: "Runs code she writes in disposable, offline Docker containers",
     configSchema: SandboxConfigSchema,
   });

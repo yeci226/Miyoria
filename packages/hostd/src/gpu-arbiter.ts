@@ -63,7 +63,7 @@ const RETRY_CARD_MS = 10_000;
 /** One service of this host as the arbiter sees it. */
 export interface ArbiterService {
   /** The descriptor, with the effective `[gpu] policy` (`host.toml` may override it). */
-  service: HostService;
+  service: Omit<HostService, "install">;
   /** `host.toml` enables it. */
   enabled: boolean;
   /** Where it runs now; `null` when it is not running. */

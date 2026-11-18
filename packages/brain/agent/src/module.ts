@@ -64,6 +64,8 @@ export class AgentModule implements Module {
   static readonly ID = "agent";
 
   readonly manifest = defineManifest(AgentModule.ID, "Agent", {
+    icon: "bot",
+    category: "her",
     description: "Conversations: what reaches her, and the mouth her lines leave through",
     requires: ["llm", "scheduler"],
     // `facts`: the main line follows the log from the start.

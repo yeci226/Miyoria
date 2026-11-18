@@ -2,13 +2,13 @@
 // §2.7): the same drawing as the panel's (`@miyoria/card-face`), through the same resvg path `og.ts`
 // uses for the card. A picture is kept per spec, so the same ring is drawn once.
 
+import { cardFontOptions } from "@miyoria/card-face/fonts";
 import { renderBondRingSvg } from "@miyoria/card-face/render";
 import type { BondRingImageSpec, BondRingImages } from "@miyoria/heart/person";
 import { Resvg } from "@resvg/resvg-js";
 
 /** Pixels across; the drawing is square. */
 const SIZE = 360;
-const FONT_FAMILY = "Microsoft JhengHei";
 /** Pictures kept: a member's has about 200 possible rings, an admin's one per bond seen. */
 const KEPT = 256;
 /** The ring's colours are made for the panel's dark theme: a dark tile keeps it legible on Discord's light one. */
@@ -35,7 +35,8 @@ function draw(spec: BondRingImageSpec): Uint8Array {
   return new Resvg(svg, {
     fitTo: { mode: "width", value: SIZE },
     background: BACKGROUND,
-    font: { loadSystemFonts: true, defaultFontFamily: FONT_FAMILY },
+    // The bundled fonts only: the numbers are drawn the same on any machine.
+    font: cardFontOptions(),
   })
     .render()
     .asPng();

@@ -1,7 +1,7 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ModuleInfo, SessionInfo } from "@miyoria/contracts/api";
 import { writeStorage } from "@/lib/storage";
 import { type Handler, mockFetch } from "@/test/render";
@@ -144,6 +144,9 @@ describe("login screen", () => {
 });
 
 describe("Discord session", () => {
+  // These read the system page's table rather than its card grid.
+  beforeEach(() => window.localStorage.setItem("miyoria.panel.system.view", "list"));
+
   it("shows the user, and disables changes for read-only accounts", async () => {
     core({ discord: true, session: discordUser(false), extra: (_m, url) => (url.pathname === "/api/modules" ? { body: [mod] } : undefined) });
     renderApp("/system");

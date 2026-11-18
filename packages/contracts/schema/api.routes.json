@@ -377,6 +377,90 @@
           }
         }
       },
+      "get": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/modules/{id}"
+          }
+        }
+      },
+      "settings": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/modules/{id}/settings"
+          }
+        }
+      },
+      "saveSettings": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "PUT",
+            "path": "/api/modules/{id}/settings"
+          }
+        }
+      },
+      "settingsHistory": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/modules/{id}/settings/history"
+          }
+        }
+      },
+      "revertSettings": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/modules/{id}/settings/revert"
+          }
+        }
+      },
+      "cardAction": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/modules/{id}/actions/{action}"
+          }
+        }
+      },
       "action": {
         "~orpc": {
           "errorMap": {},
@@ -388,6 +472,22 @@
             "inputStructure": "detailed",
             "method": "POST",
             "path": "/api/modules/{id}/{action}"
+          }
+        }
+      }
+    },
+    "places": {
+      "rooms": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/places/rooms"
           }
         }
       }
@@ -1611,20 +1711,6 @@
           }
         }
       },
-      "commissions": {
-        "~orpc": {
-          "errorMap": {},
-          "meta": {
-            "audience": "admin",
-            "permission": null
-          },
-          "route": {
-            "inputStructure": "detailed",
-            "method": "GET",
-            "path": "/api/economy/commissions"
-          }
-        }
-      },
       "predictions": {
         "~orpc": {
           "errorMap": {},
@@ -1650,34 +1736,6 @@
             "inputStructure": "detailed",
             "method": "GET",
             "path": "/api/economy/room"
-          }
-        }
-      },
-      "goals": {
-        "~orpc": {
-          "errorMap": {},
-          "meta": {
-            "audience": "admin",
-            "permission": null
-          },
-          "route": {
-            "inputStructure": "detailed",
-            "method": "GET",
-            "path": "/api/economy/goals"
-          }
-        }
-      },
-      "fulfill": {
-        "~orpc": {
-          "errorMap": {},
-          "meta": {
-            "audience": "admin",
-            "permission": "admin.economy.goals"
-          },
-          "route": {
-            "inputStructure": "detailed",
-            "method": "POST",
-            "path": "/api/economy/goals/{id}/fulfill"
           }
         }
       }
@@ -2167,21 +2225,6 @@
           }
         }
       },
-      "rerollCard": {
-        "~orpc": {
-          "errorMap": {},
-          "meta": {
-            "audience": "member",
-            "permission": null,
-            "limited": true
-          },
-          "route": {
-            "inputStructure": "detailed",
-            "method": "POST",
-            "path": "/api/member/card/reroll"
-          }
-        }
-      },
       "pat": {
         "~orpc": {
           "errorMap": {},
@@ -2193,6 +2236,158 @@
             "inputStructure": "detailed",
             "method": "POST",
             "path": "/api/member/live/pat"
+          }
+        }
+      }
+    },
+    "cards": {
+      "mine": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/cards"
+          }
+        }
+      },
+      "one": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/card/{serial}"
+          }
+        }
+      },
+      "dex": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/cards/dex"
+          }
+        }
+      },
+      "pity": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/cards/pity"
+          }
+        }
+      },
+      "wishlist": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/cards/wishlist"
+          }
+        }
+      },
+      "setWishlist": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "PUT",
+            "path": "/api/member/cards/wishlist"
+          }
+        }
+      },
+      "odds": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "public",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/public/cards/odds"
+          }
+        }
+      },
+      "setTitle": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "PUT",
+            "path": "/api/member/cards/titles/{series}"
+          }
+        }
+      },
+      "catalogue": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/cards/catalogue"
+          }
+        }
+      }
+    },
+    "cardsAdmin": {
+      "person": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/people/{id}/cards"
           }
         }
       }
@@ -2243,21 +2438,6 @@
           }
         }
       },
-      "letter": {
-        "~orpc": {
-          "errorMap": {},
-          "meta": {
-            "audience": "member",
-            "permission": null,
-            "limited": true
-          },
-          "route": {
-            "inputStructure": "detailed",
-            "method": "POST",
-            "path": "/api/member/letter"
-          }
-        }
-      },
       "screen": {
         "~orpc": {
           "errorMap": {},
@@ -2273,7 +2453,22 @@
           }
         }
       },
-      "expression": {
+      "danmakuView": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/danmaku"
+          }
+        }
+      },
+      "danmaku": {
         "~orpc": {
           "errorMap": {},
           "meta": {
@@ -2284,7 +2479,7 @@
           "route": {
             "inputStructure": "detailed",
             "method": "POST",
-            "path": "/api/member/expression"
+            "path": "/api/member/danmaku"
           }
         }
       },
@@ -2335,36 +2530,6 @@
       }
     },
     "agency": {
-      "goals": {
-        "~orpc": {
-          "errorMap": {},
-          "meta": {
-            "audience": "member",
-            "permission": null,
-            "limited": true
-          },
-          "route": {
-            "inputStructure": "detailed",
-            "method": "GET",
-            "path": "/api/member/goals"
-          }
-        }
-      },
-      "pledge": {
-        "~orpc": {
-          "errorMap": {},
-          "meta": {
-            "audience": "member",
-            "permission": null,
-            "limited": true
-          },
-          "route": {
-            "inputStructure": "detailed",
-            "method": "POST",
-            "path": "/api/member/goals/{id}/pledge"
-          }
-        }
-      },
       "bounties": {
         "~orpc": {
           "errorMap": {},
@@ -2396,8 +2561,70 @@
             "path": "/api/member/fortune"
           }
         }
+      }
+    },
+    "market": {
+      "auction": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/market/auction"
+          }
+        }
       },
-      "draw": {
+      "bids": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/market/bids"
+          }
+        }
+      },
+      "lottery": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/market/lottery"
+          }
+        }
+      },
+      "tickets": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/market/tickets"
+          }
+        }
+      },
+      "bid": {
         "~orpc": {
           "errorMap": {},
           "meta": {
@@ -2408,7 +2635,388 @@
           "route": {
             "inputStructure": "detailed",
             "method": "POST",
-            "path": "/api/member/fortune"
+            "path": "/api/member/market/bid"
+          }
+        }
+      },
+      "name": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/market/name"
+          }
+        }
+      },
+      "buy": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/market/lottery"
+          }
+        }
+      }
+    },
+    "marketAdmin": {
+      "history": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/market/history"
+          }
+        }
+      },
+      "plan": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/market/plan"
+          }
+        }
+      },
+      "settle": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/market/settle"
+          }
+        }
+      }
+    },
+    "karaoke": {
+      "overview": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/karaoke"
+          }
+        }
+      },
+      "request": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/songs"
+          }
+        }
+      },
+      "song": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/karaoke/songs/{id}"
+          }
+        }
+      },
+      "start": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/songs/{id}/sessions"
+          }
+        }
+      },
+      "submit": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/sessions/{id}/result"
+          }
+        }
+      },
+      "result": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/karaoke/sessions/{id}"
+          }
+        }
+      },
+      "editor": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/karaoke/songs/{id}/edit"
+          }
+        }
+      },
+      "saveEdit": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": "admin.panel.write",
+            "refusal": "這個帳號只能看,不能存",
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "PUT",
+            "path": "/api/member/karaoke/songs/{id}/edit"
+          }
+        }
+      },
+      "restoreEdit": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": "admin.panel.write",
+            "refusal": "這個帳號只能看,不能存",
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/songs/{id}/edit/restore"
+          }
+        }
+      }
+    },
+    "karaokeAdmin": {
+      "results": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/karaoke/results"
+          }
+        }
+      }
+    },
+    "karaokeRooms": {
+      "overview": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/karaoke/rooms"
+          }
+        }
+      },
+      "open": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms"
+          }
+        }
+      },
+      "room": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/karaoke/rooms/{code}"
+          }
+        }
+      },
+      "join": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms/{code}/join"
+          }
+        }
+      },
+      "leave": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms/{code}/leave"
+          }
+        }
+      },
+      "ready": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms/{code}/ready"
+          }
+        }
+      },
+      "song": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms/{code}/song"
+          }
+        }
+      },
+      "relay": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms/{code}/relay"
+          }
+        }
+      },
+      "start": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms/{code}/start"
+          }
+        }
+      },
+      "close": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms/{code}/close"
           }
         }
       }

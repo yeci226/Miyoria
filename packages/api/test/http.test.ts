@@ -160,6 +160,7 @@ describe("http", () => {
   it("module JSON keeps the legacy shape", async () => {
     const { base } = await start();
     const [api] = await call<ModuleInfo[]>(base, TOKEN, "GET", "/api/modules");
+    // The legacy fields, then what the system page draws the module's card with.
     expect(api).toEqual({
       id: "api",
       name: "Admin API",
@@ -168,6 +169,11 @@ describe("http", () => {
       state: "running",
       reason: null,
       recent_restarts: 0,
+      icon: "server",
+      category: "platform",
+      settings: false,
+      card: null,
+      pending: null,
     });
   });
 

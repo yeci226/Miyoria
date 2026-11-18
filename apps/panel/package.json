@@ -40,6 +40,7 @@
     "cmdk": "^1.1.1",
     "hls.js": "1.6.15",
     "lucide-react": "^0.515.0",
+    "pitchy": "4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "sonner": "^2.0.8",

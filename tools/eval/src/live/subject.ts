@@ -50,6 +50,12 @@ export interface Scene {
   now?: string;
   /** She answers aloud (the voice profile: sentences, said as written); unset: in writing. */
   spoken?: boolean;
+  /**
+   * Something happened in the world that is worth a look (a note from a module, the way a card
+   * worth a word reaches her): the run is a `world` wake with this text, not an answer to the last
+   * line. `lines` may then be empty or be the chat going on around it; set `address: "none"`.
+   */
+  world?: string;
 }
 
 export interface ReplyCall {

@@ -2,8 +2,9 @@
 //
 // Session tokens are 256 random bits; only their SHA-256 hash is kept, in memory and (when there
 // is a `SettingsStore`) under profile `_global`, key `panel_session:<hash>`, so sessions survive
-// a restart. Every request re-checks `admin.panel.access` (cached for `recheck_secs`), so revoking
-// a role takes effect without logging anyone out by hand.
+// a restart. Every request re-checks `admin.panel.access` (cached for `recheck_secs`, and at once
+// after a role change made through the API), so revoking a role takes effect without logging
+// anyone out by hand; a session whose tier no longer fits the account's access is ended.
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { PANEL_ACCESS, PANEL_WRITE } from "@miyoria/auth";
@@ -56,8 +57,9 @@ export function looksLikeToken(token: string): boolean {
 
 /**
  * What a session was opened as. `admin` was given to an account holding `admin.panel.access`;
- * `member` to anyone else who logged in, and it opens the member routes and nothing more, even if
- * the account gains the permission later: admin access takes a new login.
+ * `member` to anyone else who logged in, and it opens the member routes and nothing more. When the
+ * account's access changes either way (a role granted or taken), the session ends at its next
+ * check, so the person logs in again and gets the tier that fits.
  */
 export type SessionTier = "admin" | "member";
 
@@ -148,6 +150,16 @@ export class Sessions {
     return this.#map.size;
   }
 
+  /** The display name of a live session of `account` held in memory, `null` when none. */
+  nameOf(account: AccountRef): string | null {
+    for (const { record } of this.#map.values()) {
+      if (record.account.platform === account.platform && record.account.id === account.id) {
+        return record.name;
+      }
+    }
+    return null;
+  }
+
   /** Starts a session and returns its token (the cookie value). */
   async create(
     store: SettingsStore | undefined,
@@ -210,9 +222,38 @@ export class Sessions {
       return { record, access: checked.access };
     }
     const access = checkAccess(authorizer, record.account);
+    // The account's roles changed since the login: a member who may now use the panel, or an
+    // admin who no longer may, logs in again to get the session that fits. Without an authorizer
+    // (the auth module is restarting) nothing can be told, so nothing is ended.
+    if (authorizer !== undefined && (record.tier === "admin") !== access.panel) {
+      log.info(
+        { account: accountRefString(record.account), tier: record.tier },
+        "panel session ended: the account's access changed",
+      );
+      await this.#drop(store, hash);
+      return null;
+    }
     const current = this.#map.get(hash);
     if (current) current.checked = { at: this.#clock.now(), access };
     return { record, access };
+  }
+
+  /**
+   * Forgets every session's last access check, so the next request of each is checked again at
+   * once (after a role, an assignment or a mapping changed), whatever `recheck_secs` says.
+   */
+  recheckAll(): void {
+    for (const entry of this.#map.values()) entry.checked = null;
+  }
+
+  async #drop(store: SettingsStore | undefined, hash: string): Promise<void> {
+    this.#map.delete(hash);
+    if (!store) return;
+    try {
+      await store.set(STORE_PROFILE, storeKey(hash), null);
+    } catch (error) {
+      log.warn({ error: errorMessage(error) }, "cannot delete panel session");
+    }
   }
 
   /** Reads a session another run of this module persisted. */

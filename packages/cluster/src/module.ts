@@ -221,6 +221,8 @@ function clusterHosts(tables: ClusterTables, link: ClusterLink, publish: Publish
 export class ClusterModule implements Module {
   static readonly ID = "cluster";
   readonly manifest = defineManifest(ClusterModule.ID, "Cluster", {
+    icon: "network",
+    category: "system",
     description: "The control link hosts dial, the hosts that joined, and the service registry",
     configSchema: ClusterConfigSchema,
   });

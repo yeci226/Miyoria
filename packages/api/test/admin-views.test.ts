@@ -74,7 +74,6 @@ describe("routes need the token and the module that provides them", () => {
       "/api/life/reminders",
       "/api/life/activities",
       "/api/economy/health",
-      "/api/economy/commissions",
       "/api/economy/predictions",
       "/api/economy/room",
       "/api/workspace",
@@ -221,20 +220,6 @@ describe("economy 2.0", () => {
         week: { issued: 0, recovered: 0, ratio: null },
         warn: null,
       }),
-      commissionsWaiting: async () => [
-        {
-          id: "C1",
-          kind: "poem",
-          label: "詩",
-          brief: "寫一首",
-          price: 50,
-          status: "open",
-          created_at: "2026-11-01T00:00:00.000Z",
-          due_at: "2026-11-03T00:00:00.000Z",
-          result: null,
-          note: null,
-        },
-      ],
       predictions: async (account: unknown) => {
         expect(account).toBeNull();
         return [
@@ -267,9 +252,6 @@ describe("economy 2.0", () => {
     const health = await h.get("/api/economy/health");
     expect(health.status).toBe(200);
     expect(health.body).toMatchObject({ currency: "魚幣", available: false, days: [] });
-    expect((await h.get("/api/economy/commissions")).body).toMatchObject({
-      commissions: [{ id: "C1" }],
-    });
     expect((await h.get("/api/economy/predictions")).body).toMatchObject({
       predictions: [{ id: "P1" }],
     });

@@ -68,6 +68,7 @@ function statusCard(status: StageStatus, note: string | null = null): CommandRep
       ].join("\n"),
     },
   ];
+  if (status.obs && status.obs_warning) blocks.push({ type: "text", text: status.obs_warning });
   if (note) blocks.push({ type: "muted", text: note });
   const scenes = sceneNames(status);
   if (scenes.length > 1) {

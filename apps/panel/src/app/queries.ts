@@ -10,7 +10,7 @@ import {
 } from "@tanstack/react-query";
 import { isApiError } from "@/api/http";
 import type { DecisionsQuery, E2eRecord, FactEventsQuery, LlmCallsQuery, LlmThinkingQuery, MemoryQuery, ModuleAction, PeopleQuery } from "@/api/types";
-import type { AddDirectiveRequest, AdjustPersonRequest, UpdatePersonRequest,ClusterInviteRequest, ArbiterVerdict, AssignRoleRequest, ChannelLevelsView, DataCategoryId, GameStartRequest, ModuleInfo, QueueState, RemoveMappingRequest, RoleMapping, SayRequest, SceneRolesState, SongsState, StageState, StreamAction, TurnOutcomeKind, UpdateMemoryRequest, UpsertRoleRequest, WalletAdjustRequest } from "@miyoria/contracts/api";
+import type { AddDirectiveRequest, AdjustPersonRequest, UpdatePersonRequest,ClusterInviteRequest, ArbiterVerdict, AssignRoleRequest, ChannelLevelsView, DataCategoryId, GameStartRequest, LotPlanRequest, ModuleInfo, QueueState, RemoveMappingRequest, RoleMapping, SaveSettingsRequest, SayRequest, SceneRolesState, SettleRequest, SongsState, StageState, StreamAction, TurnOutcomeKind, UpdateMemoryRequest, UpsertRoleRequest, WalletAdjustRequest } from "@miyoria/contracts/api";
 import type { ContextKey, Timestamp } from "@miyoria/contracts/wire";
 import { type EvalData, loadEvalData } from "@/lib/eval-data";
 import { factEventsInput } from "@/lib/fact-events";
@@ -84,11 +84,11 @@ export const queryKeys = {
   reminders: ["life", "reminders"] as const,
   activities: ["life", "activities"] as const,
   economyHealth: ["economy", "health"] as const,
-  commissions: ["economy", "commissions"] as const,
   predictions: ["economy", "predictions"] as const,
   room: ["economy", "room"] as const,
-  reachedGoals: ["economy", "goals"] as const,
+  marketHistory: ["economy", "market"] as const,
   personQuests: (id: string) => ["people", "quests", id] as const,
+  personCards: (id: string) => ["people", "cards", id] as const,
   workspace: ["workspace"] as const,
   skills: ["skills"] as const,
   skill: (name: string) => ["skills", name] as const,
@@ -130,6 +130,103 @@ export function useModuleAction() {
       qc.setQueryData<ModuleInfo[]>(queryKeys.modules, (list) => list?.map((m) => (m.id === updated.id ? updated : m)));
       void qc.invalidateQueries({ queryKey: queryKeys.modules });
     },
+  });
+}
+
+// --- one module: card, settings, history ---------------------------------------
+
+/** Never retried: a 404 (no such module) or a 403 is the answer, not a hiccup. */
+const settingsKeys = {
+  detail: (id: string) => ["modules", "detail", id] as const,
+  settings: (id: string) => ["modules", "settings", id] as const,
+  history: (id: string) => ["modules", "history", id] as const,
+  rooms: (kind: string) => ["places", "rooms", kind] as const,
+};
+
+export function useModuleDetail(id: string) {
+  const api = useApi();
+  return useQuery({
+    queryKey: settingsKeys.detail(id),
+    queryFn: ({ signal }) => api.rpc.modules.get({ params: { id } }, { signal }),
+    refetchInterval: poll(15_000),
+    retry: false,
+  });
+}
+
+export function useModuleSettings(id: string) {
+  const api = useApi();
+  return useQuery({
+    queryKey: settingsKeys.settings(id),
+    queryFn: ({ signal }) => api.rpc.modules.settings({ params: { id } }, { signal }),
+    retry: false,
+  });
+}
+
+export function useSettingsHistory(id: string) {
+  const api = useApi();
+  return useInfiniteQuery({
+    queryKey: settingsKeys.history(id),
+    initialPageParam: undefined as number | undefined,
+    queryFn: ({ signal, pageParam }) =>
+      api.rpc.modules.settingsHistory(
+        { params: { id }, query: { limit: "10", ...(pageParam === undefined ? {} : { before: String(pageParam) }) } },
+        { signal },
+      ),
+    getNextPageParam: (last) => last.next_before ?? undefined,
+    retry: false,
+  });
+}
+
+/** After a save or a revert: the module's settings, history, card and the list are stale. */
+function useSettingsRefresh(id: string) {
+  const qc = useQueryClient();
+  return () => {
+    void qc.invalidateQueries({ queryKey: settingsKeys.settings(id) });
+    void qc.invalidateQueries({ queryKey: settingsKeys.history(id) });
+    void qc.invalidateQueries({ queryKey: settingsKeys.detail(id) });
+    void qc.invalidateQueries({ queryKey: queryKeys.modules, exact: true });
+  };
+}
+
+export function useSaveSettings(id: string) {
+  const api = useApi();
+  const refresh = useSettingsRefresh(id);
+  return useMutation({
+    mutationFn: (body: SaveSettingsRequest) => api.rpc.modules.saveSettings({ params: { id }, body }),
+    onSuccess: refresh,
+  });
+}
+
+export function useRevertSettings(id: string) {
+  const api = useApi();
+  const refresh = useSettingsRefresh(id);
+  return useMutation({
+    mutationFn: (body: { version: number; expected: number }) => api.rpc.modules.revertSettings({ params: { id }, body }),
+    onSuccess: refresh,
+  });
+}
+
+export function useCardAction() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, action }: { id: string; action: string }) => api.rpc.modules.cardAction({ params: { id, action } }),
+    onSuccess: (_r, { id }) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.modules, exact: true });
+      void qc.invalidateQueries({ queryKey: settingsKeys.detail(id) });
+    },
+  });
+}
+
+/** The rooms the channel picker offers; asked only while a picker is open. */
+export function usePlaceRooms(kind: "text" | "voice" | "thread" | null, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: settingsKeys.rooms(kind ?? "all"),
+    queryFn: ({ signal }) => api.rpc.places.rooms({ query: kind === null ? {} : { kind } }, { signal }),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
   });
 }
 
@@ -1083,28 +1180,9 @@ export function useActivities() {
   return useQuery({ queryKey: queryKeys.activities, queryFn: ({ signal }) => api.rpc.life.activities(undefined, { signal }), refetchInterval: pollModule(30_000), retry: false });
 }
 
-export function useReachedGoals() {
-  const api = useApi();
-  return useQuery({ queryKey: queryKeys.reachedGoals, queryFn: ({ signal }) => api.rpc.economy.goals(undefined, { signal }), refetchInterval: pollModule(60_000), retry: false });
-}
-
-export function useFulfillGoal() {
-  const api = useApi();
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => api.rpc.economy.fulfill({ params: { id }, body: {} }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.reachedGoals }),
-  });
-}
-
 export function useEconomyHealth() {
   const api = useApi();
   return useQuery({ queryKey: queryKeys.economyHealth, queryFn: ({ signal }) => api.rpc.economy.health(undefined, { signal }), refetchInterval: pollModule(60_000), retry: false });
-}
-
-export function useCommissions() {
-  const api = useApi();
-  return useQuery({ queryKey: queryKeys.commissions, queryFn: ({ signal }) => api.rpc.economy.commissions(undefined, { signal }), refetchInterval: pollModule(30_000), retry: false });
 }
 
 export function usePredictions() {
@@ -1117,9 +1195,41 @@ export function useRoom() {
   return useQuery({ queryKey: queryKeys.room, queryFn: ({ signal }) => api.rpc.economy.room(undefined, { signal }), refetchInterval: pollModule(60_000), retry: false });
 }
 
+/** The weekly market's lots and lottery weeks, newest first (`GET /api/market/history`). */
+export function useMarketHistory() {
+  const api = useApi();
+  return useQuery({ queryKey: queryKeys.marketHistory, queryFn: ({ signal }) => api.rpc.marketAdmin.history(undefined, { signal }), refetchInterval: pollModule(60_000), retry: false });
+}
+
+/** Sets or skips the coming week's lot (`admin.economy.adjust`). */
+export function usePlanLot() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: LotPlanRequest) => api.rpc.marketAdmin.plan({ body: req }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.marketHistory }),
+  });
+}
+
+/** Ends the open lot or draws this week's lottery now (`admin.economy.adjust`). */
+export function useSettleMarket() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (what: SettleRequest["what"]) => api.rpc.marketAdmin.settle({ body: { what } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.marketHistory }),
+  });
+}
+
 export function usePersonQuests(id: string) {
   const api = useApi();
   return useQuery({ queryKey: queryKeys.personQuests(id), queryFn: ({ signal }) => api.rpc.people.quests({ params: { id } }, { signal }), retry: false });
+}
+
+/** One person's cards, dex, pity and wishlist (`GET /api/people/{id}/cards`). */
+export function usePersonCards(id: string) {
+  const api = useApi();
+  return useQuery({ queryKey: queryKeys.personCards(id), queryFn: ({ signal }) => api.rpc.cardsAdmin.person({ params: { id } }, { signal }), retry: false });
 }
 
 export function useWorkspace() {

@@ -1,7 +1,8 @@
 // The card as a thing in the hand: it tilts toward the pointer (or a finger dragged across it),
 // grows a little under the pointer, and catches light. A glare follows the pointer on every card;
 // a foil card has a rainbow and glitter on the background that move and flash as it turns, and
-// only a faint sheen on her, so she stays as drawn; a bought frame's band has its own light (a
+// only a faint sheen on her, so she stays as drawn (on her rendered picture, which is opaque, the
+// foil is a holographic sheen over the whole picture, brightest in its light parts); a bought frame's band has its own light (a
 // sheen along gold, caustics in the abyss, a pink shimmer on sakura). With no pointer on it the card sways slowly so the light still moves on a phone. Under
 // prefers-reduced-motion it lies still. The layers sit over the same SVG the PNG is made from, so
 // the picture they download is the card without the light.
@@ -9,7 +10,7 @@
 import { useEffect, useRef } from "react";
 import type { IssuedCard } from "@miyoria/contracts/api";
 import { cn } from "@/lib/utils";
-import { InlinedCard, poseUrl } from "./card";
+import { artUrl, InlinedCard, useArtOpaque, useCardArt } from "./card";
 
 /** Frames that have a light of their own in `index.css` (`.holo-band-<id>`). */
 const LIT_FRAMES = new Set(["sakura", "abyss", "gold"]);
@@ -52,12 +53,18 @@ function apply(el: HTMLElement, p: Pose) {
 
 export function HoloCard({
   card,
+  portrait,
   svgRef,
   zoom = 1.05,
   sway = true,
   className,
 }: {
   card: IssuedCard;
+  /**
+   * Which picture the Core says the card has (`live`: her rendered one, opaque; `fixed`: a
+   * cut-out portrait), as its list sends it; without it, read from the picture itself.
+   */
+  portrait?: "live" | "fixed";
   svgRef?: React.Ref<SVGSVGElement>;
   /** Size under the pointer. */
   zoom?: number;
@@ -65,6 +72,7 @@ export function HoloCard({
   sway?: boolean;
   className?: string;
 }) {
+  const art = useCardArt(card);
   const box = useRef<HTMLDivElement>(null);
   const target = useRef<Pose>({ ...REST });
   const now = useRef<Pose>({ ...REST });
@@ -113,13 +121,18 @@ export function HoloCard({
   };
 
   const lit = card.frame && LIT_FRAMES.has(card.frame) ? card.frame : null;
+  // A cut-out portrait masks the foil off her; her rendered picture is opaque, so the foil is a
+  // sheen printed over the whole picture instead (`index.css`, `[data-art="opaque"]`).
+  const read = useArtOpaque(portrait === undefined ? art : { url: null, data: null });
+  // The Core's word holds for the picture the Core sent, not the panel's own fallback portrait.
+  const opaque = portrait === undefined ? read : portrait === "live" && art.url === artUrl(card.serial);
   return (
     <div className={cn("holo-stage", className)}>
       <div
         ref={box}
         className={cn("holo-card", card.voided_at && "opacity-40 grayscale")}
-        // Her picture, as the mask that keeps the foil off her.
-        style={{ "--art": `url("${poseUrl(card.pose)}")` } as React.CSSProperties}
+        data-art={opaque ? "opaque" : "cutout"}
+        style={(art.url && !opaque ? { "--art": `url("${art.url}")` } : {}) as React.CSSProperties}
         onPointerMove={move}
         onPointerDown={move}
         onPointerLeave={leave}

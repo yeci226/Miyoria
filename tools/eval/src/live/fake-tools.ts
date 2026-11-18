@@ -113,6 +113,37 @@ export const FAKE_TOOL_SPECS: Readonly<Record<string, FakeToolSpec>> = {
       ["game"],
     ),
   },
+  // The party tools of a turtle soup in a text channel (packages/play/party/src/actions.ts): the
+  // descriptions are the real ones, the `play` suite answers them.
+  party_ask: {
+    description:
+      "海龜湯專用:有人問了是非題,或說出他猜的真相,就把那句話交給裁判(湯底只有裁判知道)。" +
+      "回傳「是 / 不是 / 不重要 / 很接近了」或猜中了,照結果回答,不要自己加料。",
+    parameters: object(
+      {
+        question: { type: "string", description: "對方問的問題或猜的真相(照他的意思寫完整)" },
+        player: { type: "string", description: "誰問的(猜中有分;省略 = 你正在回的那個人)" },
+      },
+      ["question"],
+    ),
+  },
+  party_host: {
+    description:
+      "主持正在玩的派對遊戲。action:next 下一首(還沒人猜到的會先公布答案;海龜湯是放棄並公布湯底)、hint 給一個提示、" +
+      "accept 算「很接近」的那個答案對(多半是語音辨識錯字)、reject 不算、end 結束遊戲。" +
+      "回傳的就是結果,照著用自己的話講。",
+    parameters: object(
+      {
+        action: {
+          type: "string",
+          enum: ["next", "hint", "accept", "reject", "end"],
+          description: "要做什麼",
+        },
+        player: { type: "string", description: "accept / reject 針對誰(可省略 = 最近那個)" },
+      },
+      ["action"],
+    ),
+  },
   directive_add: {
     description:
       "有人要你從現在起遵守一條規則時用(例如「不要玩 Minecraft」「這一小時不要開台」)。" +

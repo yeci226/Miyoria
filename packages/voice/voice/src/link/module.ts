@@ -79,6 +79,8 @@ export class VoiceLinkModule implements Module {
   static readonly ID = "voice.link";
   static readonly DEFAULT_BIND = DEFAULT_BIND;
   readonly manifest = defineManifest(VoiceLinkModule.ID, "Voice Link", {
+    icon: "cable",
+    category: "platform",
     description: "WebSocket link to the self voice node (Discord voice I/O)",
     configSchema: VoiceLinkConfigSchema,
   });

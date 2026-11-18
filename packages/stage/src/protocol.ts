@@ -10,15 +10,24 @@ import {
   BEATS_MAX,
   CLIP_REASON_MAX,
   type CoreMessageWire,
+  DANMAKU_ID_MAX,
+  DANMAKU_NAME_MAX,
+  DANMAKU_ON_SCREEN_MAX,
+  DANMAKU_QUEUE_MAX,
+  DANMAKU_TEXT_MAX,
+  DANMAKU_WAIT_MAX_MS,
+  type DanmakuOutcome,
   type GazeTarget,
   GIFT_EXPRESSION_MAX_S,
   GIFT_EXPRESSIONS,
   GIFT_LABEL_MAX,
   GIFT_NAME_MAX,
   type GiftExpression,
+  type KaraokeStageLyrics,
+  type KaraokeStageScene,
+  type KaraokeStageVoice,
   type LevelFrame,
   SCREEN_NAME_MAX,
-  SCREEN_SONG_MAX,
   SCREEN_TEXT_MAX,
   type SongVideoAction,
   type SpeakingState,
@@ -41,8 +50,12 @@ import {
 export type {
   Activity,
   ActivityKind,
+  DanmakuOutcome,
   GazeTarget,
   GiftExpression,
+  KaraokeStageLyrics,
+  KaraokeStageScene,
+  KaraokeStageVoice,
   LevelFrame,
   SongVideoAction,
   SpeakingState,
@@ -54,12 +67,17 @@ export {
   ACTIVITY_LABEL_MAX,
   BEATS_MAX,
   CLIP_REASON_MAX,
+  DANMAKU_ID_MAX,
+  DANMAKU_NAME_MAX,
+  DANMAKU_ON_SCREEN_MAX,
+  DANMAKU_QUEUE_MAX,
+  DANMAKU_TEXT_MAX,
+  DANMAKU_WAIT_MAX_MS,
   GIFT_EXPRESSION_MAX_S,
   GIFT_EXPRESSIONS,
   GIFT_LABEL_MAX,
   GIFT_NAME_MAX,
   SCREEN_NAME_MAX,
-  SCREEN_SONG_MAX,
   SCREEN_TEXT_MAX,
   TRANSITION_MAX_MS,
 };
@@ -104,6 +122,8 @@ export function defaultStageStatus(): StageStatus {
     scenes: [],
     hotkeys: [],
     overlay_url: null,
+    obs_collection: null,
+    obs_warning: null,
   };
 }
 
@@ -119,6 +139,8 @@ export function sameStatus(a: StageStatus | null, b: StageStatus | null): boolea
     a.scene === b.scene &&
     a.streaming === b.streaming &&
     a.overlay_url === b.overlay_url &&
+    a.obs_collection === b.obs_collection &&
+    a.obs_warning === b.obs_warning &&
     sameList(a.scenes, b.scenes) &&
     sameList(a.hotkeys, b.hotkeys)
   );
@@ -203,6 +225,8 @@ export function statusOf(msg: StageStatus): StageStatus {
     scenes: [...msg.scenes],
     hotkeys: [...msg.hotkeys],
     overlay_url: msg.overlay_url,
+    obs_collection: msg.obs_collection,
+    obs_warning: msg.obs_warning,
   };
 }
 

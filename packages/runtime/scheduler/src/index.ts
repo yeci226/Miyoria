@@ -21,6 +21,8 @@ export class SchedulerModule implements Module {
   static readonly ID = "scheduler";
 
   readonly manifest: ModuleManifest = defineManifest(SchedulerModule.ID, "Action scheduler", {
+    icon: "calendar-clock",
+    category: "system",
     description: "Per-lane output queues with priority, TTL and coalescing",
     configSchema: SchedulerConfigSchema,
   });

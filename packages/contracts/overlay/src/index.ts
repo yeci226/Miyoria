@@ -4,8 +4,16 @@
 //
 // Not the stage link: `gift` here is the merged line (`{ text }`), `activity` and `status` are a
 // subset of what the link carries, and `levels` is what viewers hear, not what the voice node sent.
+//
+// The other way, the page sends `OverlayReply` frames on the same socket: what became of each
+// danmaku line (shown, or dropped and why), so a paid line that nobody saw is given back.
 
 import { z } from "zod";
+import {
+  StageLinkKaraokeLyricsSchema,
+  StageLinkKaraokeSceneSchema,
+  StageLinkKaraokeVoiceSchema,
+} from "../../stage-link/src/index.js";
 
 /** Most bands a `levels` frame carries. */
 export const OVERLAY_LEVEL_BANDS_MAX = 32;
@@ -26,8 +34,17 @@ export const OverlayNoticeMessageSchema = z
   .meta({ id: "OverlayNoticeMessage" });
 
 export const OverlayActivityKindSchema = z
-  .enum(["thinking", "synthesizing", "song_prepare", "singing"])
+  .enum(["thinking", "synthesizing", "tool", "game", "song_prepare", "singing"])
   .meta({ id: "OverlayActivityKind" });
+
+/** What happens beside the main line (a song being prepared): `progress` `null` is waiting, no bar. */
+export const OverlayActivitySideSchema = z
+  .object({
+    label: z.string(),
+    detail: z.string().nullable().optional(),
+    progress: z.number().nullable().optional(),
+  })
+  .meta({ id: "OverlayActivitySide" });
 
 /**
  * What she is doing. `kind: null` hides the line (the other fields are then empty / null).
@@ -43,6 +60,8 @@ export const OverlayActivityMessageSchema = z
     progress: z.number().nullable(),
     elapsed_ms: z.number().nullable(),
     duration_ms: z.number().nullable(),
+    /** A song being prepared beside the main line; left out when there is none. */
+    secondary: OverlayActivitySideSchema.nullable().optional(),
   })
   .meta({ id: "OverlayActivityMessage" });
 
@@ -51,20 +70,37 @@ export const OverlayGiftMessageSchema = z
   .object({ type: z.literal("gift"), text: z.string() })
   .meta({ id: "OverlayGiftMessage" });
 
-export const OverlayScreenKindSchema = z
-  .enum(["message", "dedication"])
-  .meta({ id: "OverlayScreenKind" });
-
-/** A paid message or a song dedication; the overlay queues them and shows one at a time. */
+/** A paid message; the overlay queues them and shows one at a time. */
 export const OverlayScreenMessageSchema = z
   .object({
     type: z.literal("screen"),
-    kind: OverlayScreenKindSchema,
     name: z.string(),
     text: z.string(),
-    song: z.string().nullable(),
   })
   .meta({ id: "OverlayScreenMessage" });
+
+/**
+ * A paid danmaku line: it enters from the right and crosses the screen in a lane. `name` is the
+ * sender's display name, `null` when names are hidden. The limits come with every line (the owner
+ * may change them): at most `max_on_screen` on the screen, `queue_max` waiting, and a line that
+ * waited `max_wait_ms` is dropped. The page answers each line once (`OverlayReply`).
+ */
+export const OverlayDanmakuMessageSchema = z
+  .object({
+    type: z.literal("danmaku"),
+    id: z.string(),
+    name: z.string().nullable(),
+    text: z.string(),
+    max_on_screen: z.number(),
+    queue_max: z.number(),
+    max_wait_ms: z.number(),
+  })
+  .meta({ id: "OverlayDanmakuMessage" });
+
+/** Takes every danmaku line off the screen; the waiting ones are dropped (`cleared`). */
+export const OverlayDanmakuClearMessageSchema = z
+  .object({ type: z.literal("danmaku_clear") })
+  .meta({ id: "OverlayDanmakuClearMessage" });
 
 export const OverlayTouchPartSchema = z
   .enum(["head", "face", "body", "screen"])
@@ -112,6 +148,30 @@ export const OverlayStatusMessageSchema = z
   })
   .meta({ id: "OverlayStatusMessage" });
 
+/**
+ * The karaoke room the stream shows (docs/design/karaoke.md 「做了什麼第五步」), as the stage link
+ * carries it, with `position_ms` moved to the moment this frame was sent. The scene plays the
+ * round's sound itself (it is in the stream's own audio), so no lip-sync latency is taken off.
+ * `room: null` ends the scene. A page that connects gets the latest one.
+ */
+export const OverlayKaraokeMessageSchema = StageLinkKaraokeSceneSchema.extend({
+  type: z.literal("karaoke"),
+}).meta({ id: "OverlayKaraokeMessage" });
+
+/**
+ * The words, picture and backing of the round shown: `video` and `backing.path` are URLs on the
+ * overlay's own server (the stage serves the files Core named, while that round is shown), `null`
+ * without one.
+ */
+export const OverlayKaraokeLyricsMessageSchema = StageLinkKaraokeLyricsSchema.extend({
+  type: z.literal("karaoke_lyrics"),
+}).meta({ id: "OverlayKaraokeLyricsMessage" });
+
+/** A piece of the relayed voice, as the stage link carries it (not kept for later pages). */
+export const OverlayKaraokeVoiceMessageSchema = StageLinkKaraokeVoiceSchema.extend({
+  type: z.literal("karaoke_voice"),
+}).meta({ id: "OverlayKaraokeVoiceMessage" });
+
 /** Every frame of the feed. */
 export const OverlayMessageSchema = z
   .discriminatedUnion("type", [
@@ -121,10 +181,54 @@ export const OverlayMessageSchema = z
     OverlayActivityMessageSchema,
     OverlayGiftMessageSchema,
     OverlayScreenMessageSchema,
+    OverlayDanmakuMessageSchema,
+    OverlayDanmakuClearMessageSchema,
     OverlayTouchMessageSchema,
     OverlaySpeakingMessageSchema,
     OverlayLevelsMessageSchema,
     OverlayStatusMessageSchema,
+    OverlayKaraokeMessageSchema,
+    OverlayKaraokeLyricsMessageSchema,
+    OverlayKaraokeVoiceMessageSchema,
   ])
   .meta({ id: "OverlayMessage" });
 export type OverlayMessage = z.output<typeof OverlayMessageSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// The page to the stage node
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * This page shows danmaku (its danmaku layer is on): sent once after it connects. The node waits
+ * for the answers of these pages only; with none open, a line is given back at once.
+ */
+export const OverlayDanmakuReadySchema = z
+  .object({ type: z.literal("danmaku_ready") })
+  .meta({ id: "OverlayDanmakuReady" });
+
+/** A danmaku line entered the screen (sent once, when it starts to cross). */
+export const OverlayDanmakuShownSchema = z
+  .object({ type: z.literal("danmaku_shown"), id: z.string() })
+  .meta({ id: "OverlayDanmakuShown" });
+
+/**
+ * A danmaku line will never show: the queue was full when it came (`queue_full`), it waited longer
+ * than `max_wait_ms` (`too_late`), or the layer was cleared while it waited (`cleared`).
+ */
+export const OverlayDanmakuDroppedSchema = z
+  .object({
+    type: z.literal("danmaku_dropped"),
+    id: z.string(),
+    reason: z.enum(["queue_full", "too_late", "cleared"]),
+  })
+  .meta({ id: "OverlayDanmakuDropped" });
+
+/** Every frame the page sends. The node ignores a `type` it does not know. */
+export const OverlayReplySchema = z
+  .discriminatedUnion("type", [
+    OverlayDanmakuReadySchema,
+    OverlayDanmakuShownSchema,
+    OverlayDanmakuDroppedSchema,
+  ])
+  .meta({ id: "OverlayReply" });
+export type OverlayReply = z.output<typeof OverlayReplySchema>;

@@ -1,10 +1,13 @@
 // `miyoria doctor`, per service: what a service's descriptor says it needs, checked against this
 // host (docs/design/v5-hostd.md §9). Everything here is read-only; `--fix` is the caller's, and
-// it only syncs an environment or downloads `install.files`.
+// it only syncs an environment or downloads `install.files`. Checking a file hashes it when it is
+// new or changed since its hash was remembered (`--deep` hashes every one).
 
 import type { HostInfo } from "@miyoria/contracts/host";
 import {
   type CatalogEntry,
+  checkServiceFiles,
+  formatBytes,
   type InstallDeps,
   inspectService,
   type LoadedHostConfig,
@@ -110,14 +113,25 @@ export async function serviceChecks(input: HostCheckInput): Promise<Finding[]> {
             ]),
       );
     }
-    for (const f of inspected.files) {
-      findings.push(
-        f.state === "present"
-          ? ok(name(entry, `檔案 ${f.path}`), "在")
-          : warn(name(entry, `檔案 ${f.path}`), "還沒下載", [
-              "`miyoria doctor --fix` 或 `miyoria models pull` 下載",
-            ]),
-      );
+    // `install.files`: hashed when new or changed since the last check (`--deep`: every one).
+    for (const f of await checkServiceFiles(entry, input.host, input.deep ? "deep" : "cached")) {
+      const what = name(entry, `檔案 ${f.path}`);
+      if (f.state === "verified" || f.state === "present") {
+        findings.push(ok(what, `已驗證(${formatBytes(f.size)})`));
+      } else if (f.state === "wrong") {
+        findings.push(
+          fail(what, `不對:${f.detail ?? "檢查碼不符"}`, [
+            "`miyoria doctor --fix` 重新下載(會先列出來問你)",
+          ]),
+        );
+      } else {
+        const detail = `缺 ${f.what}(${formatBytes(f.size)},授權 ${f.licence},來自 ${f.source})`;
+        const fix = [
+          "`miyoria doctor --fix` 下載(會先列出來問你)",
+          ...(f.optional ? [] : ["缺這個檔案 hostd 不會啟動這個服務"]),
+        ];
+        findings.push(f.optional ? warn(what, detail, fix) : fail(what, detail, fix));
+      }
     }
     for (const m of inspected.models) {
       findings.push(

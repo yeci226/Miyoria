@@ -34,7 +34,15 @@ import { ActivityTracker } from "./activity.js";
 import { registerStreamCommands, unregisterStreamCommands } from "./commands.js";
 import { MAX_MESSAGE } from "./conn.js";
 import { type GoLiveState, SceneDirector } from "./director.js";
-import { EMOTION_TOPIC, Forwarder, GIFT_TOPIC, SCREEN_TOPIC } from "./forward.js";
+import {
+  DANMAKU_CLEAR_TOPIC,
+  DANMAKU_TOPIC,
+  danmakuMessage,
+  EMOTION_TOPIC,
+  Forwarder,
+  GIFT_TOPIC,
+  SCREEN_TOPIC,
+} from "./forward.js";
 import { goliveFollow, VOICE_GOLIVE_TOPIC } from "./golive.js";
 import { Highlights } from "./highlights.js";
 import {
@@ -116,7 +124,8 @@ interface Running {
 /**
  * Module `stage.link`: serves the Stage Link WebSocket endpoint (`ws://<bind>/stage-link`),
  * forwards `agent.emotion`, `agent.turn.completed` and `voice.playback` to the Stage node, tells
- * it what she is doing (`activity`, see activity.ts) and provides `StageLinkKey`. Registers the
+ * it what she is doing (`activity`, see activity.ts) and provides `StageLinkKey`. Danmaku lines
+ * (`economy.danmaku`) go to the node, and how each ended comes back as `stage.danmaku`. Registers the
  * capabilities `stage.scene`, `stage.stream` and `stage.expression` in the actuator registry, and the `stream`
  * commands (which go through it) when `CommandRegistryKey` is available.
  */
@@ -125,6 +134,8 @@ export class StageLinkModule implements Module {
   static readonly DEFAULT_BIND = DEFAULT_BIND;
 
   readonly manifest = defineManifest(StageLinkModule.ID, "Stage Link", {
+    icon: "clapperboard",
+    category: "platform",
     description: "WebSocket link to the Stage node (VTube Studio, OBS, overlay)",
     optional: ["commands"],
     configSchema: StageLinkConfigSchema,
@@ -218,7 +229,8 @@ export class StageLinkModule implements Module {
     const sendActivity = (): void => {
       if (!link.isConnected()) return;
       const msg = activity.next(ctx.clock.now());
-      if (msg) link.send(msg);
+      // A frame that could not go out is given again on the next tick, not taken as shown.
+      if (msg && !link.send(msg)) activity.unsent();
     };
     let nodeUp = false;
     const unsubscribe = link.subscribeStatus((status) => {
@@ -236,6 +248,7 @@ export class StageLinkModule implements Module {
         if (beat) link.send(beat);
         const resting = forwarder.resumeResting();
         if (resting) link.send(resting);
+        for (const msg of forwarder.resumeKaraoke()) link.send(msg);
         const current = activity.resume(ctx.clock.now());
         if (current) link.send(current);
       }
@@ -252,10 +265,16 @@ export class StageLinkModule implements Module {
       GIFT_TOPIC,
       TOUCH_TOPIC,
       SCREEN_TOPIC,
+      DANMAKU_TOPIC,
+      DANMAKU_CLEAR_TOPIC,
       Events.SingCue.type,
+      Events.KaraokeStage.type,
+      Events.KaraokeStageLyrics.type,
+      Events.KaraokeStageVoice.type,
       Events.SpeechPause.type,
       Events.AgentTurnStarted.type,
       Events.AgentTurnCompleted.type,
+      Events.AgentToolRunning.type,
       Events.VoicePlaybackEvent.type,
       Events.VoiceSynthesis.type,
       Events.VoiceUpcoming.type,
@@ -335,6 +354,12 @@ export class StageLinkModule implements Module {
 
       try {
         for await (const env of events) {
+          // The relayed karaoke voice (about four a second) only passes through: nothing else
+          // looks at it, and nothing of it is logged.
+          if (is(Events.KaraokeStageVoice, env)) {
+            for (const msg of forwarder.onEvent(env)) link.send(msg);
+            continue;
+          }
           // Chat lines only count towards highlights (nothing of their text is used).
           if (is(Events.PlatformMessageCreated, env)) {
             if (!env.data.author.is_bot) clip(highlights.message(ctx.clock.now()));
@@ -347,6 +372,12 @@ export class StageLinkModule implements Module {
           if (env.type === Events.ActivityChanged.type) continue;
           if (env.type === VOICE_GOLIVE_TOPIC) {
             followGoLive(env.data as JsonValue);
+            continue;
+          }
+          if (env.type === DANMAKU_TOPIC) {
+            // Every line is answered once: by the node, or here when it cannot go out.
+            const line = danmakuMessage(env.data as JsonValue);
+            if (line !== null) link.sendDanmaku(line.id, line.msg);
             continue;
           }
           for (const msg of forwarder.onEvent(env)) {

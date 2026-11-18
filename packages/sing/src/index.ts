@@ -27,26 +27,18 @@ export type { Endpoint, EndpointQuery, EndpointSource, EndpointsOption } from ".
 export { type FailoverEntry, type FailoverOptions, FailoverSingWorker } from "./failover.js";
 export {
   type GpuContextSink,
+  karaokeWorker,
   SingerKey,
   SingModule,
   type SingWorkerFactory,
   workerUrls,
 } from "./module.js";
-export {
-  dedicationProblem,
-  MAX_DEDICATION_CHARS,
-  type SongCharge,
-  type SongPaidItem,
-  type SongPayments,
-  SongPaymentsKey,
-} from "./payments.js";
 export { paced, singSong, sleep, songBeats, songVideoPath } from "./player.js";
 export { PROMPT_KEY, SingPrompt } from "./prompt.js";
 export {
   BACKING_LABELS,
   BACKING_MODES,
   type BackingMode,
-  dedicationNote,
   type NewSong,
   SetList,
   SetListError,
@@ -57,10 +49,12 @@ export {
 } from "./setlist.js";
 export {
   REASONS,
+  REFUND_RETRY_MS,
   SETLIST_KEY,
   SingError,
   Singer,
   type SkipVote,
+  SongPriorityError,
   type SongRequest,
   skipVotesNeeded,
   workerQuery,

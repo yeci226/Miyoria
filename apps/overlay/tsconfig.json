@@ -13,8 +13,12 @@
     "skipLibCheck": true,
     "noEmit": true,
     // The feed contract is read as types only, straight from source (no build step in between).
+    // The karaoke lyrics module is shared with the member page (plain TS, from source); the song
+    // reference's types it names are read as types only.
     "paths": {
-      "@miyoria/contracts/overlay": ["../../packages/contracts/overlay/src/index.ts"]
+      "@miyoria/contracts/overlay": ["../../packages/contracts/overlay/src/index.ts"],
+      "@miyoria/contracts/workers": ["../../packages/contracts/workers/src/index.ts"],
+      "@miyoria/play/karaoke/lyrics": ["../../packages/play/karaoke/src/lyrics/index.ts"]
     }
   },
   "include": ["src", "test", "vite.config.ts"]

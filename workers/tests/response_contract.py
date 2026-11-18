@@ -23,8 +23,9 @@ NOT_JSON = "not JSON"
 NOT_IN_CONTRACT = "not in the contract"
 """A route the contract does not describe (yet): only checked to answer JSON."""
 
-# (method, route path) -> the model of its 2xx answer, by the worker's FastAPI title.
-ROUTES: dict[str, dict[tuple[str, str], str]] = {
+# (method, route path) -> the model of its 2xx answer, by the worker's FastAPI title. A file route
+# maps the file's name (the last part of the path; ``*`` any other) to the model of each file.
+ROUTES: dict[str, dict[tuple[str, str], str | dict[str, str]]] = {
     "Miyoria fake worker": {
         ("POST", "/asr"): "WorkersAsrReply",
         ("POST", "/tts"): NOT_JSON,
@@ -67,6 +68,11 @@ ROUTES: dict[str, dict[tuple[str, str], str]] = {
         ("GET", "/songs/{sid}"): "WorkersSingSongReply",
         ("POST", "/songs/{sid}/lyrics"): "WorkersSingLyricsReply",
         ("GET", "/songs/{sid}/files/{name}"): NOT_JSON,
+        ("GET", "/karaoke"): NOT_IN_CONTRACT,
+        ("GET", "/karaoke/{kid}/files/{name}"): {"reference.json": "WorkersKaraokeReference", "*": NOT_JSON},
+        ("POST", "/karaoke/{kid}/keys"): "WorkersKaraokeKeyReply",
+        ("POST", "/karaoke/voice"): "WorkersKaraokeVoicePitch",
+        ("POST", "/karaoke/stream"): "WorkersKaraokeStreamAnswer",
         ("POST", "/gpu/context"): "WorkersSingOk",
         ("GET", "/cache"): NOT_IN_CONTRACT,
         ("POST", "/cache/prune"): NOT_IN_CONTRACT,
@@ -91,10 +97,12 @@ def _route(app: Any, method: str, path: str) -> str | None:
     return None
 
 
-def model_for(worker: str, method: str, route: str | None, status: int) -> type[BaseModel] | str:
+def model_for(worker: str, method: str, route: str | None, status: int, path: str = "") -> type[BaseModel] | str:
     if status >= 400:
         return contracts.WorkersError
     name = ROUTES[worker].get((method, route or ""))
+    if isinstance(name, dict):
+        name = name.get(path.rsplit("/", 1)[-1], name.get("*"))
     if name is None:
         raise ContractError(f"{worker}: {method} {route} answered {status}, and the contract test does not "
                             f"know that route: add it to tests/response_contract.py")
@@ -108,7 +116,7 @@ def check(app: Any, method: str, path: str, status: int, content_type: str, cont
         return  # not a worker (a test's own small app)
     route = _route(app, method, path)
     is_json = content_type.startswith("application/json")
-    want = model_for(worker, method, route, status)
+    want = model_for(worker, method, route, status, path)
     seen.add((worker, method, route or path, status))
     where = f"{worker}: {method} {path} -> {status}"
     if want == NOT_JSON:

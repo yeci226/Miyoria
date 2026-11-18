@@ -17,7 +17,10 @@
 //   1. the emergency stop and the quiet hours, for what she starts herself;
 //   2. the Floor's caps (lines per window, the unanswered cap, the waits), by what woke her; a line
 //      `say` takes to another place claims that place's Floor as a start of hers (`sayKind`);
-//   3. the output review (`safeOutgoing`): a line it would replace or change is refused instead.
+//   3. a game's secret (`GameSecrets`, the party module's): a line that would give away a turtle
+//      soup's bottom, with a word of it nobody asked about, is refused, and the referee's plain
+//      answer is said in its place;
+//   4. the output review (`safeOutgoing`): a line it would replace or change is refused instead.
 //
 // What a tool brought back is shown to the input defence, which may put a warning in front.
 
@@ -30,6 +33,7 @@ import {
   DirectivesKey,
   type FloorClaimKind,
   FloorKey,
+  GameSecretsKey,
   type InputServices,
   inspectInput,
   ModerationKey,
@@ -143,6 +147,14 @@ export function serviceGuard(options: ServiceGuardOptions): Guard {
     async checkLine(place: ContextKey, line: string, ctx: GuardContext): Promise<GuardVerdict> {
       const caps = speaking(place, ctx);
       if (!caps.allow) return caps;
+      const leak = services.get(GameSecretsKey)?.leak(place, line) ?? null;
+      if (leak !== null) {
+        return refuse(
+          "game_secret",
+          LINE_REFUSALS.gameSecret(leak.word),
+          leak.instead ?? undefined,
+        );
+      }
       const safe = safeOutgoing(services.get(ModerationKey), {
         path: "reply",
         text: line,

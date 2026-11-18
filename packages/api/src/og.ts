@@ -13,12 +13,15 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { CARD_FONT_FAMILY, cardFontOptions } from "@miyoria/card-face/fonts";
 import { renderCardSvg } from "@miyoria/card-face/render";
 import type { IssuedCard } from "@miyoria/contracts/api";
 import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { Resvg } from "@resvg/resvg-js";
 import sharp from "sharp";
 import { publicCard } from "./card.js";
+import { type CardArt, cardArt } from "./card-art.js";
+import { ApiError } from "./errors.js";
 import {
   CARD_IMAGE_WIDTH,
   cardMeta,
@@ -35,13 +38,14 @@ import type { ApiContext, ApiState } from "./state.js";
 const log = getLogger("api.og");
 
 /** Bump to draw every cached image again after the layout changes. */
-const RENDER_VERSION = "2";
+const RENDER_VERSION = "3";
 const COLORS = { primary: "#f29dc4", secondary: "#7355e8" };
 const CACHED_IMAGES = 64;
 const AVATAR_HOSTS = new Set(["cdn.discordapp.com", "media.discordapp.net"]);
 const MAX_AVATAR_BYTES = 2_000_000;
 const PNG = "image/png";
-const FONT_FAMILY = "Microsoft JhengHei";
+/** The bundled font (`@miyoria/card-face/fonts`): no machine's own fonts are used. */
+const FONT_FAMILY = CARD_FONT_FAMILY;
 
 /** What a card's picture depends on: its data and this layout. */
 export function cardVersion(card: IssuedCard): string {
@@ -92,6 +96,22 @@ async function poseArt(
   return art;
 }
 
+/** A card's picture (`cardArt`) as a JPEG data URL, `CARD_IMAGE_WIDTH` wide on black like the card's top. */
+async function artUrl(art: CardArt | null): Promise<string | null> {
+  if (art === null) return null;
+  try {
+    const jpeg = await sharp(art.bytes)
+      .resize({ width: CARD_IMAGE_WIDTH })
+      .flatten({ background: "#000000" })
+      .jpeg({ quality: 88 })
+      .toBuffer();
+    return toDataUrl("image/jpeg", jpeg);
+  } catch (error) {
+    log.warn({ error: errorMessage(error) }, "cannot use a card picture");
+    return null;
+  }
+}
+
 /** Their avatar as a small PNG data URL; `null` when it is not Discord's or cannot be had. */
 async function avatarArt(url: string | null): Promise<string | null> {
   if (url === null) return null;
@@ -117,7 +137,7 @@ async function toPng(svg: string, width: number, background: string | null): Pro
   const resvg = new Resvg(svg, {
     fitTo: { mode: "width", value: width },
     ...(background === null ? {} : { background }),
-    font: { loadSystemFonts: true, defaultFontFamily: FONT_FAMILY },
+    font: cardFontOptions(),
   });
   return resvg.render().asPng();
 }
@@ -125,11 +145,8 @@ async function toPng(svg: string, width: number, background: string | null): Pro
  * The card as the whole picture, at its own 630×880 ratio and clear around its rounded corners.
  * `og:image:width` and `height` say the same size (`CARD_IMAGE_WIDTH`, `CARD_IMAGE_HEIGHT`).
  */
-export async function renderCardImage(card: IssuedCard, panelDir: string | null): Promise<Buffer> {
-  const [art, avatar] = await Promise.all([
-    poseArt(panelDir, card.pose, CARD_IMAGE_WIDTH),
-    avatarArt(card.avatar_url),
-  ]);
+export async function renderCardImage(card: IssuedCard, picture: CardArt | null): Promise<Buffer> {
+  const [art, avatar] = await Promise.all([artUrl(picture), avatarArt(card.avatar_url)]);
   const svg = renderCardSvg({
     card,
     art,
@@ -150,7 +167,7 @@ export async function renderCardImage(card: IssuedCard, panelDir: string | null)
 const BASE = "#0b0d12";
 const TEXT = "#f1f0f4";
 const MUTED = "#dedce4";
-const LATIN = "Segoe UI";
+const LATIN = CARD_FONT_FAMILY;
 /** What shows where her picture is clear: a night blue near her hair, so the glass has light to frost. */
 const NIGHT = "#161c3a";
 /** Where the glass ends. */
@@ -229,35 +246,66 @@ ${her}
 // ---- cache ----------------------------------------------------------------------------------
 
 /** Renders kept by serial and version; the least recently used go first. */
-class ImageCache {
-  readonly #items = new Map<string, Buffer>();
+class ImageCache<T> {
+  readonly #items = new Map<string, T>();
 
-  get(key: string): Buffer | undefined {
+  get(key: string): T | undefined {
     const hit = this.#items.get(key);
-    if (hit) {
+    if (hit !== undefined) {
       this.#items.delete(key);
       this.#items.set(key, hit);
     }
     return hit;
   }
 
-  set(key: string, png: Buffer): void {
+  set(key: string, value: T): void {
     this.#items.delete(key);
-    this.#items.set(key, png);
+    this.#items.set(key, value);
     while (this.#items.size > CACHED_IMAGES) {
       const oldest = this.#items.keys().next().value;
       if (oldest === undefined) break;
       this.#items.delete(oldest);
     }
   }
+
+  /** Drops every entry whose key starts with `prefix`; how many. */
+  forget(prefix: string): number {
+    let n = 0;
+    for (const key of [...this.#items.keys()]) {
+      if (!key.startsWith(prefix)) continue;
+      this.#items.delete(key);
+      n += 1;
+    }
+    return n;
+  }
 }
 
-const caches = new WeakMap<ApiState, ImageCache>();
-function cacheOf(state: ApiState): ImageCache {
+const caches = new WeakMap<ApiState, ImageCache<Buffer>>();
+function cacheOf(state: ApiState): ImageCache<Buffer> {
   let cache = caches.get(state);
   if (!cache) {
     cache = new ImageCache();
     caches.set(state, cache);
+  }
+  return cache;
+}
+
+/**
+ * Drops the pictures of the whole card `serial` kept so far (its words changed after it was
+ * issued: her line on a keepsake). The next one is drawn from the card as it is now; her picture
+ * on it (`cardArt`) does not depend on the words and stays.
+ */
+export function forgetCardImages(state: ApiState, serial: string): number {
+  return cacheOf(state).forget(`${serial}:`);
+}
+
+/** Rendered pictures (`cardArt`, only the ones that never change) by serial. */
+const artCaches = new WeakMap<ApiState, ImageCache<CardArt>>();
+function artCacheOf(state: ApiState): ImageCache<CardArt> {
+  let cache = artCaches.get(state);
+  if (!cache) {
+    cache = new ImageCache();
+    artCaches.set(state, cache);
   }
   return cache;
 }
@@ -301,36 +349,105 @@ async function defaultImage(state: ApiState, cacheControl = SITE_CACHE): Promise
   return image(png, cacheControl);
 }
 
+/** The picture of a card (`cardArt`), a rendered one kept: it never changes, the fixed one may. */
+async function artOf(state: ApiState, card: IssuedCard): Promise<CardArt | null> {
+  const cache = artCacheOf(state);
+  const kept = cache.get(card.serial);
+  if (kept) return kept;
+  const art = await cardArt(state, card);
+  if (art?.live) cache.set(card.serial, art);
+  return art;
+}
+
+/**
+ * The card as the whole picture (`renderCardImage`): the link preview's, and the one `/me card`
+ * attaches. Kept per serial and version of the card's data, drawn one at a time. Not rate limited:
+ * a route asks `admitCardCheck` first when it is open to anyone.
+ */
+export async function cardPng(state: ApiState, card: IssuedCard): Promise<Buffer> {
+  const cache = cacheOf(state);
+  const key = `${card.serial}:${cardVersion(card)}`;
+  let png = cache.get(key);
+  if (!png) {
+    png = await oneAtATime(state, async () => renderCardImage(card, await artOf(state, card)));
+    cache.set(key, png);
+  }
+  return png;
+}
+
 async function cardImage(state: ApiState, c: ApiContext): Promise<Response> {
   const file = param(c, "file");
   const serial = file.endsWith(".png") ? file.slice(0, -4) : "";
   const card = await publicCard(state, serial);
   if (card === null) return defaultImage(state, SHORT_CACHE);
   const version = cardVersion(card);
-  const cache = cacheOf(state);
-  const key = `${card.serial}:${version}`;
-  let png = cache.get(key);
-  if (!png) {
+  if (!cacheOf(state).get(`${card.serial}:${version}`)) {
     const wait = state.publicSide.admitCardCheck(clientKey(c));
     if (wait !== null) return tooMany(wait);
-    try {
-      png = await oneAtATime(state, () => renderCardImage(card, state.panelDir));
-    } catch (error) {
-      log.warn({ error: errorMessage(error) }, "cannot draw a card preview");
-      return defaultImage(state, "no-store");
-    }
-    cache.set(key, png);
+  }
+  let png: Buffer;
+  try {
+    png = await cardPng(state, card);
+  } catch (error) {
+    log.warn({ error: errorMessage(error) }, "cannot draw a card preview");
+    return defaultImage(state, "no-store");
   }
   const asked = new URL(c.req.url).searchParams.get("v");
   return image(png, asked === version ? VERSIONED_CACHE : SHORT_CACHE);
 }
 
-/** `GET /og/default.png` and `GET /og/card/{serial}.png`: open to anyone, like the page they preview. */
+const NO_ART = "這張卡不存在或已經作廢";
+
+/**
+ * `GET /api/public/card-art/{serial}.png`: the picture on a card without its frame and words, what
+ * the member page and the check page draw it with. The card must be one the public check shows
+ * (and the preview draws): an unknown, malformed or voided one is a 404. Her rendered picture never
+ * changes, so it is kept long; the fixed portrait it stands in for may give way to it, so it is not.
+ */
+async function artImage(state: ApiState, c: ApiContext): Promise<Response> {
+  const file = param(c, "file");
+  const serial = file.endsWith(".png") ? file.slice(0, -4) : "";
+  const missing = () => new ApiError(404, NO_ART, { "cache-control": "no-store" }).toResponse();
+  const card = await publicCard(state, serial);
+  if (card === null) return missing();
+  let art = artCacheOf(state).get(card.serial) ?? null;
+  if (art === null) {
+    const wait = state.publicSide.admitCardCheck(clientKey(c));
+    if (wait !== null) return tooMany(wait);
+    try {
+      art = await oneAtATime(state, () => artOf(state, card));
+    } catch (error) {
+      log.warn({ error: errorMessage(error) }, "cannot find a card's picture");
+      return missing();
+    }
+  }
+  if (art === null) return missing();
+  return new Response(new Uint8Array(art.bytes), {
+    status: 200,
+    headers: {
+      "content-type": art.type,
+      "content-length": String(art.bytes.length),
+      "cache-control": art.live ? VERSIONED_CACHE : SHORT_CACHE,
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+/**
+ * `GET /og/default.png`, `GET /og/card/{serial}.png` and `GET /api/public/card-art/{serial}.png`:
+ * open to anyone, like the page they preview.
+ */
 export function ogRoutes(state: ApiState): Route[] {
   if (!state.publicSide.config.enabled) return [];
   return [
     { method: "GET", path: "/og/default.png", public: true, handler: () => defaultImage(state) },
     { method: "GET", path: "/og/card/:file", public: true, handler: (c) => cardImage(state, c) },
+    {
+      method: "GET",
+      path: "/api/public/card-art/:file",
+      public: true,
+      handler: (c) => artImage(state, c),
+    },
   ];
 }
 

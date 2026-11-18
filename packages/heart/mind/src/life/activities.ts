@@ -173,9 +173,9 @@ export const LIFE_ACTIVITIES: readonly LifeActivity[] = [
   {
     id: "business",
     label: "經營",
-    does: "開懸賞、辦募資、進貨小店",
+    does: "開懸賞",
     leaves: "公告",
-    capabilities: ["economy.post_bounty", "economy.propose_goal"],
+    capabilities: ["economy.post_bounty"],
     wants: ["attention", "social"],
     people: "someone",
     hours: [10, 24],

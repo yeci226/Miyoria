@@ -329,6 +329,8 @@ export interface EvalModuleOptions {
 export class EvalModule implements Module {
   static readonly ID = "eval";
   readonly manifest = defineManifest(EvalModule.ID, "Live evaluation", {
+    icon: "flask-conical",
+    category: "system",
     description:
       "Runs the live evaluation once a day as a child process (off unless a time is set)",
     configSchema: EvalConfigSchema,

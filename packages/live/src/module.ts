@@ -72,6 +72,8 @@ export async function whoPats(ctx: ModuleContext, by: LivePatter): Promise<PatWh
 export class LiveModule implements Module {
   static readonly ID = "live";
   readonly manifest = defineManifest(LiveModule.ID, "Live page", {
+    icon: "radio",
+    category: "platform",
     description: "Her state, face and public lines for the live page; head-pats as Observations",
     optional: ["facts", "moderation", "activity", "heart", "self", "economy"],
     configSchema: LiveConfigSchema,

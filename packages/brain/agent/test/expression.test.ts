@@ -109,7 +109,6 @@ describe("expression", () => {
     expect(parseChunks(["<3 你"])).toEqual([text("<3 你")]);
     expect(parseChunks(["<b>粗體</b>"])).toEqual([text("<b>粗體</b>")]);
     expect(parseChunks(["<emo:>x"])).toEqual([text("<emo:>x")]);
-    expect(parseChunks(["<emo:開心>x"])).toEqual([text("<emo:開心>x")]);
     expect(parseChunks(["<pause abc/>"])).toEqual([text("<pause abc/>")]);
     expect(parseChunks(["<pauses/>"])).toEqual([text("<pauses/>")]);
     expect(parseChunks(["<silence please>"])).toEqual([text("<silence please>")]);
@@ -366,5 +365,47 @@ describe("an emotion tag used as a thinking block", () => {
 
   it("other angle brackets stay text", () => {
     expect(Expression.parse("a </b> c").text).toBe("a </b> c");
+  });
+
+  // 2026-11-17 in the channel: the react tool as a block went out as `<emoji>🍚</emoji>` and
+  // `</react>`, each a message of its own.
+  it("takes a react block out of the text and logs it as a tool", () => {
+    for (const [input, text] of [
+      ["<react><emoji>🍚</emoji></react>", ""],
+      ["好啊<react><emoji>:UiAnnoyed:</emoji></react>", "好啊"],
+      ["<react>👍</react>\n可以", "\n可以"],
+      ["<emoji>🍚</emoji>吃飯", "吃飯"],
+    ] as const) {
+      const e = Expression.parse(input);
+      expect(e.text, input).toBe(text);
+      expect(e.tools, input).toEqual(["react"]);
+    }
+  });
+
+  it("holds a react block that arrives in pieces", () => {
+    const e = new Expression();
+    for (const s of parseChunks(["嗯", "<rea", "ct><emo", "ji>🍚</em", "oji></re", "act>", "好"])) {
+      e.apply(s);
+    }
+    expect(e.text).toBe("嗯好");
+    expect(e.tools).toEqual(["react"]);
+  });
+
+  it("drops what is left of her tags when they come apart", () => {
+    expect(Expression.parse("好啦</react>").text).toBe("好啦");
+    expect(Expression.parse("好啦</emoji>").text).toBe("好啦");
+    expect(Expression.parse("<emo:happy>好啦</emo>").text).toBe("好啦");
+    expect(Expression.parse("<react>沒有結尾的話").text).toBe("沒有結尾的話");
+  });
+
+  it("takes an emotion named in another script as an emotion, not as words", () => {
+    const e = Expression.parse("<emo:開心> 好啊,走。");
+    expect(e.text.trim()).toBe("好啊,走。");
+    expect(e.text).not.toContain("<");
+  });
+
+  it("leaves a long stretch after <react> as words", () => {
+    const long = "字".repeat(300);
+    expect(Expression.parse(`<react>${long}</react>`).text).toBe(long);
   });
 });

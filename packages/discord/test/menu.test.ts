@@ -255,8 +255,8 @@ describe("handleContextMenuInteraction", () => {
 
 describe("a crowded /me", () => {
   const ME = [
-    "profile call link privacy wallet checkin feed give board screen goals pledge bounties",
-    "quests draw album giveitem predictions bet titles commission commissions room shop",
+    "profile call link privacy wallet checkin feed give board screen bounties",
+    "quests predictions bet titles room",
     "memory show",
     "memory export",
     "memory forget",
@@ -266,7 +266,7 @@ describe("a crowded /me", () => {
 
   test("keeps_every_command_reachable_by_regrouping_the_surplus_instead_of_cutting_it", () => {
     const registry = new CommandRegistry(Permissions.fromStrings(["discord:99"]));
-    // 26 subcommands once the panel's `i` is counted: one over Discord's limit.
+    // The economy's second generation goes under `play`, so `/me` stays within Discord's 25.
     const paths: string[] = [];
     const words = ME.filter(
       (w) => w !== "memory" && w !== "show" && w !== "export" && w !== "forget",

@@ -27,6 +27,8 @@ function proposalOf(event: LogEvent) {
 export class DirectiveModule implements Module {
   static readonly ID = "directive";
   readonly manifest = defineManifest(DirectiveModule.ID, "Directive", {
+    icon: "scroll-text",
+    category: "her",
     description: "The owner's rules: her tools and commands for them, and the proposals they stop",
     optional: ["facts", "commands", "actions", "agent"],
     configSchema: DirectiveConfigSchema,

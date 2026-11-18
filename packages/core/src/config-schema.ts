@@ -50,12 +50,15 @@ import {
 } from "@miyoria/memory/learning";
 import { EmbeddingConfigSchema, MemoryConfigSchema, MemoryModule } from "@miyoria/memory/memory";
 import { WorldConfigSchema, WorldModule } from "@miyoria/memory/world";
+import { CardsConfigSchema, CardsModule } from "@miyoria/play/cards";
 import {
   GameChatConfigSchema,
   GameChatModule,
   GameConfigSchema,
   GameModule,
 } from "@miyoria/play/game";
+import { KaraokeConfigSchema, KaraokeModule } from "@miyoria/play/karaoke";
+import { MarketConfigSchema, MarketModule } from "@miyoria/play/market";
 import { PartyConfigSchema, PartyModule } from "@miyoria/play/party";
 import { QueueConfigSchema, QueueModule } from "@miyoria/play/queue";
 import {
@@ -139,6 +142,9 @@ export const MODULE_CONFIG_SCHEMAS: ReadonlyMap<string, ConfigSchema | null> = n
   [McpModule.ID, null],
   [StageLinkModule.ID, StageLinkConfigSchema],
   [EconomyModule.ID, EconomyConfigSchema],
+  [CardsModule.ID, CardsConfigSchema],
+  [MarketModule.ID, MarketConfigSchema],
+  [KaraokeModule.ID, KaraokeConfigSchema],
   [WebModule.ID, WebConfigSchema],
   [SandboxModule.ID, SandboxConfigSchema],
   [ImageGenModule.ID, ImageGenConfigSchema],

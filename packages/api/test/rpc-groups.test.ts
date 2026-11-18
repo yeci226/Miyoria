@@ -1,4 +1,4 @@
-// The public, member, wallet, agency and fortune groups of the route table: each route says what the old route said (who may
+// The public, member, cards, wallet, agency and fortune groups of the route table: each route says what the old route said (who may
 // call it, and which method and path), and its answer loses every field the schema does not name.
 // The routes' behaviour (limits, refusals, words) is held by `public.test.ts`.
 
@@ -7,10 +7,9 @@ import {
   contract,
   FeedItemSchema,
   FeedRequestSchema,
-  GiftExpressionSchema,
   routeMeta,
 } from "@miyoria/contracts/api";
-import { FEED_ITEMS, GIFT_EXPRESSIONS, MAX_FEED_COUNT } from "@miyoria/economy";
+import { FEED_ITEMS, MAX_FEED_COUNT } from "@miyoria/economy";
 import { implement } from "@orpc/server";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
@@ -24,7 +23,7 @@ type Audience = "public" | "member";
 interface Case {
   /** The route's name in the table: `member.me`. */
   name: string;
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PUT";
   path: string;
   audience: Audience;
   /** The request to send: a body for a change. */
@@ -69,24 +68,40 @@ const CASES: Case[] = [
   { name: "wallet.view", method: "GET", path: "/api/member/wallet", audience: "member" },
   post("wallet.checkin", "/api/member/checkin", {}),
   post("wallet.feed", "/api/member/feed", { item: "rice" }),
-  post("wallet.letter", "/api/member/letter", { text: "hi" }),
   post("wallet.screen", "/api/member/screen", { text: "hi" }),
-  post("wallet.expression", "/api/member/expression", { expression: "heart" }),
+  { name: "wallet.danmakuView", method: "GET", path: "/api/member/danmaku", audience: "member" },
+  post("wallet.danmaku", "/api/member/danmaku", { text: "hi" }),
   post("wallet.transfer", "/api/member/transfer", { to_discord_id: "1", amount: 1 }),
   post("wallet.board", "/api/member/board", { on: true }),
   post("wallet.frame", "/api/member/frame", { buy: "sakura" }),
   post("member.pat", "/api/member/live/pat", {}),
-  { name: "agency.goals", method: "GET", path: "/api/member/goals", audience: "member" },
-  post("agency.pledge", "/api/member/goals/g1/pledge", { amount: 1 }),
   { name: "agency.bounties", method: "GET", path: "/api/member/bounties", audience: "member" },
   { name: "fortune.today", method: "GET", path: "/api/member/fortune", audience: "member" },
-  post("fortune.draw", "/api/member/fortune", {}),
+  { name: "cards.mine", method: "GET", path: "/api/member/cards", audience: "member" },
+  { name: "cards.one", method: "GET", path: "/api/member/card/MYR-0", audience: "member" },
+  { name: "cards.dex", method: "GET", path: "/api/member/cards/dex", audience: "member" },
+  { name: "cards.pity", method: "GET", path: "/api/member/cards/pity", audience: "member" },
+  { name: "cards.wishlist", method: "GET", path: "/api/member/cards/wishlist", audience: "member" },
   {
-    name: "member.rerollCard",
-    method: "POST",
-    path: "/api/member/card/reroll",
+    name: "cards.setWishlist",
+    method: "PUT",
+    path: "/api/member/cards/wishlist",
     audience: "member",
-    request: { json: {} },
+    request: { json: { parts: ["hand.cat"] } },
+  },
+  { name: "cards.odds", method: "GET", path: "/api/public/cards/odds", audience: "public" },
+  {
+    name: "cards.setTitle",
+    method: "PUT",
+    path: "/api/member/cards/titles/glasses",
+    audience: "member",
+    request: { json: { public: true } },
+  },
+  {
+    name: "cards.catalogue",
+    method: "GET",
+    path: "/api/member/cards/catalogue",
+    audience: "member",
   },
 ];
 
@@ -112,7 +127,14 @@ const CARD = {
   frame: null,
   foil: false,
   voided_at: null,
+  rarity: "SR",
+  parts: [{ id: "hand.cat", slot: "hand", name: "貓", rarity: "SR" }],
+  expression: "微笑",
 } satisfies ApiOutputs["member"]["issueCard"];
+
+const PART = { id: "hand.cat", slot: "hand", name: "貓", rarity: "SR" } as const;
+const PITY = { since: 3, pity: 30, until: 27 } satisfies ApiOutputs["cards"]["pity"];
+const CHANCE = { percent: 100, shown: "100.00" };
 
 const WORDS = {
   call_name: null,
@@ -128,7 +150,7 @@ const SPENT = {
   charged: 1,
   balance: 1,
   message: "a",
-} satisfies ApiOutputs["wallet"]["letter"];
+} satisfies ApiOutputs["wallet"]["screen"];
 
 const SLIP = {
   id: "f1",
@@ -159,7 +181,7 @@ const ANSWERS = {
   "public.board": {
     entries: [{ rank: 1, name: "a", spent: 3 }],
   } satisfies ApiOutputs["public"]["board"],
-  "public.card": CARD,
+  "public.card": { ...CARD, titles: ["眼鏡控"] } satisfies ApiOutputs["public"]["card"],
   "member.session": { name: "Alice", avatar_url: null } satisfies ApiOutputs["member"]["session"],
   "member.me": {
     card: WORDS,
@@ -181,9 +203,9 @@ const ANSWERS = {
     latest: CARD,
     today: 1,
     per_day: 5,
-    poses: [{ id: "calm", label: "a" }],
-    prices: { pose: null, foil: null, reroll: null },
-    rerolls_left: 0,
+    prices: { card: 30, foil: null },
+    balance: 12,
+    pity: PITY,
   } satisfies ApiOutputs["member"]["cards"],
   "wallet.view": {
     currency: "魚幣",
@@ -197,8 +219,8 @@ const ANSWERS = {
     frames: { owned: [], selected: null },
     hungry: "ok",
     recent: [{ ts: "2026-11-08T03:00:00Z", delta: 1, label: "a" }],
-    deals: [{ task: "a", reward_label: "b", status: "open", due_at: null }],
     on_board: false,
+    transfer_fee: 0.05,
   } satisfies ApiOutputs["wallet"]["view"],
   "wallet.checkin": { gained: 1, streak: 1, balance: 1 } satisfies ApiOutputs["wallet"]["checkin"],
   "wallet.feed": {
@@ -208,51 +230,105 @@ const ANSWERS = {
     balance: 1,
     message: "a",
   } satisfies ApiOutputs["wallet"]["feed"],
-  "wallet.letter": SPENT,
   "wallet.screen": SPENT,
-  "wallet.expression": SPENT,
-  "wallet.transfer": { sent: 1, balance: 1, to: "a" } satisfies ApiOutputs["wallet"]["transfer"],
+  "wallet.danmakuView": {
+    open: true,
+    live: false,
+    currency: "魚幣",
+    price: 5,
+    max_chars: 30,
+    cooldown_s: 20,
+    per_day: 50,
+    sent_today: 0,
+    wait_s: 0,
+    balance: 1,
+    why: "a",
+  } satisfies ApiOutputs["wallet"]["danmakuView"],
+  "wallet.danmaku": SPENT,
+  "wallet.transfer": {
+    sent: 1,
+    fee: 1,
+    balance: 1,
+    to: "a",
+  } satisfies ApiOutputs["wallet"]["transfer"],
   "wallet.board": { on_board: true } satisfies ApiOutputs["wallet"]["board"],
   "wallet.frame": {
     owned: ["sakura"],
     selected: null,
     balance: 1,
   } satisfies ApiOutputs["wallet"]["frame"],
-  "agency.goals": {
-    goals: [
-      {
-        id: "g1",
-        title: "a",
-        promise: "b",
-        target: 2,
-        raised: 1,
-        my_pledge: 0,
-        deadline: "2099-01-01T00:00:00Z",
-        status: "open",
-        fulfilled: false,
-      },
-    ],
-  } satisfies ApiOutputs["agency"]["goals"],
-  "agency.pledge": {
-    pledged: 1,
-    raised: 1,
-    target: 2,
-    reached: false,
-    balance: 1,
-    duplicate: false,
-  } satisfies ApiOutputs["agency"]["pledge"],
   "agency.bounties": {
     bounties: [{ id: "b1", task: "a", reward: 1, posted_at: "x", expires_at: "y" }],
   } satisfies ApiOutputs["agency"]["bounties"],
   "fortune.today": { fortune: SLIP, price: 10 } satisfies ApiOutputs["fortune"]["today"],
-  "fortune.draw": {
-    fortune: SLIP,
-    charged: 10,
-    balance: 1,
-  } satisfies ApiOutputs["fortune"]["draw"],
   "member.pat": { pats: { recent: 1, open: true } } satisfies ApiOutputs["member"]["pat"],
   "member.issueCard": CARD,
-  "member.rerollCard": CARD,
+  "cards.mine": {
+    cards: [{ ...CARD, price: 30, pity_hit: false, wished: ["hand.cat"], portrait: "live" }],
+  } satisfies ApiOutputs["cards"]["mine"],
+  "cards.one": {
+    card: CARD,
+    pity_hit: false,
+    wished: ["hand.cat"],
+    price: 30,
+  } satisfies ApiOutputs["cards"]["one"],
+  "cards.dex": {
+    parts: [{ ...PART, series: "貓咪系列", count: 2, first_at: "2026-11-08T03:00:00.000Z" }],
+    series: [{ id: "cats", name: "貓咪系列", title: "a", owned: 1, total: 3, complete: false }],
+    titles: [{ series: "cats", title: "a", public: false, earned_at: "2026-11-08T03:00:00Z" }],
+    legacy: {
+      name: "舊收藏",
+      items: [
+        {
+          item: "bg_stars",
+          name: "星空",
+          rarity: "R",
+          series: null,
+          count: 1,
+          first_at: "2026-11-08T03:00:00Z",
+        },
+      ],
+    },
+  } satisfies ApiOutputs["cards"]["dex"],
+  "cards.pity": PITY,
+  "cards.wishlist": { parts: [PART], max: 3 } satisfies ApiOutputs["cards"]["wishlist"],
+  "cards.setWishlist": { parts: [PART], max: 3 } satisfies ApiOutputs["cards"]["setWishlist"],
+  "cards.odds": {
+    rarities: [{ ...CHANCE, rarity: "N" }],
+    pity: { after: 30, rarities: [{ ...CHANCE, rarity: "SR" }] },
+    slots: [
+      {
+        slot: "hand",
+        name: "手上",
+        parts: [
+          { ...CHANCE, id: "hand.cat", name: "貓", rarity: "SR", series: null, series_name: null },
+        ],
+        empty: null,
+      },
+    ],
+    price: 30,
+    per_day: 5,
+  } satisfies ApiOutputs["cards"]["odds"],
+  "cards.setTitle": {
+    series: "glasses",
+    title: "眼鏡控",
+    public: true,
+    earned_at: "2026-11-08T03:00:00.000Z",
+  } satisfies ApiOutputs["cards"]["setTitle"],
+  "cards.catalogue": {
+    parts: [
+      {
+        ...PART,
+        series: "cats",
+        series_name: "貓咪系列",
+        drop_only: false,
+        blank: false,
+        enabled: true,
+        wishable: true,
+      },
+    ],
+    series: [{ id: "cats", name: "貓咪系列", title: "貓奴" }],
+  } satisfies ApiOutputs["cards"]["catalogue"],
 } as const;
 
 /** `value` with an extra field at the top and in every object and array of objects below. */
@@ -293,10 +369,11 @@ describe("the public and member routes of the table", () => {
   });
 });
 
-/** The route's Hono path: `/api/public/card/MYR-0` is the `:serial` route. */
+/** The route's Hono path: `/api/public/card/MYR-0` is the `:serial` route, and so is one card. */
 function pathOf(c: Case): string {
   if (c.name === "public.card") return "/api/public/card/:serial";
-  if (c.name === "agency.pledge") return "/api/member/goals/:id/pledge";
+  if (c.name === "cards.one") return "/api/member/card/:serial";
+  if (c.name === "cards.setTitle") return "/api/member/cards/titles/:series";
   return c.path;
 }
 
@@ -306,6 +383,7 @@ describe("the answers", () => {
   const os = implement({
     public: contract.public,
     member: contract.member,
+    cards: contract.cards,
     wallet: contract.wallet,
     agency: contract.agency,
     fortune: contract.fortune,
@@ -325,28 +403,35 @@ describe("the answers", () => {
       requestSong: os.member.requestSong.handler(answer("member.requestSong")),
       cards: os.member.cards.handler(answer("member.cards")),
       issueCard: os.member.issueCard.handler(answer("member.issueCard")),
-      rerollCard: os.member.rerollCard.handler(answer("member.rerollCard")),
       pat: os.member.pat.handler(answer("member.pat")),
+    },
+    cards: {
+      mine: os.cards.mine.handler(answer("cards.mine")),
+      one: os.cards.one.handler(answer("cards.one")),
+      dex: os.cards.dex.handler(answer("cards.dex")),
+      pity: os.cards.pity.handler(answer("cards.pity")),
+      wishlist: os.cards.wishlist.handler(answer("cards.wishlist")),
+      setWishlist: os.cards.setWishlist.handler(answer("cards.setWishlist")),
+      odds: os.cards.odds.handler(answer("cards.odds")),
+      setTitle: os.cards.setTitle.handler(answer("cards.setTitle")),
+      catalogue: os.cards.catalogue.handler(answer("cards.catalogue")),
     },
     wallet: {
       view: os.wallet.view.handler(answer("wallet.view")),
       checkin: os.wallet.checkin.handler(answer("wallet.checkin")),
       feed: os.wallet.feed.handler(answer("wallet.feed")),
-      letter: os.wallet.letter.handler(answer("wallet.letter")),
       screen: os.wallet.screen.handler(answer("wallet.screen")),
-      expression: os.wallet.expression.handler(answer("wallet.expression")),
+      danmakuView: os.wallet.danmakuView.handler(answer("wallet.danmakuView")),
+      danmaku: os.wallet.danmaku.handler(answer("wallet.danmaku")),
       transfer: os.wallet.transfer.handler(answer("wallet.transfer")),
       board: os.wallet.board.handler(answer("wallet.board")),
       frame: os.wallet.frame.handler(answer("wallet.frame")),
     },
     agency: {
-      goals: os.agency.goals.handler(answer("agency.goals")),
-      pledge: os.agency.pledge.handler(answer("agency.pledge")),
       bounties: os.agency.bounties.handler(answer("agency.bounties")),
     },
     fortune: {
       today: os.fortune.today.handler(answer("fortune.today")),
-      draw: os.fortune.draw.handler(answer("fortune.draw")),
     },
   });
   const state = {
@@ -380,9 +465,8 @@ describe("the answers", () => {
 });
 
 describe("what the contract says again of the economy", () => {
-  it("allows the items, expressions and count the wallet has", () => {
+  it("allows the items and count the wallet has", () => {
     expect(FeedItemSchema.options).toEqual([...FEED_ITEMS]);
-    expect(GiftExpressionSchema.options).toEqual([...GIFT_EXPRESSIONS]);
     expect(FeedRequestSchema.safeParse({ item: "rice", count: MAX_FEED_COUNT }).success).toBe(true);
     expect(FeedRequestSchema.safeParse({ item: "rice", count: MAX_FEED_COUNT + 1 }).success).toBe(
       false,

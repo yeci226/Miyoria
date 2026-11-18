@@ -6,7 +6,13 @@
 // browser, so this file reconnects with backoff itself.
 
 export type LivePlace = "offline" | "idle" | "in_voice" | "live" | "playing" | "singing";
-export type LiveActivityKind = "thinking" | "synthesizing" | "song_prepare" | "singing";
+export type LiveActivityKind =
+  | "thinking"
+  | "synthesizing"
+  | "tool"
+  | "game"
+  | "song_prepare"
+  | "singing";
 
 export interface LivePresence {
   place: LivePlace;

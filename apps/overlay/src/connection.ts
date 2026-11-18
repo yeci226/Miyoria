@@ -1,5 +1,7 @@
 // WebSocket client for the overlay feed. Reconnects forever with a short, capped backoff: the Stage
-// restarting must never need a refresh of the OBS browser source.
+// restarting must never need a refresh of the OBS browser source. Replies (what became of each
+// danmaku line) go back on the same socket.
+import type { OverlayReply } from "@miyoria/contracts/overlay";
 import { type FeedMessage, parseMessage } from "./feed.js";
 
 export interface FeedConnectionOptions {
@@ -10,7 +12,13 @@ export interface FeedConnectionOptions {
   maxDelayMs?: number;
 }
 
-export function connectFeed(o: FeedConnectionOptions): () => void {
+export interface FeedConnection {
+  /** Sends a reply while the socket is open; false (nothing sent) otherwise. */
+  send(reply: OverlayReply): boolean;
+  stop(): void;
+}
+
+export function connectFeed(o: FeedConnectionOptions): FeedConnection {
   const minDelay = o.minDelayMs ?? 500;
   const maxDelay = o.maxDelayMs ?? 5000;
   let ws: WebSocket | undefined;
@@ -57,11 +65,23 @@ export function connectFeed(o: FeedConnectionOptions): () => void {
   };
 
   open();
-  return () => {
-    stopped = true;
-    if (timer) clearTimeout(timer);
-    const s = ws;
-    ws = undefined;
-    s?.close();
+  return {
+    send(reply) {
+      const s = ws;
+      if (s === undefined || s.readyState !== WebSocket.OPEN) return false;
+      try {
+        s.send(JSON.stringify(reply));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      const s = ws;
+      ws = undefined;
+      s?.close();
+    },
   };
 }

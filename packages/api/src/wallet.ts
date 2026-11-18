@@ -2,10 +2,14 @@
 // session's person, and nobody else's.
 //
 // * `GET /api/member/wallet`: balance, what they can still earn today, the shop, their frames.
-// * `POST /api/member/checkin` `{}`: once a local day (Discord's `/me` counts too); 409 after.
-// * `POST /api/member/feed` `{ item, count? }`, `POST /api/member/letter` `{ text }`,
-//   `POST /api/member/expression` `{ expression }`,
+// * `POST /api/member/checkin` `{ fortune? }`: once a local day (Discord's `/me` counts too); 409
+//   after. `fortune: true` adds today's fortune slip, paid (the check-in stands if the slip fails);
+//   on a day already checked in it buys the slip alone (`gained` 0, no second reward).
+// * `POST /api/member/feed` `{ item, count? }`,
 //   `POST /api/member/screen` `{ text }` (a message on the stream: 409 when she is not live), `POST /api/member/frame` `{ buy?, select? }`.
+// * `GET /api/member/danmaku` (what a danmaku line costs them now, and why they cannot send one),
+//   `POST /api/member/danmaku` `{ text }` (one line across her stream: 409 when she is not live;
+//   given back by itself when the overlay did not show it).
 // * `POST /api/member/transfer` `{ to_discord_id, amount }`: coins to another member (403 in the
 //   same words for every reason they cannot take them); `POST /api/member/board` `{ on }`: join or
 //   leave the sponsor board (`GET /api/public/board` is in `board.ts`).
@@ -16,7 +20,7 @@
 
 import {
   type CheckinResult,
-  type DealView,
+  type DanmakuView,
   type EarnLine,
   type Economy,
   EconomyError,
@@ -35,6 +39,7 @@ import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { type AccountRef, newId } from "@miyoria/types";
 import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
+import { checkinFortune } from "./fortune-routes.js";
 import type { SessionRecord } from "./session.js";
 import type { ApiContext, ApiState } from "./state.js";
 
@@ -95,13 +100,6 @@ const shopItem = (s: ShopItem): ShopItem => ({
 
 const ledgerLine = (l: LedgerLine): LedgerLine => ({ ts: l.ts, delta: l.delta, label: l.label });
 
-const dealView = (d: DealView): DealView => ({
-  task: d.task,
-  reward_label: d.reward_label,
-  status: d.status,
-  due_at: d.due_at,
-});
-
 function walletView(v: WalletView): WalletView {
   return {
     currency: v.currency,
@@ -115,8 +113,8 @@ function walletView(v: WalletView): WalletView {
     frames: { owned: [...v.frames.owned], selected: v.frames.selected },
     hungry: v.hungry,
     recent: v.recent.map(ledgerLine),
-    deals: v.deals.map(dealView),
     on_board: v.on_board,
+    transfer_fee: v.transfer_fee,
   };
 }
 
@@ -125,6 +123,20 @@ const spendResult = (r: SpendResult): SpendResult => ({
   charged: r.charged,
   balance: r.balance,
   message: r.message,
+});
+
+const danmakuView = (v: DanmakuView): DanmakuView => ({
+  open: v.open,
+  live: v.live,
+  currency: v.currency,
+  price: v.price,
+  max_chars: v.max_chars,
+  cooldown_s: v.cooldown_s,
+  per_day: v.per_day,
+  sent_today: v.sent_today,
+  wait_s: v.wait_s,
+  balance: v.balance,
+  why: v.why,
 });
 
 const feedResult = (r: FeedResult): FeedResult => ({
@@ -137,6 +149,7 @@ const feedResult = (r: FeedResult): FeedResult => ({
 
 const transferResult = (r: TransferResult): TransferResult => ({
   sent: r.sent,
+  fee: r.fee,
   balance: r.balance,
   to: r.to,
 });
@@ -173,8 +186,20 @@ export const walletRpc = {
   view: os.wallet.view.handler(async ({ context: { state, c } }) => {
     return walletView(await withWallet(state, (e) => e.wallet(accountOf(c))));
   }),
-  checkin: os.wallet.checkin.handler(async ({ context: { state, c } }) => {
-    return checkinResult(await withWallet(state, (e) => e.checkin(accountOf(c))));
+  checkin: os.wallet.checkin.handler(async ({ input, context: { state, c } }) => {
+    const account = accountOf(c);
+    const asked = input.body.fortune === true;
+    // A day already checked in still buys the slip alone: no second check-in, nothing earned.
+    const today = asked ? await withWallet(state, (e) => e.wallet(account)) : null;
+    const done =
+      today?.checked_in_today === true
+        ? { gained: 0, streak: today.streak, balance: today.balance }
+        : checkinResult(await withWallet(state, (e) => e.checkin(account)));
+    if (!asked) return done;
+    // The paid add-on: the check-in stands whatever happens to the slip.
+    const { name } = c.get("member") as SessionRecord;
+    const { balance, ...slip } = await checkinFortune(state, { account, name });
+    return { ...done, ...slip, balance: balance ?? done.balance };
   }),
   feed: os.wallet.feed.handler(async ({ input, context: { state, c } }) => {
     const key = keyOf(input.headers["idempotency-key"]);
@@ -182,20 +207,18 @@ export const walletRpc = {
     const r = await withWallet(state, (e) => e.feed(accountOf(c), item, count ?? 1, key));
     return feedResult(r);
   }),
-  letter: os.wallet.letter.handler(async ({ input, context: { state, c } }) => {
-    const key = keyOf(input.headers["idempotency-key"]);
-    const { text } = input.body;
-    return spendResult(await withWallet(state, (e) => e.letter(accountOf(c), text, key)));
-  }),
   screen: os.wallet.screen.handler(async ({ input, context: { state, c } }) => {
     const key = keyOf(input.headers["idempotency-key"]);
     const { text } = input.body;
     return spendResult(await withWallet(state, (e) => e.screenMessage(accountOf(c), text, key)));
   }),
-  expression: os.wallet.expression.handler(async ({ input, context: { state, c } }) => {
+  danmakuView: os.wallet.danmakuView.handler(async ({ context: { state, c } }) => {
+    return danmakuView(await withWallet(state, (e) => e.danmakuView(accountOf(c))));
+  }),
+  danmaku: os.wallet.danmaku.handler(async ({ input, context: { state, c } }) => {
     const key = keyOf(input.headers["idempotency-key"]);
-    const { expression } = input.body;
-    return spendResult(await withWallet(state, (e) => e.expression(accountOf(c), expression, key)));
+    const { text } = input.body;
+    return spendResult(await withWallet(state, (e) => e.danmaku(accountOf(c), text, key)));
   }),
   transfer: os.wallet.transfer.handler(async ({ input, context: { state, c } }) => {
     const key = keyOf(input.headers["idempotency-key"]);

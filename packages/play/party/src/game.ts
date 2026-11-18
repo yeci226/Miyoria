@@ -4,31 +4,27 @@
 //
 // Secrets stay in the game. `view` is what she sees in her prompt and must hold only what her
 // role allows: never the answer of a round that is still open in a game where she does not know
-// it (a quiz, a song). Notes follow the same rule.
+// it (a song). Notes follow the same rule.
 
 import { CapabilityError } from "@miyoria/gate/actions";
-import type { AccountRef, ContextKey, SongClips } from "@miyoria/types";
+import type { AccountRef, ContextKey, GameSecretLeak, SongClips } from "@miyoria/types";
 import type { PartyConfig } from "./config.js";
 import type { SoupJudge } from "./judge.js";
 
-export const GAME_IDS = ["soup", "song", "chain", "quiz"] as const;
+export const GAME_IDS = ["soup", "song"] as const;
 export type GameId = (typeof GAME_IDS)[number];
+
+export function isGameId(id: string): id is GameId {
+  return (GAME_IDS as readonly string[]).includes(id);
+}
 
 export const GAME_TITLES: Readonly<Record<GameId, string>> = {
   soup: "海龜湯",
   song: "猜歌",
-  chain: "接龍",
-  quiz: "問答",
 };
 
-export const CHAIN_MODES = ["idiom", "word", "story"] as const;
-export type ChainMode = (typeof CHAIN_MODES)[number];
-
-export const CHAIN_TITLES: Readonly<Record<ChainMode, string>> = {
-  idiom: "成語接龍",
-  word: "詞語接龍",
-  story: "故事接龍",
-};
+/** What she is told when a game that is gone (quiz, word and story chains) is asked for. */
+export const GAMES_AVAILABLE = `現在只有「${GAME_TITLES.soup}」(soup)和「${GAME_TITLES.song}」(song)。`;
 
 /** A refusal she gets as the tool's answer ("這題還沒結束"). */
 export class PartyError extends CapabilityError {
@@ -66,7 +62,7 @@ export type EndReason = "done" | "host" | "stop" | "idle" | "empty" | "left" | "
 /** What a game may do with its session. */
 export interface Host {
   readonly cfg: PartyConfig;
-  /** The voice channel it is played in. */
+  /** Where it is played: a voice channel, or (turtle soup) a text channel. */
   readonly context: ContextKey;
   now(): number;
   /** In [0, 1): injected, so tests decide what is drawn. */
@@ -116,6 +112,11 @@ export interface Game {
   play(text: string): string;
   /** Turtle soup: a yes-or-no question someone asked. */
   ask(question: string, player: Player | null): Promise<string>;
+  /**
+   * Whether a line of hers would give away what the game hides (the line guard asks through
+   * `GameSecrets`); unset: the game hides nothing she knows.
+   */
+  leak?(text: string): GameSecretLeak | null;
   timer(name: string): void;
   /** What she should know once it is over (the answer still hidden, the story so far). */
   finish(reason: EndReason): string[];
@@ -123,10 +124,7 @@ export interface Game {
 
 /** What starting a game may say beyond which game. */
 export interface StartOptions {
-  mode?: ChainMode | null;
   rounds?: number | null;
-  /** Quiz questions she wrote herself (she knows their answers, so she does not guess). */
-  questions?: { question: string; answers: string[] }[] | null;
 }
 
 /** Shuffles a copy of `items` with `random`. */

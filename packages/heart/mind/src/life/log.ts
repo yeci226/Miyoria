@@ -89,8 +89,6 @@ export function pointOf(
       return { activity: "recap", what: "整理了筆記" };
     case "economy.post_bounty":
       return { activity: "business", what: "開了懸賞" };
-    case "economy.propose_goal":
-      return { activity: "business", what: "發起了募資" };
     case "party.start": {
       const game = str(args, "game");
       return { activity: "event", what: game === null ? "辦了派對遊戲" : `辦了${cut(game, 20)}` };

@@ -30,7 +30,7 @@ import { guildContext, inv } from "./helpers.js";
 const OWNER = "1";
 const MEMBER = "5";
 
-/** Every command the repository registers (71 leaves, docs/design/v3-architecture.md §14.2). */
+/** Every command the repository registers (72 leaves, docs/design/v3-architecture.md §14.2). */
 const INVENTORY = [
   "help",
   "admin autonomy pause",
@@ -64,6 +64,7 @@ const INVENTORY = [
   "channel activeness",
   "channel mode",
   "game goal",
+  "game party",
   "game start",
   "game status",
   "game stop",
@@ -134,6 +135,15 @@ const FAKES: Fake[] = [
     args: ["dm", "approach", "presence"].map((n) =>
       argSpec(n, n, ArgKind.choice(["on", "off"]), { required: false }),
     ),
+  },
+  {
+    path: "game party",
+    permission: "chat.talk",
+    ephemeral: false,
+    args: [
+      argSpec("game", "g", ArgKind.choice(["soup", "song"])),
+      argSpec("where", "w", ArgKind.choice(["here", "voice"]), { required: false }),
+    ],
   },
   { path: "me profile", permission: "me.profile", ephemeral: true },
   {
@@ -385,7 +395,7 @@ describe("registration", () => {
     const mapped = new Set(panelCommandPaths());
     mapped.add("help"); // folded into /me, still a text command
     expect(INVENTORY.filter((path) => !mapped.has(path))).toEqual([]);
-    expect(INVENTORY).toHaveLength(71);
+    expect(INVENTORY).toHaveLength(72);
   });
 
   it("the_tiers_map_onto_the_agent_levels", () => {
@@ -469,7 +479,7 @@ describe("what a member sees", () => {
     expect(selectOf(reply)?.options.map((o) => o.label)).toEqual(["角色與權限", "她認識的人"]);
     const miyo = await open(registry, "miyo", OWNER);
     const pages = selectOf(miyo)?.options.map((o) => o.label);
-    expect(pages).toEqual(["總覽", "語音", "聊天等級", "歌單", "緊急停止"]);
+    expect(pages).toEqual(["總覽", "語音", "派對遊戲", "聊天等級", "歌單", "緊急停止"]);
   });
 });
 
@@ -610,6 +620,24 @@ describe("permissions of controls", () => {
 });
 
 describe("controls", () => {
+  it("a_member_asks_for_a_party_game_on_the_miyo_panel", async () => {
+    const { registry, calls } = setup();
+    const miyo = await open(registry, "miyo", MEMBER);
+    expect(selectOf(miyo)?.options.map((o) => o.label)).toContain("派對遊戲");
+    const page = updated(
+      await registry.dispatchComponent(
+        click(selectOf(miyo)?.id ?? "", MEMBER, { values: ["party"] }),
+      ),
+    );
+    expect(buttons(page).map((b) => b.label)).toEqual(expect.arrayContaining(["海龜湯", "猜歌"]));
+    await registry.dispatchComponent(click(button(page, "海龜湯").id, MEMBER));
+    await registry.dispatchComponent(click(button(page, "猜歌").id, MEMBER));
+    expect(calls.map((c) => [c.path, c.args.game])).toEqual([
+      ["game party", "soup"],
+      ["game party", "song"],
+    ]);
+  });
+
   it("a_modal_asks_for_the_arguments_and_leaves_optional_ones_out", async () => {
     const { registry, calls } = setup();
     const home = await open(registry, "me", MEMBER);
@@ -987,32 +1015,17 @@ describe("public panels", () => {
 });
 
 describe("the economy hub on /me i", () => {
-  const V2 = [
-    "me quests",
-    "me draw",
-    "me album",
-    "me titles",
-    "me giveitem",
-    "me predictions",
-    "me bet",
-    "me shop",
-    "me room",
-    "me commission",
-    "me commissions",
-  ];
+  const V2 = ["me quests", "me titles", "me predictions", "me bet", "me room"];
   const ARGS: Record<string, ArgSpec[]> = {
-    "me giveitem": [argSpec("user", "u", ArgKind.user), argSpec("item", "i", ArgKind.string)],
     "me bet": [
       argSpec("prediction", "p", ArgKind.string),
       argSpec("option", "o", ArgKind.string),
       argSpec("amount", "a", ArgKind.integer),
     ],
-    "me shop": [argSpec("item", "i", ArgKind.string, { required: false })],
     "me room": [
       argSpec("item", "i", ArgKind.string, { required: false }),
       argSpec("amount", "a", ArgKind.integer, { required: false }),
     ],
-    "me commission": [argSpec("kind", "k", ArgKind.string), argSpec("brief", "b", ArgKind.string)],
   };
 
   function withEconomy() {
@@ -1026,31 +1039,25 @@ describe("the economy hub on /me i", () => {
   it("without_the_economy_there_is_no_play_page", async () => {
     const { registry } = setup();
     const labels = selectOf(await open(registry, "me", MEMBER))?.options.map((o) => o.label);
-    expect(labels).not.toContain("玩與收藏");
+    expect(labels).not.toContain("一起玩");
   });
 
   it("the_play_page_reaches_every_second_generation_feature", async () => {
     const { registry, calls } = withEconomy();
     const home = await open(registry, "me", MEMBER);
     const nav = selectOf(home);
-    expect(nav?.options.map((o) => o.label)).toContain("玩與收藏");
+    expect(nav?.options.map((o) => o.label)).toContain("一起玩");
     const page = updated(
       await registry.dispatchComponent(click(nav?.id ?? "", MEMBER, { values: ["play"] })),
     );
-    for (const label of [
-      "抽收藏",
-      "收藏冊",
-      "稱號",
-      "看預測",
-      "她的小店",
-      "她的房間",
-      "我的委託",
-    ]) {
+    for (const label of ["稱號", "看預測", "她的房間"]) {
       expect(button(page, label)).toBeDefined();
     }
-    await registry.dispatchComponent(click(button(page, "抽收藏").id, MEMBER));
-    // (The status line of the page runs again after a press, so the draw is not the last call.)
-    expect(calls.some((c) => c.path === "me draw")).toBe(true);
+    const labels = buttons(page).map((b) => b.label);
+    for (const gone of ["抽收藏", "收藏冊", "送重複的收藏"]) expect(labels).not.toContain(gone);
+    await registry.dispatchComponent(click(button(page, "稱號").id, MEMBER));
+    // (The status line of the page runs again after a press, so the titles are not the last call.)
+    expect(calls.some((c) => c.path === "me titles")).toBe(true);
     // Commands with arguments ask for them in a modal.
     const bet = modalOf(await registry.dispatchComponent(click(button(page, "押預測").id, MEMBER)));
     expect(bet.fields.map((f) => f.id)).toEqual(["prediction", "option", "amount"]);
@@ -1060,9 +1067,5 @@ describe("the economy hub on /me i", () => {
     expect(calls.find((c) => c.path === "me bet")).toMatchObject({
       args: { prediction: "p1", option: "2", amount: 10 },
     });
-    const commission = modalOf(
-      await registry.dispatchComponent(click(button(page, "委託她做一件事").id, MEMBER)),
-    );
-    expect(commission.fields.map((f) => f.id)).toEqual(["kind", "brief"]);
   });
 });

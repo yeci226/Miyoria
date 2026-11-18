@@ -30,7 +30,7 @@ import { afterEach, expect } from "vitest";
 import { EconomyConfigSchema } from "../src/config.js";
 import { EconomyDocsKey, MemoryDocs } from "../src/docs.js";
 import { EconomyService } from "../src/economy.js";
-import { CoinLedgerStoreKey, DealStoreKey, LedgerStatsKey } from "../src/records.js";
+import { CoinLedgerStoreKey, LedgerStatsKey } from "../src/records.js";
 import { EconomyError, EconomyKey } from "../src/types.js";
 import { economyOf, ledgerOf, walletOf } from "./ledger.js";
 
@@ -82,7 +82,6 @@ export async function rig(
   const k = "test";
   services.provide(k, CoinLedgerStoreKey, ledgerOf(store));
   services.provide(k, PeopleStoreKey, store.people);
-  services.provide(k, DealStoreKey, economyOf(store).deals);
   const ids = new Map<string, PersonId>();
   for (const [a, name] of [
     [ALICE, "Alice"],

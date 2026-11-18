@@ -113,6 +113,19 @@ export {
 } from "./imagegen.js";
 export { isJsonObject, type JsonObject, type JsonPrimitive, type JsonValue } from "./json.js";
 export {
+  KARAOKE_REASONS,
+  type KaraokeCharge,
+  type KaraokeFileName,
+  type KaraokePaid,
+  type KaraokePayoutKind,
+  type KaraokeQuery,
+  type KaraokeVoice,
+  type KaraokeWallet,
+  KaraokeWalletKey,
+  type KaraokeWorker,
+  KaraokeWorkerKey,
+} from "./karaoke.js";
+export {
   CONVERSATION_FOLDED_TOPIC,
   type ConversationFolded,
   type ConversationState,
@@ -186,6 +199,13 @@ export {
   type ThoughtTrigger,
   type ThoughtTriggerKind,
 } from "./mind.js";
+export {
+  type PlaceDirectory,
+  PlaceDirectoryKey,
+  type PlaceRoom,
+  type PlaceRoomKind,
+  type PlaceSpace,
+} from "./places.js";
 export {
   type AccountRef,
   type Attachment,
@@ -588,6 +608,13 @@ export {
   SELF_INITIATED_SOURCES,
 } from "./arbiter.js";
 export {
+  CARD_REASONS,
+  type CardCharge,
+  type CardPayer,
+  type CardWallet,
+  CardWalletKey,
+} from "./cards.js";
+export {
   DIRECTIVE_AUTHORITIES,
   DIRECTIVE_EFFECTS,
   type Directive,
@@ -651,10 +678,13 @@ export {
 } from "./impulse.js";
 export {
   type KeepsakeCard,
+  type KeepsakeCardBook,
+  type KeepsakeCardImage,
   type KeepsakeCardOrder,
   type KeepsakeCards,
   type KeepsakeField,
   type KeepsakeFortune,
+  type KeepsakeOdds,
   type KeepsakeResult,
   type Keepsakes,
   KeepsakesKey,
@@ -679,6 +709,20 @@ export {
   type LiveTouch,
   type LiveVideo,
 } from "./live.js";
+export {
+  MARKET_REASONS,
+  type MarketCap,
+  type MarketCharge,
+  type MarketChargeReason,
+  type MarketPerson,
+  type MarketWallet,
+  MarketWalletKey,
+  type SongPriority,
+  SongPriorityKey,
+  type SongPriorityTerms,
+  type SongTickets,
+  SongTicketsKey,
+} from "./market.js";
 export {
   type MessageActionOutcome,
   type MessageActionRequest,
@@ -726,6 +770,9 @@ export {
 } from "./participation.js";
 export {
   type ClipOutcome,
+  type GameSecretLeak,
+  type GameSecrets,
+  GameSecretsKey,
   type PartyAward,
   type PartyRewardRequest,
   type PartyRewards,
@@ -744,6 +791,26 @@ export {
   type PartySnapshot,
 } from "./party-overview.js";
 export { CORE_CHARS, CORE_SENTENCES, characterCore } from "./persona-core.js";
+export {
+  type AdminProfilePicture,
+  type AuctionPictureData,
+  type DexPictureData,
+  type LotteryPictureData,
+  type MemberPictureKind,
+  type MemberPictureResult,
+  type MemberProfilePicture,
+  type OddsPictureData,
+  type PictureDataMap,
+  type PictureFile,
+  type PictureKind,
+  type PictureRing,
+  type Pictures,
+  PicturesKey,
+  type PictureWho,
+  type ProfilePictureData,
+  type WalletPictureData,
+  type WeekPictureData,
+} from "./pictures.js";
 export {
   type Desire,
   type Goal,

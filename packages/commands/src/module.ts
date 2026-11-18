@@ -97,6 +97,8 @@ export class CommandsModule implements Module {
   static readonly ID = "commands";
 
   readonly manifest: ModuleManifest = defineManifest(CommandsModule.ID, "Commands", {
+    icon: "command",
+    category: "platform",
     description: "Cross-platform command framework and built-in commands",
     configSchema: CommandsConfigSchema,
   });

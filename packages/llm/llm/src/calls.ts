@@ -672,6 +672,23 @@ export class LlmCallLog {
     return this.#calls.filter((c) => c.thought === id).map((c) => structuredClone(c));
   }
 
+  /**
+   * The calls since `since` (ISO) that finished, answered or failed (one cancelled or still going
+   * is neither), newest first until the span ends. `whole`: a kept call is older than `since`, so
+   * none of the span was dropped from the ring (or never seen, before this process started).
+   */
+  outcomes(since: string): { finished: number; errors: number; whole: boolean } {
+    let finished = 0;
+    let errors = 0;
+    for (let i = this.#calls.length - 1; i >= 0; i--) {
+      const c = this.#calls[i] as LlmCallRecord;
+      if (c.at < since) return { finished, errors, whole: true };
+      if (c.status === "ok" || c.status === "error") finished += 1;
+      if (c.status === "error") errors += 1;
+    }
+    return { finished, errors, whole: false };
+  }
+
   /** Breakdowns of the calls since `since` (ISO), or of every kept call. */
   stats(since: string | null = null, filter: LlmCallFilter = {}): LlmCallStats {
     const calls = this.#calls.filter(

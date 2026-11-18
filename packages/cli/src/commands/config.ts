@@ -24,10 +24,12 @@ import {
   parseValue,
   showValue,
   TomlDocument,
+  type TomlValue,
 } from "../toml-patch.js";
 import { bold, dim, eprintln, green, plainReporter, println, red, yellow } from "../ui.js";
 import * as validate from "../validate.js";
 import { type Change, diffToml, renderChange, type Target, Workspace } from "../workspace.js";
+import { configuredDatabase } from "./db.js";
 import { clientFor, isRunning, moduleAction } from "./remote.js";
 
 export class ConfigCommandError extends Error {
@@ -457,7 +459,35 @@ export function list(configPath: string, reveal: boolean): void {
   }
 }
 
-export function get(
+export async function get(
+  configPath: string,
+  key: string | undefined,
+  env: string | undefined,
+  reveal: boolean,
+): Promise<void> {
+  if (key !== undefined && env === undefined) {
+    const ws = Workspace.open(configPath);
+    const path = parseKey(key);
+    const covered = await layerKey(ws, configPath, path);
+    if (covered !== null && covered.key === formatKey(path)) {
+      // The value the module runs with is the panel's; say where the file's stands.
+      const file = getIn(ws.doc.data, path);
+      println(showValue(covered.value));
+      eprintln(
+        yellow(
+          `(${layerNote(covered).replace(";檔案的值不會生效", "")};miyoria.toml:${file === undefined ? "沒設" : showValue(file)})`,
+        ),
+      );
+      return;
+    }
+    getFromFile(configPath, key, env, reveal);
+    if (covered !== null) eprintln(yellow(`(${covered.key} ${layerNote(covered)})`));
+    return;
+  }
+  getFromFile(configPath, key, env, reveal);
+}
+
+function getFromFile(
   configPath: string,
   key: string | undefined,
   env: string | undefined,
@@ -494,6 +524,206 @@ export function get(
   const secret = isSecret(last) || used.some(([name]) => isSecret(name));
   println(secret && !reveal ? mask(resolved) : display("", resolved, reveal));
   if (used.length > 0) eprintln(dim(`(miyoria.toml:${showValue(item)};${sources(used)})`));
+}
+
+// ---- the panel's layer -------------------------------------------------------------------
+//
+// What the panel changes of a module's config lives in the database (`config_revisions`, docs/
+// design/v5-settings.md §4) and wins over `miyoria.toml` key by key. `get` and `set` say when a
+// key is covered by it, `overrides` lists it, and `bake` writes it into the file and empties it.
+
+/** One key of the panel's layer. */
+export interface LayerKey {
+  /** The key as the file writes it: `modules.market.auction_channel`. */
+  key: string;
+  path: string[];
+  value: TomlValue;
+  /** The revision that set it, and who and when. */
+  version: number;
+  by: string;
+  at: string;
+}
+
+type Doc = { [key: string]: unknown };
+
+const isDoc = (v: unknown): v is Doc => typeof v === "object" && v !== null && !Array.isArray(v);
+
+function docAt(doc: unknown, path: readonly string[]): unknown {
+  let at = doc;
+  for (const key of path) at = isDoc(at) ? at[key] : undefined;
+  return at;
+}
+
+/** Every leaf under `modules.<id>` of a layer document, `enabled` left out (it is module on/off). */
+function layerLeaves(doc: unknown): string[][] {
+  const out: string[][] = [];
+  const walk = (value: unknown, path: string[]) => {
+    if (isDoc(value) && Object.keys(value).length > 0) {
+      for (const [k, v] of Object.entries(value)) walk(v, [...path, k]);
+    } else if (!isDoc(value)) out.push(path);
+  };
+  const modules = docAt(doc, ["modules"]);
+  if (!isDoc(modules)) return out;
+  for (const [id, section] of Object.entries(modules)) {
+    if (!isDoc(section)) continue;
+    for (const [k, v] of Object.entries(section)) if (k !== "enabled") walk(v, ["modules", id, k]);
+  }
+  return out;
+}
+
+interface Revisions {
+  current(): { version: number; doc: Doc; created_at: string; created_by: string } | null;
+  history(limit?: number): { version: number; doc: Doc; created_at: string; created_by: string }[];
+  write(doc: Doc, by: string, options?: { note?: string | null; expected?: number }): unknown;
+}
+
+/**
+ * Opens the database the config names, when its file is there (a missing one is not created),
+ * runs `fn` with its config revisions and closes it. `null` when there is no database.
+ */
+async function withRevisions<T>(
+  ws: Workspace,
+  configPath: string,
+  fn: (revisions: Revisions) => T,
+): Promise<T | null> {
+  let path: string;
+  try {
+    path = await configuredDatabase(workspaceConfig(ws), configPath);
+  } catch {
+    return null;
+  }
+  if (!existsSync(path)) return null;
+  const { SqliteStore } = await import("@miyoria/store");
+  const store = await SqliteStore.open(path);
+  try {
+    return fn(store.config.revisions as unknown as Revisions);
+  } finally {
+    await store.close();
+  }
+}
+
+/** A JSON value as TOML holds it: a whole number is an integer (`48`, not `48.0`). */
+function tomlOf(value: unknown): TomlValue {
+  if (typeof value === "number" && Number.isInteger(value)) return BigInt(value);
+  if (Array.isArray(value)) return value.map(tomlOf) as TomlValue;
+  if (isDoc(value)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, tomlOf(v)])) as TomlValue;
+  }
+  return value as TomlValue;
+}
+
+/** The layer's keys with the revision that set each one. */
+function layerKeys(revisions: Revisions): LayerKey[] {
+  const current = revisions.current();
+  if (current === null) return [];
+  const history = revisions.history(2_000);
+  return layerLeaves(current.doc).map((path) => {
+    const value = docAt(current.doc, path);
+    const same = (doc: unknown) => JSON.stringify(docAt(doc, path)) === JSON.stringify(value);
+    // The oldest revision of the newest run that holds this value.
+    let set = history[0] ?? current;
+    for (const row of history) {
+      if (!same(row.doc)) break;
+      set = row;
+    }
+    return {
+      key: formatKey(path),
+      path,
+      value: tomlOf(value),
+      version: set.version,
+      by: set.created_by,
+      at: set.created_at,
+    };
+  });
+}
+
+/** The layer's key at `path`, if the panel covers it. */
+async function layerKey(ws: Workspace, configPath: string, path: readonly string[]) {
+  const key = formatKey(path);
+  try {
+    const keys = await withRevisions(ws, configPath, layerKeys);
+    return keys?.find((k) => k.key === key || key.startsWith(`${k.key}.`)) ?? null;
+  } catch {
+    // An unreadable database is not this command's business.
+    return null;
+  }
+}
+
+function when(at: string): string {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return at;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function layerNote(k: LayerKey): string {
+  return `面板改過:${showValue(k.value)}(第 ${k.version} 版,${k.by},${when(k.at)});檔案的值不會生效`;
+}
+
+/** `miyoria config overrides`: every key the panel covers, its value, the file's and who set it. */
+export async function overrides(configPath: string): Promise<void> {
+  const ws = Workspace.open(configPath);
+  const keys = await withRevisions(ws, configPath, layerKeys);
+  if (keys === null) {
+    plainReporter.note("找不到資料庫,沒有面板改過的設定");
+    return;
+  }
+  if (keys.length === 0) {
+    plainReporter.note("沒有面板改過的設定");
+    return;
+  }
+  for (const k of keys) {
+    const file = getIn(ws.doc.data, k.path);
+    const fileText = file === undefined ? "沒設" : showValue(file);
+    println(
+      `${k.key} = ${showValue(k.value)}  ${dim(`檔案:${fileText} · 第 ${k.version} 版 · ${k.by} · ${when(k.at)}`)}`,
+    );
+  }
+}
+
+/**
+ * `miyoria config bake`: writes every key of the panel's layer into `miyoria.toml` (comments and
+ * layout kept), then a revision without those keys, so the file is the only source again. Module
+ * on/off flags stay where they are.
+ */
+export async function bake(configPath: string, yes: boolean, p: Prompter | null): Promise<void> {
+  const ws = Workspace.open(configPath);
+  const keys = await withRevisions(ws, configPath, layerKeys);
+  if (keys === null || keys.length === 0) {
+    plainReporter.note("沒有面板改過的設定,不用寫入");
+    return;
+  }
+  for (const k of keys) ws.doc.set(k.path, k.value);
+  const changes = ws.changes();
+  if (changes.length > 0) {
+    for (const line of changeLines(ws, changes)) println(`  ${line}`);
+  }
+  println(dim(`  然後清掉資料庫裡這 ${keys.length} 個面板的值`));
+  if (!yes && !(p !== null && (await p.confirm("寫入 miyoria.toml 並清掉面板的值?", true)))) {
+    plainReporter.warn("沒有寫入任何檔案(用 --yes 直接寫入)");
+    return;
+  }
+  for (const path of ws.save()) plainReporter.ok(`已寫入 ${ws.shown(path)}`);
+  await withRevisions(ws, configPath, (revisions) => {
+    const current = revisions.current();
+    if (current === null) return;
+    const doc = structuredClone(current.doc);
+    const modules = docAt(doc, ["modules"]);
+    if (isDoc(modules)) {
+      for (const [id, section] of Object.entries(modules)) {
+        if (!isDoc(section)) continue;
+        const kept = "enabled" in section ? { enabled: section.enabled } : {};
+        if (Object.keys(kept).length === 0) delete modules[id];
+        else modules[id] = kept;
+      }
+    }
+    revisions.write(doc, "cli", {
+      note: "bake: written to miyoria.toml",
+      expected: current.version,
+    });
+  });
+  plainReporter.ok("已清掉面板的值;現在 miyoria.toml 是唯一的來源");
+  plainReporter.note("core 正在執行的話,模組用的值沒有變(檔案和面板一樣),下次啟動照檔案讀");
 }
 
 /** `.env` variable name for a new secret key: `stage.obs.password` → `STAGE_OBS_PASSWORD`. */
@@ -546,6 +776,11 @@ export async function set(
       const err = validate.valueForKey(path, parsed, ctx);
       if (err) throw new ConfigCommandError(`\`${shown}\`:${err}`);
       ws.doc.set(path, parsed);
+    }
+    const covered = await layerKey(ws, configPath, path);
+    if (covered !== null) {
+      r.warn(`${covered.key} ${layerNote(covered)}`);
+      r.note("在面板的模組設定按「還原」,或執行 `miyoria config bake` 讓檔案成為唯一的來源");
     }
   }
   const changes = writeNow(r, ws);

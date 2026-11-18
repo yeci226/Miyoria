@@ -15,13 +15,21 @@ function Tabs({ className, ...props }: React.ComponentProps<typeof TabsPrimitive
 /**
  * The page's second level: a flush row under the header. It is frame glass, so it sits beside the
  * content surface and never inside it (a nested backdrop filter sees nothing but its parent).
+ * `inline` is the same underlined row inside a block on the content surface (the member page's
+ * 卡冊): no glass of its own, not sticky, and its first tab lines up with the block title.
  */
-function TabsList({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.List>) {
+function TabsList({
+  className,
+  variant = "frame",
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.List> & { variant?: "frame" | "inline" }) {
   return (
     <TabsPrimitive.List
       data-slot="tabs-list"
       className={cn(
-        "glass-dock sticky top-0 z-10 flex shrink-0 items-center gap-0.5 overflow-x-auto border-b px-2 text-muted-foreground sm:px-5 md:top-15",
+        variant === "frame"
+          ? "glass-dock sticky top-0 z-10 flex shrink-0 items-center gap-0.5 overflow-x-auto border-b px-2 text-muted-foreground sm:px-5 md:top-15"
+          : "flex shrink-0 items-center gap-0.5 overflow-x-auto border-b text-muted-foreground [&>[data-slot=tabs-trigger]:first-child]:pl-0",
         className,
       )}
       {...props}

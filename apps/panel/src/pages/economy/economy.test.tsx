@@ -1,8 +1,7 @@
-import { screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { EarnReason } from "@/api/types";
-import type { EconomyHealth, PredictionView, ReachedGoal, RoomItem } from "@miyoria/contracts/api";
+import type { EconomyHealth, PredictionView, RoomItem } from "@miyoria/contracts/api";
 import { mockFetch, renderRoute } from "@/test/render";
 import { EARN_REASON_LABEL, ISSUED_REASONS, reasonLabel, RECOVERED_REASONS } from "./labels";
 
@@ -73,40 +72,16 @@ describe("經濟 / 健康度", () => {
   });
 });
 
-describe("經濟 / 委託、預測、房間", () => {
-  it("lists the commissions that wait for her", async () => {
-    mockFetch((_m, u) =>
-      u.pathname === "/api/economy/commissions"
-        ? {
-            body: {
-              currency: "魚幣",
-              commissions: [
-                { id: "C1", kind: "poem", label: "寫詩", brief: "寫一首關於下雨的詩", price: 80, status: "open", created_at: new Date().toISOString(), due_at: new Date(Date.now() + 86_400_000).toISOString(), result: null, note: null },
-              ],
-            },
-          }
-        : undefined,
-    );
-    renderRoute("/economy?tab=commissions");
-    const table = await screen.findByRole("table", { name: "委託" });
-    const row = within(table).getByText("寫一首關於下雨的詩").closest("tr") as HTMLElement;
-    expect(within(row).getByText("寫詩")).toBeInTheDocument();
-    expect(row).toHaveTextContent("80 魚幣");
-  });
-
-  it("has empty states for commissions, predictions and the room", async () => {
+describe("經濟 / 預測、房間", () => {
+  it("has empty states for predictions and the room", async () => {
     mockFetch((_m, u) => {
-      if (u.pathname === "/api/economy/commissions") return { body: { currency: "魚幣", commissions: [] } };
       if (u.pathname === "/api/economy/predictions") return { body: { currency: "魚幣", predictions: [] } };
       if (u.pathname === "/api/economy/room") return { body: { currency: "魚幣", room: [] } };
       return undefined;
     });
-    const a = renderRoute("/economy?tab=commissions");
-    expect(await screen.findByText("沒有等她做的委託")).toBeInTheDocument();
-    a.unmount();
-    const b = renderRoute("/economy?tab=predictions");
+    const a = renderRoute("/economy?tab=predictions");
     expect(await screen.findByText("沒有預測")).toBeInTheDocument();
-    b.unmount();
+    a.unmount();
     renderRoute("/economy?tab=room");
     expect(await screen.findByText("房間裡還沒有可以集資的東西")).toBeInTheDocument();
   });
@@ -171,55 +146,3 @@ describe("ledger reason labels", () => {
   });
 });
 
-const reached = (over: Partial<ReachedGoal> = {}): ReachedGoal => ({
-  id: "g1",
-  title: "新麥克風",
-  promise: "學三種貓叫",
-  target: 50,
-  reached_at: "2026-11-10T00:00:00.000Z",
-  fulfilled_at: null,
-  fulfilled_by: null,
-  ...over,
-});
-
-describe("經濟 / 目標", () => {
-  it("lists the filled goals and marks one kept after a confirmation", async () => {
-    const user = userEvent.setup();
-    let goals = [reached(), reached({ id: "g0", title: "唱歌", fulfilled_at: "2026-11-09T00:00:00.000Z", fulfilled_by: "self" })];
-    const fetch = mockFetch((m, u) => {
-      if (u.pathname === "/api/economy/goals" && m === "GET") return { body: { goals } };
-      if (u.pathname === "/api/economy/goals/g1/fulfill" && m === "POST") {
-        goals = goals.map((g) => (g.id === "g1" ? { ...g, fulfilled_at: "2026-11-12T00:00:00.000Z", fulfilled_by: "owner" } : g));
-        return { body: { goal: goals[0] } };
-      }
-      return undefined;
-    });
-    renderRoute("/economy?tab=goals");
-    const table = await screen.findByRole("table", { name: "湊滿的目標" });
-    expect(screen.getByText("1 個還沒做到")).toBeInTheDocument();
-    const kept = within(table).getByText("唱歌").closest("tr") as HTMLElement;
-    expect(within(kept).getByText("做到了")).toBeInTheDocument();
-    expect(within(kept).getByText(/她自己說做到了/)).toBeInTheDocument();
-    const owed = within(table).getByText("新麥克風").closest("tr") as HTMLElement;
-    await user.click(within(owed).getByRole("button", { name: "記成做到了" }));
-    const dialog = await screen.findByRole("alertdialog");
-    expect(dialog).toHaveTextContent("學三種貓叫");
-    await user.click(within(dialog).getByRole("button", { name: "記成做到了" }));
-    await waitFor(() =>
-      expect(fetch.mock.calls.some(([u, init]) => String(u).endsWith("/api/economy/goals/g1/fulfill") && init?.method === "POST")).toBe(true),
-    );
-    await waitFor(() => expect(within(screen.getByRole("table", { name: "湊滿的目標" })).getByText(/主人記的/)).toBeInTheDocument());
-  });
-
-  it("keeps the button disabled for a read-only account, and has an empty state", async () => {
-    mockFetch((_m, u) => (u.pathname === "/api/economy/goals" ? { body: { goals: [reached()] } } : undefined));
-    renderRoute("/economy?tab=goals", { session: { session: { method: "token", user: null, permissions: { write: false } }, logout: () => {} } });
-    expect(await screen.findByRole("button", { name: "記成做到了" })).toBeDisabled();
-  });
-
-  it("says when no goal was filled yet", async () => {
-    mockFetch((_m, u) => (u.pathname === "/api/economy/goals" ? { body: { goals: [] } } : undefined));
-    renderRoute("/economy?tab=goals");
-    expect(await screen.findByText("還沒有湊滿的目標")).toBeInTheDocument();
-  });
-});

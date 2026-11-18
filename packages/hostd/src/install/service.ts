@@ -3,13 +3,26 @@
 // `install.manual` and at the models. Nothing here installs a system program, and nothing here
 // touches a folder outside the state folder, except the catalog's own files it reads.
 
-import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { HostInstallRuntimeState, HostServiceInstallResult } from "@miyoria/contracts/host";
 import type { CatalogEntry } from "../catalog.js";
 import type { LoadedHostConfig } from "../host-config.js";
 import { pythonIn } from "../resolve.js";
-import { downloadFile, type Fetch } from "./download.js";
+import { downloadFile, type Fetch, formatBytes } from "./download.js";
+import {
+  adoptFile,
+  bytesToFetch,
+  type CheckMode,
+  checkFiles,
+  checkFilesQuick,
+  type FileStatus,
+  fileDestIn,
+  hashAndRemember,
+  spaceProblem,
+  VerifiedCache,
+  verifiedCacheFile,
+} from "./files.js";
 import { hfCacheHasIn, hfDir } from "./hf.js";
 import {
   type EnvironmentState,
@@ -34,6 +47,10 @@ export interface InstallDeps {
   uv?: string;
   /** Replaces the host allowlist of `install.files` (tests). */
   allowedHosts?: readonly string[];
+  /** Free bytes on the drive of a folder (tests); default the drive's own answer. */
+  freeBytes?: (dir: string) => number | null;
+  /** Shorter waits for the downloads (tests). */
+  downloadTimings?: { idleTimeoutMs?: number; retryDelaysMs?: readonly number[] };
   now?: () => Date;
 }
 
@@ -72,14 +89,13 @@ export function extrasOf(entry: CatalogEntry, host: LoadedHostConfig): string[] 
   return [...(host.config.services[entry.name]?.extras ?? entry.descriptor.install.extras)];
 }
 
-/** Where a download of `install.files` goes: `<state>/models/<path>`. Throws when `path` escapes it. */
+/**
+ * Where a download of `install.files` goes: `<state>/models/<path>`, the state folder `host.toml`
+ * names (`[paths] state`, relative to the workspace), so a packaged install keeps its models in the
+ * user's folder and not in the package's. Throws when `path` escapes it.
+ */
 export function fileDest(host: LoadedHostConfig, path: string): string {
-  const dest = resolve(host.state.models, path);
-  const inside = relative(host.state.models, dest);
-  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) {
-    throw new Error(`${path} is not a path inside the model folder`);
-  }
-  return dest;
+  return fileDestIn(host.state.models, path);
 }
 
 /**
@@ -123,7 +139,8 @@ export interface Inspection {
     pythonExists?: boolean;
   };
   system: HostServiceInstallResult["system"];
-  files: HostServiceInstallResult["files"];
+  /** `install.files`, looked at without reading them (`checkServiceFiles` hashes). */
+  files: FileStatus[];
   manual: HostServiceInstallResult["manual"];
   models: HostServiceInstallResult["models"];
 }
@@ -176,10 +193,7 @@ export function inspectService(
       const hint = found ? undefined : systemHint(program, platform);
       return { program, found, ...(hint !== undefined ? { hint } : {}) };
     }),
-    files: install.files.map((file) => ({
-      path: file.path,
-      state: existsSync(fileDest(host, file.path)) ? ("present" as const) : ("missing" as const),
-    })),
+    files: checkFilesQuick(install.files, host.state.models, host.state.root),
     manual: install.manual.map((item) => ({
       path: manualPath(entry, host, deps.root, item.path),
       what: item.what,
@@ -191,6 +205,24 @@ export function inspectService(
       present: hfCacheHasIn(hfCacheOf(entry, host), model.repo, model.revision),
     })),
   };
+}
+
+/**
+ * The `install.files` of a service, hashed as `mode` says (`cached`: only what changed since it was
+ * last hashed; `deep`: everything). Hashes are remembered for the next check.
+ */
+export function checkServiceFiles(
+  entry: CatalogEntry,
+  host: LoadedHostConfig,
+  mode: CheckMode,
+): Promise<FileStatus[]> {
+  return checkFiles(
+    entry.descriptor.install.files,
+    host.state.models,
+    host.state.root,
+    mode,
+    host.workspace,
+  );
 }
 
 /**
@@ -259,7 +291,7 @@ export async function installService(
   }
 
   const failedRuntime = runtime.state === "uv-missing" || runtime.state === "failed";
-  const files = await fetchFiles(entry, host, deps, options, before.files, failedRuntime);
+  const files = await fetchFiles(entry, host, deps, options, failedRuntime);
   // The environment may have appeared: look at the models again.
   const after = inspectService(entry, host, deps, options.extras);
   return {
@@ -334,45 +366,191 @@ async function syncEnvironment(
   return runtimeResult("synced", { dir, extras });
 }
 
+/**
+ * The `install.files` step: a file that is there and matches stays; a missing one, or one whose
+ * size or checksum is wrong, is downloaded (one at a time) unless `noFiles` or `skip` says not to,
+ * after a check that the drive has room for all of them. Without downloading, a missing or wrong
+ * file is reported as `missing`; it does not make the install fail.
+ */
 async function fetchFiles(
   entry: CatalogEntry,
   host: LoadedHostConfig,
   deps: InstallDeps,
   options: InstallOptions,
-  present: HostServiceInstallResult["files"],
   skip: boolean,
 ): Promise<HostServiceInstallResult["files"]> {
-  const out: HostServiceInstallResult["files"] = [];
-  for (const file of entry.descriptor.install.files) {
-    if (present.find((p) => p.path === file.path)?.state === "present") {
-      // An existing file is kept; a checksum in the descriptor is checked against it.
+  const declared = entry.descriptor.install.files;
+  if (declared.length === 0) return [];
+  const download = options.noFiles !== true && !skip;
+  const statuses = await checkFiles(
+    declared,
+    host.state.models,
+    host.state.root,
+    download ? "cached" : "quick",
+    host.workspace,
+  );
+  const out = new Map<string, HostServiceInstallResult["files"][number]>();
+  const todo: FileStatus[] = [];
+  for (const s of statuses) {
+    if (s.state === "verified" || s.state === "present") {
+      out.set(s.path, { path: s.path, state: "present" });
+    } else if (!download) {
+      out.set(s.path, {
+        path: s.path,
+        state: "missing",
+        ...(s.detail !== undefined ? { detail: s.detail } : {}),
+      });
+    } else {
+      todo.push(s);
+    }
+  }
+  const room =
+    todo.length === 0 ? null : spaceProblem(host.state.models, bytesToFetch(todo), deps.freeBytes);
+  const cache = new VerifiedCache(verifiedCacheFile(host.state.root));
+  for (const s of todo) {
+    if (room !== null) {
+      out.set(s.path, { path: s.path, state: "failed", detail: room });
+      continue;
+    }
+    if (options.signal?.aborted) {
+      out.set(s.path, { path: s.path, state: "failed", detail: "已取消" });
+      continue;
+    }
+    if (s.adopt !== null) {
       try {
-        if (file.sha256 !== undefined) {
-          await downloadFile(file.url, fileDest(host, file.path), { sha256: file.sha256 });
-        }
-        out.push({ path: file.path, state: "present" });
+        const how = adoptFile(s.adopt, s.dest);
+        const stat = statSync(s.dest);
+        cache.set(s.path, stat.size, stat.mtimeMs, s.sha256);
+        cache.save();
+        const label = how === "linked" ? "硬連結" : "複製";
+        options.onLine?.(`沿用 ${s.adopt}(檢查碼相同,${label}到 ${s.dest},不用下載)`);
+        out.set(s.path, { path: s.path, state: "present", detail: `沿用舊位置的檔案(${label})` });
       } catch (error) {
-        out.push({ path: file.path, state: "failed", detail: message(error) });
+        out.set(s.path, { path: s.path, state: "failed", detail: message(error) });
       }
       continue;
     }
-    if (options.noFiles === true || skip) {
-      out.push({ path: file.path, state: "missing" });
-      continue;
-    }
+    options.onLine?.(`下載 ${s.path}(${formatBytes(s.size)},來自 ${s.source},授權 ${s.licence})`);
     try {
-      await downloadFile(file.url, fileDest(host, file.path), {
+      const done = await downloadFile(s.url, s.dest, {
+        sha256: s.sha256,
+        size: s.size,
+        label: s.path,
+        ...(options.onLine !== undefined ? { onProgress: options.onLine } : {}),
         ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
-        ...(file.sha256 !== undefined ? { sha256: file.sha256 } : {}),
         ...(deps.allowedHosts !== undefined ? { allowedHosts: deps.allowedHosts } : {}),
         ...(options.signal !== undefined ? { signal: options.signal } : {}),
+        ...(deps.downloadTimings?.idleTimeoutMs !== undefined
+          ? { idleTimeoutMs: deps.downloadTimings.idleTimeoutMs }
+          : {}),
+        ...(deps.downloadTimings?.retryDelaysMs !== undefined
+          ? { retryDelaysMs: deps.downloadTimings.retryDelaysMs }
+          : {}),
       });
-      out.push({ path: file.path, state: "downloaded" });
+      const stat = statSync(s.dest);
+      cache.set(s.path, stat.size, stat.mtimeMs, done.sha256);
+      cache.save();
+      out.set(s.path, { path: s.path, state: "downloaded" });
     } catch (error) {
-      out.push({ path: file.path, state: "failed", detail: message(error) });
+      out.set(s.path, { path: s.path, state: "failed", detail: message(error) });
     }
   }
-  return out;
+  return statuses.map((s) => out.get(s.path) ?? { path: s.path, state: "missing" });
+}
+
+// ---- the hashes of what is here ----------------------------------------------------------------
+
+export interface PresentFile {
+  /** Where it was found: `install.files`, or the `install.manual` path it is in. */
+  from: string;
+  /** The file, absolute. */
+  file: string;
+  /** A `path` for `[[install.files]]`: relative to the model folder. */
+  path: string;
+  sha256: string;
+  size: number;
+}
+
+/** A folder with more files than this is source code or a cache, not model files. */
+const MAX_FOLDER_FILES = 50;
+
+function filesIn(dir: string): string[] | null {
+  const out: string[] = [];
+  const walk = (current: string): boolean => {
+    for (const d of readdirSync(current, { withFileTypes: true })) {
+      if (d.name === ".git") return false;
+      const full = join(current, d.name);
+      if (d.isDirectory()) {
+        if (!walk(full)) return false;
+      } else if (d.isFile()) {
+        out.push(full);
+        if (out.length > MAX_FOLDER_FILES) return false;
+      }
+    }
+    return true;
+  };
+  return walk(dir) ? out.sort() : null;
+}
+
+/**
+ * The SHA-256 and size of the files of a service that are on this machine: its `install.files`,
+ * and what its `install.manual` items hold, so a file placed by hand can become an
+ * `[[install.files]]` entry (`miyoria doctor --print-hashes`). Hashes are remembered.
+ */
+export async function presentFileHashes(
+  entry: CatalogEntry,
+  host: LoadedHostConfig,
+  root: string,
+): Promise<{ files: PresentFile[]; skipped: Array<{ path: string; why: string }> }> {
+  const models = host.state.models;
+  const cache = new VerifiedCache(verifiedCacheFile(host.state.root));
+  const files: PresentFile[] = [];
+  const skipped: Array<{ path: string; why: string }> = [];
+  const add = async (from: string, file: string, path: string) => {
+    const insideModels = relative(models, file);
+    const key =
+      insideModels.startsWith("..") || isAbsolute(insideModels)
+        ? file
+        : insideModels.replaceAll("\\", "/");
+    const sha = await hashAndRemember(cache, key, file);
+    files.push({ from, file, path, sha256: sha, size: statSync(file).size });
+  };
+  for (const declared of entry.descriptor.install.files) {
+    const dest = fileDest(host, declared.path);
+    if (existsSync(dest) && statSync(dest).isFile())
+      await add("install.files", dest, declared.path);
+    else skipped.push({ path: dest, why: "不在這台" });
+  }
+  for (const item of entry.descriptor.install.manual) {
+    const where = manualPath(entry, host, root, item.path);
+    if (!existsSync(where)) {
+      skipped.push({ path: where, why: "不在這台" });
+      continue;
+    }
+    const inside = (file: string): string => {
+      const r = relative(models, file);
+      if (!r.startsWith("..") && !isAbsolute(r)) return r.replaceAll("\\", "/");
+      return [basename(where), relative(where, file)]
+        .filter((p) => p !== "")
+        .join("/")
+        .replaceAll("\\", "/");
+    };
+    if (statSync(where).isFile()) {
+      await add(item.path, where, inside(where));
+      continue;
+    }
+    const below = filesIn(where);
+    if (below === null) {
+      skipped.push({
+        path: where,
+        why: `資料夾裡有 .git 或超過 ${MAX_FOLDER_FILES} 個檔案(原始碼?),不適合 install.files`,
+      });
+      continue;
+    }
+    for (const file of below) await add(item.path, file, inside(file));
+  }
+  cache.save();
+  return { files, skipped };
 }
 
 function message(error: unknown): string {

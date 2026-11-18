@@ -3,9 +3,9 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { type HostService, HostServiceSchema } from "@miyoria/contracts/host";
 import { parse as parseToml } from "smol-toml";
 import type { ZodError } from "zod";
+import { type ServiceDescriptor, ServiceDescriptorSchema } from "./descriptor.js";
 
 /**
  * Where descriptors live, relative to the workspace root. `dir/*` is every folder one level
@@ -73,7 +73,7 @@ export interface CatalogEntry {
   dir: string;
   /** The descriptor file, absolute. */
   file: string;
-  descriptor: HostService;
+  descriptor: ServiceDescriptor;
 }
 
 export interface CatalogProblem {
@@ -115,7 +115,7 @@ function describeIssues(error: ZodError): string[] {
 }
 
 /** Every text of a descriptor that may carry placeholders, with where it is. */
-function placeholderTexts(descriptor: HostService): Array<[string, string]> {
+function placeholderTexts(descriptor: ServiceDescriptor): Array<[string, string]> {
   const out: Array<[string, string]> = [];
   const { run, launch, install } = descriptor;
   if (run) {
@@ -132,9 +132,6 @@ function placeholderTexts(descriptor: HostService): Array<[string, string]> {
     out.push(["launch.cwd", launch.cwd]);
   }
   if (install.project !== undefined) out.push(["install.project", install.project]);
-  install.files.forEach((f, i) => {
-    out.push([`install.files[${i}].path`, f.path]);
-  });
   install.manual.forEach((m, i) => {
     out.push([`install.manual[${i}].path`, m.path]);
   });
@@ -142,11 +139,23 @@ function placeholderTexts(descriptor: HostService): Array<[string, string]> {
 }
 
 /** What a descriptor lacks for its kind, which the schema cannot say. */
-function kindProblems(descriptor: HostService): string[] {
+function kindProblems(descriptor: ServiceDescriptor): string[] {
   if (descriptor.kind === "external") {
     return descriptor.probe === undefined ? ["an external service needs [probe]"] : [];
   }
   return descriptor.run === undefined ? [`a ${descriptor.kind} needs [run]`] : [];
+}
+
+/** Two `[[install.files]]` that would land on the same file. */
+function fileProblems(descriptor: ServiceDescriptor): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  descriptor.install.files.forEach((f, i) => {
+    const key = f.path.toLowerCase();
+    if (seen.has(key)) out.push(`install.files.${i}.path: ${f.path} is listed twice`);
+    seen.add(key);
+  });
+  return out;
 }
 
 /** Loads every descriptor under the catalog roots of a workspace folder. */
@@ -168,7 +177,7 @@ export function loadCatalog(root: string): Catalog {
         fail(`not valid TOML: ${error instanceof Error ? error.message : String(error)}`);
         continue;
       }
-      const parsed = HostServiceSchema.safeParse(raw);
+      const parsed = ServiceDescriptorSchema.safeParse(raw);
       if (!parsed.success) {
         for (const message of describeIssues(parsed.error)) fail(message);
         continue;
@@ -176,6 +185,7 @@ export function loadCatalog(root: string): Catalog {
       const descriptor = parsed.data;
       const found = [
         ...kindProblems(descriptor),
+        ...fileProblems(descriptor),
         ...placeholderTexts(descriptor).flatMap(([where, text]) =>
           placeholdersIn(text).flatMap((name) => {
             if (!isKnownPlaceholder(name)) return [`${where}: unknown placeholder {${name}}`];

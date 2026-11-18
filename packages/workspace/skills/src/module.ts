@@ -24,6 +24,8 @@ import { SkillStore } from "./store.js";
 export class SkillsModule implements Module {
   static readonly ID = "skills";
   readonly manifest = defineManifest(SkillsModule.ID, "Skills", {
+    icon: "wand-sparkles",
+    category: "system",
     description: "Small how-to documents she writes, improves and opens on demand",
     optional: ["sandbox", "actions"],
     configSchema: SkillsConfigSchema,

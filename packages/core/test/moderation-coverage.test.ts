@@ -159,6 +159,8 @@ describe("everything people write is judged", () => {
       "packages/heart/person/src/module.ts",
       "packages/stage/src/link/module.ts",
       "packages/memory/world/src/module.ts",
+      // How lively a channel is, for a card drop: who wrote and when, never what.
+      "packages/play/cards/src/drops.ts",
     ];
     expect(readers.filter((f) => !counting.includes(f))).toEqual(
       [

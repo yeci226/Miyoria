@@ -2,31 +2,30 @@
 // main-column blocks (shop, how to earn, recent). Everything is what `GET /api/member/wallet`
 // answers; a Core without the route shows one line, and someone she does not know sees one line.
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
-import type { FeedItem, FeedResult, GiftExpression, ShopItem, SpendResult, WalletView } from "@miyoria/contracts/api";
+import type { FeedItem, FeedResult, ShopItem, SpendResult, WalletView } from "@miyoria/contracts/api";
 import { isNotProvided } from "@/api/http";
 import { useApi } from "@/app/connection";
 import { ConfirmDialog } from "@/components/confirm";
 import { EmptyLine, ErrorLine, SkeletonRows } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input, Textarea } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
 import { fmtInt, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
-import { FRAME_SWATCH } from "./card";
-import { Board, Bounties, Fortune, Goals } from "./Extras";
+import { FRAME_SWATCH, frameName, isUniqueFrame } from "./card";
+import { Board, Bounties, Fortune, FORTUNE, useFortuneToday } from "./Extras";
 import { newKey, priceText, say, usePatchWallet, useWallet } from "./spend";
 
-const LETTER_MAX = 120;
 const SCREEN_MAX = 60;
 
 export const STRANGER_LINE = "她還不認識你,先和她說說話吧";
 
 const HUNGRY: Record<string, string> = { full: "吃飽了", ok: "還好", hungry: "有點餓", starving: "很餓" };
 const FEED_LABEL: Record<string, string> = { rice: "一碗白飯", big_bowl: "鋼盆", dessert: "甜點" };
-const EXPRESSION_LABEL: Record<string, string> = { heart: "愛心眼", blush: "臉紅", squint: "＞＜" };
 const FRAME_LABEL: Record<string, string> = { sakura: "櫻花", abyss: "深海", gold: "金框" };
 
 // ---------------------------------------------------------------------------
@@ -48,9 +47,22 @@ function WalletBody({ w }: { w: WalletView }) {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
 
+  const client = useQueryClient();
+  const fortuneId = useId();
+  // The fortune slip is a paid add-on of the check-in: asked with it, today's slip comes in its answer.
+  const [withFortune, setWithFortune] = useState(false);
+  const slipOffer = w.shop.find((s) => s.id === "fortune");
+  // Offered until today's slip exists (and only where the Core answers for it).
+  const slipDrawn = useFortuneToday().data;
+  const slipOpen = slipOffer !== undefined && slipDrawn !== undefined && slipDrawn.fortune === null;
   const checkin = useMutation({
-    mutationFn: () => api.rpc.wallet.checkin({ body: {} }),
+    mutationFn: (fortune: boolean) => api.rpc.wallet.checkin({ body: fortune ? { fortune: true } : {} }),
     onSuccess: (r) => {
+      if (r.fortune) {
+        const slip = r.fortune;
+        client.setQueryData(FORTUNE, (old: { fortune: unknown; price: number } | undefined) => (old ? { ...old, fortune: slip } : old));
+      }
+      if (r.fortune_note) notify.info(r.fortune_note);
       patch((v) => ({
         ...v,
         balance: r.balance,
@@ -58,7 +70,10 @@ function WalletBody({ w }: { w: WalletView }) {
         checked_in_today: true,
         today_earned: v.today_earned + r.gained,
       }));
-      notify.ok(`簽到了,+${fmtInt(r.gained)} ${w.currency}`);
+      setWithFortune(false);
+      // A day checked in already buys the slip alone: `gained` is 0 then.
+      if (r.gained > 0) notify.ok(`簽到了,+${fmtInt(r.gained)} ${w.currency}`);
+      else if (r.fortune) notify.ok("今天的籤詩來了");
       void refresh();
     },
     onError: (e) => {
@@ -105,9 +120,28 @@ function WalletBody({ w }: { w: WalletView }) {
       </div>
       {w.hungry && <p className="text-[13px] text-muted-foreground">她現在:{HUNGRY[w.hungry] ?? w.hungry}</p>}
       <div className="grid gap-1.5">
-        <Button variant="secondary" disabled={w.checked_in_today} busy={checkin.isPending} onClick={() => checkin.mutate()}>
+        <Button variant="secondary" disabled={w.checked_in_today} busy={checkin.isPending} onClick={() => checkin.mutate(withFortune && slipOpen)}>
           {w.checked_in_today ? "今天已簽到" : `簽到${checkinLine ? ` +${fmtInt(checkinLine.amount)}` : ""}`}
         </Button>
+        {slipOpen && !w.checked_in_today && (
+          <div className="flex items-center gap-2">
+            <Switch id={fortuneId} checked={withFortune} disabled={!slipOffer.available || checkin.isPending} onCheckedChange={setWithFortune} />
+            <label htmlFor={fortuneId} className="text-xs text-muted-foreground">
+              加買今日籤詩 · {priceText(slipOffer.price, w.currency)}
+            </label>
+          </div>
+        )}
+        {slipOpen && w.checked_in_today && (
+          <Button
+            variant="outline"
+            disabled={!slipOffer.available || checkin.isPending}
+            title={slipOffer.available ? undefined : (slipOffer.why ?? undefined)}
+            busy={checkin.isPending}
+            onClick={() => checkin.mutate(true)}
+          >
+            買今日籤詩 · {priceText(slipOffer.price, w.currency)}
+          </Button>
+        )}
         {w.streak > 0 && <p className="text-xs text-muted-foreground">連續簽到 {w.streak} 天</p>}
       </div>
       {feeds.length > 0 && (
@@ -163,52 +197,6 @@ export function WalletCard() {
 // ---------------------------------------------------------------------------
 // main column
 
-function Letter({ item, currency }: { item: ShopItem; currency: string }) {
-  const api = useApi();
-  const { patch, refresh } = usePatchWallet();
-  const [text, setText] = useState("");
-  const id = useId();
-  const count = [...text.trim()].length;
-  const over = count > LETTER_MAX;
-  const send = useMutation({
-    mutationFn: (t: string) => api.rpc.wallet.letter({ headers: { "idempotency-key": newKey() }, body: { text: t } }),
-    onSuccess: (r: SpendResult) => {
-      patch((v) => ({ ...v, balance: r.balance }));
-      if (r.accepted) setText("");
-      say(r);
-      void refresh();
-    },
-    onError: (e) => notify.error(e),
-  });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (count > 0 && !over) send.mutate(text.trim());
-  };
-  return (
-    <form className="grid content-start gap-2" onSubmit={submit}>
-      <label htmlFor={id} className="text-xs text-muted-foreground">
-        寫信給她
-      </label>
-      <Textarea id={id} value={text} onChange={(e) => setText(e.target.value)} placeholder="她有空時會讀" />
-      <div className="flex items-center justify-between gap-3">
-        <span className={cn("text-xs tabular-nums", over ? "text-primary" : "text-muted-foreground")} aria-live="polite">
-          {count}/{LETTER_MAX}
-        </span>
-        <Button
-          type="submit"
-          variant="secondary"
-          busy={send.isPending}
-          disabled={count === 0 || over || !item.available}
-          title={item.available ? undefined : (item.why ?? undefined)}
-        >
-          寄出 · {priceText(item.price, currency)}
-        </Button>
-      </div>
-      {!item.available && item.why && <p className="text-xs text-muted-foreground">{item.why}</p>}
-    </form>
-  );
-}
-
 /** One line on the stream's screen while she is live; she sees it and may read it out. */
 function ScreenMessage({ item, currency }: { item: ShopItem; currency: string }) {
   const api = useApi();
@@ -256,67 +244,28 @@ function ScreenMessage({ item, currency }: { item: ShopItem; currency: string })
   );
 }
 
-/** Song extras are spent from Discord's `/queue song`: shown here so they can be found, not bought. */
-function SongExtras({ items, currency }: { items: ShopItem[]; currency: string }) {
-  return (
-    <div className="grid gap-1">
-      <p className="text-xs text-muted-foreground">點歌加購 · 在 Discord 點歌時用</p>
-      <ul className="divide-y divide-line-soft">
-        {items.map((s) => (
-          <li key={s.id} className="flex items-center gap-3 py-(--row-y)">
-            <span className="min-w-0 flex-1 text-sm">{s.label}</span>
-            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{priceText(s.price, currency)}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+/** A frame on the list: one the shop sells, or a one-of-a-kind one won at the weekly auction (never sold). */
+interface FrameOffer {
+  fid: string;
+  label: string;
+  /** `null`: not for sale. */
+  price: number | null;
+  available: boolean;
+  why: string | null;
 }
 
-function ExpressionRow({ item, currency }: { item: ShopItem; currency: string }) {
-  const api = useApi();
-  const { patch, refresh } = usePatchWallet();
-  const key = item.id.replace(/^expression:/, "");
-  const label = EXPRESSION_LABEL[key] ?? item.label;
-  const send = useMutation({
-    mutationFn: () => api.rpc.wallet.expression({ headers: { "idempotency-key": newKey() }, body: { expression: key as GiftExpression } }),
-    onSuccess: (r: SpendResult) => {
-      patch((v) => ({ ...v, balance: r.balance }));
-      say(r);
-      void refresh();
-    },
-    onError: (e) => {
-      notify.error(e);
-      void refresh();
-    },
-  });
-  return (
-    <li className="grid gap-0.5 py-(--row-y)">
-      <div className="flex items-center gap-3">
-        <span className="min-w-0 flex-1 text-sm">{label}</span>
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{priceText(item.price, currency)}</span>
-        <Button
-          size="sm"
-          variant="outline"
-          aria-label={`送出 ${label}`}
-          busy={send.isPending}
-          disabled={!item.available}
-          onClick={() => send.mutate()}
-        >
-          送出
-        </Button>
-      </div>
-      {!item.available && item.why && <p className="text-xs text-muted-foreground">{item.why}</p>}
-    </li>
-  );
-}
+const shopFrame = (item: ShopItem): FrameOffer => {
+  const fid = item.id.replace(/^frame:/, "");
+  return { fid, label: FRAME_LABEL[fid] ?? item.label, price: item.price, available: item.available, why: item.why ?? null };
+};
 
-function FrameRow({ item, w }: { item: ShopItem; w: WalletView }) {
+const wonFrame = (fid: string): FrameOffer => ({ fid, label: frameName(fid) ?? fid, price: null, available: false, why: null });
+
+function FrameRow({ item, w }: { item: FrameOffer; w: WalletView }) {
   const api = useApi();
   const { patch, refresh } = usePatchWallet();
   const [asking, setAsking] = useState(false);
-  const fid = item.id.replace(/^frame:/, "");
-  const label = FRAME_LABEL[fid] ?? item.label;
+  const { fid, label } = item;
   const owned = w.frames.owned.includes(fid);
   const selected = w.frames.selected === fid;
   const run = useMutation({
@@ -341,7 +290,7 @@ function FrameRow({ item, w }: { item: ShopItem; w: WalletView }) {
         />
         <span className="min-w-0 flex-1 text-sm">{label}</span>
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {selected ? "使用中" : owned ? "已擁有" : priceText(item.price, w.currency)}
+          {selected ? "使用中" : owned ? "已擁有" : item.price === null ? "" : priceText(item.price, w.currency)}
         </span>
         {owned ? (
           <Button
@@ -375,7 +324,7 @@ function FrameRow({ item, w }: { item: ShopItem; w: WalletView }) {
         onClose={() => setAsking(false)}
       >
         <p>
-          {priceText(item.price, w.currency)},之後抽的卡會用這個框。
+          {priceText(item.price ?? 0, w.currency)},之後抽的卡會用這個框。
         </p>
       </ConfirmDialog>
     </li>
@@ -383,11 +332,12 @@ function FrameRow({ item, w }: { item: ShopItem; w: WalletView }) {
 }
 
 function Shop({ w }: { w: WalletView }) {
-  const letter = w.shop.find((s) => s.kind === "letter");
-  const expressions = w.shop.filter((s) => s.kind === "expression");
-  const frames = w.shop.filter((s) => s.kind === "frame");
+  const frames = [
+    ...w.shop.filter((s) => s.kind === "frame").map(shopFrame),
+    // A won one-of-a-kind frame is theirs alone and never in the shop: listed after the shop's.
+    ...w.frames.owned.filter(isUniqueFrame).map(wonFrame),
+  ];
   const screen = w.shop.find((s) => s.id === "screen_message");
-  const songs = w.shop.filter((s) => s.kind === "song");
   return (
     <Card aria-label="商店">
       <CardHeader>
@@ -395,31 +345,19 @@ function Shop({ w }: { w: WalletView }) {
       </CardHeader>
       <div className="grid gap-5 lg:grid-cols-2">
         <div className="grid content-start gap-5">
-          {letter && <Letter item={letter} currency={w.currency} />}
           {screen && <ScreenMessage item={screen} currency={w.currency} />}
         </div>
         <div className="grid content-start gap-5">
-          {expressions.length > 0 && (
-            <div className="grid gap-1">
-              <p className="text-xs text-muted-foreground">直播中送她一個表情</p>
-              <ul className="divide-y divide-line-soft">
-                {expressions.map((s) => (
-                  <ExpressionRow key={s.id} item={s} currency={w.currency} />
-                ))}
-              </ul>
-            </div>
-          )}
           {frames.length > 0 && (
             <div className="grid gap-1">
               <p className="text-xs text-muted-foreground">卡框</p>
               <ul className="divide-y divide-line-soft">
-                {frames.map((s) => (
-                  <FrameRow key={s.id} item={s} w={w} />
+                {frames.map((f) => (
+                  <FrameRow key={f.fid} item={f} w={w} />
                 ))}
               </ul>
             </div>
           )}
-          {songs.length > 0 && <SongExtras items={songs} currency={w.currency} />}
         </div>
       </div>
     </Card>
@@ -489,10 +427,7 @@ export function WalletMain() {
         <Fortune />
         <Board />
       </div>
-      <div className="grid items-start gap-(--stage-gap) lg:grid-cols-2">
-        <Goals />
-        <Bounties />
-      </div>
+      <Bounties />
       <div className="grid gap-(--stage-gap) lg:grid-cols-2">
         <Earn w={w} />
         <Recent w={w} />

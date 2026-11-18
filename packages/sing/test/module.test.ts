@@ -36,6 +36,9 @@ import {
   SongClipsKey,
   type SongCue,
   type SongPrepare,
+  type SongPriority,
+  SongPriorityKey,
+  SongTicketsKey,
   SpeechPauseKey,
   toTimestamp,
   VoiceFloorKey,
@@ -50,6 +53,7 @@ import {
   BACKING_LABELS,
   backingOf,
   type GpuContext,
+  REFUND_RETRY_MS,
   SETLIST_KEY,
   SingerKey,
   SingModule,
@@ -57,8 +61,6 @@ import {
   SingWorkerError,
   type SongEntry,
   type SongMeta,
-  type SongPayments,
-  SongPaymentsKey,
   type SongQuery,
   type SongTrack,
   skipVotesNeeded,
@@ -238,6 +240,22 @@ class FakeWorker implements SingWorker {
     this.downloaded.push({ song, file, dest });
   }
 
+  async karaokeFile(song: string): Promise<void> {
+    throw new SingWorkerError(`no karaoke ${song}`, { status: 404 });
+  }
+
+  async karaokeKey(song: string): Promise<never> {
+    throw new SingWorkerError(`no karaoke ${song}`, { status: 404 });
+  }
+
+  async karaokeVoice(): Promise<never> {
+    throw new SingWorkerError("no voice", { status: 503 });
+  }
+
+  async karaokeStream(): Promise<never> {
+    throw new SingWorkerError("not found", { status: 404 });
+  }
+
   async health(): Promise<string | null> {
     return null;
   }
@@ -334,6 +352,8 @@ class Harness {
   readonly events: PublishedEvent[] = [];
   /** What went to Core's other sink for the audience context (the hosts' GPU arbiters). */
   readonly sent: GpuContext[] = [];
+  /** The module under test (its card). */
+  module: SingModule | null = null;
 
   private constructor(withMind: boolean, store: MemorySettingsStore | null) {
     const s = this.sup.services;
@@ -366,14 +386,15 @@ class Harness {
   ): Promise<Harness> {
     const h = new Harness(withMind, restart?.store ?? null);
     if (restart?.worker) h.worker = restart.worker;
+    h.module = new SingModule(() => h.worker, {
+      endpoints: oneWorker(),
+      context: (services, context) => {
+        expect(services).toBe(h.sup.services);
+        h.sent.push(context);
+      },
+    });
     await h.sup.register(
-      new SingModule(() => h.worker, {
-        endpoints: oneWorker(),
-        context: (services, context) => {
-          expect(services).toBe(h.sup.services);
-          h.sent.push(context);
-        },
-      }),
+      h.module,
       { poll_ms: 100, quiet_ms: 200, lead_ms: 300, announce_max_secs: 5, ...(config as object) },
       true,
     );
@@ -888,7 +909,7 @@ describe("sing module", () => {
     await h.command("queue song request", { song: "https://youtu.be/abc" });
     await settle(1600);
     expect(prepares(h)).toEqual([
-      { no: 1, title: "夜に駆ける", stage: "queued", progress: 0, exclusive: null },
+      { no: 1, title: "夜に駆ける", stage: "queued", progress: 0, exclusive: null, by: "Owen" },
     ]);
     // The one the worker runs wins over the queued one; a link is no title until the worker
     // found one.
@@ -900,6 +921,7 @@ describe("sing module", () => {
       stage: "download",
       progress: 0.2,
       exclusive: null,
+      by: "Owen",
     });
     Object.assign(h.worker.jobs.get("j2") ?? {}, { source: { title: "アイドル", artist: null } });
     h.worker.exclusive("j2", "offloading");
@@ -918,6 +940,54 @@ describe("sing module", () => {
       progress: 0,
       exclusive: null,
     });
+  });
+
+  it("keeps showing one song, its progress never goes back, and another starts from its own", async () => {
+    h = await Harness.create();
+    await h.join();
+    await h.command("queue song request", { song: "夜に駆ける" });
+    await h.command("queue song request", { song: "アイドル" });
+    h.worker.progress("j1", 0.3, "separate");
+    await settle(1600);
+    expect(prepares(h).at(-1)).toMatchObject({ no: 1, stage: "separate", progress: 0.3 });
+    // The second job gets ahead: the overlay stays with the first (no flipping by rank).
+    h.worker.progress("j2", 0.6, "convert");
+    h.worker.progress("j1", 0.31, "separate");
+    await settle(1600);
+    expect(prepares(h).at(-1)).toMatchObject({ no: 1, progress: 0.31 });
+    // The worker's progress falls back (a stage that comes again): the song's does not.
+    h.worker.progress("j1", 0.2, "separate");
+    await settle(1600);
+    const shown = prepares(h)
+      .filter((p) => p.no === 1)
+      .map((p) => p.progress);
+    expect(shown).toEqual([...shown].sort((x, y) => x - y));
+    expect(prepares(h).every((p) => p.no !== 2)).toBe(true);
+    // It ends: the next song shows from its own progress.
+    h.worker.finish("j1", "夜に駆ける");
+    await settle(1600);
+    expect(prepares(h).at(-1)).toMatchObject({ no: 2, progress: 0.6 });
+  });
+
+  it("reports a worker that stopped answering as unreachable, and the song again when it answers", async () => {
+    h = await Harness.create();
+    await h.join();
+    await h.command("queue song request", { song: "夜に駆ける" });
+    h.worker.progress("j1", 0.4, "convert");
+    await settle(1600);
+    expect(prepares(h).at(-1)).toMatchObject({ stage: "convert", progress: 0.4 });
+    const job = h.worker.job.bind(h.worker);
+    (h.worker as { job: unknown }).job = async () => {
+      throw new Error("connect ECONNREFUSED");
+    };
+    await settle(5000);
+    expect(prepares(h).at(-1), "not yet").toMatchObject({ stage: "convert" });
+    await settle(20_000);
+    expect(prepares(h).at(-1)).toMatchObject({ no: 1, stage: "unreachable", progress: 0.4 });
+    (h.worker as { job: unknown }).job = job;
+    h.worker.progress("j1", 0.5, "convert");
+    await settle(1600);
+    expect(prepares(h).at(-1)).toMatchObject({ stage: "convert", progress: 0.5 });
   });
 
   it("without a word from her, or out of voice, the worker does not wait", async () => {
@@ -1061,6 +1131,48 @@ describe("sing module", () => {
     expect(h.singer.list.open()).toHaveLength(0);
   });
 
+  it("its card shows the set list and the song she sings, with an action that stops it", async () => {
+    h = await Harness.create();
+    expect(await h.module?.card()).toEqual({
+      facts: [
+        { label: "歌單", value: 0, unit: "首" },
+        { label: "準備中", value: 0, unit: "首" },
+        { label: "worker", value: "連得上" },
+      ],
+    });
+    await h.join();
+    h.worker.cacheHit = true;
+    h.worker.cacheSeconds = 30;
+    await h.command("queue song request", { song: "Long" });
+    h.worker.cacheHit = false;
+    await h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "Next one" });
+    await settle(6000 + 400);
+    expect(h.voice.plays).toHaveLength(1);
+    const card = await h.module?.card();
+    expect(card?.facts).toEqual([
+      { label: "歌單", value: 2, unit: "首" },
+      { label: "準備中", value: 1, unit: "首" },
+      { label: "正在唱", value: "Long" },
+      { label: "worker", value: "連得上" },
+    ]);
+    expect(card?.actions).toEqual([
+      {
+        id: "stop",
+        label: "停下這首",
+        confirm: "停下她正在唱的歌?",
+        capability: "sing.stop",
+        args: {},
+      },
+    ]);
+    // The action, as the panel runs it through the gate: this song stops, the next one stays.
+    const action = card?.actions?.[0];
+    await h.invoke(Principals.panel("api"), action?.capability ?? "", action?.args ?? {});
+    await settle(50);
+    expect(h.voice.plays[0]?.stoppedWith).not.toBeNull();
+    expect(h.singer.list.open()).toHaveLength(1);
+    expect((await h.module?.card())?.actions).toBeUndefined();
+  });
+
   it("her wrap-up clears the rest of the list and lets the song she is singing finish", async () => {
     h = await Harness.create();
     await h.join();
@@ -1181,155 +1293,191 @@ describe("sing module", () => {
     expect(zero.status === "denied" && zero.decision.reason).toBe("no song is ready");
   });
 
-  describe("paid extras", () => {
-    class FakePayments implements SongPayments {
-      charges: { item: string; ref: string; text?: string }[] = [];
+  describe("the song priority ticket", () => {
+    class FakePriority implements SongPriority {
+      charges: { who: string; key: string }[] = [];
       refunds: string[] = [];
       refuse: string | null = null;
+      onSale = true;
+      /** While set, a refund throws (the economy is restarting). */
+      down = false;
 
-      async charge(_who: AccountRef, item: string, _key: string, ref: string, text?: string) {
-        if (this.refuse !== null) return { refused: this.refuse };
-        this.charges.push({ item, ref, ...(text === undefined ? {} : { text }) });
-        return { entryId: `e${this.charges.length}` };
+      terms() {
+        return this.onSale ? { price: 40, per_day: 2, currency: "魚幣" } : null;
       }
 
-      async refund(_who: AccountRef, id: string) {
-        if (this.refunds.includes(id)) return false;
-        this.refunds.push(id);
-        return true;
+      async charge(who: AccountRef, key: string) {
+        if (this.refuse !== null) return { ok: false as const, message: this.refuse };
+        this.charges.push({ who: who.id, key });
+        return { ok: true as const, balance: 0 };
+      }
+
+      async refund(_who: AccountRef, key: string) {
+        if (this.down) throw new Error("錢包現在打不開");
+        if (this.refunds.includes(key)) return 0;
+        this.refunds.push(key);
+        return 40;
+      }
+
+      readonly consumed: string[] = [];
+      /** While set, marking a ticket used throws (the market is restarting). */
+      consumeDown = false;
+
+      consume(key: string) {
+        if (this.consumeDown) throw new Error("市集現在不在");
+        this.consumed.push(key);
       }
     }
 
-    const asAmy = (h2: Harness, args: Record<string, JsonValue>) =>
-      h2.invoke(Principals.command(AMY, TEXT), "sing.request", args);
+    const asAmy = (args: Record<string, JsonValue>) =>
+      h.invoke(Principals.command(AMY, TEXT), "sing.request", args);
 
-    async function paid(config: JsonValue = { max_pending_per_user: 1 }) {
-      h = await Harness.create(config);
-      const pay = new FakePayments();
-      h.sup.services.provide("economy", SongPaymentsKey, pay);
-      await h.join();
-      return pay;
+    async function priced(config: JsonValue = { max_pending_per_user: 10 }) {
+      h = await Harness.create(config, false);
+      const ticket = new FakePriority();
+      h.sup.services.provide("market", SongPriorityKey, ticket);
+      return ticket;
     }
 
-    it("a ticket lets one more past the limit, and is only charged at the limit", async () => {
-      const pay = await paid();
-      // Below the limit nothing is charged, ticket or not.
-      expect((await asAmy(h, { query: "one", ticket: true })).status).toBe("done");
-      expect(pay.charges).toEqual([]);
-      // At the limit: refused without a ticket (and the text points to the ticket)...
-      const no = await asAmy(h, { query: "two" });
-      expect(no.status === "failed" && no.error).toContain("ticket");
-      expect(pay.charges).toEqual([]);
-      // ...a ticket makes room for one more, not two.
-      expect((await asAmy(h, { query: "two", ticket: true })).status).toBe("done");
-      expect(pay.charges.map((c) => c.item)).toEqual(["song_ticket"]);
-      expect(h.singer.list.get(2)?.ticket_entry).toBe("e1");
-      const three = await asAmy(h, { query: "three", ticket: true });
-      expect(three.status).toBe("failed");
-      // The failed attempt's ticket went back.
-      expect(pay.charges.map((c) => c.item)).toEqual(["song_ticket", "song_ticket"]);
-      expect(pay.refunds).toEqual(["e2"]);
-    });
-
-    it("her own tool call never spends money", async () => {
-      const pay = await paid();
-      await h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "one" });
-      const r = await h.invoke(Principals.user(AMY, TEXT), "sing.request", {
-        query: "two",
-        ticket: true,
-        dedication: "hi",
+    it("puts a ticket's song ahead of the songs without one, tickets in their own order", async () => {
+      const ticket = await priced();
+      await asAmy({ query: "one" });
+      await asAmy({ query: "two" });
+      const first = await asAmy({ query: "three", priority: true });
+      expect(first.status === "done" && first.result.text).toContain("點歌優先券");
+      await h.invoke(Principals.command(BOB, TEXT), "sing.request", {
+        query: "four",
+        priority: true,
       });
-      expect(r.status).toBe("failed");
-      expect(pay.charges).toEqual([]);
+      await asAmy({ query: "five" });
+      const order = h.singer.list.open().map((e) => e.query);
+      expect(order).toEqual(["three", "four", "one", "two", "five"]);
+      expect(ticket.charges.map((c) => c.who)).toEqual(["8", "9"]);
+      expect(h.singer.list.get(3)).toMatchObject({ priority: true });
+      // The song asked for again is not a second ticket.
+      const again = await asAmy({ query: "one", priority: true });
+      expect(again.status === "done" && again.result.text).toContain("沒有用點歌優先券");
+      expect(ticket.charges).toHaveLength(2);
     });
 
-    it("refunds the ticket when the song fails, or is dropped; keeps it when sung", async () => {
-      const pay = await paid();
-      await asAmy(h, { query: "one" });
-      await asAmy(h, { query: "two", ticket: true });
+    it("never spends money on her call, and refuses with the market's reason", async () => {
+      const ticket = await priced();
+      // Her tool call in a turn of hers, for someone in chat: no ticket.
+      const hers = { query: "one", priority: true };
+      await h.invoke(Principals.user(AMY, TEXT), "sing.request", hers, "t1");
+      expect(ticket.charges).toEqual([]);
+      expect(h.singer.list.get(1)?.priority).toBeUndefined();
+      // The member page: their own request, no turn of hers.
+      await h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "two", priority: true });
+      expect(ticket.charges).toHaveLength(1);
+      ticket.refuse = "點歌優先券一天最多用 2 張";
+      const refused = await asAmy({ query: "three", priority: true });
+      expect(refused.status === "failed" && refused.error).toContain("一天最多用 2 張");
+      expect(h.singer.list.open().map((e) => e.query)).toEqual(["two", "one"]);
+      ticket.refuse = null;
+      ticket.onSale = false;
+      const off = await asAmy({ query: "four", priority: true });
+      expect(off.status === "failed" && off.error).toContain("沒有賣");
+    });
+
+    it("gives the ticket back when the song fails or is dropped, once", async () => {
+      const ticket = await priced();
+      await asAmy({ query: "one", priority: true });
+      h.worker.fail("j1", "no search result");
+      await settle(200);
+      expect(h.singer.list.get(1)?.state).toBe("failed");
+      expect(ticket.refunds).toEqual([ticket.charges[0]?.key]);
+      expect(h.singer.list.get(1)?.priority_key).toBeNull();
+      await asAmy({ query: "two", priority: true });
+      await h.singer.stop(true);
+      expect(ticket.refunds).toHaveLength(2);
+      // The set list keeps it across a restart: still marked, nothing more to give back.
+      const stored = h.singer.list.snapshot() as { entries: { priority?: boolean }[] };
+      expect(stored.entries.map((e) => e.priority)).toEqual([true, true]);
+    });
+
+    it("tries a refund that did not go again until it does, once", async () => {
+      const ticket = await priced();
+      await asAmy({ query: "one", priority: true });
+      ticket.down = true;
+      h.worker.fail("j1", "no search result");
+      await settle(200);
+      expect(h.singer.list.get(1)?.state).toBe("failed");
+      expect(ticket.refunds).toEqual([]);
+      expect(h.singer.list.get(1)?.priority_key).not.toBeNull();
+      // The wallet is back: a later round gives it back, and only once.
+      ticket.down = false;
+      await settle(REFUND_RETRY_MS + 300);
+      expect(ticket.refunds).toEqual([ticket.charges[0]?.key]);
+      expect(h.singer.list.get(1)?.priority_key).toBeNull();
+      await settle(REFUND_RETRY_MS + 300);
+      expect(ticket.refunds).toHaveLength(1);
+    });
+
+    it("uses the ticket once its song starts being sung, and holds it for the market until then", async () => {
+      const ticket = await priced();
+      const tickets = h.sup.services.require(SongTicketsKey);
+      await asAmy({ query: "one", priority: true });
+      const key = ticket.charges[0]?.key ?? "";
+      // Listed and waiting: the market's pass sees it held.
+      expect(tickets.holds(key)).toBe(true);
+      expect(tickets.holds("song:unknown")).toBe(false);
+      h.worker.finish("j1", "One", 1);
+      await settle(200);
+      expect(ticket.consumed).toEqual([]);
+      await h.join();
+      await settle(6000 + 400);
+      expect(h.voice.plays).toHaveLength(1);
+      expect(ticket.consumed).toEqual([key]);
+      expect(h.singer.list.get(1)?.priority_key).toBeNull();
+      expect(ticket.refunds).toEqual([]);
+      // A song that ended unsung is not held: the market may give its ticket back.
+      await asAmy({ query: "two", priority: true });
+      const two = ticket.charges[1]?.key ?? "";
+      ticket.down = true;
       h.worker.fail("j2", "no search result");
       await settle(200);
-      expect(h.singer.list.get(2)?.state).toBe("failed");
-      expect(pay.refunds).toEqual(["e1"]);
-      expect(h.singer.list.get(2)?.ticket_entry).toBeNull();
-
-      // Dropped by stop-all while still waiting.
-      await asAmy(h, { query: "three", ticket: true });
-      await h.singer.stop(true);
-      expect(pay.refunds).toEqual(["e1", "e2"]);
+      expect(h.singer.list.get(2)?.priority_key).toBe(two);
+      expect(tickets.holds(two)).toBe(false);
     });
 
-    it("a sung song keeps its ticket and dedication, and the dedication goes on screen", async () => {
-      const pay = await paid({ max_pending_per_user: 1 });
-      await asAmy(h, { query: "one" });
-      await asAmy(h, { query: "Song A", ticket: true, dedication: "給今天加班的人" });
-      expect(pay.charges.map((c) => c.item)).toEqual(["song_ticket", "dedication"]);
-      h.worker.finish("j2", "Song A", 1);
-      await settle(6000 + 3000);
-      expect(h.singer.list.get(2)?.state).toBe("done");
-      const shown = h.events.filter((e) => e.type === "economy.screen");
-      expect(shown).toHaveLength(1);
-      expect(shown[0]?.data).toMatchObject({
-        kind: "dedication",
-        text: "給今天加班的人",
-        song: "Song A",
-      });
-      expect(pay.refunds).toEqual([]);
-    });
-
-    it("a dedication skipped before she sings is refunded", async () => {
-      const pay = await paid({});
-      await asAmy(h, { query: "Song A", dedication: "加油" });
-      h.worker.finish("j1", "Song A", 1);
-      await settle(200);
-      expect(h.singer.list.playing()?.no).toBe(1);
-      await h.singer.stop(false);
-      await settle(50);
-      expect(pay.refunds).toEqual(["e1"]);
-      expect(h.events.some((e) => e.type === "economy.screen")).toBe(false);
-    });
-
-    it("tells her about the dedication before the song, and keeps it in her prompt", async () => {
-      await paid({});
-      await asAmy(h, { query: "Song A", dedication: "加油" });
-      h.worker.finish("j1", "Song A", 1);
-      await settle(200);
-      expect(h.initiatives().at(-1)?.hint).toContain("獻詞:「加油」");
-      expect(await h.section()).toContain("獻詞:「加油」");
-    });
-
-    it("rejects a long or naming dedication and a refused charge, without a song", async () => {
-      const pay = await paid({});
-      for (const text of ["長".repeat(41), "給 @someone", "給 <@123456>", "看 https://x.y"]) {
-        expect((await asAmy(h, { query: "S", dedication: text })).status).toBe("failed");
-      }
-      pay.refuse = "這句獻詞沒辦法通過";
-      const r = await asAmy(h, { query: "S", dedication: "ok" });
-      expect(r.status === "failed" && r.error).toContain("沒辦法通過");
-      expect(h.singer.list.all()).toHaveLength(0);
-      expect(h.worker.submitted).toHaveLength(0);
-    });
-
-    it("is unavailable without the payment port", async () => {
-      h = await Harness.create({ max_pending_per_user: 1 });
+    it("marks a sung song's ticket used later when the market was not there", async () => {
+      const ticket = await priced();
+      ticket.consumeDown = true;
+      await asAmy({ query: "one", priority: true });
+      const key = ticket.charges[0]?.key ?? "";
+      h.worker.finish("j1", "One", 1);
       await h.join();
-      await asAmy(h, { query: "one" });
-      const t = await asAmy(h, { query: "two", ticket: true });
-      expect(t.status === "failed" && t.error).toContain("現在不能用");
-      const d = await asAmy(h, { query: "three", dedication: "hi" });
-      expect(d.status === "failed" && d.error).toContain("現在不能用");
-      expect(h.singer.list.all()).toHaveLength(1);
+      await settle(6000 + 400 + 2000);
+      expect(h.singer.list.get(1)?.state).toBe("done");
+      // Not kept yet: still held, so nothing is given back for it meanwhile.
+      expect(ticket.consumed).toEqual([]);
+      expect(h.sup.services.require(SongTicketsKey).holds(key)).toBe(true);
+      ticket.consumeDown = false;
+      await settle(REFUND_RETRY_MS + 300);
+      expect(ticket.consumed).toEqual([key]);
+      expect(ticket.refunds).toEqual([]);
     });
 
-    it("keeps the paid fields across a restart", async () => {
-      const pay = await paid();
-      await asAmy(h, { query: "one" });
-      await asAmy(h, { query: "two", ticket: true, dedication: "hi" });
-      await h.singer.save();
-      expect(pay.charges).toHaveLength(2);
-      const snap = JSON.stringify(h.singer.list.snapshot());
-      expect(snap).toContain('"ticket_entry":"e1"');
-      expect(snap).toContain('"dedication_entry":"e2"');
+    it("holds a listed song's ticket again after a restart", async () => {
+      const store = new MemorySettingsStore();
+      h = await Harness.create({ max_pending_per_user: 10 }, false, { store });
+      const ticket = new FakePriority();
+      h.sup.services.provide("market", SongPriorityKey, ticket);
+      await asAmy({ query: "one", priority: true });
+      const key = ticket.charges[0]?.key ?? "";
+      await h.stop();
+      h = await Harness.create({ max_pending_per_user: 10 }, false, { store, worker: h.worker });
+      expect(h.sup.services.require(SongTicketsKey).holds(key)).toBe(true);
+    });
+
+    it("gives it back when the list has no room for the song", async () => {
+      const ticket = await priced({ max_pending_per_user: 2 });
+      for (const q of ["a", "b"]) await asAmy({ query: q });
+      const full = await asAmy({ query: "c", priority: true });
+      expect(full.status).toBe("failed");
+      expect(ticket.charges).toHaveLength(1);
+      expect(ticket.refunds).toEqual([ticket.charges[0]?.key]);
     });
   });
 

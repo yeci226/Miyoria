@@ -1,6 +1,6 @@
 # 暫緩與待決定清單
 
-統一記錄 owner 說「暫緩」「先記錄」的事、還沒做決定的問題和已知但還沒修的問題。新的暫緩項目加在這裡;詳細內容在各自的文件,這裡只放一行和連結。最後整理:2026-11-14。
+統一記錄 owner 說「暫緩」「先記錄」的事、還沒做決定的問題和已知但還沒修的問題。新的暫緩項目加在這裡;詳細內容在各自的文件,這裡只放一行和連結。最後整理:2026-11-18。
 
 ## 暫緩的功能
 
@@ -11,6 +11,9 @@
 | Minecraft 幾乎不能玩(任務迴圈、技能庫、狀態快照、食物動作、生存反射) | 調查做一半暫停,原因還沒對照程式碼確認 | [minecraft-findings.md](minecraft-findings.md) |
 | 自我修復、自我改進(失敗後換方法、改動要過評測才留下、在沙箱寫修正開 PR) | owner 說先不做;沙箱要先有 Docker | 本文件 §4 |
 | 大家線上唱 K(她當主持人的 KTV 房) | owner 2026-11-15 提的想法,還沒決定做不做。**做到的時候先問 owner 細節,不要照下面的草稿自己做**(owner 2026-11-16);以下只是當時的初步看法。不把舊的 `karaoke` 專案(SUMI,單人桌面練歌室,Tauri)整個搬進來;要拿的是三塊:參考音符的擷取(ROSVOT,加進唱歌 worker)、瀏覽器端的即時音高和評分、歌詞和音高導引的畫面。下載、分離伴奏、歌詞對時、點歌佇列、派對遊戲的框架這邊已經有。難的是延遲:伴奏要在唱的人自己的瀏覽器播、在本機評分,別人聽到的要是混好的一軌。最早放在階段 5(玩)或階段 7(活動契約),要先有階段 6 的公開站拆分。版權要先想清楚(把伴奏和歌詞送到每個人的瀏覽器) | 這一列 |
+| 直播上用魚幣付費的彈幕 | owner 2026-11-18:**正在做**,排在卡拉 OK 之後。他看過的其他直播互動(花魚幣指定表情或摸摸、帶你名字的螢幕特效、花魚幣投票)**現在不做**,以後要做先問 owner | 這一列 |
+| 聊天事件的 CG(聊天裡偶爾出現特殊事件時給一個提示,可以花魚幣解鎖那一刻的 CG;每張獨一無二,只有買的人看得到,用 AI 生圖) | owner 2026-11-17 提的想法,以後做:生圖的模型還沒決定。做的時候先問 owner 細節(什麼算特殊事件、誰決定、價格、要不要進圖鑑)。生圖一律經 ComfyUI 的 API;內容照她的界線(擦邊可以,不描寫真正的性行為);圖只給本人看,用產物庫的私有產物。和生圖卡池是同一批前置(模型、檢查管線) | 這一列;[v5-play.md](v5-play.md) §3 |
+| 服務的模型檔自動下載(`service.toml` 宣告需要哪些檔案、來源和檢查碼;`add` / `update` 補齊缺的,`doctor` 驗證) | **機制做好了(2026-11-18)**:`[[install.files]]`(來源、SHA-256、大小、授權,只從允許的主機、可續傳、先問一次)、`doctor` 驗證並記住雜湊、`doctor --print-hashes`、缺必要檔案 hostd 不啟動。**sing 的兩個分離模型已經自動下載(2026-11-18)**:MelBandRoformer.ckpt、becruily 的 .ckpt 和它的設定檔,固定 commit 和 SHA-256 對過實際檔案;becruily 的 repository 沒標授權,owner 決定自動下載。舊的手動位置 `workers/models/` 繼續有效(worker 先找新位置、退回舊位置;`update` 看到舊位置的檔案檢查碼相同就用硬連結接過來,`adopt_from`)。**還差**:turn 的 smart-turn / silero-vad 沒有 SHA-256 和固定 commit,先註解掉、照舊列成手動(turn 因此暫時不再自動下載),要在有這些檔案的電腦上 `miyoria doctor --print-hashes turn` 填進去、查 commit、取消註解;MelBandRoformer 的 `.yaml`(sha256 f63f38eb…,1721 bytes)還沒有確認過的固定來源,仍然手動(`workers/README.md` 說它是 MSST 的 `config_vocals_mel_band_roformer_kj.yaml`,要查到哪個 commit 的內容一模一樣才能填)。Seed-VC 原始碼、MediaMTX 執行檔、她的 RVC 模型和參考音維持手動 | [v5-hostd.md](v5-hostd.md) §9.1;`workers/turn/service.toml`、`workers/sing/service.toml` 的 `TODO(owner machine)` |
 | 每日貼文(她做完自己想做的事之後,在 owner 指定的一個頻道貼一則,一天幾則,內容只能是真的做過的事) | owner 2026-11-16 決定先擱置,不是壞掉。程式、`[modules.mind.daily_posts]` 和 `DailyPostsKey` 都刪了;舊設定檔裡還有這一段會被忽略並在啟動時警告。它是走提案板和舊主線送出去的,兩個都在 V5 刪了,所以從第一步起就沒貼過。要重做就接到新跑者的 initiative(`packages/brain/selfhost/src/initiative.ts`),當成多一種機會:由 `LifeBook`(她做過什麼的日誌,留著)餵,設定一個專屬頻道和每日上限 | [v4-plan.md](v4-plan.md) §8.4、§16 第 8 列(舊設計) |
 | 經濟系統:點歌券、她自己的錢包、她的訊息上附「餵她」按鈕 | 刻意不做 | [economy.md](economy.md) §9.1 |
 | 檔案附件的後續:音檔(轉文字)、掃描或中日韓字型的 PDF(要 OCR 或帶套件的沙箱映像)、舊版 .doc/.xls/.ppt、壓縮檔、一次傳很多檔、讓她把讀過的檔案記進筆記 | 第一版只做文字/程式碼/csv/json/pdf(純文字層、簡單字型)/docx/xlsx/pptx | [file-attachments.md](file-attachments.md) §6 |
@@ -64,6 +67,15 @@
   - 比的項目:每次查詢的花費、結果品質(中文和時事)、速度、被擋的機率、要不要多跑一個服務。
   - 還沒查任何資料,這一條只是記下要做。
 
+### 卡拉 OK 等模型的(2026-11-18)
+
+第 1 步(單人網頁唱 K)沒有下載任何新模型;下面這些要新模型才做得到,細節在 [karaoke.md](karaoke.md) 的「等模型、還沒做的」。**下載任何候選模型之前要先問 owner**(他還沒同意下載,硬碟也快滿)。
+
+- **歌詞對整首辨識**:歌詞要先對過聽到的,現在每行 `check: "unchecked"`;要整首辨識(WhisperX、或拿主唱跑現在的 Qwen3-ASR)再逐行比對,owner 看過實測再定模型。
+- **每個字的時間**:強制對齊(WhisperX 的 wav2vec2、MFA、SOFA 實測),日文漢字先轉讀音;現在 `chars: null`,不逐字上色。
+- **照字切音符**:字的時間出來之後,音符才能照字切;現在只用音高切。準的音符(GAME / ROSVOT)要 owner 同意下載後在朋友那台試。
+- **第二個偵測器**:瀏覽器背景的神經網路(SwiftF0 或 RMVPE 的 ONNX)接成另一個 `ScoreTrackSource`;先拿真人清唱比 McLeod 差多少,夠準就不做。
+
 ## 等 owner 決定
 
 - V5 還沒定的:十二月的生圖模型、ComfyUI 跑在哪一台、她的 LoRA 的授權;「玩」剩下的([v5-play.md](v5-play.md) §8:水族箱要先看示意圖;交易所的開戶門檻、持有上限、指數基金、放空);圖片訊息的背景暫時沿用遊戲美術那一張,之後要換;Minecraft 的志向清單 / 誰算主人 / AltoClef。其餘十一項已決定:[v5-architecture.md](v5-architecture.md) §16。
@@ -83,9 +95,13 @@
 - 唱歌混音的預設要不要去掉和聲(現在保留原和聲,放回伴奏;去掉的版本聽過了,沒決定)。
 - Core 要不要在有新 commit 時趁她閒置自己重啟,或授權我修完直接重啟(現在每次都問)。
 - `apps/panel/.tmp-build`(build 時的 Node 編譯快取)可以刪,沙箱不讓我移到資源回收筒。
+- owner 的 Temp 資料夾有大約八個不認得的、各約 150 MB 的資料夾,清硬碟那次沒有動(2026-11-18);要先看是什麼再決定刪不刪。`uv cache clean` 也沒能執行:有 `uv run` 的程序佔著快取。等那些程序結束後再清(uv 的快取可以放心清,下次會重新下載)。
 
 ## 已知但還沒修
 
+- **「修進度條」已修(2026-11-18,分支 `v5fix-bar`,待合併)**:主線是她現在在做的事(說話、思考、唱歌、用工具、玩遊戲),準備歌曲變成旁邊一個小的第二行(歌名 + 一條整體進度),只有她閒著時才佔主線;每個 worker 階段都有白話標籤(`SONG_PREPARE_STAGES` 加 `STAGE_LABELS` 加 worker 的來源掃描測試,三邊對不上會失敗);進度在 worker 和發布端都只進不退,影片階段有自己的份量;排隊 / 等待是不確定的微光;換歌立刻重來;顯示的歌固定一首(只有還在排隊的會讓給 worker 已經在跑的);沒標題時顯示「某某 點的歌」或「連結」;工具和遊戲有自己的活動(新事件 `agent.tool.running`,只帶工具名);過期狀態都處理了(Core 掉線連 notice 一起清、送失敗會重送、正在唱依歌長逾時、worker 連不上 20 秒後顯示「連不上」、再 60 秒收起)。還沒做:實況上看過一輪;`party_*` 遊戲(派對)沒有自己的活動,只有 `game.director.session` 的遊戲;面板「直播頁」(`apps/panel` 的 `LiveActivityKind`)還只認得舊的四種 `kind`,新的 `tool` / `game` 和第二行要等面板那邊接;點歌以外的背景工作(畫圖等)還沒有第二行。
+- **點歌從 2026-11-17 晚上壞到 2026-11-18 早上**:拿掉固定網址之後,點歌模組看不到叢集裡的 worker(修在 PR 69)。**還沒有人確認過一首真的歌經過朋友那台**:這要有人實際點一首、等到播出來。
+- **她讀不到連結裡的圖,也不能真的瀏覽網頁**(2026-11-17):現況和可以做的三件事在 [v5-play.md](v5-play.md) §10.3。
 - **主人規則沒寫進去**(2026-11-10 加了保險):回合裡有人明說「不要玩 <她有的遊戲>」而她這回合沒自己呼叫 `directive_add` 時,回合結束前用說這句話的人的身分替她寫一條 deny(`packages/brain/agent/src/prohibition.ts`、`turn.ts` 的 `keepRules`;規則服務照樣判斷這個人能不能立規則;「先 / 今天」是 6 小時)。只認得 Minecraft、osu 和幾個別名;事故評測 `mc-owner-rule-never-written` 要重新錄才會翻成通過。
 - **她把自己的盤算講出來**(2026-11-10 先用規則擋):送出前把「第三人稱講對方 + 對自己下指令」的那一行拿掉(`packages/brain/agent/src/leak.ts` 的 `isSelfTalk`,只拿掉那行、其他照送,有「你」的不算)。還沒做事故評測題、也還沒看真實頻率;規則抓不到的說法要再補。
 - **抓被回覆的訊息為什麼會失敗**:2026-11-08 14:19、14:22 兩次回覆都沒帶到被回覆的那句。已改成先用 Discord 隨回覆送來的引用內容、抓到再換成完整的,失敗會記 `could not fetch reply parents` 警告;原本為什麼抓不到(逾時、權限或 Discord 錯誤)還沒查,重啟後看警告。
@@ -98,8 +114,7 @@
 - Discord 指令拿不到互動 ID,錢包操作防不了網路重送造成的重複扣款(面板有防)。
 - 事故評測還有 9 題標成已知失敗,修好、重新錄製後才會翻成通過:`pnpm eval`。
 - **經濟 §13 還沒做或沒驗證的**(2026-11-08):
-  - Discord 不能指定立繪(選圖要看著圖挑,留在會員頁)。籤詩(`/me fortune`)、今天的卡(`/me card`)早就有;2026-11-12 `/me card` 加了 `action:再發一張`(可加 `foil` 做成閃卡)和 `action:重抽`,價錢和次數跟會員頁一樣。
-  - 已經聽得到的歌被中途跳過,點歌券和獻詞的錢不退;要不要改成「沒唱完就退」等 owner 決定。
+  - Discord 不能指定立繪(選圖要看著圖挑,留在會員頁)。籤詩(2026-11-17 起是 `/me checkin fortune:true`)、今天的卡(`/me card`)早就有;2026-11-12 `/me card` 加了 `action:再發一張`(可加 `foil` 做成閃卡)和 `action:重抽`,價錢和次數跟會員頁一樣。
   - 面板新區塊(閃卡、籤詩、目標、懸賞、轉帳、排行榜)只跑了測試,還沒在瀏覽器裡實際看過;overlay 留言卡看過了。
 - **檔案附件沒在真的 Docker 跑過**:這台的 Docker 沒開,所以她現在會婉拒所有非圖片檔(zip 本來就不支援);容器裡的寫入權限、刪檔、`python:3.12-slim` 的實際行為沒驗證。
 - **好感等級的「相處方式」還沒看過她實際寫什麼**:要等她下一次反省。面板的人物卡從 2026-11-12 起顯示等級(Lv.)和相處方式(寫的等級和現在不同時註明「Lv.N 時寫的」),可以在那裡看。
@@ -111,7 +126,8 @@
 - **becruily BS-RoFormer karaoke 的授權**:HF 上沒標(`becruily/bs-roformer-karaoke`);現在是唱歌預設的主唱模型,只在本機跑、沒散布。
 - **「伴唱也轉」(`backing=convert`)**沒實測:伴唱常是好幾個聲音疊在一起,RVC 的 RMVPE 只抓一條音高,可能轉得很怪。
 - **推理外洩的源頭沒查實**:2026-11-09 15:29 她在一回合(`reasoning` off、4.9 秒、23 則)把整段思考當回覆一行一行發出去。DB 的訊息和 `turn_outcomes` 看得出推理在 content 裡(provider 已把 `reasoning_content` 分開,不是它併進來的),但 LLM 呼叫的原始回應只存在 Core 記憶體,查不到;最可能是 opencode 上的 `deepseek-v4.1-flash` 收了 `thinking: disabled` 卻仍把思考寫在 content。已加的是送出前的防線(`packages/brain/agent/src/leak.ts`)和提示詞一行;要根治得在 Core 重啟後的面板呼叫檢視器看原始回應,再決定是換模型、改 `thinking_off`,還是讓 `chat_text` 開 `low`。防線擋不住不含「情緒標記 / 回覆要短 / 可以說:」這類字眼的純驗算自言自語(要兩行以上才算外洩)。
-- **連結預覽的圖沒用 Geist 字型**:resvg 吃不了 woff2,預覽圖用系統的中文字型(Windows 微軟正黑體),和面板上的卡字型略有差;要一致得把 Geist 的 ttf 放進 repo。另外 Discord 對同一個圖片網址的快取時間沒實測:網址帶 `?v=` 版本,卡變了網址就變,但已經貼出去的舊訊息可能還是舊圖。
+- **連結預覽的圖沒用 Geist 字型**:resvg 吃不了 woff2,預覽圖和羈絆環用專案帶的 Noto Sans TC(`packages/card-face/fonts`,2026-11-17 起不再用系統字型),拉丁字和面板上的卡(Geist)略有差;要一致得把 Geist 的 ttf 放進 repo。另外 Discord 對同一個圖片網址的快取時間沒實測:網址帶 `?v=` 版本,卡變了網址就變,但已經貼出去的舊訊息可能還是舊圖。
+- **卡的現場立繪還沒進產物庫**(2026-11-17):會員頁、卡片頁、`/me card` 和連結預覽現在拿的是同一張現場算的圖(2026-11-17 做了,`/api/public/card-art/<編號>.png`)。圖還沒進產物庫(`cards_card.artifact_id` 空著;快取在 `data/cards/portraits`,依規格雜湊、不會自己清)。「別台電腦替 Core 算卡圖」(`renderer` 能力)也還沒有。閃卡的彩虹遮罩原本用固定立繪的透明背景,現場算的圖不透明,遮罩變成整塊立繪、彩虹只剩立繪以外;要不要重做遮罩等 owner 看過實頁的樣稿。見 [cards.md](cards.md) §6.2。
 - **Core 從 `/` 起的非公開頁(`/me`、管理頁)只有靜態標題**,沒有各自的預覽;要的話在 `meta.ts` 的 `pageMeta` 加。
 - **叫了這回合沒提供的工具,她說「等我一下」就沒下文**:那個工具不在現在的範圍、也不是迴圈裡的工具時,工具沒有執行,她卻已經說了等一下的話(`稍等喔。` 這類),後面沒有任何結果或下一句(`packages/brain/agent/test/tool-scope.test.ts` 的 `refuses a call of a tool that is not offered now` 照現在的樣子寫)。V5 階段 3 做工具迴圈時一起修。
 
@@ -175,7 +191,7 @@
 ### V5 階段 2(hostd)做的過程中留下的(2026-11-16)
 
 - **voice node 還沒有跟著套件發行**:`miyoria add voice-node` 只能在有 repository 的資料夾裡做。`apps/voice-node/service.toml` 用 `pnpm start`(tsx 從原始碼跑),沒有 repository 的安裝(`npm i -g miyoria`)沒有東西可跑。要先有一個編譯好的進入點,再換掉描述檔的 `command`。
-- **`install.manual` 的路徑在套件安裝時會落在套件資料夾裡**:路徑(`workers/models/applio`、`workers/voices/<聲音>/ref.wav` 等)是從目錄根(repository 的根)算起。從 repository 跑時那就是使用者放東西的地方;套件安裝時目錄根是套件資料夾,不是使用者的資料夾。用套件安裝的人要把這些東西放在哪裡,還沒定。
+- **`install.manual` 的路徑在套件安裝時會落在套件資料夾裡**:路徑(`workers/models/applio`、`workers/voices/<聲音>/ref.wav` 等)是從目錄根(repository 的根)算起。從 repository 跑時那就是使用者放東西的地方;套件安裝時目錄根是套件資料夾,不是使用者的資料夾。用套件安裝的人要把這些東西放在哪裡,還沒定。(2026-11-18:改成自動下載的 `[[install.files]]` 不受影響,一律放在 `host.toml` 的狀態資料夾 `<state>/models`;手動項目也可以用 `{models}` / `{state}` 開頭的路徑,turn 的兩個已經這樣寫。私人的 `workers/models/applio`、`workers/voices/...` 等還是從目錄根算。)
 - **Docker 的檔案還是舊的,也沒有跑過**:`workers/docker-compose.yml`、`workers/asr/Dockerfile`、`workers/tts/Dockerfile` 和 `deploy/` 仍用 `requirements*.txt`(不是 uv 專案)、舊的埠(asr 在 8001),`deploy/docker-compose.yml` 沒有發佈 `7880`,所以 Docker 的 Core 收不到別台電腦的連線。這一輪沒有改它們,也沒有 build 過。
 - **Linux 只被 CI 的單元測試跑過**:hostd、安裝和更新在 Linux 上只被 CI 的單元測試跑過,沒有在 Linux 上用真的 worker 跑過;macOS 的登入時自動啟動(`host autostart`)還不支援。
 - **voice link 和 stage link 的用戶端沒有改用共用的重連工具**:`packages/hostd/src/link/reconnect.ts` 有退避、看門狗和「哪些關閉碼不該再撥」的規則,註解寫明 voice node 和 Stage 之後可以搬過去(列在 H12)。目前 `apps/voice-node/src/link.ts` 和 Stage 的連線(`packages/stage/src/link/`)還是各寫各的重連。

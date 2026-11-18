@@ -43,6 +43,8 @@ export function actuatorsFor(ctx: ModuleContext): ActuatorRegistry {
 export class ActionsModule implements Module {
   static readonly ID = "actions";
   readonly manifest = defineManifest(ActionsModule.ID, "Actions", {
+    icon: "shield-check",
+    category: "system",
     description: "The gate in front of everything she does: guardrails, consent, review, audit",
     optional: ["commands", "llm"],
     configSchema: ActionsConfigSchema,

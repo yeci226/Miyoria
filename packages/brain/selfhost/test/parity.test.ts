@@ -236,7 +236,7 @@ describe("the prompt's sections", () => {
       ],
       bucket: () => null,
     };
-    const party: PartyStatus = { running: () => ({ game: "quiz", title: "問答" }) };
+    const party: PartyStatus = { running: () => ({ game: "song", title: "猜歌" }) };
     const rig = await Rig.create({
       provide: (sup) => {
         sup.services.provide("app", PromptContributorsKey, contributors);
@@ -282,7 +282,7 @@ describe("the prompt's sections", () => {
     // Block 7: what she trusts, the party game, the style note.
     const last = texts.at(-1) ?? "";
     expect(last).toContain("外面在下雨");
-    expect(last).toContain("「問答」正在進行");
+    expect(last).toContain("「猜歌」正在進行");
     expect(last).toMatch(/<\/now>\n<style_note>\n- 回覆開頭先放這一刻的 <emo:名稱>/);
     expect(last.indexOf("<style_note>")).toBeLessThan(last.indexOf("<turn>"));
 

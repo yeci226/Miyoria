@@ -84,7 +84,19 @@ describe("parseConfig", () => {
 
   it("shows everything by default and derives the websocket from where the page was served", () => {
     const c = parseConfig("", loc);
-    expect([...c.show].sort()).toEqual(["activity", "emotion", "gifts", "queue", "screen", "status", "subtitles", "touches", "wave"]);
+    expect([...c.show].sort()).toEqual([
+      "activity",
+      "danmaku",
+      "emotion",
+      "gifts",
+      "karaoke",
+      "queue",
+      "screen",
+      "status",
+      "subtitles",
+      "touches",
+      "wave",
+    ]);
     expect(c.ws).toBe("ws://192.168.1.5:7884/overlay/ws");
     expect(c).toMatchObject({ cps: DEFAULT_CPS, scale: 1, debug: false, demo: false });
   });
@@ -92,8 +104,19 @@ describe("parseConfig", () => {
   it("show= selects sections, ignoring unknown names and falling back when none are valid", () => {
     expect([...parseConfig("?show=subtitles,queue", loc).show]).toEqual(["subtitles", "queue"]);
     expect([...parseConfig("?show=Subtitles,%20EMOTION,bogus", loc).show]).toEqual(["subtitles", "emotion"]);
-    expect(parseConfig("?show=bogus", loc).show.size).toBe(9);
-    expect(parseConfig("?show=", loc).show.size).toBe(9);
+    expect(parseConfig("?show=bogus", loc).show.size).toBe(11);
+    expect(parseConfig("?show=", loc).show.size).toBe(11);
+    expect([...parseConfig("?show=subtitles,danmaku", loc).show]).toEqual(["subtitles", "danmaku"]);
+  });
+
+  it("danmaku_band= takes top-bottom fractions of the frame, else the layout's band", () => {
+    expect(parseConfig("", loc).danmakuBand).toBeNull();
+    expect(parseConfig("?danmaku_band=0.04-0.30", loc).danmakuBand).toEqual({ top: 0.04, bottom: 0.3 });
+    expect(parseConfig("?danmaku_band=0-1", loc).danmakuBand).toEqual({ top: 0, bottom: 1 });
+    expect(parseConfig("?danmaku_band=.1 - .5", loc).danmakuBand).toEqual({ top: 0.1, bottom: 0.5 });
+    for (const bad of ["0.3-0.1", "0.2-0.21", "0.5-1.5", "-0.1-0.3", "abc", "0.1", "0.1-0.3-0.5", ""]) {
+      expect(parseConfig(`?danmaku_band=${encodeURIComponent(bad)}`, loc).danmakuBand, bad).toBeNull();
+    }
   });
 
   it("ws= overrides, but only ws:// or wss://", () => {
@@ -116,7 +139,23 @@ describe("parseConfig", () => {
   it("layer= and layout= pick a known value, else the overlay in the default layout", () => {
     expect(parseConfig("", loc)).toMatchObject({ layer: "overlay", layout: "default" });
     expect(parseConfig("?layer=Backdrop&layout=sing", loc)).toMatchObject({ layer: "backdrop", layout: "sing" });
-    expect(parseConfig("?layer=top&layout=karaoke", loc)).toMatchObject({ layer: "overlay", layout: "default" });
+    expect(parseConfig("?layer=top&layout=bogus", loc)).toMatchObject({ layer: "overlay", layout: "default" });
+    expect(parseConfig("?layer=backdrop&layout=Karaoke", loc)).toMatchObject({ layer: "backdrop", layout: "karaoke" });
+  });
+
+  it("karaoke: the section is on by default, readings off unless asked, and the demo is its own", () => {
+    expect(parseConfig("", loc)).toMatchObject({ karaokeDemo: false, karaokeRuby: "off" });
+    expect(parseConfig("?show=subtitles", loc).show.has("karaoke")).toBe(false);
+    expect(parseConfig("?karaoke_ruby=reading", loc).karaokeRuby).toBe("reading");
+    expect(parseConfig("?karaoke_ruby=ROMAN", loc).karaokeRuby).toBe("roman");
+    expect(parseConfig("?karaoke_ruby=kana", loc).karaokeRuby).toBe("off");
+    expect(parseConfig("?demo=karaoke", loc)).toMatchObject({ demo: true, karaokeDemo: true, karaokeRuby: "reading" });
+    expect(parseConfig("?karaoke_demo=1&karaoke_ruby=off", loc)).toMatchObject({
+      demo: true,
+      karaokeDemo: true,
+      karaokeRuby: "off",
+    });
+    expect(parseConfig("?demo=1", loc)).toMatchObject({ demo: true, karaokeDemo: false });
   });
 });
 

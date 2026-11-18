@@ -6,7 +6,7 @@
 // name, title, number and frame, the same words its page prints; an unknown, voided or unreadable
 // serial gets the site's own tags and nothing of anybody.
 
-import { FRAME_NAME } from "@miyoria/card-face";
+import { frameName } from "@miyoria/card-face";
 import type { IssuedCard } from "@miyoria/contracts/api";
 
 export const SITE_NAME = "Miyoria";
@@ -160,7 +160,7 @@ export function pageMeta(path: string, origin: string): PageMeta {
 export function cardWords(card: IssuedCard): { title: string; description: string; alt: string } {
   const title = card.relationship ?? "初次見面";
   const no = `No.${String(card.number).padStart(3, "0")}`;
-  const frame = card.frame ? FRAME_NAME[card.frame] : undefined;
+  const frame = frameName(card.frame);
   const bits = [`${card.name} 的 ${SITE_NAME} 會員卡`, `${title}`, no];
   if (card.foil) bits.push("閃卡");
   if (frame) bits.push(frame);

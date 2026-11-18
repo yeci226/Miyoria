@@ -2,6 +2,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { configuredModules } from "@miyoria/core/light";
+import { SqliteStore } from "@miyoria/store";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { exampleConfig } from "../src/assets.js";
 import * as config from "../src/commands/config.js";
@@ -115,7 +116,7 @@ describe("config", () => {
 
   it("unset_get_and_list", async () => {
     writeFileSync(join(dir, ".env"), "LLM_API_KEY=sk-1234567890abcd\nUNUSED=1\n");
-    config.get(path, "llm.providers.deepseek.api_key", undefined, false);
+    await config.get(path, "llm.providers.deepseek.api_key", undefined, false);
     expect(text()).toContain("••••abcd");
     expect(text()).toContain("LLM_API_KEY: .env");
     out.length = 0;
@@ -130,7 +131,48 @@ describe("config", () => {
     await expect(config.unset(path, "core.nope", undefined, false)).rejects.toThrow(
       /沒有 `core.nope`/,
     );
-    expect(() => config.get(path, "nope", undefined, false)).toThrow(/miyoria config list/);
+    await expect(config.get(path, "nope", undefined, false)).rejects.toThrow(/miyoria config list/);
+  });
+
+  it("says_where_the_panel_covers_a_key_lists_the_layer_and_bakes_it_into_the_file", async () => {
+    // The database the example config names, with a panel edit and a module switch in it.
+    writeFileSync(
+      path,
+      `[core]\ndatabase_url = "sqlite:data/test.db"\n\n[modules.market]\nauction_hours = 12\n`,
+    );
+    const store = await SqliteStore.open(join(dir, "data", "test.db"));
+    store.config.revisions.write(
+      { modules: { market: { auction_hours: 48, auction_step: 7 }, cards: { enabled: false } } },
+      "panel:discord:1",
+    );
+    await store.close();
+
+    await config.get(path, "modules.market.auction_hours", undefined, false);
+    expect(text()).toContain("48\n");
+    expect(text()).toContain("面板改過:48(第 1 版,panel:discord:1");
+    expect(text()).toContain("miyoria.toml:12");
+    out.length = 0;
+
+    await config.overrides(path);
+    expect(text()).toContain("modules.market.auction_hours = 48");
+    expect(text()).toContain("檔案:12");
+    expect(text()).toContain("modules.market.auction_step = 7");
+    expect(text()).not.toContain("enabled");
+    out.length = 0;
+
+    await config.set(path, ["modules.market.auction_hours", "24"], undefined, false);
+    expect(text()).toContain("檔案的值不會生效");
+    out.length = 0;
+
+    await config.bake(path, true, null);
+    expect(read("miyoria.toml")).toContain("auction_hours = 48\n");
+    expect(read("miyoria.toml")).toContain("auction_step = 7\n");
+    const after = await SqliteStore.open(join(dir, "data", "test.db"));
+    expect(after.config.revisions.current()?.doc).toEqual({
+      modules: { cards: { enabled: false } },
+    });
+    expect(after.config.revisions.current()?.created_by).toBe("cli");
+    await after.close();
   });
 
   it("editor_command_parses_arguments", () => {

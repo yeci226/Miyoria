@@ -1,65 +1,13 @@
-import { useCommissions, usePredictions, useRoom } from "@/app/queries";
+import { usePredictions, useRoom } from "@/app/queries";
 import { BarList } from "@/components/charts/charts";
 import { ModuleQuery } from "@/components/module-query";
 import { Meter, StatusBadge, type Tone } from "@/components/status";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fmtDateTime, fmtInt, fmtPct, fmtRelative } from "@/lib/format";
-import { COMMISSION_KIND_LABEL, PREDICTION_STATUS_LABEL } from "./labels";
+import { PREDICTION_STATUS_LABEL } from "./labels";
 
 const MODULE = "經濟(economy 模組)";
-
-/** Commissions people paid for that she has not handed in or declined. */
-export function CommissionsTab() {
-  const q = useCommissions();
-  const now = q.dataUpdatedAt > 0 ? q.dataUpdatedAt : Date.now();
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>等她做的委託</CardTitle>
-      </CardHeader>
-      <ModuleQuery query={q} module={MODULE} isEmpty={(d) => d.commissions.length === 0} empty="沒有等她做的委託">
-        {(d) => (
-          <Table aria-label="委託">
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="w-24">種類</TableHead>
-                <TableHead>要她做什麼</TableHead>
-                <TableHead className="w-24 text-right">價錢</TableHead>
-                <TableHead className="w-32">期限</TableHead>
-                <TableHead className="hidden w-32 md:table-cell">下單</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {d.commissions.map((c) => (
-                <TableRow key={c.id}>
-                  <TableCell>{COMMISSION_KIND_LABEL[c.kind] ?? c.label}</TableCell>
-                  <TableCell className="min-w-56 whitespace-normal break-words">
-                    {c.brief}
-                    <span className="ml-2 font-mono text-[11px] text-muted-foreground">{c.id}</span>
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {fmtInt(c.price)} <span className="text-muted-foreground">{d.currency}</span>
-                  </TableCell>
-                  <TableCell>
-                    <time dateTime={c.due_at} title={fmtDateTime(c.due_at)} className={Date.parse(c.due_at) < now ? "text-primary" : undefined}>
-                      {fmtRelative(c.due_at, now)}
-                    </time>
-                  </TableCell>
-                  <TableCell className="hidden text-muted-foreground md:table-cell">
-                    <time dateTime={c.created_at} title={fmtDateTime(c.created_at)}>
-                      {fmtRelative(c.created_at, now)}
-                    </time>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </ModuleQuery>
-    </Card>
-  );
-}
 
 const STATUS_TONE: Record<string, Tone> = { open: "brand", closed: "warning", resolved: "neutral", cancelled: "neutral" };
 

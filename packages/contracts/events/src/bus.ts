@@ -18,6 +18,7 @@ import { EVAL_EVENTS } from "./eval.js";
 import { EXTENSION_EVENTS } from "./extension.js";
 import { GATE_EVENTS } from "./gate.js";
 import { HEART_EVENTS } from "./heart.js";
+import { KARAOKE_BUS_EVENTS } from "./karaoke.js";
 import { LlmBudget, LlmCall } from "./llm.js";
 import { MEMORY_EVENTS } from "./memory.js";
 import { PLATFORM_EVENTS } from "./platform.js";
@@ -56,6 +57,7 @@ export const BUS_EVENTS: readonly AnyEventDefinition[] = [
   ...WORKSPACE_EVENTS,
   ...SING_EVENTS,
   ...PLAY_EVENTS,
+  ...KARAOKE_BUS_EVENTS,
   ...STAGE_EVENTS,
   ...CLUSTER_EVENTS,
   ...EVAL_EVENTS,

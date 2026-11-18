@@ -33,6 +33,8 @@ describe("payloads as they are published", () => {
         scenes: ["Main"],
         hotkeys: [],
         overlay_url: null,
+        obs_collection: "Miyoria",
+        obs_warning: null,
       }),
     ).toEqual([]);
     expect(problems("stage.status", { connected: false })).toEqual([]);

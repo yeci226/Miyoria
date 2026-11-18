@@ -10,15 +10,11 @@
 //   person, and coins never go by a cascade; a wipe deletes them as a data category.
 // - `economy_wallets`: what a person chose about their wallet (the card frame, leaving the
 //   sponsor board). It goes with the person.
-// - `economy_deals`: a bribe she accepted (docs/design/economy.md §12), by the account that made
-//   it (identity's `accounts.id`); the speaker's wallet pays.
 // - `economy_fortunes`: the fortune slips she wrote on the member page (§13), at most one per
 //   person per local day, by the session account it was written for.
-// - `economy_goals`, `economy_goal_pledges`: her crowdfunding goals and the coins people held
-//   for them (a pledge's id is its ledger row), by the account that pledged.
 // - `economy_bounties`: tasks she pays for out of her purse, and the account it was paid to.
-// - `economy_docs`: economy 2.0's documents (collection items, predictions and bets,
-//   commissions, her room), one table, `kind` says which; by the account that owns one.
+// - `economy_docs`: economy 2.0's documents (predictions and bets, her room, and the collectibles
+//   and commissions of before they were retired), one table, `kind` says which; by the account that owns one.
 //
 // Rows that name an account (identity's `accounts.id`) go with it; "a person's" are the rows of
 // the person's accounts. Coins are never kept outside the ledger: these tables say what the coins
@@ -28,7 +24,6 @@ import { accounts, micros, persons } from "@miyoria/store";
 import type { JsonObject } from "@miyoria/types";
 import { sql } from "drizzle-orm";
 import {
-  type AnySQLiteColumn,
   check,
   index,
   integer,
@@ -39,15 +34,6 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 const oneOf = (values: readonly string[]) => sql.raw(values.map((v) => `'${v}'`).join(","));
-
-export const DEAL_STATUSES = [
-  "open",
-  "owed",
-  "settled",
-  "broken",
-  "refunded",
-  "cancelled",
-] as const;
 
 export const economyLedger = sqliteTable(
   "economy_ledger",
@@ -60,7 +46,7 @@ export const economyLedger = sqliteTable(
     person_id: text().notNull(),
     /** Positive: earned or refunded; negative: spent. A whole number (`STRICT`). */
     delta: integer().notNull(),
-    /** `checkin`, `talked`, `voice`, `feed`, `letter`, `refund`, ... */
+    /** `checkin`, `talked`, `voice`, `feed`, `expression`, `refund`, ... */
     reason: text().notNull(),
     /** What it is about: the food and count, the frame, her reason, the refunded row. */
     ref: text(),
@@ -90,40 +76,6 @@ export const economyWallets = sqliteTable("economy_wallets", {
   off_board: integer({ mode: "boolean" }).notNull().default(false),
 });
 
-export const economyDeals = sqliteTable(
-  "economy_deals",
-  {
-    /** ULID. */
-    id: text().primaryKey(),
-    /** The speaker; their wallet pays. */
-    account_id: text()
-      .notNull()
-      .references(() => accounts.id, { onDelete: "cascade" }),
-    reward_item: text().notNull(),
-    reward_count: integer().notNull(),
-    /** What the reward costs in coins, fixed when the deal was made. */
-    reward_value: integer().notNull(),
-    task: text().notNull(),
-    prepaid: integer({ mode: "boolean" }).notNull().default(false),
-    /** The escrow's ledger row, for a prepaid deal. */
-    escrow_entry: text(),
-    status: text({ enum: DEAL_STATUSES }).notNull(),
-    created_at: micros().notNull(),
-    /** When she said she did the task. */
-    done_at: micros(),
-    /** Unpaid: when payment is due; prepaid: when the escrow is refunded if she has not done it. */
-    due_at: micros(),
-    closed_at: micros(),
-  },
-  (t) => [
-    index("economy_deals_account_idx").on(t.account_id, t.created_at),
-    index("economy_deals_status_idx").on(t.status, t.due_at),
-    check("economy_deals_status_check", sql`${t.status} IN (${oneOf(DEAL_STATUSES)})`),
-  ],
-);
-
-export const GOAL_STATUSES = ["open", "reached", "expired", "cancelled"] as const;
-export const GOAL_FULFILLERS = ["owner", "self"] as const;
 export const BOUNTY_STATUSES = ["open", "awarded", "cancelled", "expired"] as const;
 
 export const economyFortunes = sqliteTable(
@@ -146,50 +98,6 @@ export const economyFortunes = sqliteTable(
   },
   // One per account per day in the table; one per person (every account of theirs) in `put`.
   (t) => [uniqueIndex("economy_fortunes_day_idx").on(t.account_id, t.day)],
-);
-
-export const economyGoals = sqliteTable(
-  "economy_goals",
-  {
-    /** ULID. */
-    id: text().primaryKey(),
-    title: text().notNull(),
-    /** What she will do when the target is reached. */
-    promise: text().notNull(),
-    target: integer().notNull(),
-    status: text({ enum: GOAL_STATUSES }).notNull(),
-    created_at: micros().notNull(),
-    deadline: micros().notNull(),
-    closed_at: micros(),
-    /** A reached goal's promise kept: when, and by whom (the owner, or she said so herself). */
-    fulfilled_at: micros(),
-    fulfilled_by: text({ enum: GOAL_FULFILLERS }),
-  },
-  (t) => [
-    index("economy_goals_status_idx").on(t.status, t.created_at),
-    check("economy_goals_status_check", sql`${t.status} IN (${oneOf(GOAL_STATUSES)})`),
-    check(
-      "economy_goals_fulfilled_by_check",
-      sql`${t.fulfilled_by} IN (${oneOf(GOAL_FULFILLERS)})`,
-    ),
-  ],
-);
-
-export const economyGoalPledges = sqliteTable(
-  "economy_goal_pledges",
-  {
-    /** The escrow's ledger row. */
-    id: text().primaryKey(),
-    goal_id: text()
-      .notNull()
-      .references((): AnySQLiteColumn => economyGoals.id, { onDelete: "cascade" }),
-    account_id: text()
-      .notNull()
-      .references(() => accounts.id, { onDelete: "cascade" }),
-    amount: integer().notNull(),
-    created_at: micros().notNull(),
-  },
-  (t) => [index("economy_goal_pledges_goal_idx").on(t.goal_id, t.created_at)],
 );
 
 export const economyBounties = sqliteTable(
@@ -217,7 +125,7 @@ export const economyBounties = sqliteTable(
 export const economyDocs = sqliteTable(
   "economy_docs",
   {
-    /** `item`, `prediction`, `bet`, `commission`, `room`. */
+    /** `item`, `prediction`, `bet`, `commission` (retired, still kept), `room`. */
     kind: text().notNull(),
     /** ULID, or a deterministic id that makes a create idempotent. */
     id: text().notNull(),
@@ -240,9 +148,6 @@ export const economyDocs = sqliteTable(
 
 export type LedgerRow = typeof economyLedger.$inferSelect;
 export type WalletRow = typeof economyWallets.$inferSelect;
-export type DealRow = typeof economyDeals.$inferSelect;
 export type FortuneRow = typeof economyFortunes.$inferSelect;
-export type GoalRow = typeof economyGoals.$inferSelect;
-export type PledgeRow = typeof economyGoalPledges.$inferSelect;
 export type BountyRow = typeof economyBounties.$inferSelect;
 export type DocRow = typeof economyDocs.$inferSelect;

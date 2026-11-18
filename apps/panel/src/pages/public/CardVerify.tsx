@@ -2,13 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { BadgeCheck, CircleX, Download, Link2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { isApiError } from "@/api/http";
-import type { IssuedCard } from "@miyoria/contracts/api";
+import type { PublicCard } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { Logo } from "@/components/logo";
 import { SkeletonRows } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
 import { notify } from "@/lib/notify";
-import { FRAME_NAME, cardFileName, cardPng, verifyUrl } from "./card";
+import { cardFileName, cardPng, frameName, verifyUrl } from "./card";
 import { HoloCard } from "./HoloCard";
 
 /** `/card/<serial>`: the serial in the page path, or `null`. */
@@ -47,7 +47,7 @@ function save(blob: Blob, name: string) {
 }
 
 /** What the card says, beside it: whether it is real, and everything on it in words. */
-function Details({ card, svg }: { card: IssuedCard; svg: React.RefObject<SVGSVGElement | null> }) {
+function Details({ card, svg }: { card: PublicCard; svg: React.RefObject<SVGSVGElement | null> }) {
   const [busy, setBusy] = useState(false);
   const download = async () => {
     if (!svg.current) return;
@@ -68,7 +68,7 @@ function Details({ card, svg }: { card: IssuedCard; svg: React.RefObject<SVGSVGE
       notify.error(e);
     }
   };
-  const finish = [card.frame ? (FRAME_NAME[card.frame] ?? card.frame) : null, card.foil ? "閃卡" : null]
+  const finish = [card.frame ? (frameName(card.frame) ?? card.frame) : null, card.foil ? "閃卡" : null]
     .filter((s): s is string => s !== null)
     .join(" · ");
   const line = card.line ?? card.public_feeling;
@@ -104,6 +104,8 @@ function Details({ card, svg }: { card: IssuedCard; svg: React.RefObject<SVGSVGE
         <Fact label="羈絆">{card.affinity ?? "—"}</Fact>
         <Fact label="信任">{card.trust ?? "—"}</Fact>
         <Fact label="熟悉">{card.familiarity ?? "—"}</Fact>
+        {/* Only the titles the holder chose to show; a private one never reaches this page. */}
+        {(card.titles ?? []).length > 0 && <Fact label="稱號">{card.titles.map((t) => `「${t}」`).join("")}</Fact>}
         {card.stamp && <Fact label="她蓋的章">{card.stamp}</Fact>}
         {(card.fields ?? []).slice(0, 3).map((f) => (
           <Fact key={f.label} label={f.label}>

@@ -119,10 +119,7 @@ describe("bookkeeping", () => {
         // The economy plugin's tables (v5-data §8 step 9a).
         "coin_ledger",
         "coin_wallets",
-        "deals",
         "fortunes",
-        "goals",
-        "goal_pledges",
         "bounties",
         "economy_docs",
         // The memory plugin's tables (v5-data §8 step 9b).

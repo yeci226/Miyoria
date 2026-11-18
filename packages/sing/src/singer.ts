@@ -20,6 +20,17 @@
 //   `Events.SpeechPause`): the voice module neither speaks nor transcribes, the overlay says so.
 // * The song being prepared, its worker stage and progress are published as
 //   `Events.SingPrepare` whenever they change (the overlay's activity line).
+// * A request with a song priority ticket (`priority`, the person's own command or member page
+//   only) pays it first through `SongPriorityKey` and stands ahead of the songs without one. A
+//   song that is not sung (it could not be listed or made, it failed, it was cancelled) gives the
+//   ticket back; a refund that did not go (the wallet was not there) keeps the ticket's key on the
+//   entry and is tried again every `REFUND_RETRY_MS` (the ledger gives a charge back once, so a
+//   retry never pays twice). Once the song starts being sung (or ends counted as sung) the ticket
+//   is used (`SongPriority.consume`), and never given back. The market keeps every charge in its
+//   own table and gives back one that is neither used nor held by the set list (`holdsTicket`,
+//   `SongTicketsKey`) after a grace period, so a charge lost half way (before the set list was
+//   saved, a refund that failed before the song was listed, a song trimmed from the history with
+//   its refund due) still goes back. Her prompt says nothing of it: the order is the whole effect.
 
 import { randomUUID } from "node:crypto";
 import { CapabilityError } from "@miyoria/gate/actions";
@@ -43,6 +54,7 @@ import {
   type SetlistLine,
   type SongCue,
   type SongPrepare,
+  SongPriorityKey,
   type SpeechPause,
   type SteerableTask,
   type SteerOutcome,
@@ -65,11 +77,9 @@ import {
   type WorkerJob,
 } from "./client.js";
 import type { SingConfig } from "./config.js";
-import { dedicationProblem, type SongPayments, SongPaymentsKey } from "./payments.js";
 import { singSong, sleep } from "./player.js";
 import {
   type BackingMode,
-  dedicationNote,
   type NewSong,
   SetList,
   type SongEntry,
@@ -90,6 +100,8 @@ const ANNOUNCEMENTS_REMEMBERED = 32;
 
 /** An announcement no longer makes sense after this. */
 const ANNOUNCE_TTL_MS = 2 * 60_000;
+/** How often a song priority ticket whose refund did not go is tried again. */
+export const REFUND_RETRY_MS = 30_000;
 
 /** Initiative / mind suggestion reasons. */
 export const REASONS = {
@@ -101,18 +113,16 @@ export const REASONS = {
 } as const;
 
 export class SingError extends CapabilityError {
-  override readonly name = "SingError";
+  override readonly name: string = "SingError";
+}
+
+/** A song priority ticket could not be taken: nothing was charged, the song was not listed. */
+export class SongPriorityError extends SingError {
+  override readonly name = "SongPriorityError";
 }
 
 /** A request: what to look for, and who asked. */
-export interface SongRequest
-  extends Omit<NewSong, "query" | "ticket_entry" | "dedication" | "dedication_entry"> {
-  query: string;
-  /** Buy a ticket if (and only if) the requester is at the per-person limit. */
-  ticket?: boolean;
-  /** A paid dedication (screened and charged here); needs a requester. */
-  dedication?: string | null;
-}
+export type SongRequest = NewSong;
 
 const LINK = /https?:\/\/[^\s<>"'「」]+/i;
 /** A link pasted without its scheme (`www.bilibili.com/video/BV…/`, `youtu.be/…`): one of the usual hosts. */
@@ -200,6 +210,10 @@ export class Singer implements VoiceFloor, SpeechPause {
   #saved: string | null = null;
   /** Restored songs that never reached the worker. */
   readonly #orphans = new Set<SongNo>();
+  /** When refunds that did not go were last tried again (epoch ms). */
+  #refundsTried = 0;
+  /** The stored set list was read back (or there was none): `holdsTicket` can tell. */
+  #restored = false;
   /** Songs whose job has (or is about to have) the GPU, by number. */
   readonly #gpu = new Set<SongNo>();
   #preparing: Preparing | null = null;
@@ -211,6 +225,10 @@ export class Singer implements VoiceFloor, SpeechPause {
   readonly #jobs = new Map<SongNo, { title: string; exclusive: string | null }>();
   /** JSON of the `Events.SingPrepare` payload last published. */
   #prepareSent = JSON.stringify(NOT_PREPARING);
+  /** The song the overlay is shown, and the furthest its progress got: it stays until it ends. */
+  #shown: { no: SongNo; progress: number } | null = null;
+  /** Since when no poll of the worker got an answer (epoch ms), or `null`. */
+  #lostSince: number | null = null;
 
   /**
    * `videoDir`: the worker's cache dir (absolute) when song videos are shown on stream
@@ -316,25 +334,19 @@ export class Singer implements VoiceFloor, SpeechPause {
         `already preparing ${this.cfg.max_practice} songs for yourself; sing one of them first`,
       );
     }
-    const { ticket, dedication, ...plain } = req;
-    const dedicationText = dedication?.trim() || null;
-    if (dedicationText !== null) {
-      const problem = dedicationProblem(dedicationText);
-      if (problem !== null) throw new SingError(problem);
-    }
-    const paid = await this.#charge(req, query, ticket === true, dedicationText);
+    // A ticket is paid before the song is listed, and given back if it cannot be.
+    const ticket = req.priority === true ? await this.#chargePriority(req, query) : null;
     let entry: SongEntry;
     try {
-      entry = this.list.add({ ...plain, query, ...paid.fields }, toTimestamp(this.ctx.clock.now()));
+      entry = this.list.add(
+        { ...req, query, priority: ticket !== null, priority_key: ticket },
+        toTimestamp(this.ctx.clock.now()),
+      );
     } catch (error) {
-      await this.#refundAll(req.requester, paid.entries);
-      const hint =
-        req.requester !== null && this.list.atUserLimit(req.requester) && ticket !== true
-          ? this.#payments() !== null
-            ? "。想多點一首可以用指令 /queue song request 加上點歌加點券(ticket)"
-            : ""
-          : "";
-      throw new SingError(`${errorMessage(error)}${hint}`, { cause: error });
+      if (ticket !== null && req.requester !== null) {
+        await this.#refundPriority(req.requester, ticket);
+      }
+      throw new SingError(errorMessage(error), { cause: error });
     }
     try {
       const job = await this.worker.submit(this.#query(query, req.key, entry.backing), signal);
@@ -351,76 +363,85 @@ export class Singer implements VoiceFloor, SpeechPause {
     return entry;
   }
 
-  #payments(): SongPayments | null {
-    return this.ctx.services.get(SongPaymentsKey) ?? null;
+  /**
+   * Takes one song priority ticket from the requester (`SongPriorityKey`, the market's): the key
+   * it is charged under. Throws a `SongPriorityError` with the reason when it cannot.
+   */
+  async #chargePriority(req: SongRequest, query: string): Promise<string> {
+    const port = this.ctx.services.get(SongPriorityKey);
+    if (req.requester === null) throw new SongPriorityError("點歌優先券要有點歌的人");
+    if (!port || port.terms() === null) throw new SongPriorityError("現在沒有賣點歌優先券");
+    const key = `song:${randomUUID()}`;
+    const charged = await port.charge(req.requester, key, `song:${safeName(query, 60)}`);
+    if (!charged.ok) throw new SongPriorityError(charged.message);
+    return key;
+  }
+
+  async #refundPriority(requester: AccountRef, key: string): Promise<boolean> {
+    try {
+      const port = this.ctx.services.get(SongPriorityKey);
+      if (!port) {
+        log.warn({ key }, "no song priority ticket to refund through");
+        return false;
+      }
+      await port.refund(requester, key);
+      return true;
+    } catch (error) {
+      log.warn({ key, err: errorMessage(error) }, "cannot refund a song priority ticket");
+      return false;
+    }
   }
 
   /**
-   * Charges what a request asked to pay for: a ticket (only when the requester is at the limit)
-   * and a dedication. Throws a `SingError` with the reason when it cannot; a charge made is
-   * refunded when a later one fails.
+   * The songs that ended without being sung and still hold a ticket (a refund that did not go,
+   * or a song restored as failed) give it back now; at most every `REFUND_RETRY_MS`.
    */
-  async #charge(
-    req: SongRequest,
-    query: string,
-    wantsTicket: boolean,
-    dedication: string | null,
-  ): Promise<{
-    fields: { ticket_entry?: string; dedication?: string; dedication_entry?: string };
-    entries: string[];
-  }> {
-    const fields: { ticket_entry?: string; dedication?: string; dedication_entry?: string } = {};
-    const entries: string[] = [];
-    const who = req.requester;
-    const needsTicket = wantsTicket && who !== null && this.list.atUserLimit(who);
-    if (!needsTicket && dedication === null) return { fields, entries };
-    const payments = this.#payments();
-    if (who === null || payments === null) {
-      throw new SingError(
-        needsTicket ? "點歌加點券現在不能用" : "獻詞現在不能用(要有帳號和經濟系統)",
-      );
+  async #retryRefunds(): Promise<void> {
+    const now = this.ctx.clock.now();
+    if (now - this.#refundsTried < REFUND_RETRY_MS) return;
+    this.#refundsTried = now;
+    for (const e of this.list.all()) {
+      if ((e.state === "failed" || e.state === "cancelled") && e.priority_key) {
+        await this.#giveBackPriority(e);
+      }
+      if (e.state === "done" && e.priority_key) this.#consumePriority(e);
     }
-    const nonce = `${this.ctx.clock.now()}:${randomUUID()}`;
-    const ref = `song:${safeName(query, 60)}`;
+  }
+
+  /** A song that ended without being sung (failed, cancelled) gives its ticket back, once. */
+  async #giveBackPriority(entry: SongEntry): Promise<void> {
+    const key = entry.priority_key ?? null;
+    if (key === null || entry.requester === null) return;
+    if (await this.#refundPriority(entry.requester, key)) entry.priority_key = null;
+  }
+
+  /**
+   * The song started being sung (or counts as sung): its ticket is used, and the market keeps
+   * that (`SongPriority.consume`). The key goes once it is kept; until then the retry round tries
+   * again, and the market's pass sees the song held (`holdsTicket`), so it gives nothing back.
+   */
+  #consumePriority(entry: SongEntry): void {
+    const key = entry.priority_key ?? null;
+    if (key === null) return;
+    const port = this.ctx.services.get(SongPriorityKey);
+    if (!port) return;
     try {
-      if (needsTicket) {
-        const r = await payments.charge(who, "song_ticket", `${nonce}:ticket`, ref);
-        if ("refused" in r) throw new SingError(r.refused);
-        fields.ticket_entry = r.entryId;
-        entries.push(r.entryId);
-      }
-      if (dedication !== null) {
-        const r = await payments.charge(who, "dedication", `${nonce}:ded`, ref, dedication);
-        if ("refused" in r) throw new SingError(r.refused);
-        fields.dedication = dedication;
-        fields.dedication_entry = r.entryId;
-        entries.push(r.entryId);
-      }
+      port.consume(key);
+      entry.priority_key = null;
     } catch (error) {
-      await this.#refundAll(who, entries);
-      throw error;
-    }
-    return { fields, entries };
-  }
-
-  async #refundAll(who: AccountRef | null, entries: string[]): Promise<void> {
-    const payments = this.#payments();
-    if (who === null || payments === null) return;
-    for (const id of entries) {
-      try {
-        await payments.refund(who, id);
-      } catch (error) {
-        log.warn({ err: errorMessage(error) }, "could not refund a song charge");
-      }
+      log.warn({ key, err: errorMessage(error) }, "cannot mark a song priority ticket used");
     }
   }
 
-  /** The song was not sung to its end: gives back the ticket and the dedication, once each. */
-  #release(entry: SongEntry): void {
-    const ids = [entry.ticket_entry, entry.dedication_entry].filter((x): x is string => !!x);
-    entry.ticket_entry = null;
-    entry.dedication_entry = null;
-    if (ids.length > 0) void this.#refundAll(entry.requester, ids);
+  /**
+   * Whether the set list holds the song a ticket was charged under (`SongTicketsKey`, for the
+   * market's pass): listed, and not ended without being sung. `null` until the stored set list
+   * was read back at start, when a song of before the stop would look gone.
+   */
+  holdsTicket(key: string): boolean | null {
+    if (!this.#restored) return null;
+    const entry = this.list.all().find((e) => e.priority_key === key);
+    return entry !== undefined && entry.state !== "failed" && entry.state !== "cancelled";
   }
 
   #query(query: string, key: number, backing: BackingMode = "keep"): SongQuery {
@@ -566,8 +587,8 @@ export class Singer implements VoiceFloor, SpeechPause {
     if (entry.state !== "preparing" && entry.state !== "ready") return;
     log.info({ no: entry.no, why }, "song failed");
     this.list.finish(entry, "failed", why);
-    this.#release(entry);
     this.#finishQueueItem(entry, false);
+    void this.#giveBackPriority(entry);
     const where = entry.context ?? this.voiceContext();
     if (tell && where !== null && entry.requester !== null) {
       this.#tell(
@@ -642,7 +663,7 @@ export class Singer implements VoiceFloor, SpeechPause {
       entry.practice === true
         ? `你自己練的${songLabel(entry)}準備好了(#${entry.no}),還沒唱給誰聽。` +
           `有人在語音、你想唱的時候用 sing.play(song = ${entry.no}),opening 寫一句開場;不用急,之後也可以跟大家提一下新歌。${voice}${busy}`
-        : `${entry.requester_name} 點的${songLabel(entry)}已經準備好了(#${entry.no}${dedicationNote(entry)})。` +
+        : `${entry.requester_name} 點的${songLabel(entry)}已經準備好了(#${entry.no})。` +
           `想唱就用 sing.play(song = ${entry.no}),opening 寫一句開場;現在不想唱也可以晚點再唱。${voice}${busy}`;
     if (where === null || !this.#sheDecides()) {
       this.#autoStart();
@@ -666,7 +687,7 @@ export class Singer implements VoiceFloor, SpeechPause {
     const announcement = this.#tell(
       where,
       REASONS.start,
-      `你要開始唱${songLabel(next)}了(${next.requester_name} 點的${dedicationNote(next)})。用一句話開場,說完就開始。`,
+      `你要開始唱${songLabel(next)}了(${next.requester_name} 點的)。用一句話開場,說完就開始。`,
       next,
     );
     this.#begin(next, where.scope, null, this.cfg.opening_window_ms, announcement);
@@ -765,7 +786,7 @@ export class Singer implements VoiceFloor, SpeechPause {
   /**
    * The worker's cache cleaned the song out while it sat ready here (`workers/sing/cache.py`):
    * the same request again makes it again, and it is ready (and offered or started) as before.
-   * Nothing was audible yet, so it keeps its place and its charges. `false`: the worker refused.
+   * Nothing was audible yet, so it keeps its place. `false`: the worker refused.
    */
   async #prepareAgain(entry: SongEntry): Promise<boolean> {
     let job: WorkerJob;
@@ -806,13 +827,16 @@ export class Singer implements VoiceFloor, SpeechPause {
     if (!song) throw new SingError("the song has no audio");
     log.info({ no: entry.no, song: song.id, guild }, "singing");
     if (this.#playing?.entry === entry) this.#playing.audible = true;
-    this.#showDedication(entry);
     return singSong(
       {
         worker: this.worker,
         voice,
         clock: this.ctx.clock,
-        cue: (cue) => this.#cue(cue),
+        cue: (cue) => {
+          // Her voice is out: the song is being sung, and its ticket is used.
+          if (cue.state === "started") this.#consumePriority(entry);
+          this.#cue(cue);
+        },
         leadMs: this.cfg.lead_ms,
         fadeMs: this.cfg.fade_ms,
         lyrics: this.cfg.lyrics,
@@ -825,27 +849,15 @@ export class Singer implements VoiceFloor, SpeechPause {
     );
   }
 
-  /** The dedication goes up on the overlay as the song starts. */
-  #showDedication(entry: SongEntry): void {
-    if (!entry.dedication || !entry.dedication_entry) return;
-    const title = entry.song?.title?.trim() || entry.query;
-    this.ctx.publish(Events.EconomyScreen, {
-      kind: "dedication",
-      name: safeName(entry.requester_name, 32),
-      text: entry.dedication,
-      song: safeName(title, 60),
-    });
-  }
-
   #ended(entry: SongEntry, guild: string, outcome: PlaybackState | "error"): void {
-    const wasAudible = this.#playing?.entry === entry && this.#playing.audible;
     if (this.#playing?.entry === entry) this.#playing = null;
     if (entry.song) this.#cue({ state: "ended", song: entry.song.id, outcome });
     const finished = outcome === "finished";
-    this.list.finish(entry, finished || outcome === "interrupted" ? "done" : "failed", entry.error);
-    // A song that was sung (to the end, or skipped once it was audible) keeps its charges.
-    if (!wasAudible || !(finished || outcome === "interrupted")) this.#release(entry);
+    const sung = finished || outcome === "interrupted";
+    this.list.finish(entry, sung ? "done" : "failed", entry.error);
     this.#finishQueueItem(entry, finished);
+    if (sung) this.#consumePriority(entry);
+    else void this.#giveBackPriority(entry);
     log.info({ no: entry.no, outcome }, "song ended");
     const where = this.voiceContext(guild);
     if (finished && where !== null && !this.#closed) {
@@ -915,8 +927,8 @@ export class Singer implements VoiceFloor, SpeechPause {
           await this.worker.cancel(e.job).catch(() => undefined);
         }
         this.list.finish(e, "cancelled");
-        this.#release(e);
         this.#finishQueueItem(e, false);
+        await this.#giveBackPriority(e);
         dropped += 1;
       }
     }
@@ -1163,6 +1175,7 @@ export class Singer implements VoiceFloor, SpeechPause {
    * old jobs) is asked for again: a song it finished is in its cache and comes back at once.
    */
   async poll(signal?: AbortSignal): Promise<void> {
+    await this.#retryRefunds();
     if (this.list.preparing().length > 0) {
       // Without this the worker assumes people are listening, which is the careful answer.
       const context = this.#gpuContext();
@@ -1177,6 +1190,8 @@ export class Singer implements VoiceFloor, SpeechPause {
         .context(context, signal)
         .catch((e: unknown) => log.debug({ err: errorMessage(e) }, "could not update the worker"));
     }
+    let answered = 0;
+    let lost = 0;
     for (const entry of this.list.preparing()) {
       try {
         if (entry.job === null) {
@@ -1185,6 +1200,7 @@ export class Singer implements VoiceFloor, SpeechPause {
           continue;
         }
         this.#apply(entry, await this.worker.job(entry.job, signal));
+        answered += 1;
       } catch (error) {
         if (signal?.aborted) return;
         if (error instanceof SingWorkerError && error.status === 404) {
@@ -1194,9 +1210,12 @@ export class Singer implements VoiceFloor, SpeechPause {
           );
           continue;
         }
+        lost += 1;
         log.debug({ no: entry.no, err: errorMessage(error) }, "could not check a song job");
       }
     }
+    if (answered > 0) this.#lostSince = null;
+    else if (lost > 0) this.#lostSince ??= this.ctx.clock.now();
     this.#publishPrepare();
   }
 
@@ -1219,28 +1238,53 @@ export class Singer implements VoiceFloor, SpeechPause {
     };
   }
 
-  /** Publishes the song being prepared (`Events.SingPrepare`) when it changed. */
+  /**
+   * Publishes the song being prepared (`Events.SingPrepare`) when it changed. One song at a time:
+   * the one shown stays until it is no longer preparing (it is not swapped for another that got
+   * further, which made the overlay flip between two jobs); the next is the one furthest along,
+   * the lowest number on a tie. Its progress never goes back, and a worker that has not answered
+   * for `LOST_AFTER_MS` is reported as `unreachable` instead of freezing the bar.
+   */
   #publishPrepare(): void {
     const preparing = this.#closed ? [] : this.list.preparing();
     for (const no of this.#jobs.keys()) {
       if (!preparing.some((e) => e.no === no)) this.#jobs.delete(no);
     }
-    // The one furthest along: a job the worker runs before the queued ones.
-    const rank = (e: SongEntry) => (e.stage !== "queued" && e.stage !== "" ? 1 : 0) + e.progress;
+    if (preparing.length === 0) this.#lostSince = null;
     let best: SongEntry | null = null;
-    for (const e of preparing) if (best === null || rank(e) > rank(best)) best = e;
+    const idle = (e: SongEntry) => e.stage === "queued" || e.stage === "";
+    const stuck =
+      this.#shown === null ? undefined : preparing.find((e) => e.no === this.#shown?.no);
+    // Only a song still waiting its turn gives way, and only to one the worker already runs.
+    if (stuck !== undefined && !(idle(stuck) && preparing.some((e) => !idle(e)))) best = stuck;
+    else {
+      // A job the worker already runs goes before the queued ones.
+      const rank = (e: SongEntry) => (idle(e) ? 0 : 1) + e.progress;
+      for (const e of preparing) {
+        if (best === null || rank(e) > rank(best) || (rank(e) === rank(best) && e.no < best.no)) {
+          best = e;
+        }
+      }
+      this.#shown = best === null ? null : { no: best.no, progress: 0 };
+    }
     let payload: SongPrepare = NOT_PREPARING;
-    if (best !== null) {
+    if (best !== null && this.#shown !== null) {
       const info = this.#jobs.get(best.no);
       const query = best.query.trim();
       // A link or a library path is no title; the worker's comes once it found the song.
       const asked = LINK.test(query) || query.toLowerCase().startsWith("library:") ? "" : query;
+      const progress = Math.min(Math.max(best.progress, this.#shown.progress, 0), 1);
+      this.#shown.progress = progress;
+      const lost =
+        this.#lostSince !== null && this.ctx.clock.now() - this.#lostSince >= LOST_AFTER_MS;
+      const by = best.practice === true ? "" : best.requester_name.trim();
       payload = {
         no: best.no,
         title: info?.title || asked,
-        stage: best.stage,
-        progress: Math.round(Math.min(Math.max(best.progress, 0), 1) * 1000) / 1000,
+        stage: lost ? "unreachable" : best.stage,
+        progress: Math.round(progress * 1000) / 1000,
         exclusive: info?.exclusive ?? null,
+        ...(by === "" ? {} : { by }),
       };
     }
     const json = JSON.stringify(payload);
@@ -1279,14 +1323,20 @@ export class Singer implements VoiceFloor, SpeechPause {
    * their worker jobs on the next poll; ready ones are offered or sung as usual.
    */
   async restore(): Promise<void> {
+    try {
+      await this.#restore();
+    } finally {
+      this.#restored = true;
+    }
+  }
+
+  async #restore(): Promise<void> {
     const store = this.ctx.services.get(SettingsStoreKey);
     if (!store) return;
     try {
       const raw = await store.get(STORE_PROFILE, SETLIST_KEY);
       if (raw === null) return;
       const n = this.list.restore(raw);
-      // A song cut off with nothing to sing is over: its charges go back.
-      for (const e of this.list.all()) if (e.state === "failed") this.#release(e);
       this.#saved = JSON.stringify(this.list.snapshot());
       for (const e of this.list.preparing()) if (e.job === null) this.#orphans.add(e.no);
       if (n > 0) {
@@ -1365,6 +1415,9 @@ export class Singer implements VoiceFloor, SpeechPause {
     this.ctx.publish(Events.SingCue, cue);
   }
 }
+
+/** A worker that has not answered a poll for this long is shown as out of reach (ms). */
+const LOST_AFTER_MS = 20_000;
 
 const NOT_PREPARING: SongPrepare = { no: null, title: "", stage: "", progress: 0, exclusive: null };
 

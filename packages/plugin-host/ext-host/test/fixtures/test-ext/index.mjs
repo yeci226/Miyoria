@@ -129,6 +129,7 @@ async function onRequest(method, params) {
           ],
           prompts: ["facts"],
           subscriptions: config.subscriptions ?? ["*"],
+          status: true,
           ...(config.executor
             ? {
                 executor: {
@@ -220,6 +221,8 @@ async function onRequest(method, params) {
           throw new Error(`unknown tool ${name}`);
       }
     }
+    case "status":
+      return { facts: [{ label: "回合", value: 3, unit: "次" }] };
     case "commands.invoke":
       return {
         text: `fixture: ${params.args.text} by ${params.invoker_display_name}`,

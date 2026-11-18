@@ -107,6 +107,8 @@ describe("protocol", () => {
       scenes: ["Talk", "Game"],
       hotkeys: ["Wave"],
       overlay_url: "http://127.0.0.1:7884/overlay/",
+      obs_collection: "Miyoria",
+      obs_warning: null,
       id: 7,
     };
     expect(JSON.parse(encodeMessage(msg))).toStrictEqual({
@@ -118,6 +120,8 @@ describe("protocol", () => {
       scenes: ["Talk", "Game"],
       hotkeys: ["Wave"],
       overlay_url: "http://127.0.0.1:7884/overlay/",
+      obs_collection: "Miyoria",
+      obs_warning: null,
       id: 7,
     });
     expect(parseStageMessage(JSON.parse(encodeMessage(msg)))).toStrictEqual(msg);
@@ -131,6 +135,8 @@ describe("protocol", () => {
       scenes: [],
       hotkeys: [],
       overlay_url: null,
+      obs_collection: null,
+      obs_warning: null,
     });
   });
 
@@ -234,6 +240,8 @@ describe("config", () => {
       host: "127.0.0.1",
       port: 4455,
       password: "",
+      collection: null,
+      profile: null,
       subtitle_source: null,
       subtitle_clear_ms: 6_000,
       poll_ms: 2_000,

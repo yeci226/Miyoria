@@ -9,7 +9,9 @@
 // * replacing a value keeps the key text, the spacing and the trailing comment;
 // * a new key goes after the last entry of its table;
 // * a new table goes right after the last table sharing its longest existing prefix
-//   (`[modules.api.discord_oauth]` after `[modules.api]`), or at the end of the file;
+//   (`[modules.api.discord_oauth]` after `[modules.api]`), or at the end of the file; after that
+//   table's trailing comments, never between it and them (a comment block that sits right above
+//   the next table, after a blank line, stays with that table);
 // * keys inside inline tables are edited by rewriting that inline table.
 
 import { parse as parseToml, TomlDate } from "smol-toml";
@@ -455,6 +457,45 @@ export class TomlDocument {
     return end;
   }
 
+  /**
+   * Where a table goes that follows the header `at`: after its last entry and the comment lines
+   * that trail it (commented-out entries, notes), before the blank lines that precede the next
+   * table. A comment block that touches the next table and is set off from the entries by a blank
+   * line belongs to that table, so it stays below the new one.
+   */
+  #afterSection(at: number): number {
+    const { headers } = this.#scan;
+    const start = this.#contentEnd(at);
+    const next = headers[at + 1];
+    const text = this.#text;
+    let limit = next === undefined ? text.length : next.lineStart;
+    // The lines of the gap, each with its offset; the gap ends at a line start (or the file's end).
+    const lines: Array<{ from: number; text: string }> = [];
+    for (let from = start; from < limit; ) {
+      const nl = text.indexOf("\n", from);
+      const to = nl === -1 || nl >= limit ? limit : nl + 1;
+      lines.push({ from, text: text.slice(from, to) });
+      from = to;
+    }
+    const isComment = (l: { text: string }) => l.text.trimStart().startsWith("#");
+    // A comment block that ends at the next table, with a blank line above it, is that table's.
+    let block = lines.length;
+    while (block > 0 && isComment(lines[block - 1] as { text: string })) block--;
+    const above = lines[block - 1];
+    if (next !== undefined && block < lines.length && above !== undefined) {
+      if (above.text.trim() === "") limit = (lines[block] as { from: number }).from;
+    }
+    // Back over blank lines: the new table follows the last line with content.
+    let pos = limit;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i] as { from: number; text: string };
+      if (line.from >= limit) continue;
+      if (line.text.trim() !== "") break;
+      pos = line.from;
+    }
+    return pos;
+  }
+
   #arrayTableAt(path: readonly string[]): Header | undefined {
     return this.#scan.headers.find((h) => h.array && startsWith(path, h.path));
   }
@@ -522,7 +563,7 @@ export class TomlDocument {
         if (startsWith(h.path, prefix)) at = i;
       });
       if (at !== -1) {
-        const pos = this.#contentEnd(at);
+        const pos = this.#afterSection(at);
         const lead = this.#text[pos - 1] === "\n" ? "" : nl;
         this.#replace(pos, pos, `${lead}${nl}${line}`);
         return;

@@ -10,7 +10,6 @@ import {
   type ArbiterDecisionView as ContractArbiterDecisionView,
   type AuthScope as ContractAuthScope,
   type CauseChain as ContractCauseChain,
-  type CommissionView as ContractCommissionView,
   type ConversationNote as ContractConversationNote,
   type CostReport as ContractCostReport,
   type DataCategoryId as ContractDataCategoryId,
@@ -48,7 +47,6 @@ import {
   type ProposedTool as ContractProposedTool,
   type QuestsView as ContractQuestsView,
   type QueueItemInfo as ContractQueueItemInfo,
-  type ReachedGoal as ContractReachedGoal,
   type ReflectionRun as ContractReflectionRun,
   type ReflectionStats as ContractReflectionStats,
   type ReminderView as ContractReminderView,
@@ -72,7 +70,7 @@ import {
   contract,
   routeMeta,
 } from "@miyoria/contracts/api";
-import type { Economy2, ReachedGoalView } from "@miyoria/economy";
+import type { Economy2 } from "@miyoria/economy";
 import { NODE_APPROVE, type PendingApproval } from "@miyoria/gate/actions";
 import type {
   CostReport,
@@ -234,16 +232,8 @@ const CASES: Case[] = [
   // No client in this repository calls the next one; only the tests do.
   { name: "facts.deliveries", method: "GET", path: "/api/facts/deliveries" },
   { name: "economy.health", method: "GET", path: "/api/economy/health" },
-  { name: "economy.commissions", method: "GET", path: "/api/economy/commissions" },
   { name: "economy.predictions", method: "GET", path: "/api/economy/predictions" },
   { name: "economy.room", method: "GET", path: "/api/economy/room" },
-  { name: "economy.goals", method: "GET", path: "/api/economy/goals" },
-  {
-    name: "economy.fulfill",
-    method: "POST",
-    path: "/api/economy/goals/:id/fulfill",
-    permission: "admin.economy.goals",
-  },
   { name: "people.quests", method: "GET", path: "/api/people/:id/quests" },
   { name: "activity.snapshot", method: "GET", path: "/api/activity" },
   { name: "activity.tasks", method: "GET", path: "/api/activity/tasks" },
@@ -472,17 +462,14 @@ describe("the schemas agree with the types of the packages that own the shapes",
 
   it("the economy", () => {
     type Health = Awaited<ReturnType<Economy2["health"]>>;
-    type Commission = Awaited<ReturnType<Economy2["commissionsWaiting"]>>[number];
     type Prediction = Awaited<ReturnType<Economy2["predictions"]>>[number];
     type Room = Awaited<ReturnType<Economy2["room"]>>[number];
     type Quests = Awaited<ReturnType<Economy2["quests"]>>;
     const health: Same<ContractEconomyHealth, Health & { currency: string }> = true;
-    const commission: Same<ContractCommissionView, Commission> = true;
     const prediction: Same<ContractPredictionView, Prediction> = true;
     const room: Same<ContractRoomItem, Room> = true;
     const quests: Same<ContractQuestsView, Quests & { currency: string }> = true;
-    const goal: Same<ContractReachedGoal, ReachedGoalView> = true;
-    expect([health, commission, prediction, room, quests, goal]).toEqual(Array(6).fill(true));
+    expect([health, prediction, room, quests]).toEqual(Array(4).fill(true));
   });
 
   it("her inner state, her world, her mood and her goals", () => {
@@ -531,7 +518,8 @@ describe("the schemas agree with the types of the packages that own the shapes",
     const transport: Same<ContractMcpServerInfo["transport"], ServerStatus["transport"]> = true;
     const item: Same<ContractQueueItemInfo["state"], ItemState> = true;
     const scenes: Same<ContractSceneRolesState, SceneRolesView> = true;
-    const stage: Same<ContractStageState["overlay_url"], StageStatus["overlay_url"]> = true;
+    const stage: Same<ContractStageState["overlay_url"], StageStatus["overlay_url"]> &
+      Same<ContractStageState["obs_warning"], StageStatus["obs_warning"]> = true;
     const participant: Same<ContractVoiceSession["participants"][number], VoiceParticipant> = true;
     const context: Same<ContractVoiceSession["context"], ContextKey> = true;
     expect([extension, transport, item, scenes, stage, participant, context]).toEqual(

@@ -120,7 +120,7 @@ describe("what other modules asked of the Floor", () => {
     sup.services.provide("app", EventLogKey, log);
     sup.services.provide("app", ImpulseHostKey, host);
     sup.services.provide("app", PartyStatusKey, {
-      running: (c) => (playing.has(c.channel) ? { game: "quiz", title: "問答" } : null),
+      running: (c) => (playing.has(c.channel) ? { game: "song", title: "猜歌" } : null),
     });
     await sup.register(new ArbiterModule("p"), {}, true);
     await sup.startAll();

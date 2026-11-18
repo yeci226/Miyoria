@@ -71,6 +71,8 @@ export class AuthModule implements Module {
   static readonly ID = "auth";
 
   readonly manifest: ModuleManifest = defineManifest(AuthModule.ID, "Permissions", {
+    icon: "key-round",
+    category: "system",
     description: "Roles, permission nodes and platform role mappings",
     // Started after `commands` so its authorizer replaces the fallback.
     optional: [CommandsModule.ID],

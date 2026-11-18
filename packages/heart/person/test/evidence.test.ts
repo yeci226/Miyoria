@@ -186,24 +186,6 @@ describe("the economy's effects", () => {
     const changes = people.log.history("amy");
     expect(new Set(changes.map((c) => c.change.cause))).toEqual(new Set(["evidence"]));
   });
-
-  it("takes a broken deal off as a real loss, under the bad direction's cap", async () => {
-    const clock = new ManualClock();
-    const store = await openStore(clock);
-    const people = store.plugin(heartTables).people;
-    people.adminSet("amy", "bond", 50);
-    const effects = new HeartEffects(people);
-    const lost = await effects.penalty(
-      "amy",
-      { affinity: 1.5, trust: 4, reason: "約定做了,說好的錢沒付" },
-      T0,
-    );
-    expect(lost).toEqual({ affinity: -1.5, trust: -4 });
-    expect(people.log.history("amy", { limit: 1 })[0]?.change).toMatchObject({
-      cause: "evidence",
-      reason_quote: "約定做了,說好的錢沒付",
-    });
-  });
 });
 
 describe("the nightly reflection on one person", () => {

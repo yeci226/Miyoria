@@ -53,6 +53,7 @@ const STATE: Record<SongEntry["state"], string> = {
 
 function line(e: SongEntry, waiting = false): string {
   let s = `#${e.no} ${md(songLabel(e))}：${STATE[e.state]}`;
+  if (e.priority === true && (e.state === "preparing" || e.state === "ready")) s += "（優先券）";
   if (e.state === "preparing") s += `（${Math.round(e.progress * 100)}%）`;
   s += ` · ${md(e.requester_name)}`;
   if (waiting) s += "（不在語音裡，回來再唱）";
@@ -155,16 +156,11 @@ export function registerCommands(
           { required: false },
         ),
         argSpec(
-          "ticket",
-          "同時點歌數到上限時，用點歌加點券多點一首（沒到上限不收費）",
+          "priority",
+          "用一張點歌優先券(花魚幣,一天有上限):排到沒用券的歌前面;沒唱成就退回",
           ArgKind.boolean,
-          {
-            required: false,
-          },
+          { required: false },
         ),
-        argSpec("dedication", "獻詞（40 字內，要付費；過審查、不能點名別人）", ArgKind.string, {
-          required: false,
-        }),
       ],
       permission: perms.request,
     }),
@@ -176,9 +172,7 @@ export function registerCommands(
       if (key !== null && key !== undefined) args.key = key;
       const backing = backingOf(inv.str("backing"));
       if (backing !== "keep") args.backing = backing;
-      if (inv.bool("ticket") === true) args.ticket = true;
-      const dedication = (inv.str("dedication") ?? "").trim();
-      if (dedication !== "") args.dedication = dedication;
+      if (inv.bool("priority") === true) args.priority = true;
       return ask(actuators, inv, "sing.request", args);
     },
   );

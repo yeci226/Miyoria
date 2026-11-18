@@ -511,14 +511,14 @@ export type ReminderChangedData = z.output<typeof ReminderChangedSchema>;
 /**
  * A social event someone caused toward her: `social.event`. The social module publishes it for
  * every one, whether or not the daily caps let it change the numbers; the economy publishes
- * `gift` and `broken_promise` the same way (the gift also says `hunger: 0`).
+ * `gift` the same way (it also says `hunger: 0`).
  */
 export const SocialEventSchema = z
   .object({
     person: z.string(),
     /** Display name (untrusted). */
     name: z.string().nullable(),
-    /** `praise`, `insult`, `warm`, `gift`, `broken_promise`, ... */
+    /** `praise`, `insult`, `warm`, `gift`, ... */
     kind: z.string(),
     /** `rule` (keywords), `appraisal` (the LLM), `mind` (her own hint) or `economy`. */
     source: z.string(),

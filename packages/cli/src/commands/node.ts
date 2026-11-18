@@ -83,35 +83,94 @@ export async function stage(configPath: string): Promise<void> {
   });
 }
 
-export async function stageObsSetup(
-  configPath: string,
-  dryRun: boolean,
-  relayout: boolean,
-): Promise<void> {
+export interface StageObsSetupFlags {
+  dryRun: boolean;
+  relayout: boolean;
+  /** `--here`: build in OBS's current scene collection. */
+  here: boolean;
+  /** `--no-profile`: keep OBS's current profile. */
+  noProfile: boolean;
+  /** `--profile-settings`: set the video size and replay buffer in an existing profile too. */
+  profileSettings: boolean;
+  /** `--collection` / `--profile` (`null` = `[stage.obs]`'s, else `Miyoria`). */
+  collection: string | null;
+  profile: string | null;
+}
+
+export async function stageObsSetup(configPath: string, flags: StageObsSetupFlags): Promise<void> {
+  if (flags.here && flags.collection !== null) {
+    throw new NodeCommandError("--here 和 --collection 只能選一個");
+  }
+  if (flags.noProfile && (flags.profile !== null || flags.profileSettings)) {
+    throw new NodeCommandError("--no-profile 不能和 --profile、--profile-settings 一起用");
+  }
   const config = await loadConfig(configPath);
   configureLogging({ level: "warn" });
   const { describeObsSetupStep: describeStep, setupStageObs } = await import("@miyoria/core");
-  const steps = await setupStageObs(config, {
+  const { dryRun } = flags;
+  const result = await setupStageObs(config, {
     baseDir: dirname(resolve(configPath)),
     dryRun,
-    relayout,
+    relayout: flags.relayout,
+    collection: flags.here ? null : (flags.collection ?? undefined),
+    profile: flags.noProfile ? null : (flags.profile ?? undefined),
+    profileSettings: flags.profileSettings,
     onStep: (step) => println(`${dryRun ? "  會" : "  "}${describeStep(step)}`),
   });
+  const { steps, place } = result;
   const changes = steps.filter((s) => s.op !== "write_mask" && s.op !== "filter");
+  const where = `場景集合「${result.collection}」、設定檔「${result.profile}」`;
+  if (result.layoutUnknown) {
+    println(
+      `  (場景集合「${result.collection}」已經有了,切過去才讀得到裡面有什麼;實際執行時只會補上缺的)`,
+    );
+  }
   if (dryRun) {
+    const same = place.length === 0 && changes.length === 0 && !result.layoutUnknown;
     ok(
-      `預覽完成:${changes.length === 0 ? "OBS 已經是這個版面" : `${steps.length} 個步驟`}(沒有改 OBS)`,
+      `預覽完成:${same ? "OBS 已經是這個版面" : `${place.length + steps.length} 個步驟`},在${where}(沒有改 OBS)`,
     );
   } else {
     ok(
-      changes.length === 0
-        ? "OBS 已經是這個版面,只更新了遮罩"
-        : `OBS 版面建好了(${steps.length} 個步驟)`,
+      place.length === 0 && changes.length === 0
+        ? `OBS 已經是這個版面(${where}),只更新了遮罩`
+        : `OBS 版面建好了,在${where}(${place.length + steps.length} 個步驟)`,
+    );
+  }
+  for (const note of result.notes) warn(note);
+  if (result.createdProfile) {
+    warn(
+      `新的設定檔「${result.profile}」是空白的:要從 OBS 推流的話,串流金鑰(設定 → 直播)和編碼器(設定 → 輸出)要在這個設定檔裡重新設一次`,
     );
   }
   warn(
     "VTube Studio 要用透明背景:背景選純色並勾「透明」,OBS 的「VTube Studio 透明」才會只看到她本人",
   );
+  // The Stage checks OBS's collection with this: suggest it, the config file is the owner's.
+  const lines: string[] = [];
+  if (!flags.here && result.configured.collection !== result.collection) {
+    lines.push(`collection = ${JSON.stringify(result.collection)}`);
+  }
+  if (!flags.noProfile && result.configured.profile !== result.profile) {
+    lines.push(`profile = ${JSON.stringify(result.profile)}`);
+  }
+  if (lines.length > 0) {
+    println();
+    println(
+      "在 miyoria.toml 的 [stage.obs] 加上這幾行,Stage 才會確認 OBS 在她的場景集合上(不在就不建任何東西,並在面板提醒):",
+    );
+    println("  [stage.obs]");
+    for (const line of lines) println(`  ${line}`);
+  }
+  if (
+    flags.here &&
+    result.configured.collection !== null &&
+    result.configured.collection !== result.collection
+  ) {
+    warn(
+      `[stage.obs] collection 是「${result.configured.collection}」,但這次建在「${result.collection}」:OBS 停在這份集合時 Stage 不會建任何東西`,
+    );
+  }
 }
 
 export async function profileValidate(configPath: string): Promise<void> {

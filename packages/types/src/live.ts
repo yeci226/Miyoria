@@ -22,7 +22,13 @@ export interface LivePresence {
 }
 
 /** What she is busy with this moment; the overlay's activity line. */
-export type LiveActivityKind = "thinking" | "synthesizing" | "song_prepare" | "singing";
+export type LiveActivityKind =
+  | "thinking"
+  | "synthesizing"
+  | "tool"
+  | "game"
+  | "song_prepare"
+  | "singing";
 
 export interface LiveActivity {
   kind: LiveActivityKind;

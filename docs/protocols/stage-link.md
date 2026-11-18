@@ -34,8 +34,10 @@ Stage 節點(`miyoria stage`,跑在直播機)和 Core 的 `stage.link` 模組之
 | `beat` | `song`, `bpm`, `times_ms`, `offset_ms` | 她唱的歌的節拍:`times_ms` 是每一拍離歌開頭幾毫秒(排好序),`offset_ms` 是送出時歌已經唱了多久;Stage 每拍讓她點一下頭、身體換一邊擺(`[stage.motion] beat_nod_deg` / `beat_sway_deg`)。歌結束時送空的 `times_ms`;最後一拍過後兩秒也會自己停。沒有 `id`、不回覆 |
 | `notice` | `text` | overlay 的一行狀態(`""` 清掉)。她的語音因為要做歌暫停時是「準備歌曲中…」(來自 `speech.pause`)。新的 overlay 改用 `activity` 顯示這段時間,`notice` 留給舊版 Stage / overlay;新 overlay 只在沒有 `activity` 時才把它顯示在活動膠囊裡 |
 | `clip` | `reason`, `id?` | 存一段精華:Stage 叫 OBS 存 replay buffer(直播最後幾十秒,長度和資料夾在 OBS 設定),在檔案旁邊寫 `<檔名>.json`(`reason`、`at`)。成功時回 `status`,並另外送 `clip_saved`;OBS 沒存到(replay buffer 沒開)回 `error`。Core 在直播中、唱完歌 / 她情緒很強 / 聊天室突然很多訊息時送(`[modules."stage.link".highlights]`) |
-| `activity` | `kind`, `label`, `detail`, `progress`, `elapsed_ms`, `duration_ms` | 她現在在做什麼(overlay 左下的活動膠囊,見下面「活動」)。`kind`:`thinking` / `synthesizing` / `song_prepare` / `singing`,`null` = 隱藏(其他欄位為空);`label` 是短的中文狀態(≤ 40);`detail` 是歌名(已跳脫、≤ 49 字)或 `null`;`progress` 0..1 或 `null`(不確定);唱歌時 `elapsed_ms`(送出時唱到哪)與 `duration_ms`(歌多長),進度由收到的一方自己的時鐘推進 |
+| `activity` | `kind`, `label`, `detail`, `progress`, `elapsed_ms`, `duration_ms`, `secondary?` | 她現在在做什麼(overlay 左下的活動膠囊,見下面「活動」)。`kind`:`thinking` / `synthesizing` / `tool` / `game` / `song_prepare` / `singing`,`null` = 隱藏(其他欄位為空);`secondary`(可省略,舊版不會送、也不會讀)是旁邊的小第二行 `{label, detail, progress}`:準備中的歌(`progress` 為 `null` 是在等,不畫條);`label` 是短的中文狀態(≤ 40);`detail` 是歌名(已跳脫、≤ 49 字)或 `null`;`progress` 0..1 或 `null`(不確定);唱歌時 `elapsed_ms`(送出時唱到哪)與 `duration_ms`(歌多長),進度由收到的一方自己的時鐘推進 |
 | `touch` | `x`, `y`(0..1,畫面左上為原點), `part`(`head` / `face` / `body` / `screen`) | 觀眾在網站摸了直播畫面(`live.touch`)。overlay 在 (x·寬, y·高) 畫手印和愛心(每秒最多送 8 個、不重送給新連線);頭 / 臉 / 身體讓她小小反應(`[stage.touch]`,`screen` 不反應),見 `miyoria.example.toml` 的 stage 區 |
+| `danmaku` | `id`, `name`(string / null), `text`, `max_on_screen`, `queue_max`, `max_wait_ms` | 一則付費彈幕(`economy.danmaku`,[v5-play.md](../design/v5-play.md) §11.6):從 overlay 右邊飄到左邊。`name` 是 `null` 表示不顯示名字;三個上限是 owner 的設定,每一則都帶。Stage 對每一則回一次 `danmaku_done`。只送給 hello 帶 `danmaku` 能力的 Stage;送不出去時 Core 自己當成 `no_overlay` |
+| `danmaku_clear` | | 把 overlay 上的彈幕全部拿掉;還在排隊的回 `danmaku_done`(`cleared`) |
 | `status_request` | `id?` | 要一份最新的 `status` |
 | `ping` / `pong` | | |
 
@@ -53,24 +55,29 @@ Stage 節點(`miyoria stage`,跑在直播機)和 Core 的 `stage.link` 模組之
 {"type":"song_video","action":"play","song":"yt-K4DyBUG242c","path":"C:\\Miyoria\\data\\songs\\yt-K4DyBUG242c\\video.mp4","offset_ms":0,"scene":"唱歌"}
 {"type":"song_video","action":"stop","song":"yt-K4DyBUG242c"}
 {"type":"activity","kind":"song_prepare","label":"轉換歌聲","detail":"夜に駆ける","progress":0.62,"elapsed_ms":null,"duration_ms":null}
+{"type":"activity","kind":"tool","label":"查資料中","detail":null,"progress":null,"elapsed_ms":null,"duration_ms":null,"secondary":{"label":"準備歌曲","detail":"夜に駆ける","progress":0.62}}
 {"type":"activity","kind":"singing","label":"正在唱","detail":"夜に駆ける","progress":null,"elapsed_ms":0,"duration_ms":261000}
 {"type":"activity","kind":null,"label":"","detail":null,"progress":null,"elapsed_ms":null,"duration_ms":null}
 ```
 
-`song_video`、`activity`、`beat`、`clip` / `clip_saved` 是 v1 之後加的:舊版 Stage 不認得它們(記 debug log、略過),協定版本仍是 1。
+`song_video`、`activity`、`beat`、`clip` / `clip_saved`、`danmaku` / `danmaku_clear` / `danmaku_done` 是 v1 之後加的:舊版 Stage 不認得它們(記 debug log、略過),協定版本仍是 1。
 
-**活動(`activity`,Core 端)**:由 `stage.link` 從匯流排事件算出來,優先順序由高到低:
+**活動(`activity`,Core 端)**:由 `stage.link` 從匯流排事件算出來。主線(她現在在做的事)優先順序由高到低:
 
 | `kind` | `label` | 什麼時候 | 進度 |
 |---|---|---|---|
-| `singing` | 正在唱 | `sing.cue` `started` 到 `ended` | `elapsed_ms` / `duration_ms`(`sing.cue` `started` 的 `duration_ms`;沒有就是不確定) |
-| `song_prepare` | 下載中 / 讓出顯示卡中 / 分離人聲 / 轉換歌聲 / 混音 / 找歌詞(也有 排隊中、找歌中、下載影片、準備歌曲) | `sing.prepare` 有歌在準備(`exclusive` 是 `waiting` / `offloading` 時是「讓出顯示卡中」,其他依 worker 的 `stage`) | worker 的整體進度 |
+| `singing` | 正在唱 | `sing.cue` `started` 到 `ended`;`ended` 沒來時,過了歌長(`duration_ms`,沒有就 15 分鐘)再加 30 秒就不再算 | `elapsed_ms` / `duration_ms`(`sing.cue` `started` 的 `duration_ms`;沒有就是不確定) |
 | `synthesizing` | 產生語音… | 她的一句話送去 TTS(`voice.synthesis`)、還沒開始播(`voice.playback` `started` / `failed`) | 不確定 |
+| `tool` | 查資料中(`web_*`)/ 回想中(記憶、技能)/ 處理點歌中(`sing_*`)/ 操作遊戲中(`game_*`、`party_*`)/ 使用工具中(其他) | `agent.tool.running` `started` 到 `ended`(只帶工具名,不帶參數;`say`、`react` 這類本身就是說話的工具不顯示) | 不確定 |
 | `thinking` | 思考中… | 回合在跑(`agent.turn.started` 到 `completed`),還沒說出任何一句 | 不確定 |
+| `game` | 玩遊戲中(`detail` 是遊戲名) | `game.director.session` `started` 到 `stopped` | 不確定 |
+| `song_prepare` | 見下表 | `sing.prepare` 有歌在準備,**而且上面都沒有在做**;否則這首歌是 `secondary` | worker 的整體進度 |
+
+準備中的歌(`sing.prepare`)一次一首,進度只進不退、換歌從自己的進度重來;`stage` 的白話(`SONG_PREPARE_STAGES` 每個都有,一個測試會檢查 worker、契約和這張表沒有對不上):排隊中 `queued`、找歌中 `resolve`、下載中 `download`、等待中 `exclusive` / `gpu_wait`(以及 `exclusive` 是 `waiting` / `offloading` 時)、分離人聲 `separate`、分離主唱 `lead`、轉換歌聲 `convert`、轉換和聲 `convert_backing`、混音 `mix`、抓節拍 `beats`、找歌詞 `lyrics`、下載影片 `video`、分析旋律 `reference`、製作伴奏 `encode`、對歌詞 `lyrics_asr` / `lyrics_align`、連不上 `unreachable`(`sing` 模組在 worker 20 秒沒回應時自己報的);沒看過的階段叫「準備歌曲」。排隊、等待、連不上是不確定(沒有條)。`detail` 是歌名,還沒有時是「某某 點的歌」(`sing.prepare` 的 `by`,選填),再沒有就是「連結」。連不上超過 60 秒就把這一行收起來。作為 `secondary` 時 `label` 固定是「準備歌曲」(連不上時是「連不上」)。
 
 - 一個回合的第一句開始播之後就交給字幕:句子之間(下一句在 TTS)不再顯示「思考中」或「產生語音」。文字頻道的回合只有 `subtitle_text_turns = true` 時才算。
-- `thinking` / `synthesizing` 要持續 250 ms 才顯示(很快結束的回合不會閃一下);回合 2 分鐘、TTS 30 秒沒有結束就不再算。
-- 種類、文字或歌改變時立刻送;同一個活動的進度最多每 250 ms 送一次(而且要變超過 0.5%);唱歌時只在開始送一次。Stage 重新連上(送 `status`)時會先收到目前的活動。
+- `thinking` / `synthesizing` / `tool` 要持續 250 ms 才顯示(很快結束的不會閃一下);回合、工具呼叫 2 分鐘、TTS 30 秒沒有結束就不再算。
+- 種類、文字或歌改變時立刻送;同一個活動的進度(主線或第二行)最多每 250 ms 送一次(而且要變超過 0.5%);唱歌時只在開始送一次。Stage 重新連上(送 `status`)時會先收到目前的活動;送不出去(沒連上、送出佇列滿)的 `activity` 下一個 tick 會再送,不算已經顯示。Stage 掉了 Core 的連線時,overlay 的活動和「準備歌曲中…」都會清掉。
 - 歌名是不可信的文字:經過 `safeName`(去掉控制字元、換行,最多 48 字)。
 
 **字幕的規則**(Core 端):
@@ -83,9 +90,10 @@ Stage 節點(`miyoria stage`,跑在直播機)和 Core 的 `stage.link` 模組之
 
 | type | 欄位 | 說明 |
 |---|---|---|
-| `status` | `vts`(bool), `obs`(bool), `scene`(string / null), `streaming`(bool), `scenes`(string[]), `hotkeys`(string[]), `overlay_url`(string / null), `id?` | 目前狀態。`vts`:已連上並通過 VTS 認證;`obs`:已連上 obs-websocket;`scene`:OBS 目前的 program 場景;`scenes`:OBS 所有場景名稱(`GetSceneList`,順序跟 OBS 場景清單由上到下一樣,OBS 沒連上時是 `[]`);`hotkeys`:VTS 目前模型的 hotkey 名稱(VTS 連上 / 換連線、以及收到 `status_request` 時重新讀取,VTS 沒連上時是 `[]`);`overlay_url`:Stage 的 overlay 網頁(給 OBS browser source 用,綁 `0.0.0.0` / `::` 時寫成 `127.0.0.1`) |
+| `status` | `vts`(bool), `obs`(bool), `scene`(string / null), `streaming`(bool), `scenes`(string[]), `hotkeys`(string[]), `overlay_url`(string / null), `id?` | 目前狀態。`vts`:已連上並通過 VTS 認證;`obs`:已連上 obs-websocket;`scene`:OBS 目前的 program 場景;`scenes`:OBS 所有場景名稱(`GetSceneList`,順序跟 OBS 場景清單由上到下一樣,OBS 沒連上時是 `[]`);`hotkeys`:VTS 目前模型的 hotkey 名稱(VTS 連上 / 換連線、以及收到 `status_request` 時重新讀取,VTS 沒連上時是 `[]`);`overlay_url`:Stage 的 overlay 網頁(給 OBS browser source 用,綁 `0.0.0.0` / `::` 時寫成 `127.0.0.1`);`obs_collection`(string / null):OBS 目前的場景集合(連上 OBS 和開始直播時讀);`obs_warning`(string / null):要擁有者處理的 OBS 問題,現在只有「OBS 不在「Miyoria」這份場景集合上(現在是「…」)」(`[stage.obs] collection` 有設而 OBS 在別的集合上,見下面「OBS 的場景集合」) |
 | `error` | `message`, `id?` | 錯誤 |
 | `clip_saved` | `reason`, `path` | 精華存好了:`path` 是直播機上 OBS 寫的檔案。Core 發 `stage.clip` 事件 |
+| `danmaku_done` | `id`, `outcome` | 一則彈幕的結果,每一則一次:`shown`(開始飄了)、`no_overlay`(沒有開著彈幕層的 overlay 頁)、`queue_full`、`too_late`、`cleared`、`lost`(頁面斷線或沒回)。只有 `shown` 是被看到了;Core 發 `stage.danmaku`,經濟照它留下或退回那一則的錢。連不上 Core 時 Stage 先留著,連上後再送 |
 | `ping` / `pong` | | |
 
 ```json
@@ -94,7 +102,7 @@ Stage 節點(`miyoria stage`,跑在直播機)和 Core 的 `stage.link` 模組之
 {"type":"error","message":"OBS is not connected","id":13}
 ```
 
-`scenes`、`hotkeys`、`overlay_url` 是 v1 之後加的欄位:舊版 Stage 不送也沒關係,Core 會當成 `[]`、`[]`、`null`(協定版本仍是 1)。`scene` 的 `transition` / `transition_ms` 也是之後加的:舊版 Stage 會忽略它們(用 OBS 目前的轉場),協定版本不變。管理面板的 `GET /api/stage` 直接用它們:`scenes` → 場景選單,`hotkeys` → `expressions`(表情 / hotkey 選單),`overlay_url` → overlay 預覽。
+`scenes`、`hotkeys`、`overlay_url`、`obs_collection`、`obs_warning` 是 v1 之後加的欄位:舊版 Stage 不送也沒關係,Core 會當成 `[]`、`[]`、`null`、`null`、`null`(協定版本仍是 1)。`obs_warning` 在面板的 `GET /api/stage` 是同名欄位(OBS 沒連上時是 `null`),`/stream status` 也會寫出來。`scene` 的 `transition` / `transition_ms` 也是之後加的:舊版 Stage 會忽略它們(用 OBS 目前的轉場),協定版本不變。管理面板的 `GET /api/stage` 直接用它們:`scenes` → 場景選單,`hotkeys` → `expressions`(表情 / hotkey 選單),`overlay_url` → overlay 預覽。
 
 **請求與回覆**:`scene`、`stream`、`avatar_hotkey`、`status_request` 帶 `id` 時,Stage 一定要回一個帶同樣 `id` 的訊息:成功回 `status`(動作完成後的狀態),失敗回 `error`。`stream` 會等 OBS 真的進入(或離開)直播狀態才回,最多 `[stage.obs] stream_wait_ms`(預設 15 秒)。Core 端等 `request_timeout_ms`(預設 10 秒)沒回覆就當作失敗。沒有 `id` 的 `error` 只是通知(Core 會發佈成 `stage.error` 事件)。
 
@@ -113,11 +121,11 @@ golive_obs = true          # 跟在 voice node 的 Go Live 後面按 OBS 開始 
 golive_start_delay_ms = 3000   # 等 voice node 的 ffmpeg 綁好 RTMP listener 再按
 ```
 
-- 訂閱 `agent.emotion`、`agent.turn.completed`、`voice.playback`,依上面的規則轉送;另外用 `agent.turn.started`、`voice.synthesis`、`sing.prepare`、`sing.cue` 算出 `activity`。
+- 訂閱 `agent.emotion`、`agent.turn.completed`、`voice.playback`,依上面的規則轉送;另外用 `agent.turn.started`、`agent.tool.running`、`game.director.session`、`voice.synthesis`、`sing.prepare`、`sing.cue` 算出 `activity`。
 - 另外訂閱 `voice.golive`(`{guild, state, error?, reason?}`):`starting` 時在 `golive_start_delay_ms` 後叫 OBS 開始直播(最多重試 3 次),`stopped` / `failed` 時叫 OBS 停止。所以 Discord 的 `/golive start` 一個指令就能從推流到 OBS 全包;`golive_obs = false` 可以關掉,讓 OBS 自己控制。
 - 有 ActivityManager(module `activity`)時上面這段不跑:OBS 是開台(`ensure_live`)的第二個子步驟,`stage.stream` 過閘門、Go Live 真的 `live` 之後才按(`[modules.activity] obs`、`obs_start_delay_ms`、`obs_attempts`);直播機連著但 OBS 沒開就是「開台失敗:OBS 沒開」並把 Go Live 收回。Go Live 從別處開或自己斷掉時,它也會讓 OBS 跟著開 / 停。`[modules.activity] obs_hub = true`(OBS 推到 MediaMTX、voice node 用 `golive_listen = false` 去拉)時順序反過來:先開 OBS、串流起來後等 `obs_start_delay_ms` 再開 Go Live;關台、開台失敗收回、離開語音、Go Live 自己斷掉都不停 OBS(OBS 是網站的),只有 OBS 在播而沒有 Go Live 也不算她在直播。
 - 提供 `StageLink` 服務(`StageLinkKey`):`setScene`、`stream`、`hotkey`、`refreshStatus`、`gaze`、`status`、`subscribeStatus`。
-- 狀態變化發佈成 `custom` 事件(topic `stage.status`),payload `{connected, vts, obs, scene, streaming, scenes, hotkeys, overlay_url}`(斷線時只有 `{"connected": false}`)。
+- 狀態變化發佈成 `custom` 事件(topic `stage.status`),payload `{connected, vts, obs, scene, streaming, scenes, hotkeys, overlay_url, obs_collection, obs_warning}`(斷線時只有 `{"connected": false}`)。
 - 有 `CommandRegistry` 時註冊指令:`stream start`、`stream stop`、`stream scene <name>`、`stream status`(權限節點 `stream.start` / `stream.stop` / `stream.scene` / `stream.status`)。
 
 ### 場景用途與場景導演(`[modules."stage.link".scenes]`)
@@ -168,7 +176,7 @@ only_while_live = false         # true:只在直播中切
 - 收到 `stop`(或下一首的 `play`):晚 `latency_ms` 後 stop、把 `local_file` 清空。
 - OBS 沒連上、拒絕任何一個呼叫:記 log,歌照唱,不會讓 Stage 出錯。
 
-**OBS 要自己建的東西**(Miyoria 不會改你的 OBS 場景):
+**OBS 要自己建的東西**:`miyoria stage obs-setup` 會在 Miyoria 自己的場景集合裡把下面這些建好(見下一節和 [OPERATIONS.md](../OPERATIONS.md)「Stage 與管理面板」);Stage 執行時不會改你的 OBS 場景。要手動建的話:
 
 1. 新增場景,名稱例如 `唱歌`(或在 `[modules."stage.link".scenes] roles` 寫 `sing = "你的場景名稱"`;名稱裡有 sing / song / karaoke / MV / 唱歌 / 歌回 的會被自動分類成 `sing`)。
 2. 場景裡由下到上:
@@ -176,6 +184,18 @@ only_while_live = false         # true:只在直播中切
    2. 她的 **VTube Studio 視窗擷取**(或遊戲擷取 / Spout2,跟聊天場景一樣的來源可以直接「加入現有的」),放在影片上面,背景透明。
    3. 最上面 **`Miyoria Overlay` 瀏覽器來源**(`http://127.0.0.1:7884/overlay/`,一樣「加入現有的」),歌詞字幕會在這裡。
 3. 沒有 `唱歌` 場景也可以:把同一個媒體來源加進聊天場景(可以先隱藏),唱歌時 Stage 會在目前場景裡顯示它、唱完藏回去。
+
+### OBS 的場景集合與設定檔(`[stage.obs] collection` / `profile`,Stage 端)
+
+```toml
+[stage.obs]
+collection = "Miyoria"   # obs-setup 建的場景集合;沒設 = 不檢查
+profile = "Miyoria"      # obs-setup 建的設定檔;只記 log
+```
+
+- `miyoria stage obs-setup` 把場景和來源建在 OBS 的場景集合 `Miyoria` 裡,並用設定檔 `Miyoria`(都是沒有就建立、有就切過去;`--collection` / `--profile` 換名稱,`--here` / `--no-profile` 用目前的),跑完印出上面兩行讓你貼進 `miyoria.toml`。用到的 obs-websocket 請求:`GetSceneCollectionList`、`CreateSceneCollection`(建立並切過去)、`SetCurrentSceneCollection`、`GetProfileList`、`CreateProfile`(空白的設定檔,建立並切過去)、`SetCurrentProfile`,每次切換都等 `CurrentSceneCollectionChanged` / `CurrentProfileChanged`(30 秒);只在這次新建的設定檔(或加 `--profile-settings` 時的目標設定檔)裡送 `SetVideoSettings`(`baseWidth`/`baseHeight`/`outputWidth`/`outputHeight` 1920x1080,新建時 `fpsNumerator`/`fpsDenominator` 沿用切換前的)和 `SetProfileParameter`(`SimpleOutput` / `AdvOut` 的 `RecRB` = `true`)。切換前用 `GetStreamStatus`、`GetRecordStatus`、`GetVirtualCamStatus`、`GetReplayBufferStatus` 確認沒有輸出在跑,有就拒絕。
+- Stage 連上 OBS 時、以及 OBS 開始直播時,用 `GetSceneCollectionList` 讀目前的場景集合。和 `collection` 不一樣時:不建任何東西(字幕文字來源 `subtitle_source` 也不自動建立)、不切換場景集合,log 記一次警告,`status` 的 `obs_warning` 寫「OBS 不在「Miyoria」這份場景集合上(現在是「…」)」。讀不到時也不建東西,但不算警告。回到對的集合後(下一次連上或開始直播時)字幕來源才會檢查並建立。
+- `profile` 不一樣時只用 `GetProfileList` 讀出來記一行 info(連帶重播緩衝在不在);精華用的重播緩衝在設定檔裡,其他功能不受影響。
 
 ---
 

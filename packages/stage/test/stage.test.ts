@@ -308,6 +308,55 @@ describe("stage", () => {
     );
   }, 15_000);
 
+  it("danmaku_answers_reach_core_and_wait_for_it_while_it_restarts", async () => {
+    const { sup, bus, services, module } = await core();
+    const vts = await fakeVts();
+    const config = stageConfig(module, vts);
+    config.vts.enabled = false;
+    const controller = new AbortController();
+    const stage = runStage(config, { obs: new FakeObs("Talk"), signal: controller.signal });
+    cleanup.push(async () => {
+      controller.abort();
+      await stage.catch(() => undefined);
+    });
+    const link = services.require(StageLinkKey);
+    await waitUntil(() => link.status()?.overlay_url != null, "stage up");
+    expect(link.node()?.[1]).toContain("danmaku");
+    // The overlay page: its danmaku layer is on.
+    const page = new WebSocket(`${(link.status()?.overlay_url ?? "").replace(/^http/, "ws")}ws`);
+    const lines: Json[] = [];
+    page.on("message", (data) => {
+      const m = JSON.parse(data.toString());
+      if (m.type === "danmaku") lines.push(m);
+    });
+    await new Promise<void>((r, j) => page.once("open", () => r()).once("error", j));
+    cleanup.push(() => page.terminate());
+    page.send(JSON.stringify({ type: "danmaku_ready" }));
+    const answers = bus.subscribe([Events.StageDanmaku.type]);
+    const line = { name: "Mia", text: "好", max_on_screen: 12, queue_max: 20, max_wait_ms: 30_000 };
+    await delay(50);
+    bus.publish("test", Events.EconomyDanmaku, { id: "L1", ...line });
+    await waitUntil(() => lines.length === 1, "line on the page");
+    page.send(JSON.stringify({ type: "danmaku_shown", id: "L1" }));
+    expect((await answers.recv())?.data).toEqual({ id: "L1", outcome: "shown" });
+
+    // Core goes away while the page still shows a line: the node keeps the answer.
+    bus.publish("test", Events.EconomyDanmaku, { id: "L2", ...line });
+    await waitUntil(() => lines.length === 2, "second line on the page");
+    const addr = module.localAddr() as BoundAddress;
+    await sup.stopAll();
+    page.send(JSON.stringify({ type: "danmaku_dropped", id: "L2", reason: "too_late" }));
+    const bus2 = new EventBus();
+    const services2 = new ServiceRegistry();
+    const sup2 = new Supervisor({ bus: bus2, services: services2 });
+    const later = bus2.subscribe([Events.StageDanmaku.type]);
+    await sup2.register(new StageLinkModule(), { bind: formatAddress(addr), token: TOKEN }, true);
+    await sup2.startAll();
+    cleanup.push(() => sup2.stopAll());
+    const env = await Promise.race([later.recv(), delay(10_000).then(() => null)]);
+    expect(env?.data).toEqual({ id: "L2", outcome: "too_late" });
+  }, 20_000);
+
   it("levels_endpoint_feeds_lip_sync", async () => {
     const levels = new Levels(defaultLipSyncConfig());
     const controller = new AbortController();

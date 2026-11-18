@@ -84,6 +84,11 @@ def hostd_call(method: str, params: dict[str, Any], timeout: float) -> Any:
     return hostd_client.call(method, params, timeout)
 
 
+def _share_only(job: Any) -> bool:
+    """A job that never takes speech offline and is never urgent: a karaoke job."""
+    return getattr(getattr(job, "request", None), "purpose", "cover") == "karaoke"
+
+
 def _rate_prior(stage: str) -> float:
     return RATE_PRIORS.get(stage, 0.3)
 
@@ -287,6 +292,10 @@ class HostdArbitration:
                 if job.cancel.wait(delay):
                     raise Cancelled() from e
 
+    def _behind(self, job: Any) -> list[str]:
+        """The jobs queued behind ``job``, which make it urgent; none for a karaoke job (never urgent)."""
+        return [] if _share_only(job) else self._queued(job)
+
     def _own(self) -> int:
         try:
             return int(self._backend().own_vram_mb())
@@ -295,7 +304,7 @@ class HostdArbitration:
 
     def _renew(self, job: Any, step: dict[str, Any] | None = None, end: dict[str, Any] | None = None) -> Any:
         """``None`` when hostd did not answer or no longer knows the lease."""
-        params = {"lease": job.id, "own_mb": self._own(), "queued": self._queued(job), "step": step, "end": end}
+        params = {"lease": job.id, "own_mb": self._own(), "queued": self._behind(job), "step": step, "end": end}
         try:
             r = self._rpc(job.gpu, "gpu.renew", params, TIMEOUT_S["gpu.renew"])
         except Exception as e:  # noqa: BLE001
@@ -348,7 +357,8 @@ class HostdArbitration:
         return {
             "job": job.id,
             "stage": stage,
-            "mode": "exclusive",
+            # A karaoke job never takes speech offline (hostd answers ``wait`` where it would).
+            "mode": "share" if _share_only(job) else "exclusive",
             "max_s": self.lease_s,
             "reason": "",
             "on_gpu": self._stage_uses_gpu(stage),
@@ -358,7 +368,7 @@ class HostdArbitration:
             "est_work_s": prior,
             "est_work_by_card": by_card,
             "cpu_fallback": stage in CPU_FALLBACK,
-            "queued": self._queued(job),
+            "queued": self._behind(job),
             "ack": bool(job.request.exclusive_ack),
             "resumed": resumed,
             "announced": announced,

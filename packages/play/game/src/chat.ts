@@ -479,6 +479,8 @@ interface Running {
 export class GameChatModule implements Module {
   static readonly ID = "game.chat";
   readonly manifest = defineManifest(GameChatModule.ID, "Game chat", {
+    icon: "swords",
+    category: "play",
     description: "In-game chat as its own conversation, with her replies typed or spoken",
     optional: ["game", "heart", "voice", "extensions"],
     configSchema: GameChatConfigSchema,

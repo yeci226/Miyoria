@@ -6,6 +6,7 @@ import { AuthorizerKey } from "@miyoria/types";
 import { Hono } from "hono";
 import { dataRoutes } from "./data.js";
 import { ApiError, NO_SUCH_ENDPOINT } from "./errors.js";
+import { karaokeRoutes } from "./karaoke-routes.js";
 import { liveRoutes } from "./live.js";
 import { memberRoutes } from "./member.js";
 import { metricsRoutes } from "./metrics.js";
@@ -118,6 +119,7 @@ export function routes(state: ApiState, options: AppOptions = {}): Route[] {
     ...publicRoutes(state),
     ...ogRoutes(state),
     ...memberRoutes(state),
+    ...karaokeRoutes(state),
     ...dataRoutes(state),
     ...liveRoutes(state),
 

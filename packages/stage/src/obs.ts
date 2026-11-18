@@ -24,8 +24,16 @@ export const ObsConfigSchema = z.object({
   /** obs-websocket password (empty when authentication is off). */
   password: z.string().default(""),
   /**
+   * OBS scene collection that holds Miyoria's scenes (`miyoria stage obs-setup` makes it and prints
+   * this line; `null` = no check). While OBS is on another collection the Stage creates nothing in
+   * OBS, logs a warning and reports it in its status (`obs_warning`).
+   */
+  collection: z.string().trim().min(1).nullable().default(null),
+  /** OBS profile `obs-setup` made for Miyoria; on another one the Stage only logs a line. */
+  profile: z.string().trim().min(1).nullable().default(null),
+  /**
    * Text source that shows her latest line (none by default). Created in the current scene,
-   * at the bottom, when OBS does not have it yet.
+   * at the bottom, when OBS does not have it yet (never while OBS is on another `collection`).
    */
   subtitle_source: z.string().nullable().default(null),
   /** Clear the subtitle source this long after the final text; 0 keeps it. */
@@ -102,6 +110,10 @@ export interface Obs {
   startReplayBuffer?(): Promise<void>;
   /** Saves the replay buffer and returns the file OBS wrote, `null` when it wrote none in time. */
   saveReplay?(): Promise<string | null>;
+  /** OBS's current scene collection (optional, like the one below). */
+  sceneCollection?(): Promise<string>;
+  /** OBS's current profile. */
+  profileName?(): Promise<string>;
   /** Drops the connection (optional). */
   close?(): Promise<void>;
 }
@@ -362,6 +374,14 @@ class ObsWebSocketObs implements Obs {
     return null;
   }
 
+  async sceneCollection(): Promise<string> {
+    return (await this.#call("GetSceneCollectionList")).currentSceneCollectionName;
+  }
+
+  async profileName(): Promise<string> {
+    return (await this.#call("GetProfileList")).currentProfileName;
+  }
+
   async #lastReplay(): Promise<string | null> {
     try {
       const path = (await this.#call("GetLastReplayBufferReplay")).savedReplayPath;
@@ -384,10 +404,21 @@ export interface ObsState {
   streaming: boolean;
   /** Scene names, top of OBS's scene list first. */
   scenes: string[];
+  /** OBS's current scene collection, as last read (on connecting and on going live). */
+  collection: string | null;
+  /** `[stage.obs] collection` while OBS is on another collection, else `null`. */
+  wrongCollection: string | null;
 }
 
 export function defaultObsState(): ObsState {
-  return { connected: false, scene: null, streaming: false, scenes: [] };
+  return {
+    connected: false,
+    scene: null,
+    streaming: false,
+    scenes: [],
+    collection: null,
+    wrongCollection: null,
+  };
 }
 
 function sameObsState(a: ObsState, b: ObsState): boolean {
@@ -395,9 +426,19 @@ function sameObsState(a: ObsState, b: ObsState): boolean {
     a.connected === b.connected &&
     a.scene === b.scene &&
     a.streaming === b.streaming &&
+    a.collection === b.collection &&
+    a.wrongCollection === b.wrongCollection &&
     a.scenes.length === b.scenes.length &&
     a.scenes.every((s, i) => s === b.scenes[i])
   );
+}
+
+/** What the status says while OBS is on another scene collection (`null` when it is not). */
+export function collectionWarning(state: ObsState): string | null {
+  if (!state.connected || state.wrongCollection === null) return null;
+  return `OBS 不在「${state.wrongCollection}」這份場景集合上${
+    state.collection ? `(現在是「${state.collection}」)` : ""
+  }`;
 }
 
 /** Keeps one OBS connection (reconnecting with backoff), polls its state and runs commands. */
@@ -411,6 +452,10 @@ export class ObsController {
   /** Scene switches, one at a time. */
   readonly #switches = new SerialQueue();
   #replayWarned = false;
+  /** The collection last warned about (one warning per wrong collection). */
+  #collectionWarned: string | null = null;
+  /** The subtitle source was looked for on this connection. */
+  #subtitleChecked = false;
 
   constructor(connector: ObsConnector, config: ObsConfig) {
     this.#connector = connector;
@@ -452,7 +497,10 @@ export class ObsController {
           log.info("connected to OBS");
           backoffMs = 1_000;
           this.#current = obs;
-          await this.#ensureSubtitleSource(obs);
+          this.#subtitleChecked = false;
+          this.#collectionWarned = null;
+          await this.#checkPlace(obs);
+          await this.#checkProfile(obs);
           while (!signal.aborted) {
             try {
               await this.refresh();
@@ -472,6 +520,69 @@ export class ObsController {
     } finally {
       for (const timer of this.#clearTimers) clearTimeout(timer);
       this.#clearTimers.clear();
+    }
+  }
+
+  /**
+   * Reads OBS's scene collection and compares it with `[stage.obs] collection`. On another one
+   * (or when it cannot be read) nothing is created in OBS; a wrong one is logged once and goes into
+   * the state. Once it is right, the subtitle source is looked for (once per connection).
+   */
+  async #checkPlace(obs: Obs): Promise<void> {
+    const expected = this.#config.collection;
+    let current = this.#state.get().collection;
+    if (obs.sceneCollection) {
+      try {
+        current = await obs.sceneCollection();
+      } catch (error) {
+        log.debug({ err: errorMessage(error) }, "cannot read the OBS scene collection");
+      }
+    }
+    const wrong = expected !== null && current !== null && current !== expected;
+    this.#state.set({
+      ...this.#state.get(),
+      collection: current,
+      wrongCollection: wrong ? expected : null,
+    });
+    if (wrong) {
+      if (this.#collectionWarned !== current) {
+        log.warn(
+          { collection: current, expected },
+          "OBS is not on Miyoria's scene collection: the Stage creates nothing in it (switch OBS to it, or run `miyoria stage obs-setup`)",
+        );
+        this.#collectionWarned = current;
+      }
+      return;
+    }
+    this.#collectionWarned = null;
+    // Unknown (an Obs without `sceneCollection` is taken as right; one that failed to read is not).
+    if (expected !== null && current === null && obs.sceneCollection) return;
+    if (!this.#subtitleChecked) {
+      this.#subtitleChecked = true;
+      await this.#ensureSubtitleSource(obs);
+    }
+  }
+
+  /** `[stage.obs] profile`: only a line in the log (the replay buffer comes from the profile). */
+  async #checkProfile(obs: Obs): Promise<void> {
+    const expected = this.#config.profile;
+    if (expected === null || !obs.profileName) return;
+    try {
+      const current = await obs.profileName();
+      if (current === expected) return;
+      let replayBuffer = "unknown";
+      if (obs.replayBufferActive) {
+        replayBuffer = await obs.replayBufferActive().then(
+          () => "available",
+          () => "not available",
+        );
+      }
+      log.info(
+        { profile: current, expected, replay_buffer: replayBuffer },
+        "OBS is on another profile than Miyoria's (highlights need its replay buffer)",
+      );
+    } catch (error) {
+      log.debug({ err: errorMessage(error) }, "cannot read the OBS profile");
     }
   }
 
@@ -500,10 +611,19 @@ export class ObsController {
         log.debug({ err: errorMessage(error) }, "cannot list OBS scenes");
       }
     }
-    const state: ObsState = { connected: true, scene, streaming, scenes };
-    this.#state.set(state);
+    const before = this.#state.get();
+    this.#state.set({
+      connected: true,
+      scene,
+      streaming,
+      scenes,
+      collection: before.collection,
+      wrongCollection: before.wrongCollection,
+    });
+    // Going live: is OBS still on her collection?
+    if (streaming && !before.streaming) await this.#checkPlace(obs);
     if (streaming) await this.#keepReplayBuffer(obs);
-    return state;
+    return this.#state.get();
   }
 
   /** Starts OBS's replay buffer while streaming (`replay_buffer`); failures are logged once. */

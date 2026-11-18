@@ -252,7 +252,7 @@ describe("the live stage", () => {
   it("reacts to a pat at once, then sends it", async () => {
     const calls: Array<{ method: string; path: string; body: unknown }> = [];
     mockFetch((method, url, body) => {
-      calls.push({ method, path: url.pathname, body });
+      if (url.pathname !== "/api/member/danmaku") calls.push({ method, path: url.pathname, body });
       return { body: { pats: { recent: 1, open: true } } };
     });
     const s = stage();
@@ -329,7 +329,7 @@ describe("the picture and the touches", () => {
     beforeEach(() => {
       calls.length = 0;
       mockFetch((method, url, body) => {
-        calls.push({ method, path: url.pathname, body });
+        if (url.pathname !== "/api/member/danmaku") calls.push({ method, path: url.pathname, body });
         return { body: { pats: { recent: 1, open: true } } };
       });
       Object.defineProperty(HTMLMediaElement.prototype, "play", { configurable: true, value: () => Promise.resolve() });
@@ -471,5 +471,111 @@ describe("the picture and the touches", () => {
       expect(screen.getByRole("button", { name: "靜音" })).toBeInTheDocument();
       localStorage.clear();
     });
+  });
+});
+
+describe("the danmaku form", () => {
+  const VIEW = {
+    open: true,
+    live: true,
+    currency: "魚幣",
+    price: 5,
+    max_chars: 30,
+    cooldown_s: 20,
+    per_day: 10,
+    sent_today: 2,
+    wait_s: 0,
+    balance: 100,
+    why: null as string | null,
+  };
+  const calls: Array<{ method: string; path: string; body: unknown; key: string | null }> = [];
+  let view = VIEW;
+  let post: { status?: number; body: unknown } = { body: { accepted: true, charged: 5, balance: 95, message: "彈幕送出了" } };
+
+  beforeEach(() => {
+    calls.length = 0;
+    view = VIEW;
+    post = { body: { accepted: true, charged: 5, balance: 95, message: "彈幕送出了" } };
+    mockFetch((method, url, body, headers) => {
+      if (url.pathname !== "/api/member/danmaku") return { body: { pats: { recent: 0, open: true } } };
+      calls.push({ method, path: url.pathname, body, key: headers.get("idempotency-key") });
+      return method === "GET" ? { body: view } : post;
+    });
+  });
+
+  const form = () => screen.findByTestId("danmaku-form");
+
+  it("shows the price and the limits from the view", async () => {
+    stage();
+    const f = await form();
+    expect(f).toHaveTextContent("5 魚幣");
+    expect(f).toHaveTextContent("每 20 秒一則,今天 2/10");
+    expect(f).toHaveTextContent("沒顯示出來的會自動退回");
+    expect(screen.getByLabelText(/發一則彈幕/)).toHaveAttribute("maxlength", "30");
+    expect(screen.getByRole("button", { name: /發彈幕/ })).toBeDisabled(); // nothing typed yet
+  });
+
+  it("disables the button and says why while she cannot take one", async () => {
+    view = { ...VIEW, why: "她現在沒在直播" };
+    stage();
+    const f = await form();
+    expect(f).toHaveTextContent("她現在沒在直播");
+    await userEvent.type(screen.getByLabelText(/發一則彈幕/), "晚安");
+    expect(screen.getByRole("button", { name: /發彈幕/ })).toBeDisabled();
+  });
+
+  it("sends a line, clears the input and shows what the server said", async () => {
+    stage();
+    await form();
+    await userEvent.type(screen.getByLabelText(/發一則彈幕/), "晚安");
+    expect(screen.getByText("2/30")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /發彈幕/ }));
+    await waitFor(() => expect(screen.getByTestId("danmaku-form").querySelector("[role=status]")).toHaveTextContent("彈幕送出了"));
+    expect(screen.getByLabelText(/發一則彈幕/)).toHaveValue("");
+    const sent = calls.find((c) => c.method === "POST");
+    expect(sent?.body).toEqual({ text: "晚安" });
+    expect(sent?.key).toBeTruthy();
+    // The view is asked for again after a send.
+    await waitFor(() => expect(calls.filter((c) => c.method === "GET").length).toBeGreaterThan(1));
+  });
+
+  it("keeps the text and shows the reason of a refused line", async () => {
+    post = { body: { accepted: false, charged: 0, balance: 100, message: "這句不能發" } };
+    stage();
+    await form();
+    await userEvent.type(screen.getByLabelText(/發一則彈幕/), "不行");
+    await userEvent.click(screen.getByRole("button", { name: /發彈幕/ }));
+    await waitFor(() => expect(screen.getByTestId("danmaku-form").querySelector("[role=status]")).toHaveTextContent("這句不能發"));
+    expect(screen.getByLabelText(/發一則彈幕/)).toHaveValue("不行");
+  });
+
+  it.each([
+    [429, "太快了,請 12 秒後再發"],
+    [409, "她現在沒在直播"],
+  ])("shows the server's sentence for a %i inline", async (status, sentence) => {
+    post = { status, body: { error: sentence } };
+    stage();
+    await form();
+    await userEvent.type(screen.getByLabelText(/發一則彈幕/), "嗨");
+    await userEvent.click(screen.getByRole("button", { name: /發彈幕/ }));
+    const note = () => screen.getByTestId("danmaku-form").querySelector("[role=status]");
+    await waitFor(() => expect(note()).toHaveTextContent(sentence));
+    expect(note()).toHaveClass("text-primary");
+    expect(screen.getByLabelText(/發一則彈幕/)).toHaveValue("嗨");
+  });
+
+  it("shows no form to a visitor", async () => {
+    stage(null);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("danmaku-form")).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("shows no form while danmaku are off", async () => {
+    view = { ...VIEW, open: false };
+    stage();
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("danmaku-form")).toBeNull();
   });
 });

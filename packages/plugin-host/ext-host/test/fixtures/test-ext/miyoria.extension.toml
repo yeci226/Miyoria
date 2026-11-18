@@ -1,5 +1,6 @@
 id = "test.fixture"
 version = "0.0.1"
+icon = "flask-conical"
 kind = ["tools", "commands", "events", "prompt"]
 runtime = "node"
 entry = "index.mjs"

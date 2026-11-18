@@ -34,9 +34,18 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** The hash of a descriptor's `[install]` section. */
-export function installSectionHash(install: HostInstall): string {
-  return createHash("sha256").update(stable(install)).digest("hex");
+/** An `[install]` section, whichever shape its `files` have. */
+export type InstallSection = Omit<HostInstall, "files"> & { files: readonly unknown[] };
+
+/**
+ * The hash of a descriptor's `[install]` section. `install.files` is left out (as an empty list, so
+ * a section without files hashes as before): a file is checked by its own checksum, and adding or
+ * pinning one does not make the environment stale.
+ */
+export function installSectionHash(install: InstallSection): string {
+  return createHash("sha256")
+    .update(stable({ ...install, files: [] }))
+    .digest("hex");
 }
 
 /** The hash of `<project>/uv.lock`; `null` when there is none. */
@@ -72,7 +81,7 @@ export interface EnvironmentWanted {
   envDir: string;
   projectDir: string;
   extras: readonly string[];
-  install: HostInstall;
+  install: InstallSection;
   platform: NodeJS.Platform;
 }
 

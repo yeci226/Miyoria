@@ -369,6 +369,7 @@ describe("config and helpers", () => {
         rate_total_per_minute: 3000,
         utc_offset_minutes: 480,
       },
+      picture_background: "",
     });
   });
 

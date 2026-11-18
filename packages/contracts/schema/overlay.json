@@ -7,6 +7,8 @@
       "enum": [
         "thinking",
         "synthesizing",
+        "tool",
+        "game",
         "song_prepare",
         "singing"
       ]
@@ -54,6 +56,16 @@
             "number",
             "null"
           ]
+        },
+        "secondary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OverlayActivitySide"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -64,6 +76,133 @@
         "progress",
         "elapsed_ms",
         "duration_ms"
+      ]
+    },
+    "OverlayActivitySide": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label"
+      ]
+    },
+    "OverlayDanmakuClearMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "danmaku_clear"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "OverlayDanmakuDropped": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "danmaku_dropped"
+        },
+        "id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "queue_full",
+            "too_late",
+            "cleared"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "reason"
+      ]
+    },
+    "OverlayDanmakuMessage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "danmaku"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "max_on_screen": {
+          "type": "number"
+        },
+        "queue_max": {
+          "type": "number"
+        },
+        "max_wait_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name",
+        "text",
+        "max_on_screen",
+        "queue_max",
+        "max_wait_ms"
+      ]
+    },
+    "OverlayDanmakuReady": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "danmaku_ready"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "OverlayDanmakuShown": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "danmaku_shown"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id"
       ]
     },
     "OverlayEmotionMessage": {
@@ -100,6 +239,222 @@
       "required": [
         "type",
         "text"
+      ]
+    },
+    "OverlayKaraokeLyricsMessage": {
+      "type": "object",
+      "properties": {
+        "room": {
+          "type": "string",
+          "maxLength": 12
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "song": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "lyrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersKaraokeLyricsV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "video": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageLinkKaraokeBacking"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "const": "karaoke_lyrics"
+        }
+      },
+      "required": [
+        "room",
+        "round",
+        "song",
+        "lyrics",
+        "video",
+        "backing",
+        "type"
+      ]
+    },
+    "OverlayKaraokeMessage": {
+      "type": "object",
+      "properties": {
+        "room": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 12
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "lobby",
+                "countdown",
+                "singing",
+                "results"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "rounds_left": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "song": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageLinkKaraokeSong"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shift": {
+          "type": "integer",
+          "minimum": -12,
+          "maximum": 12
+        },
+        "members": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StageLinkKaraokeMember"
+          }
+        },
+        "position_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -86400000,
+              "maximum": 86400000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "board": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StageLinkKaraokeLine"
+          }
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currency": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "air": {
+          "$ref": "#/$defs/StageLinkKaraokeAir"
+        },
+        "type": {
+          "type": "string",
+          "const": "karaoke"
+        }
+      },
+      "required": [
+        "room",
+        "state",
+        "round",
+        "rounds_left",
+        "song",
+        "shift",
+        "members",
+        "position_ms",
+        "board",
+        "note",
+        "currency",
+        "air",
+        "type"
+      ]
+    },
+    "OverlayKaraokeVoiceMessage": {
+      "type": "object",
+      "properties": {
+        "room": {
+          "type": "string",
+          "maxLength": 12
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "at_ms": {
+          "type": "number",
+          "minimum": -86400000,
+          "maximum": 86400000
+        },
+        "audio": {
+          "type": "string",
+          "maxLength": 44000
+        },
+        "type": {
+          "type": "string",
+          "const": "karaoke_voice"
+        }
+      },
+      "required": [
+        "room",
+        "round",
+        "at_ms",
+        "audio",
+        "type"
       ]
     },
     "OverlayLevelsMessage": {
@@ -146,6 +501,12 @@
           "$ref": "#/$defs/OverlayScreenMessage"
         },
         {
+          "$ref": "#/$defs/OverlayDanmakuMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayDanmakuClearMessage"
+        },
+        {
           "$ref": "#/$defs/OverlayTouchMessage"
         },
         {
@@ -156,6 +517,15 @@
         },
         {
           "$ref": "#/$defs/OverlayStatusMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayKaraokeMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayKaraokeLyricsMessage"
+        },
+        {
+          "$ref": "#/$defs/OverlayKaraokeVoiceMessage"
         }
       ]
     },
@@ -175,11 +545,17 @@
         "text"
       ]
     },
-    "OverlayScreenKind": {
-      "type": "string",
-      "enum": [
-        "message",
-        "dedication"
+    "OverlayReply": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/OverlayDanmakuReady"
+        },
+        {
+          "$ref": "#/$defs/OverlayDanmakuShown"
+        },
+        {
+          "$ref": "#/$defs/OverlayDanmakuDropped"
+        }
       ]
     },
     "OverlayScreenMessage": {
@@ -189,28 +565,17 @@
           "type": "string",
           "const": "screen"
         },
-        "kind": {
-          "$ref": "#/$defs/OverlayScreenKind"
-        },
         "name": {
           "type": "string"
         },
         "text": {
           "type": "string"
-        },
-        "song": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
         "type",
-        "kind",
         "name",
-        "text",
-        "song"
+        "text"
       ]
     },
     "OverlaySpeakingMessage": {
@@ -326,6 +691,452 @@
         "face",
         "body",
         "screen"
+      ]
+    },
+    "StageLinkKaraokeAir": {
+      "type": "object",
+      "properties": {
+        "backing": {
+          "type": "boolean"
+        },
+        "relay": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 60
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delay_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000
+        },
+        "backing_gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "voice_gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "duck_gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "backing",
+        "relay",
+        "delay_ms",
+        "backing_gain",
+        "voice_gain",
+        "duck_gain"
+      ]
+    },
+    "StageLinkKaraokeBacking": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "pcm",
+            "m4a"
+          ]
+        },
+        "rate": {
+          "type": "integer",
+          "minimum": 8000,
+          "maximum": 192000
+        }
+      },
+      "required": [
+        "path",
+        "format",
+        "rate"
+      ]
+    },
+    "StageLinkKaraokeLine": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "color": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "rank": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 110
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "voice",
+                "estimate"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "move": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "same"
+          ]
+        },
+        "winner": {
+          "type": "boolean"
+        },
+        "coins": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "finished": {
+          "type": "boolean"
+        },
+        "on_air": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "color",
+        "rank",
+        "total",
+        "source",
+        "move",
+        "winner",
+        "coins",
+        "finished",
+        "on_air"
+      ]
+    },
+    "StageLinkKaraokeMember": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "color": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "singer",
+            "spectator"
+          ]
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "opener": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "color",
+        "role",
+        "ready",
+        "opener"
+      ]
+    },
+    "StageLinkKaraokeSong": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "artist": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 86400000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "artist",
+        "duration_ms"
+      ]
+    },
+    "WorkersKaraokeLineStatus": {
+      "type": "string",
+      "enum": [
+        "matched",
+        "uncertain",
+        "failed",
+        "unchecked"
+      ]
+    },
+    "WorkersKaraokeLineV2": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkersKaraokeLineStatus"
+        },
+        "source": {
+          "$ref": "#/$defs/WorkersKaraokeLyricsSource"
+        },
+        "similarity": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "heard": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "aligned": {
+          "type": "boolean"
+        },
+        "pieces": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkersKaraokePiece"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "edited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "text",
+        "status",
+        "source",
+        "similarity",
+        "heard",
+        "aligned",
+        "pieces",
+        "edited"
+      ]
+    },
+    "WorkersKaraokeLyricsCheck": {
+      "type": "object",
+      "properties": {
+        "matched": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "uncertain": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "kept",
+            "doubtful",
+            "wrong_song",
+            "unchecked"
+          ]
+        }
+      },
+      "required": [
+        "matched",
+        "uncertain",
+        "failed",
+        "verdict"
+      ]
+    },
+    "WorkersKaraokeLyricsSource": {
+      "type": "string",
+      "enum": [
+        "found",
+        "heard"
+      ]
+    },
+    "WorkersKaraokeLyricsV2": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/WorkersKaraokeLyricsSource"
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timing": {
+          "type": "string",
+          "enum": [
+            "line",
+            "char"
+          ]
+        },
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersKaraokeLyricsCheck"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersKaraokeLineV2"
+          }
+        }
+      },
+      "required": [
+        "provider",
+        "source",
+        "language",
+        "timing",
+        "check",
+        "lines"
+      ]
+    },
+    "WorkersKaraokePiece": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "sung": {
+          "type": "boolean"
+        },
+        "start": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "end": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reading": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "roman": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "text",
+        "sung",
+        "start",
+        "end",
+        "reading",
+        "roman"
       ]
     }
   }

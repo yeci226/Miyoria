@@ -41,6 +41,7 @@ const LifePage = lazyRouteComponent(() => import("@/pages/life/LifePage"), "Life
 const EconomyPage = lazyRouteComponent(() => import("@/pages/economy/EconomyPage"), "EconomyPage");
 const LlmPage = lazyRouteComponent(() => import("@/pages/llm/LlmPage"), "LlmPage");
 const SystemPage = lazyRouteComponent(() => import("@/pages/system/SystemPage"), "SystemPage");
+const ModulePage = lazyRouteComponent(() => import("@/pages/system/ModulePage"), "ModulePage");
 const MachinesPage = lazyRouteComponent(() => import("@/pages/machines/MachinesPage"), "MachinesPage");
 const RulesPage = lazyRouteComponent(() => import("@/pages/rules/RulesPage"), "RulesPage");
 const EvalPage = lazyRouteComponent(() => import("@/pages/eval/EvalPage"), "EvalPage");
@@ -147,6 +148,13 @@ export const systemRoute = createRoute({
   component: SystemPage,
 });
 
+/** One subsystem: its card, its settings and their change log (`/system/market`). */
+export const systemModuleRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/system/$id",
+  component: ModulePage,
+});
+
 /** Old bookmarks (one page per feature) land on the merged pages. */
 const moved = (path: string, to: string, search: Record<string, string> = {}) =>
   createRoute({
@@ -167,6 +175,7 @@ const routeTree = rootRoute.addChildren([
   economyRoute,
   llmRoute,
   systemRoute,
+  systemModuleRoute,
   createRoute({ getParentRoute: () => rootRoute, path: "/machines", component: MachinesPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/rules", component: RulesPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/eval", component: EvalPage }),

@@ -6,6 +6,7 @@ import {
   type ContextKey,
   DirectivesKey,
   FloorKey,
+  GameSecretsKey,
   type InputServices,
   type ServiceKey,
 } from "@miyoria/types";
@@ -126,6 +127,27 @@ describe("the service guard", () => {
       ["notable", elsewhere],
       ["wish", elsewhere],
     ]);
+  });
+
+  it("a line that gives a game's secret away is refused, with the plain answer to say instead", async () => {
+    const asked: [ContextKey, string][] = [];
+    const secrets = {
+      leak: (place: ContextKey, text: string) => {
+        asked.push([place, text]);
+        return text.includes("按鈕") ? { word: "按鈕", instead: "很接近了!" } : null;
+      },
+    };
+    const g = serviceGuard({ services: services([[GameSecretsKey, secrets]]) });
+    expect(await g.checkLine(CTX, "很接近了,想想電梯按鈕", ctx())).toEqual(
+      refuse("game_secret", LINE_REFUSALS.gameSecret("按鈕"), "很接近了!"),
+    );
+    expect(await g.checkLine(CTX, "很接近了!", ctx())).toEqual(ALLOW);
+    expect(asked.map(([place]) => place)).toEqual([CTX, CTX]);
+    const none = { leak: () => ({ word: "傘", instead: null }) };
+    const quiet = serviceGuard({ services: services([[GameSecretsKey, none]]) });
+    expect(await quiet.checkLine(CTX, "帶傘", ctx())).toEqual(
+      refuse("game_secret", LINE_REFUSALS.gameSecret("傘")),
+    );
   });
 
   it("a line the output review would change is refused, not rewritten", async () => {

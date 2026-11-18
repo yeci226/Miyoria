@@ -114,6 +114,77 @@ describe("apply", () => {
   });
 });
 
+describe("tiers entered", () => {
+  it("are told once committed, only for tiers above the highest one reached", () => {
+    const told: { person: string; tiers: string[]; cause: string }[] = [];
+    const off = store.onTierEntered((e) =>
+      told.push({ person: e.person, tiers: e.tiers.map((t) => t.label), cause: e.cause }),
+    );
+    // 認識 is where everyone starts: a first small rise enters nothing.
+    store.apply("p1", up());
+    expect(told).toEqual([]);
+    // A jump enters every tier on the way, lowest first.
+    store.adminSet("p1", "bond", 50);
+    expect(told).toEqual([{ person: "p1", tiers: ["朋友", "好朋友"], cause: "admin" }]);
+    // Down and up again past a tier already reached tells nothing; the next new one does.
+    store.adminSet("p1", "bond", 10);
+    store.adminSet("p1", "bond", 80);
+    expect(told.at(-1)).toEqual({ person: "p1", tiers: ["摯友"], cause: "admin" });
+    expect(told).toHaveLength(2);
+    // A rolled-back write is never told.
+    expect(() =>
+      t.db.tx(() => {
+        store.adminSet("p1", "bond", 130);
+        throw new Error("the caller failed");
+      }),
+    ).toThrow("the caller failed");
+    expect(told).toHaveLength(2);
+    // Inside a caller's transaction it is told when that commits.
+    t.db.tx(() => {
+      store.adminSet("p1", "bond", 130);
+      expect(told).toHaveLength(2);
+    });
+    expect(told.at(-1)?.tiers).toEqual(["知心"]);
+    off();
+    store.adminSet("p1", "bond", 160);
+    expect(told).toHaveLength(3);
+  });
+
+  it("are not told for the migration or a listener that throws", () => {
+    const told: string[] = [];
+    store.onTierEntered(() => {
+      throw new Error("a broken listener");
+    });
+    store.onTierEntered((e) => told.push(e.person));
+    store.migrateLegacy(
+      {
+        relationships: [
+          {
+            profile: "p",
+            person: "p9",
+            affinity: 200,
+            trust: 50,
+            familiarity: 40,
+            tags: [],
+            notes: "",
+            call_name: null,
+            interactions: 10,
+            last_interaction: null,
+            updated_at: toTimestamp(NOW),
+          },
+        ],
+        deltas: new Map(),
+        cards: [],
+        selfState: null,
+      },
+      { now: NOW },
+    );
+    expect(store.get("p9")?.tier_floor).toBe(190);
+    store.adminSet("p2", "bond", 20);
+    expect(told).toEqual(["p2"]);
+  });
+});
+
 describe("caps of another day", () => {
   it("counts a reflection's corrections against the day it reviewed when told to", () => {
     const yesterday = NOW - DAY;

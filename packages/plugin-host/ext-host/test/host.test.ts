@@ -201,6 +201,11 @@ describe("ext host end to end", { timeout: 30_000 }, () => {
     // Per-extension storage.
     expect(await call(h, "store_roundtrip", { key: "k", value: { n: 1 } })).toBe('{"n":1}');
 
+    // Its card on the panel (it said it answers `status`) and the icon its manifest names.
+    const module = h.sup.module(EXT);
+    expect(module?.manifest.icon).toBe("flask-conical");
+    expect(await module?.card?.()).toEqual({ facts: [{ label: "回合", value: 3, unit: "次" }] });
+
     // Disabling the module removes every proxy.
     await h.sup.disable(EXT);
     expect(h.tools.isEmpty).toBe(true);

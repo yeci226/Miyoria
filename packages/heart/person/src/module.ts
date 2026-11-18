@@ -21,6 +21,7 @@ import {
   interval,
   type Logger,
   type Module,
+  type ModuleCard,
   type ModuleContext,
   sleep,
 } from "@miyoria/runtime/kernel";
@@ -55,6 +56,7 @@ import {
   type JsonValue,
   ModerationKey,
   type PersonId,
+  PicturesKey,
   type ProfileId,
   parseSongCue,
   RelationshipEffectsKey,
@@ -76,7 +78,7 @@ import type { LegacyResult } from "./legacy.js";
 import { BLOCKED_TAG, type HeartPerson, hasTag, isProposalField } from "./model.js";
 import { readOldCards } from "./old-cards.js";
 import { BondRingImagesKey } from "./ring-image.js";
-import { CARES_THRESHOLD, cares, type HeartChangeRequest } from "./rules.js";
+import { CARES_THRESHOLD, cares, dayStart, type HeartChangeRequest, localDay } from "./rules.js";
 import { type HeartStore, heartTables } from "./store.js";
 import { Together } from "./together.js";
 import { viewOf } from "./view.js";
@@ -459,6 +461,8 @@ function screenWith(ctx: ModuleContext): ScreenCallName {
 export class HeartModule implements Module {
   static readonly ID = "heart";
   readonly manifest = defineManifest(HeartModule.ID, "Heart", {
+    icon: "heart",
+    category: "her",
     description:
       "Her numbers and words for each person (heart_person) and who people are: her feel proposals, the lines people say, evidence, the daily pass, /me and /admin person",
     optional: ["commands", "actions", "auth", "moderation"],
@@ -467,6 +471,8 @@ export class HeartModule implements Module {
   readonly #profile: ProfileId;
   readonly #options: HeartModuleOptions;
   #stop: (() => void) | null = null;
+  /** The rows and the clock, for the card on the panel, while it runs with a store. */
+  #running: { people: HeartStore; clock: Clock } | null = null;
 
   constructor(profile: ProfileId, options: HeartModuleOptions = {}) {
     this.#profile = profile;
@@ -492,6 +498,7 @@ export class HeartModule implements Module {
     }
     const people = store.plugin(heartTables).people;
     people.setRules(config);
+    this.#running = { people, clock };
     try {
       await migrateOnStart({
         people,
@@ -548,7 +555,13 @@ export class HeartModule implements Module {
     const commands = new CommandMount(
       "heart",
       (registry) =>
-        registerCommands(registry, directory, screen, () => ctx.services.get(BondRingImagesKey)),
+        registerCommands(
+          registry,
+          directory,
+          screen,
+          () => ctx.services.get(BondRingImagesKey),
+          () => ctx.services.get(PicturesKey),
+        ),
       unregisterCommands,
     );
     commands.attach(ctx);
@@ -634,7 +647,27 @@ export class HeartModule implements Module {
     });
   }
 
+  /**
+   * The people she has a row for, and the ones whose numbers changed today (her local day, the
+   * daily pass left out). Her nightly reflection is the `reflect` module's: when it runs and whom
+   * it took are not the heart's to tell, so there is no next.
+   */
+  async card(): Promise<ModuleCard> {
+    const running = this.#running;
+    if (running === null) return { facts: [] };
+    const { people, clock } = running;
+    const today = dayStart(localDay(clock.now(), people.rules), people.rules);
+    const summary = people.summary(today);
+    return {
+      facts: [
+        { label: "認識的人", value: summary.people, unit: "人" },
+        { label: "今天有變動", value: summary.changed, unit: "人" },
+      ],
+    };
+  }
+
   async stop(): Promise<void> {
+    this.#running = null;
     this.#stop?.();
     this.#stop = null;
   }

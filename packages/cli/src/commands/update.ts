@@ -4,7 +4,9 @@
 // Then the services (docs/design/v5-hostd.md §9): every enabled Python service whose install record
 // differs from the lock, the extras or the descriptor is synced again, and every running service
 // that was synced or whose folder changed in the pull is restarted, one at a time through the
-// guard. A guarded service that is busy is reported and left running.
+// guard. A guarded service that is busy is reported and left running. Last, the model files of
+// `[[install.files]]` that are missing or wrong are listed with sizes and licences and, after one
+// question (`--yes` skips it), downloaded.
 
 import {
   copyFileSync,
@@ -39,9 +41,25 @@ import {
 import { repoRoot } from "../stack/config.js";
 import { defaultRunner, type Runner, tailLines } from "../stack/system.js";
 import { bold, dim, fail, note, ok, println, section, warn } from "../ui.js";
-import { catalogRoot, hostTarget, loadHost, rpcText, watchStarts } from "./host.js";
+import {
+  catalogRoot,
+  HostCommandError,
+  hostTarget,
+  loadHost,
+  rpcText,
+  watchStarts,
+} from "./host.js";
 import { loadConfig } from "./node.js";
-import { openInstaller, printInstall, progressPrinter, type ServiceDeps } from "./services.js";
+import {
+  confirmFiles,
+  filesToFetch,
+  openInstaller,
+  printFileNeeds,
+  printFiles,
+  printInstall,
+  progressPrinter,
+  type ServiceDeps,
+} from "./services.js";
 
 export class UpdateError extends Error {
   override readonly name = "UpdateError";
@@ -69,7 +87,7 @@ export interface UpdateDeps {
   env: Record<string, string | undefined>;
   platform: NodeJS.Platform;
   now: () => Date;
-  /** The installer's seams for the services part (tests). */
+  /** The installer's seams for the services part (tests), and the download question. */
   services?: ServiceDeps;
 }
 
@@ -401,6 +419,9 @@ export async function updateServices(
     if (inspected.runtime.kind !== "managed") continue;
     if (options.force || inspected.runtime.state?.state !== "ready") stale.add(entry.name);
   }
+  // The model files of `[[install.files]]` that are missing or wrong: asked about after the
+  // environments, once for all of them.
+  const needs = await filesToFetch(enabled, host);
   const plan = planServiceUpdate({
     services: order
       .filter((name) => enabled.some((e) => e.name === name))
@@ -414,7 +435,7 @@ export async function updateServices(
 
   section("服務");
   const nothing = plan.syncStopped.length + plan.syncAndRestart.length + plan.restart.length === 0;
-  if (nothing && client === null) {
+  if (nothing && client === null && needs.length === 0) {
     ok("環境都與 uv.lock、extras 和 service.toml 一致");
     return 0;
   }
@@ -425,6 +446,10 @@ export async function updateServices(
     }
     if (plan.restart.length > 0) note(`會重啟(經過保護):${plan.restart.join("、")}`);
     if (nothing) ok("環境都與 uv.lock、extras 和 service.toml 一致");
+    if (needs.length > 0) {
+      printFileNeeds(needs, host.state.models);
+      note("會先問一次再下載(--yes 不問)");
+    }
     return 0;
   }
 
@@ -501,6 +526,40 @@ export async function updateServices(
     }
     await restartOne(name, plan.syncAndRestart.includes(name) ? "stop-sync-start" : "restart");
   }
+
+  // The model files, after the environments: a service left busy above is left for later.
+  const fileNeeds = needs.filter((n) => !later.includes(n.service));
+  if (fileNeeds.length > 0) {
+    let agreed = false;
+    let refused = false;
+    try {
+      agreed = await confirmFiles(fileNeeds, host, deps.services ?? {}, "miyoria update --yes");
+    } catch (error) {
+      if (!(error instanceof HostCommandError)) throw error;
+      fail(error.message);
+      failures += 1;
+      refused = true;
+    }
+    if (agreed) {
+      for (const name of [...new Set(fileNeeds.map((n) => n.service))]) {
+        try {
+          const result = await installer.install(
+            { service: name, only_stale: true },
+            progressPrinter(),
+          );
+          const bad = printInstall(result, { brief: true });
+          printFiles(result);
+          if (bad) failures += 1;
+        } catch (error) {
+          failures += 1;
+          fail(`${name}  ${rpcText(error)}`);
+        }
+      }
+    } else if (!refused) {
+      note("沒有下載模型檔;之後 `miyoria doctor --fix` 可以補(缺必要檔案的服務 hostd 不會啟動)");
+    }
+  }
+
   if (later.length > 0) {
     warn(
       options.noRestart

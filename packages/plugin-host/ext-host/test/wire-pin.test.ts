@@ -208,6 +208,7 @@ describe("extension to host: what the host reads", () => {
         prompts: [],
         subscriptions: [],
         executor: null,
+        status: false,
       },
     });
     expect(
@@ -238,6 +239,7 @@ describe("extension to host: what the host reads", () => {
         prompts: ["facts"],
         subscriptions: ["agent.turn.completed"],
         executor: { name: "E", goals: [], guide: null, steer: false },
+        status: false,
       },
     });
     expect(ContributionsSchema.safeParse({ tools: "no" }).success).toBe(false);

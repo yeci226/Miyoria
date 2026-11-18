@@ -39,12 +39,12 @@ export interface SocialSignals {
 export const SocialSignalsKey = serviceKey<SocialSignals>("SocialSignals");
 
 /**
- * What the economy moves in a relationship besides what someone said: `treat` is a paid gift,
- * `deal_kept` a deal they paid for. Both are small, diminish like any other event and count toward
- * the daily caps; `kind_cap` limits what that kind alone gains per day on top of them.
+ * What the economy moves in a relationship besides what someone said: `treat` is a paid gift. It
+ * is small, diminishes like any other event and counts toward the daily caps; `kind_cap` limits
+ * what that kind alone gains per day on top of them.
  */
 export interface RelationshipGain {
-  kind: "treat" | "deal_kept";
+  kind: "treat";
   affinity: number;
   trust: number;
   /** Most this kind alone may gain per person per day (`null`: only the overall caps). */
@@ -57,15 +57,6 @@ export interface RelationshipEffects {
   gain(
     person: PersonId,
     gain: RelationshipGain,
-    now: number,
-  ): Promise<{ affinity: number; trust: number }>;
-  /**
-   * A loss (a broken promise), under the daily cap of the bad direction (`negative_factor` times
-   * the good one, so it is a real loss); `reason` is recorded with the change.
-   */
-  penalty(
-    person: PersonId,
-    loss: { affinity: number; trust: number; reason: string },
     now: number,
   ): Promise<{ affinity: number; trust: number }>;
 }

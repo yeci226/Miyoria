@@ -214,6 +214,51 @@ export class Supervisor {
   }
 
   /**
+   * Replaces a module's config (its `[modules.<id>]` section, as `register` took it) and, when
+   * `restart` is not `false` and the module is enabled, stops it and everything that requires it
+   * and starts them again with it, in the supervisor's queue like `pause`: the module's `stop`
+   * saves its state under the old config and `start` reads the new one. A disabled module keeps
+   * the config for when it is enabled. Clears the failure history. Resolves once the modules were
+   * started again, whether or not they came up (`list` says how they are).
+   */
+  reconfigure(
+    id: ModuleId,
+    config: JsonValue | null,
+    options: { restart?: boolean } = {},
+  ): Promise<void> {
+    return this.#queue.run(async () => {
+      const slot = this.#slot(id);
+      slot.config = config;
+      if (options.restart === false || !slot.enabled) return;
+      slot.restarts = [];
+      if (slot.state === "failed") slot.state = "stopped";
+      await this.#stopWithDependents(id, null);
+      await this.#startPending();
+    });
+  }
+
+  /** The config a module was registered (or last reconfigured) with. */
+  configOf(id: ModuleId): JsonValue | null {
+    return this.#slot(id).config;
+  }
+
+  /** Whether the module was registered as required (it cannot be disabled). */
+  isRequired(id: ModuleId): boolean {
+    return this.#slots.get(id)?.required ?? false;
+  }
+
+  /** The registered module itself (for its manifest, card and actions), `undefined` if none. */
+  module(id: ModuleId): Module | undefined {
+    return this.#slots.get(id)?.module;
+  }
+
+  /** Modules that (transitively) require `id`: what a restart of `id` stops too. */
+  dependentsOf(id: ModuleId): ModuleId[] {
+    this.#slot(id);
+    return this.#dependents(id);
+  }
+
+  /**
    * Stops the running modules among `ids` (with their dependents, in the order given), runs
    * `fn` while they are down, then starts every enabled, stopped module again. For changing
    * data a module caches and saves on stop: restarting after the change would let `stop` write

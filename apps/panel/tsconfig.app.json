@@ -28,9 +28,15 @@
       "@miyoria/contracts/api": ["../../packages/contracts/api/src/index.ts"],
       "@miyoria/contracts/events": ["../../packages/contracts/events/src/index.ts"],
       "@miyoria/contracts/wire": ["../../packages/contracts/wire/src/index.ts"],
+      "@miyoria/contracts/workers/karaoke": ["../../packages/contracts/workers/src/karaoke.ts"],
+      "@miyoria/contracts/workers": ["../../packages/contracts/workers/src/index.ts"],
+      "@miyoria/play/karaoke/score": ["../../packages/play/karaoke/src/score/index.ts"],
+      "@miyoria/play/karaoke/lyrics": ["../../packages/play/karaoke/src/lyrics/index.ts"],
+      "@miyoria/play/karaoke/edit": ["../../packages/play/karaoke/src/edit/index.ts"],
       "@miyoria/contracts/schema/api.routes.json": ["../../packages/contracts/schema/api.routes.json"]
     },
     "resolveJsonModule": true
   },
-  "include": ["src", "../../packages/card-face/src"]
+  "include": ["src", "../../packages/card-face/src"],
+  "exclude": ["../../packages/card-face/src/pictures"]
 }

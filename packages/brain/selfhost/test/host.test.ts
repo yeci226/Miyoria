@@ -282,6 +282,13 @@ describe("tools", () => {
     ]);
     await until(() => own(rig, C2).length === 1, 3_000, "the other transcript");
     expect(own(rig, C2)[0]?.content).toBe("大家好");
+    // The call is announced while it runs and again when it ends: the name only, no arguments.
+    const running = rig.of<{ tool: string; state: string }>(Events.AgentToolRunning.type);
+    expect(running.map((r) => [r.tool, r.state])).toEqual([
+      ["say", "started"],
+      ["say", "ended"],
+    ]);
+    expect(JSON.stringify(running)).not.toContain("大家好");
     const result = rig.model.requests[1]?.messages.find((m) => m.role === "tool");
     expect(String(result?.content)).toContain("已經在 <#c2> 說了");
   });

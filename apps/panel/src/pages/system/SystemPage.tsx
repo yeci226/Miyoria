@@ -1,6 +1,6 @@
-import { getRouteApi, useNavigate } from "@tanstack/react-router";
+import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import type { ColumnDef } from "@tanstack/react-table";
-import { ChevronRight, Power, PowerOff, RotateCw } from "lucide-react";
+import { ChevronRight, LayoutGrid, List, Power, PowerOff, RotateCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ModuleAction } from "@/api/types";
 import type { ExtensionInfo, McpServerInfo, McpState, ModuleInfo } from "@miyoria/contracts/api";
@@ -17,7 +17,11 @@ import { ConfirmDialog } from "@/components/confirm";
 import { RowActions, SearchInput } from "@/components/controls";
 import { DataTable } from "@/components/data-table";
 import { Page, PageHeader, Toolbar } from "@/components/page";
-import { QueryView } from "@/components/query-state";
+import { EmptyLine, QueryView } from "@/components/query-state";
+import { Skeleton } from "@/components/ui/misc";
+import { Segmented } from "@/components/ui/segmented";
+import { readStorage, writeStorage } from "@/lib/storage";
+import { CATEGORIES, ModuleTile } from "./module-bits";
 import { StateBadge, StatusBadge, type Tone } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -59,8 +63,19 @@ function Reason({ text, failed }: { text: string | null; failed: boolean }) {
 
 // --- modules -------------------------------------------------------------------
 
-type Filter = "all" | "attention" | "disabled";
+type Filter = "all" | "attention" | "disabled" | "settings";
 const needsAttention = (m: ModuleInfo) => m.state === "failed" || m.state === "degraded" || (m.enabled && m.state === "stopped");
+const FILTERS: Record<Filter, (m: ModuleInfo) => boolean> = {
+  all: () => true,
+  attention: needsAttention,
+  disabled: (m) => !m.enabled,
+  settings: (m) => m.settings === true,
+};
+
+/** Grid of cards or the table; remembered per browser. */
+type View = "grid" | "list";
+const VIEW_KEY = "miyoria.panel.system.view";
+const readView = (): View => (readStorage(VIEW_KEY) === "list" ? "list" : "grid");
 
 function ModuleFilter({ value, onChange }: { value: Filter; onChange: (f: Filter) => void }) {
   const modules = useModules();
@@ -74,27 +89,68 @@ function ModuleFilter({ value, onChange }: { value: Filter; onChange: (f: Filter
         <SelectItem value="all">全部 · {list.length}</SelectItem>
         <SelectItem value="attention">需要注意 · {list.filter(needsAttention).length}</SelectItem>
         <SelectItem value="disabled">已停用 · {list.filter((m) => !m.enabled).length}</SelectItem>
+        <SelectItem value="settings">有設定 · {list.filter(FILTERS.settings).length}</SelectItem>
       </SelectContent>
     </Select>
   );
 }
 
-function ModulesTab({ filterText, filter }: { filterText: string; filter: Filter }) {
+/** The cards, a section per category; the search matches name, id and description. */
+function ModuleGrid({
+  modules,
+  filterText,
+  onEnable,
+}: {
+  modules: ModuleInfo[];
+  filterText: string;
+  onEnable: (m: ModuleInfo) => void;
+}) {
+  const shown = modules.filter((m) => includes(filterText, m.id, m.name, m.description));
+  if (shown.length === 0) return <EmptyLine>沒有符合的子系統</EmptyLine>;
+  return (
+    <div className="flex flex-col gap-(--stage-gap)">
+      {CATEGORIES.map(({ id, label }) => {
+        const inSection = shown.filter((m) => (m.category ?? "system") === id);
+        if (inSection.length === 0) return null;
+        return (
+          <section key={id} aria-labelledby={`cat-${id}`} className="flex flex-col gap-3">
+            <h2 id={`cat-${id}`} className="text-[15px] font-semibold tracking-[-0.01em]">
+              {label}
+              <span className="ml-2 text-[13px] font-normal text-muted-foreground tabular-nums">{inSection.length}</span>
+            </h2>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {inSection.map((m) => (
+                <ModuleTile key={m.id} module={m} canToggle={m.id !== SELF_ID} onEnable={() => onEnable(m)} />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function ModulesTab({ filterText, filter, view }: { filterText: string; filter: Filter; view: View }) {
   const modules = useModules();
   const action = useModuleAction();
   const [pending, setPending] = useState<{ m: ModuleInfo; action: ModuleAction } | null>(null);
 
   const data = useMemo(
-    () =>
-      (modules.data ?? [])
-        .filter((m) => (filter === "attention" ? needsAttention(m) : filter === "disabled" ? !m.enabled : true))
-        .sort((a, b) => a.id.localeCompare(b.id)),
+    () => (modules.data ?? []).filter(FILTERS[filter]).sort((a, b) => a.name.localeCompare(b.name, "zh-Hant")),
     [modules.data, filter],
   );
 
   const columns = useMemo<ColumnDef<ModuleInfo>[]>(
     () => [
-      { id: "name", header: "子系統", cell: ({ row }) => <NameCell name={row.original.name} id={row.original.id} /> },
+      {
+        id: "name",
+        header: "子系統",
+        cell: ({ row: { original: m } }) => (
+          <Link to="/system/$id" params={{ id: m.id }} className="block rounded-sm outline-none hover:underline focus-visible:underline">
+            <NameCell name={m.name} id={m.id} />
+          </Link>
+        ),
+      },
       { id: "state", header: "狀態", meta: { className: "w-28" }, cell: ({ row }) => <StateBadge state={row.original.state} /> },
       {
         id: "reason",
@@ -134,18 +190,22 @@ function ModulesTab({ filterText, filter }: { filterText: string; filter: Filter
   return (
     <>
       <Card>
-        <QueryView query={modules}>
-          {() => (
-            <DataTable
-              label="子系統"
-              columns={columns}
-              data={data}
-              getRowId={(m) => m.id}
-              filter={filterText}
-              globalFilterFn={(m, n) => includes(n, m.id, m.name, m.description)}
-              empty="沒有符合的子系統"
-            />
-          )}
+        <QueryView query={modules} skeleton={view === "grid" ? <GridSkeleton /> : undefined}>
+          {() =>
+            view === "grid" ? (
+              <ModuleGrid modules={data} filterText={filterText} onEnable={(m) => setPending({ m, action: "enable" })} />
+            ) : (
+              <DataTable
+                label="子系統"
+                columns={columns}
+                data={data}
+                getRowId={(m) => m.id}
+                filter={filterText}
+                globalFilterFn={(m, n) => includes(n, m.id, m.name, m.description)}
+                empty="沒有符合的子系統"
+              />
+            )
+          }
         </QueryView>
       </Card>
       <ConfirmDialog
@@ -175,6 +235,25 @@ function ModulesTab({ filterText, filter }: { filterText: string; filter: Filter
             : null}
       </ConfirmDialog>
     </>
+  );
+}
+
+/** Card-shaped placeholders while the list loads. */
+function GridSkeleton() {
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="載入中">
+      {Array.from({ length: 6 }, (_, i) => (
+        <div key={i} className="glass-well flex h-40 flex-col gap-3 rounded-[10px] border border-border p-4">
+          <div className="flex items-center gap-2.5">
+            <Skeleton className="size-7 rounded-md" />
+            <Skeleton className="h-3.5 w-24" />
+            <Skeleton className="ml-auto h-3 w-12" />
+          </div>
+          <Skeleton className="h-3 w-2/3" />
+          <Skeleton className="h-3 w-1/2" />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -446,6 +525,11 @@ export function SystemPage() {
   }
   const needle = text.trim().toLowerCase();
   const [filter, setFilter] = useState<Filter>("all");
+  const [view, setView] = useState<View>(readView);
+  const pickView = (v: View) => {
+    setView(v);
+    writeStorage(VIEW_KEY, v);
+  };
   return (
     <Tabs value={tab} onValueChange={(t) => void navigate({ to: "/system", search: { tab: t as SystemTab }, replace: true })}>
       <TabsList>
@@ -460,9 +544,21 @@ export function SystemPage() {
         <Toolbar className="-mb-4">
           <SearchInput value={text} onChange={setText} placeholder="搜尋名稱或 id" label="搜尋" />
           {tab === "modules" && <ModuleFilter value={filter} onChange={setFilter} />}
+          {tab === "modules" && (
+            <Segmented
+              label="顯示方式"
+              className="ml-auto"
+              value={view}
+              onChange={pickView}
+              options={[
+                { value: "grid", label: <LayoutGrid className="size-3.5" aria-label="格子" />, title: "格子" },
+                { value: "list", label: <List className="size-3.5" aria-label="清單" />, title: "清單" },
+              ]}
+            />
+          )}
         </Toolbar>
         <TabsContent value="modules">
-          <ModulesTab filterText={needle} filter={filter} />
+          <ModulesTab filterText={needle} filter={filter} view={view} />
         </TabsContent>
         <TabsContent value="extensions">
           <ExtensionsTab filterText={needle} />

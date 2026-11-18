@@ -40,13 +40,16 @@ export class ApiError extends Error {
   readonly kind: ApiErrorKind;
   readonly status: number;
   readonly path: string;
+  /** The error body's JSON, when it was JSON (a refused settings save carries `problems`). */
+  readonly body: unknown;
 
-  constructor(kind: ApiErrorKind, status: number, path: string, message: string) {
+  constructor(kind: ApiErrorKind, status: number, path: string, message: string, body: unknown = null) {
     super(message);
     this.name = "ApiError";
     this.kind = kind;
     this.status = status;
     this.path = path;
+    this.body = body;
   }
 
   get notProvided(): boolean {
@@ -105,11 +108,11 @@ export function buildQuery(query: Query | undefined): string {
 /** Encodes one path segment (module ids contain dots, persona keys dashes). */
 export const seg = (value: string): string => encodeURIComponent(value);
 
-async function readError(res: Response): Promise<{ message: string; json: boolean }> {
+async function readError(res: Response): Promise<{ message: string; json: boolean; body?: unknown }> {
   const text = await res.text().catch(() => "");
   try {
     const body = JSON.parse(text) as Partial<ErrorBody>;
-    if (typeof body.error === "string") return { message: body.error, json: true };
+    if (typeof body.error === "string") return { message: body.error, json: true, body };
   } catch {
     // Not JSON: a proxy, a static file server or an old Core.
   }
@@ -192,8 +195,8 @@ export class ApiClient {
       throw new ApiError("network", 0, path, `無法連線到 Core(${reason})`);
     }
     if (!res.ok) {
-      const { message, json } = await readError(res);
-      throw new ApiError(classify(res.status, message, json), res.status, path, message);
+      const { message, json, body } = await readError(res);
+      throw new ApiError(classify(res.status, message, json), res.status, path, message, body);
     }
     return res;
   }

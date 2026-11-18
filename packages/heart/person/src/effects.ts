@@ -1,10 +1,8 @@
 // What the economy moves in a relationship besides what someone said (`RelationshipEffectsKey`):
-// a paid gift and a deal kept add a hair of bond and trust, a deal broken takes some away. Since
-// phase 4 step 4 these are changes of `heart_person` with cause `evidence`, under the same daily
+// a paid gift adds a hair of bond and trust. Since phase 4 step 4 it is a change of `heart_person` with cause `evidence`, under the same daily
 // caps as her own proposals (docs/design/v5-heart.md §2.3 "禮物維持現有的一點點"): a gift of the
 // same kind is worth `repeat_damping` less each time the same day, and stops at its own daily cap
-// (`kind_cap`). A broken deal is a loss in the bad direction, whose cap is `negative_factor` times
-// the good one, so it stays a real penalty.
+// (`kind_cap`).
 //
 // The evidence itself (`heart.evidence`, which moves nothing) is recorded by the caller through
 // `HeartKey.evidence`.
@@ -18,7 +16,6 @@ import type { HeartStore } from "./store.js";
 /** The reason each kind of gain records: also how today's earlier ones of its kind are found. */
 export const GAIN_QUOTES: Readonly<Record<RelationshipGain["kind"], string>> = {
   treat: "送了禮物",
-  deal_kept: "約定說好的錢付了",
 };
 
 /** `RelationshipEffects` on `heart_person`. */
@@ -65,37 +62,6 @@ export class HeartEffects implements RelationshipEffects {
       requests.push({ type: "adjust", field, delta, cause: "evidence", quote });
     }
     if (requests.length === 0) return none;
-    return totals(this.#people.applyAll(person, requests, { now }));
-  }
-
-  async penalty(
-    person: PersonId,
-    loss: { affinity: number; trust: number; reason: string },
-    now: number,
-  ): Promise<{ affinity: number; trust: number }> {
-    const row = this.#people.get(person);
-    if (row !== null && hasTag(row, BLOCKED_TAG)) return { affinity: 0, trust: 0 };
-    const requests: HeartChangeRequest[] = [];
-    const quote = loss.reason;
-    if (Math.abs(loss.affinity) > 0) {
-      requests.push({
-        type: "adjust",
-        field: "bond",
-        delta: -Math.abs(loss.affinity),
-        cause: "evidence",
-        quote,
-      });
-    }
-    if (Math.abs(loss.trust) > 0) {
-      requests.push({
-        type: "adjust",
-        field: "trust",
-        delta: -Math.abs(loss.trust),
-        cause: "evidence",
-        quote,
-      });
-    }
-    if (requests.length === 0) return { affinity: 0, trust: 0 };
     return totals(this.#people.applyAll(person, requests, { now }));
   }
 }

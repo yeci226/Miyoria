@@ -52,21 +52,29 @@ describe("a restart", () => {
     expect(await balance(second, ALICE)).toBe(70);
   });
 
-  it("keeps the collection: what was drawn is still owned", async () => {
-    const series = [
-      { id: "a", label: "甲", title: "甲家", items: [{ id: "a_n", label: "甲N", rarity: "N" }] },
-    ];
-    const first = await rig({ collection_series: series }, { durable: true });
-    await fund(first, ALICE, 500);
-    await first.economy.v2.draw(ALICE, "d1");
-    const owned = (await first.economy.v2.album(ALICE)).series[0]?.owned_distinct;
-    expect(owned).toBe(1);
+  it("keeps documents: a collectible drawn before the draw was removed is still there", async () => {
+    const first = await rig({}, { durable: true });
+    const at = new Date().toISOString();
+    expect(
+      await first.economy.docs().create({
+        id: "item:old",
+        kind: "item",
+        owner: ALICE,
+        status: "held",
+        version: 1,
+        data: { item: "glasses_black", rarity: "N", source: "draw" },
+        created_at: at,
+        updated_at: at,
+      }),
+    ).toBe(true);
+    const held = (r: Awaited<ReturnType<typeof rig>>) =>
+      r.economy.docs().list("p", "item", { owners: [ALICE], limit: 10 });
 
-    const second = await rig({ collection_series: series }, { durable: true, store: first.store });
-    expect((await second.economy.v2.album(ALICE)).series[0]?.owned_distinct).toBe(1);
+    const second = await rig({}, { durable: true, store: first.store });
+    expect((await held(second)).map((d) => d.id)).toEqual(["item:old"]);
     // Without the store's documents (the in-memory fallback) a restart would forget it.
-    const amnesia = await rig({ collection_series: series }, { store: first.store });
-    expect((await amnesia.economy.v2.album(ALICE)).series[0]?.owned_distinct).toBe(0);
+    const amnesia = await rig({}, { store: first.store });
+    expect(await held(amnesia)).toEqual([]);
   });
 
   it("starts the module with the store's documents and provides what others call", async () => {

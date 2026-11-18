@@ -171,6 +171,8 @@ export const LINE_REFUSALS = {
   quietHours: (until: string) => `現在是安靜時段,${until} 之後才能自己開口`,
   paused: "現在是暫停狀態(緊急停止)",
   undelivered: (reason: string) => `送不出去(${neutralize(reason).replace(/\s+/g, " ").trim()})`,
+  gameSecret: (word: string) =>
+    `說出了湯底的字「${neutralize(word).replace(/\s+/g, " ").trim()}」,但沒人問過這個;只照裁判的結果回答,只用提問的人自己說過的字(有裁判的結果時,程式已經替你說了)`,
 } as const;
 
 /** The note of the next round (and of the transcript) after lines of hers were refused. */

@@ -77,6 +77,15 @@ export const PublicBoardSchema = z
   .meta({ id: "ApiPublicBoard" });
 export type PublicBoard = z.output<typeof PublicBoardSchema>;
 
+/**
+ * `GET /api/public/card/{serial}`: the card, and the titles its holder chose to show others
+ * (series titles, private unless they make one public); empty on an older member card.
+ */
+export const PublicCardSchema = IssuedCardSchema.extend({
+  titles: z.array(z.string()),
+}).meta({ id: "ApiPublicCard" });
+export type PublicCard = z.output<typeof PublicCardSchema>;
+
 export const publicView = {
   /** One body serves everyone for `cache_secs`; 429 with `Retry-After` past the rate limit. */
   status: route
@@ -101,5 +110,5 @@ export const publicView = {
     .meta({ audience: "public", permission: null })
     .route({ method: "GET", path: "/api/public/card/{serial}" })
     .input(z.object({ params: z.object({ serial: z.string() }) }))
-    .output(IssuedCardSchema),
+    .output(PublicCardSchema),
 };

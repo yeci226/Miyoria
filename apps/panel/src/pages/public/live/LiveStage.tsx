@@ -17,6 +17,7 @@ import {
   liveReducer,
   type SourceFactory,
 } from "./feed";
+import { DanmakuForm } from "./DanmakuForm";
 import { LivePlayer, type Spot, type TouchMode } from "./LivePlayer";
 
 /** How long a hand stays where she was touched. */
@@ -248,6 +249,8 @@ export function LiveStage({ member, loginUrl = null, source, size = "section" }:
           {member !== null && now && !open ? "摸頭還沒開放" : (note?.text ?? "")}
         </span>
       </div>
+
+      {member !== null && <DanmakuForm />}
     </div>
   );
 

@@ -10,12 +10,14 @@ import { EmptyLine, QueryView, SkeletonRows } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/misc";
 import { fmtInt } from "@/lib/format";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { AFFINITY, FAMILIARITY, TRUST } from "./card";
 import { CardSection } from "./CardSection";
 import { Transfer } from "./Extras";
+import { useAuction } from "./Market";
 import { WalletCard } from "./Wallet";
 
 /** Her view of someone changes with a reflection, not by the second. */
@@ -259,11 +261,19 @@ function RequestSong() {
   const api = useApi();
   const client = useQueryClient();
   const [query, setQuery] = useState("");
+  const [priority, setPriority] = useState(false);
   const id = useId();
+  const priorityId = useId();
+  // The priority ticket is the market's: offered while the market answers. Its price and daily
+  // limit are not sent, so the Core's sentence says them when it will not sell one.
+  const market = useAuction();
+  const canPriority = market.isSuccess;
   const request = useMutation({
-    mutationFn: (text: string) => api.rpc.member.requestSong({ body: { query: text } }),
+    mutationFn: ({ text, first }: { text: string; first: boolean }) =>
+      api.rpc.member.requestSong({ body: first ? { query: text, priority: true } : { query: text } }),
     onSuccess: () => {
       setQuery("");
+      setPriority(false);
       notify.ok("已經交給她了,唱不唱由她決定");
       void client.invalidateQueries({ queryKey: ME });
       void client.invalidateQueries({ queryKey: ["public", "songs"] });
@@ -273,7 +283,7 @@ function RequestSong() {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const text = query.trim();
-    if (text !== "") request.mutate(text);
+    if (text !== "") request.mutate({ text, first: canPriority && priority });
   };
   return (
     <Card aria-label="點歌">
@@ -291,6 +301,19 @@ function RequestSong() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        {canPriority && (
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={priorityId}
+              checked={priority}
+              disabled={request.isPending}
+              onCheckedChange={(v) => setPriority(v === true)}
+            />
+            <label htmlFor={priorityId} className="text-xs text-muted-foreground">
+              用點歌優先券(排在沒用券的歌前面,要花{market.data?.currency ?? "幣"})
+            </label>
+          </div>
+        )}
         <Button type="submit" busy={request.isPending} disabled={query.trim() === ""}>
           <Music aria-hidden />
           點歌

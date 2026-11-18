@@ -11,6 +11,10 @@
 //   paid twice. An in row the receiver's limit refuses gives the out row back.
 // * The two rows point at each other through `ref` (`<other row id>:<other's name>`); the in row's
 //   id is the out row's plus `~in`, which is how a retry finds it.
+// * The sender pays a fee on top of the amount (`transfer_fee` of it, rounded up, at least 1 coin):
+//   a third row, the sender's `transfer_fee`, with no row on the other side, so the coins are burned.
+//   It is posted after the in row lands (a refused transfer costs nothing) and under a key derived
+//   from the out row, so a retry finishes it too. The day limits count the amount, not the fee.
 // * Spends take turns inside this process (`serial`), so the sender's day limit holds.
 
 import { type AccountRef, accountRefString, newId, safeName, toTimestamp } from "@miyoria/types";
@@ -25,6 +29,13 @@ export const NO_TRANSFERS = "現在沒有開放轉帳";
 export const OWN_ACCOUNT = "不能轉給自己";
 const MAX_NAME_CHARS = 24;
 const MAX_DAY_ROWS = 2_000;
+
+/** The fee on sending `amount` at `rate` of it: rounded up, at least 1, none when the rate is 0. */
+export function transferFee(amount: number, rate: number): number {
+  if (rate <= 0) return 0;
+  // Rounded to 6 places first so 140 * 0.05 is 7, not 7.000000000000001 and then 8.
+  return Math.max(1, Math.ceil(Number((amount * rate).toFixed(6))));
+}
 
 /** The id of the receiver's row of the transfer whose sender's row is `outId`. */
 export const inIdOf = (outId: string): string => `${outId}~in`;
@@ -98,6 +109,7 @@ export async function sendCoins(
   const senderName = safeName(sender.name, MAX_NAME_CHARS);
   const receiverName = safeName(receiver.name, MAX_NAME_CHARS);
   const ledger = e.ledger();
+  const fee = transferFee(amount, c.transfer_fee);
 
   const sent = await e.serial(async (): Promise<number> => {
     const outKey = `transfer:${key}`;
@@ -109,6 +121,9 @@ export async function sendCoins(
       if ((await dayTotal(ledger, e, receiver, "transfer_in")) + amount > c.transfer_in_per_day) {
         throw new EconomyError(403, NO_RECEIVER);
       }
+      if ((await ledger.balance(e.profile, sender.wallet)) < amount + fee) {
+        throw new EconomyError(402, `${c.currency}不夠(要 ${amount + fee},含手續費 ${fee})`);
+      }
       const id = newId();
       const post = await ledger.post(
         row(e, sender, id, -amount, "transfer_out", `${inIdOf(id)}:${receiverName}`, outKey),
@@ -117,7 +132,11 @@ export async function sendCoins(
       if (post.status === "short") throw new EconomyError(402, `${c.currency}不夠`);
       if (post.status === "capped") throw new EconomyError(429, "今天到上限了");
       out = post.entry;
-      e.record(sender, "economy.transfer", { amount, to: accountRefString(receiver.account) });
+      e.record(sender, "economy.transfer", {
+        amount,
+        fee,
+        to: accountRefString(receiver.account),
+      });
     }
     // A retry owes whatever the first try did not finish, of the amount it started with.
     const owed = -out.delta;
@@ -147,11 +166,19 @@ export async function sendCoins(
       await e.refundOnce(sender, out);
       throw new EconomyError(403, NO_RECEIVER);
     }
+    // The fee burns with the amount's rows in place; a retry finds the row by its key.
+    const burn = transferFee(owed, c.transfer_fee);
+    if (burn > 0) {
+      await ledger.post(
+        row(e, sender, `${out.id}~fee`, -burn, "transfer_fee", out.id, `transfer_fee:${out.id}`),
+      );
+    }
     return owed;
   });
 
   return {
     sent,
+    fee,
     balance: await ledger.balance(e.profile, sender.wallet),
     to: receiverName,
   };

@@ -21,12 +21,15 @@ import {
   type Invocation,
   notice,
   parseAccount,
+  pictureParts,
   type ReplyFile,
 } from "@miyoria/commands";
 import {
   type AccountRef,
+  type AdminProfilePicture,
   accountRefString,
   type PersonId,
+  type Pictures,
   type RelationshipLabel,
   relationshipLabel,
   tierStanding,
@@ -80,6 +83,12 @@ export type ScreenCallName = (call: string) => Promise<string | null>;
 /** Where the ring's pictures come from, asked each time (the renderer may start after this). */
 export type RingImages = () => BondRingImages | undefined;
 
+/**
+ * Where the picture messages come from (docs/design/v5-play.md §11.5): the personal card in place
+ * of the bare ring, the week's review. Asked each time; without it the ring and the text stay.
+ */
+export type PictureSource = () => Pictures | undefined;
+
 /** How far under the ring a member's picture draws a bond below 0 (they are only told it is). */
 const PUBLIC_BELOW = 0.25;
 
@@ -111,6 +120,7 @@ export function registerCommands(
   people: PeopleDirectory,
   screen: ScreenCallName = async () => null,
   images: RingImages = () => undefined,
+  pictures: PictureSource = () => undefined,
 ): void {
   const callRoutes: AnyComponentRoute[] = [
     {
@@ -136,7 +146,7 @@ export function registerCommands(
         if (result.tone === "warn" || result.tone === "error" || inv.messageId === null) {
           return ComponentResult.reply(result);
         }
-        return ComponentResult.update(await profile(people, images, inv, result.text));
+        return ComponentResult.update(await profile(people, images, inv, result.text, pictures));
       },
     },
     {
@@ -144,17 +154,31 @@ export function registerCommands(
       handle: async (inv) => {
         const result = await setCall(people, screen, inv, "清除");
         if (result.tone === "warn" || result.tone === "error") return ComponentResult.reply(result);
-        return ComponentResult.update(await profile(people, images, inv, result.text));
+        return ComponentResult.update(await profile(people, images, inv, result.text, pictures));
       },
     },
   ];
 
   registry.register(
     commandSpec("me profile", "查看她對你的印象與她怎麼稱呼你", {
+      args: [
+        argSpec("week", "看你這一週的回顧（聊天、點歌、抽卡、魚幣）", ArgKind.boolean, {
+          required: false,
+        }),
+        argSpec("picture", "附上圖（預設附上；false 只要文字）", ArgKind.boolean, {
+          required: false,
+        }),
+      ],
       permission: "me.profile",
       ephemeral: true,
     }),
-    (inv) => profile(people, images, inv),
+    (inv) => {
+      const drawn = inv.bool("picture") !== false;
+      if (inv.bool("week") === true) return week(people, pictures, inv, drawn);
+      return drawn
+        ? profile(people, images, inv, null, pictures)
+        : profile(people, () => undefined, inv, null);
+    },
   );
 
   registry.register(
@@ -262,7 +286,7 @@ export function registerCommands(
         : {};
     registry.register(
       { ...spec, ephemeral: true },
-      (inv) => admin(people, images, op, inv),
+      (inv) => admin(people, images, op, inv, pictures),
       options,
     );
   }
@@ -365,6 +389,7 @@ async function profile(
   images: RingImages,
   inv: Invocation,
   note: string | null = null,
+  pictures: PictureSource = () => undefined,
 ): Promise<CommandReply> {
   const now = people.clock.now();
   const person = await people.resolve(inv.invoker, inv.invoker_display_name, now);
@@ -376,9 +401,16 @@ async function profile(
   const shown = row === null ? tier : tierStanding({ affinity: row.bond, met: metOf(row) }).label;
   const callName = row?.call_name ?? null;
   const blocks: CardBlock[] = [];
-  // The ring a member sees (no number), when she has a row for them and a renderer is running.
+  // Their card as a picture (the ring and the words of their member page); else the ring alone
+  // (no number), when she has a row for them and a renderer is running.
   const files: ReplyFile[] = [];
-  if (row !== null) {
+  const card =
+    row === null ? null : ((await memberPicture(pictures, inv, "profile"))?.file ?? null);
+  if (card !== null) {
+    const parts = pictureParts(card);
+    blocks.push(...parts.blocks);
+    files.push(...parts.files);
+  } else if (row !== null) {
     const ring = publicBond(row).ring;
     const drawn = await ringFile(images, {
       lap: ring.lap,
@@ -420,6 +452,50 @@ async function profile(
     session: {},
     files,
   });
+}
+
+/** A member picture of the invoker; `null` without the service or anything to draw. */
+async function memberPicture(
+  pictures: PictureSource,
+  inv: Invocation,
+  kind: "profile" | "week",
+  draw = true,
+): Promise<Awaited<ReturnType<Pictures["forMember"]>>> {
+  const who = { account: inv.invoker, name: inv.invoker_display_name };
+  try {
+    return (await pictures()?.forMember(who, kind, { draw })) ?? null;
+  } catch {
+    // A card without the picture is still the card.
+    return null;
+  }
+}
+
+/**
+ * `/me profile week:true`: their week as a picture (docs/design/v5-play.md §11.5), from what their
+ * member page shows them; its one-line summary is the text, and all of it when it cannot be drawn
+ * or `picture:false` asked for words only.
+ */
+async function week(
+  people: PeopleDirectory,
+  pictures: PictureSource,
+  inv: Invocation,
+  draw = true,
+): Promise<CommandReply> {
+  const now = people.clock.now();
+  const person = await people.resolve(inv.invoker, inv.invoker_display_name, now);
+  if (person === null) return notice("error", "無法讀取你的資料。");
+  const row = people.heart.get(person);
+  if (row !== null && hasTag(row, BLOCKED_TAG)) return NOT_RESPONDING();
+  const result = await memberPicture(pictures, inv, "week", draw);
+  if (result === null) return notice("info", "這一週的回顧現在看不到。");
+  const title = `${inv.invoker_display_name} 的這一週`;
+  const parts = pictureParts(result.file);
+  if (parts.blocks.length === 0) {
+    return cardReply([{ type: "text", text: result.alt }], { title, accent: "brand" });
+  }
+  // The picture says it all on Discord; a text platform reads its summary.
+  const reply = cardReply(parts.blocks, { title, accent: "brand", files: parts.files });
+  return { ...reply, text: `${title}\n${result.alt}` };
 }
 
 async function setCall(
@@ -464,6 +540,7 @@ async function admin(
   images: RingImages,
   op: AdminOp,
   inv: Invocation,
+  pictures: PictureSource = () => undefined,
 ): Promise<CommandReply> {
   const now = people.clock.now();
   const user = inv.str("user") ?? "";
@@ -474,7 +551,7 @@ async function admin(
   const heart = people.heart;
   switch (op) {
     case "show":
-      return show(people, images, person, name, now);
+      return show(people, images, person, name, now, pictures);
     case "tag":
     case "untag": {
       const on = op === "tag";
@@ -546,6 +623,7 @@ async function show(
   person: PersonId,
   name: string,
   now: number,
+  pictures: PictureSource = () => undefined,
 ): Promise<CommandReply> {
   const r = people.heart.get(person);
   if (r === null) return notice("info", `她和 ${name} 還沒有任何互動。`);
@@ -574,18 +652,58 @@ async function show(
   }
   const impression = r.impression.trim() === "" ? "（尚無）" : r.impression.trim();
   lines.push(`印象：${impression}`);
-  // The owner's ring has the number on the heart.
-  const drawn = await ringFile(images, { ...bondPlace(r.bond).ring, value: r.bond });
+  // The owner's card has the eight numbers and the bond on the ring's heart; else the ring alone.
+  const place = bondPlace(r.bond);
+  let picture: Awaited<ReturnType<Pictures["render"]>> = null;
+  try {
+    picture = (await pictures()?.render("profile", adminCard(r, name, place))) ?? null;
+  } catch {
+    picture = null;
+  }
+  const drawn = picture === null ? await ringFile(images, { ...place.ring, value: r.bond }) : null;
+  const parts = pictureParts(picture);
   const blocks: CardBlock[] = [
+    ...parts.blocks,
     ...(drawn === null ? [] : [drawn.block]),
     { type: "text", text: lines.join("\n") },
     { type: "muted", text: `person ${person}` },
   ];
+  const files = drawn === null ? parts.files : [drawn.file];
   return cardReply(blocks, {
     title: name,
     accent: "neutral",
-    ...(drawn === null ? {} : { files: [drawn.file] }),
+    ...(files.length === 0 ? {} : { files }),
   });
+}
+
+/** The owner's card of someone: the numbers of their row. */
+function adminCard(
+  r: HeartPerson,
+  name: string,
+  place: ReturnType<typeof bondPlace>,
+): AdminProfilePicture {
+  return {
+    variant: "admin",
+    name,
+    bond: r.bond,
+    ring: place.ring,
+    tier_label: place.tier_label,
+    next_label: place.next_label,
+    tier_progress: place.tier_progress,
+    values: {
+      trust: r.trust,
+      familiarity: r.familiarity,
+      warmth: r.warmth,
+      respect: r.respect,
+      ease: r.ease,
+      grudge: r.grudge,
+      longing: r.longing,
+      rapport: r.rapport,
+    },
+    call_name: r.call_name,
+    tags: [...r.tags],
+    interactions: r.interactions,
+  };
 }
 
 function normalizeTag(tag: string): string | null {

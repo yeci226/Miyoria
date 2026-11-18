@@ -188,6 +188,8 @@ export interface LearningModuleOptions {
 export class ConversationModule implements Module {
   static readonly ID = "conversation";
   readonly manifest = defineManifest(ConversationModule.ID, "Conversation notes", {
+    icon: "messages-square",
+    category: "her",
     description: "Continuous conversation compaction into her own structured notes",
     requires: ["llm"],
     optional: ["heart", "knowledge"],
@@ -295,6 +297,8 @@ export class ConversationModule implements Module {
 export class KnowledgeModule implements Module {
   static readonly ID = "knowledge";
   readonly manifest = defineManifest(KnowledgeModule.ID, "Knowledge", {
+    icon: "lightbulb",
+    category: "her",
     description: "Her self-organized documents about people, servers, herself and topics",
     optional: ["heart"],
     configSchema: KnowledgeConfigSchema,
@@ -479,6 +483,8 @@ export function subjectsFor(
 export class ReflectModule implements Module {
   static readonly ID = "reflect";
   readonly manifest = defineManifest(ReflectModule.ID, "Reflection", {
+    icon: "notebook-pen",
+    category: "her",
     description: "Feedback signals, lessons and her daily reflection",
     requires: ["llm"],
     optional: ["self", "memory", "knowledge", "conversation", "heart", "mind", "actions"],

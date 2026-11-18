@@ -131,7 +131,11 @@ export type MemberForgetResult = z.output<typeof MemberForgetResultSchema>;
 
 /** Body of `POST /api/member/songs`. */
 export const SongRequestSchema = z
-  .strictObject({ query: z.string().trim().min(1).max(120) })
+  .strictObject({
+    query: z.string().trim().min(1).max(120),
+    /** Use a song priority ticket (coins, a daily limit): ahead of the songs without one. */
+    priority: z.boolean().optional(),
+  })
   .meta({ id: "ApiMemberSongRequest" });
 export type SongRequest = z.input<typeof SongRequestSchema>;
 
@@ -149,7 +153,23 @@ export const CardFieldSchema = z
   .meta({ id: "ApiCardField" });
 export type CardField = z.output<typeof CardFieldSchema>;
 
-/** A card she gave someone: what she thought of them then, kept so its code can be checked. */
+/** A part drawn onto a card (what is in her hand, an accessory, the outfit, the pose, the background). */
+export const CardPartSchema = z
+  .object({
+    /** `<slot>.<name>`: what the dex and the wishlist name it by. */
+    id: z.string(),
+    slot: z.enum(["hand", "accessory", "outfit", "pose", "background"]),
+    name: z.string(),
+    rarity: z.enum(["N", "R", "SR", "SSR"]),
+  })
+  .meta({ id: "ApiCardPart" });
+export type CardPart = z.output<typeof CardPartSchema>;
+
+/**
+ * A card she gave someone: what she thought of them then, kept so its code can be checked. A daily
+ * card (since phase 5) also has a rarity, the parts drawn onto it and her expression; an older
+ * member card has none of these and stays exactly as it was.
+ */
 export const IssuedCardSchema = z
   .object({
     /** `MYR-XXXX-XXXX-XXXX`, Crockford base32 (no I L O U), 60 random bits from crypto. */
@@ -174,7 +194,8 @@ export const IssuedCardSchema = z
     stamp: z.string().nullable(),
     /** Fields she chose to add (at most three); empty on older cards. */
     fields: z.array(CardFieldSchema),
-    /** Which picture of her is on it: a key of the server's card poses. */
+    /** Which picture of her is on it: a key of the server's card poses (on a daily card, the one
+     * nearest her drawn expression). */
     pose: z.string(),
     /** The card frame they had chosen then, null for none. */
     frame: z.string().nullable(),
@@ -182,22 +203,30 @@ export const IssuedCardSchema = z
     foil: z.boolean(),
     /** When a reroll replaced it, or null: a voided card is shown as void, never as valid. */
     voided_at: z.string().nullable(),
+    /** A daily card's rarity; null on an older member card. */
+    rarity: z.enum(["N", "R", "SR", "SSR"]).nullable(),
+    /** The parts drawn onto it, in slot order (blanks left out); empty on an older card. */
+    parts: z.array(CardPartSchema),
+    /** Her expression on it, in words (chosen by the relationship); null on an older card. */
+    expression: z.string().nullable(),
+    /**
+     * Why she gave it: `daily` (bought), `milestone` (the relationship reached a new tier),
+     * `keepsake` (they were here before the cards), `drop` (caught in a channel); absent on an
+     * older member card.
+     */
+    kind: z.enum(["daily", "milestone", "keepsake", "drop"]).optional(),
   })
   .meta({ id: "ApiIssuedCard" });
 export type IssuedCard = z.output<typeof IssuedCardSchema>;
 
-/** One picture of her they may choose for a card. */
-export const CardPoseChoiceSchema = z
-  .object({ id: z.string(), label: z.string() })
-  .meta({ id: "ApiCardPoseChoice" });
-export type CardPoseChoice = z.output<typeof CardPoseChoiceSchema>;
-
-/** What the card extras cost them now; a price is null when it is off sale or there is no wallet. */
+/**
+ * What a card costs them now: the daily card itself (the first of the day too), and the foil
+ * finish on top; a price is null when it is off sale or there is no wallet.
+ */
 export const CardPricesSchema = z
   .object({
-    pose: z.number().nullable(),
+    card: z.number().nullable(),
     foil: z.number().nullable(),
-    reroll: z.number().nullable(),
   })
   .meta({ id: "ApiCardPrices" });
 export type CardPrices = z.output<typeof CardPricesSchema>;
@@ -205,31 +234,29 @@ export type CardPrices = z.output<typeof CardPricesSchema>;
 /** `GET /api/member/card`. */
 export const MemberCardsSchema = z
   .object({
-    /** Their newest card that is not voided. */
+    /** Their newest card that is not voided (a daily card, or else their last older card). */
     latest: IssuedCardSchema.nullable(),
-    /** Cards issued to them in the current local day; rerolls and voided cards not counted. */
+    /** Daily cards issued to them in the current local day. */
     today: z.number(),
-    /** Most cards a person may be issued per local day. */
+    /** Most daily cards a person may be issued per local day. */
     per_day: z.number(),
-    /** Pictures their affinity band allows. */
-    poses: z.array(CardPoseChoiceSchema),
     prices: CardPricesSchema,
-    /** Rerolls of today's newest card they may still buy today (0 when none is possible). */
-    rerolls_left: z.number(),
+    /** Their coins now; null when their wallet cannot be used. */
+    balance: z.number().nullable(),
+    /** Cards in a row without SR or better, and how many until the next is guaranteed one. */
+    pity: z.object({ since: z.number(), pity: z.number(), until: z.number() }).nullable(),
   })
   .meta({ id: "ApiMemberCards" });
 export type MemberCards = z.output<typeof MemberCardsSchema>;
 
-/** Body of `POST /api/member/card`: a picture of their choosing and a foil finish, if they pay. */
+/** Body of `POST /api/member/card`: a foil finish on top, if they pay for it. */
 export const IssueCardRequestSchema = z
   .strictObject({
-    pose: z.string().max(16).optional(),
     foil: z.boolean().optional(),
   })
   .meta({ id: "ApiIssueCardRequest" });
 export type IssueCardRequest = z.input<typeof IssueCardRequestSchema>;
 
-/** The body of a request that says nothing (reroll, check-in, a fortune draw): `{}`, no other field. */
 /** Body of `POST /api/member/live/pat`: empty, or where on her picture the pat landed (0..1). */
 const PatUnit = z.number().finite().min(0).max(1);
 export const PatRequestSchema = z
@@ -282,17 +309,14 @@ export const member = {
     .meta({ audience: "member", permission: null, limited: true })
     .route({ method: "GET", path: "/api/member/card" })
     .output(MemberCardsSchema),
-  /** A card of what the page shows them now; the extras cost coins and take an idempotency key. */
+  /**
+   * A daily card of what the page shows them now: it costs coins (the first of the day too), at
+   * most a few a day; foil costs more. Takes an idempotency key.
+   */
   issueCard: route
     .meta({ audience: "member", permission: null, limited: true })
     .route({ method: "POST", path: "/api/member/card" })
     .input(z.object({ headers: IdempotencyHeaders.optional(), body: IssueCardRequestSchema }))
-    .output(IssuedCardSchema),
-  /** Today's newest card is voided and she writes a new one. */
-  rerollCard: route
-    .meta({ audience: "member", permission: null, limited: true })
-    .route({ method: "POST", path: "/api/member/card/reroll" })
-    .input(z.object({ headers: IdempotencyHeaders, body: EmptyRequestSchema }))
     .output(IssuedCardSchema),
   /** A head-pat, as themselves only. `403` while pats are off, `429` for too many, `503` without the live module. */
   pat: route

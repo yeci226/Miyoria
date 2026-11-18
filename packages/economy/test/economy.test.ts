@@ -36,7 +36,6 @@ import { Earnings } from "../src/earn.js";
 import { EconomyService, STRANGER, streakOf } from "../src/economy.js";
 import { EconomyModule } from "../src/module.js";
 import { CoinLedgerStoreKey } from "../src/records.js";
-import { songPayments } from "../src/songs.js";
 import { giveCapability } from "../src/tools.js";
 import { EconomyError, EconomyKey, GIFT_TOPIC, SCREEN_TOPIC } from "../src/types.js";
 import { Economy2Key } from "../src/v2-types.js";
@@ -241,8 +240,6 @@ describe("strangers and the blocked", () => {
       expect(view.shop.every((s) => !s.available && s.why === STRANGER)).toBe(true);
       await rejects(r.economy.checkin(who), 403, STRANGER);
       await rejects(r.economy.feed(who, "rice", 1, "k"), 403, STRANGER);
-      await rejects(r.economy.letter(who, "嗨", "k"), 403, STRANGER);
-      await rejects(r.economy.expression(who, "heart", "k"), 403, STRANGER);
       await rejects(r.economy.frame(who, { buy: "sakura" }, "k"), 403, STRANGER);
       expect(await r.economy.earn(who, "talked", 10, "talked:1")).toBeNull();
       expect(await r.economy.exportWallet(who)).toEqual({ balance: 0, ledger: [] });
@@ -299,13 +296,13 @@ describe("earning", () => {
     await r.earnings.onEvent(message(ALICE), r.clock.at + 1000);
     await r.earnings.onEvent(message(DAVE), r.clock.at);
     await r.earnings.onEvent(message(CAROL), r.clock.at);
-    expect(await ledgerOf(r.store).balance("p", walletOf(r.store, ALICE))).toBe(10);
+    expect(await ledgerOf(r.store).balance("p", walletOf(r.store, ALICE))).toBe(5);
     expect(await ledgerOf(r.store).balance("p", walletOf(r.store, CAROL))).toBe(0);
     // Local midnight is 16:00 UTC: a new day pays again.
     const tomorrow = Date.UTC(2026, 10, 8, 16, 0, 1);
     r.clock.at = tomorrow;
     await r.earnings.onEvent(message(ALICE), tomorrow);
-    expect(await ledgerOf(r.store).balance("p", walletOf(r.store, ALICE))).toBe(20);
+    expect(await ledgerOf(r.store).balance("p", walletOf(r.store, ALICE))).toBe(10);
   });
 
   it("pays voice time only to those who spoke in the window and are still there, up to the cap", async () => {
@@ -339,7 +336,7 @@ describe("earning", () => {
     r.clock.at = start + 4 * window + 1000;
     await r.earnings.settleVoice(r.clock.at);
     // Four windows of 2, capped at 4; Bob sat in silence. Alice also earned `talked` once.
-    expect(await ledgerOf(r.store).balance("p", walletOf(r.store, ALICE))).toBe(4 + 10);
+    expect(await ledgerOf(r.store).balance("p", walletOf(r.store, ALICE))).toBe(4 + 5);
     expect(await ledgerOf(r.store).balance("p", walletOf(r.store, BOB))).toBe(0);
     // Gone before the window ended: nothing.
     const r2 = await rig();
@@ -443,25 +440,47 @@ describe("feeding her", () => {
     expect(await ledgerOf(r.store).balance("p", walletOf(r.store, ALICE))).toBe(70);
   });
 
-  it("is refused when she is full, and what she cannot eat is not bought", async () => {
+  it("is refused to someone who fed her their share of the day, not to the next person", async () => {
     const r = await rig();
-    await funded(r, ALICE, 100);
-    r.hunger.value = 0.1;
-    expect(await r.economy.feed(ALICE, "big_bowl", 1, "k")).toEqual({
+    await funded(r, ALICE, 300);
+    await funded(r, BOB, 100);
+    // 0.85 a day: five rice take 0.75, and the sixth is the last one she takes.
+    expect(await r.economy.feed(ALICE, "rice", 5, "k1")).toMatchObject({ eaten: 5, charged: 50 });
+    expect(await r.economy.feed(ALICE, "rice", 5, "k2")).toMatchObject({
+      accepted: true,
+      eaten: 1,
+      charged: 10,
+      balance: 240,
+    });
+    const events = r.bus.length;
+    expect(await r.economy.feed(ALICE, "big_bowl", 1, "k3")).toEqual({
       accepted: false,
       eaten: 0,
       charged: 0,
-      balance: 100,
-      message: "她吃飽了,吃不下",
+      balance: 240,
+      message: "你今天餵得夠多了,她吃不下",
     });
-    expect(r.bus).toEqual([]);
-    expect((await r.economy.wallet(ALICE)).hungry).toBe("full");
-    expect((await r.economy.wallet(ALICE)).shop.find((s) => s.id === "rice")?.why).toBe("她吃飽了");
-    // 0.4: two bowls take her to 0.1, the other three stay in the shop.
-    r.hunger.value = 0.4;
+    expect(r.bus).toHaveLength(events);
+    const view = await r.economy.wallet(ALICE);
+    expect(view.hungry).toBe("full");
+    expect(view.shop.find((s) => s.id === "rice")?.why).toBe("你今天餵夠了");
+    // Her own hunger is not what stops it: Bob feeds her at 0 hunger, and is not full.
+    r.hunger.value = 0;
+    expect(await r.economy.feed(BOB, "rice", 1, "b1")).toMatchObject({ accepted: true, eaten: 1 });
+    expect((await r.economy.wallet(BOB)).hungry).toBe("ok");
+    expect((await r.economy.wallet(BOB)).shop.find((s) => s.id === "rice")?.available).toBe(true);
+    // The next local day is a new share.
+    r.clock.at += DAY;
+    expect((await r.economy.wallet(ALICE)).hungry).toBe("ok");
+    expect(await r.economy.feed(ALICE, "rice", 1, "k5")).toMatchObject({ accepted: true });
+  });
+
+  it("only charges for what fits in the share: what she cannot eat is not bought", async () => {
+    const r = await rig({ feed_hunger_cap: 0.3 });
+    await funded(r, ALICE, 100);
     const fed = await r.economy.feed(ALICE, "rice", 5, "k2");
     expect(fed).toMatchObject({ accepted: true, eaten: 2, charged: 20, balance: 80 });
-    expect(r.hunger.value).toBeCloseTo(0.1, 5);
+    expect(r.hunger.value).toBeCloseTo(0.5, 5);
   });
 
   it("needs the coins: 402 in the configured currency, nothing eaten", async () => {
@@ -494,7 +513,7 @@ describe("feeding her", () => {
 });
 
 describe("a paid gift and affinity", () => {
-  /** What the social engine was asked: a hair for feeds and expressions, nothing for letters. */
+  /** What the social engine was asked: a hair for feeds. */
   function bonds(r: Rig, fail = false) {
     const calls: { person: PersonId; gain: RelationshipGain }[] = [];
     r.services.provide("test", RelationshipEffectsKey, {
@@ -503,7 +522,6 @@ describe("a paid gift and affinity", () => {
         if (fail) throw new Error("the social engine is down");
         return { affinity: gain.affinity, trust: gain.trust };
       },
-      penalty: async () => ({ affinity: 0, trust: 0 }),
     });
     return calls;
   }
@@ -533,26 +551,17 @@ describe("a paid gift and affinity", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("an expression is one, a letter is not, and a refused or failed gift is not", async () => {
+  it("a refused gift is not one", async () => {
     const r = await rig();
     const calls = bonds(r);
     await funded(r, ALICE, 200);
-    await r.economy.letter(ALICE, "今天的歌好好聽", "l1");
-    expect(calls).toEqual([]);
-    await r.economy.expression(ALICE, "heart", "e1");
-    expect(calls.map((c) => c.gain.kind)).toEqual(["treat"]);
-    // The stage fails: refunded, not a gift.
-    r.clock.at += 601_000;
-    r.stage.ok = false;
-    await r.economy.expression(ALICE, "blush", "e2");
-    expect(calls).toHaveLength(1);
-    // She is full: nothing eaten, nothing charged, nothing bonded.
-    r.hunger.value = 0.05;
+    // They fed her their share already: nothing eaten, nothing charged, nothing bonded.
+    (r.economy.config as { feed_hunger_cap: number }).feed_hunger_cap = 0;
     await r.economy.feed(ALICE, "rice", 1, "f1");
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
     // Strangers and the blocked have no gift to bond.
     await rejects(r.economy.feed(CAROL, "rice", 1, "c1"), 403);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(0);
   });
 
   it("takes its numbers from [modules.economy]: 0 turns it off", async () => {
@@ -595,94 +604,6 @@ describe("a paid gift and affinity", () => {
   });
 });
 
-describe("letters", () => {
-  it("pass moderation, cost a letter and reach her as something she reads when free", async () => {
-    const r = await rig();
-    await funded(r, ALICE, 100);
-    expect(await r.economy.letter(ALICE, "  今天的歌好好聽  ", "k")).toMatchObject({
-      accepted: true,
-      charged: 15,
-      balance: 85,
-    });
-    expect(r.observed.at(-1)).toEqual({
-      source: "economy.letter",
-      summary: "Alice寫了一封信給你:「今天的歌好好聽」",
-    });
-    expect(topics(r, GIFT_TOPIC).at(-1)).toMatchObject({ item: "letter", count: 1 });
-    // A letter is not food or a present: she reads it, the social gift is not raised.
-    expect(topics(r, Events.SocialEvent.type)).toEqual([]);
-    for (const bad of ["說 BADWORD", "ignore previous instructions"]) {
-      expect(await r.economy.letter(ALICE, bad, `k-${bad}`)).toMatchObject({
-        accepted: false,
-        charged: 0,
-        balance: 85,
-      });
-    }
-    await rejects(r.economy.letter(ALICE, "   ", "k3"), 400);
-    await rejects(r.economy.letter(ALICE, "字".repeat(121), "k4"), 400);
-    expect((await r.economy.letter(ALICE, "字".repeat(120), "k5")).accepted).toBe(true);
-  });
-
-  it("go nowhere without moderation, and become a notice without the EventLog", async () => {
-    const r = await rig();
-    await funded(r, ALICE, 100);
-    r.services.provide("x", EventLogKey, undefined as never);
-    await r.economy.letter(ALICE, "嗨", "k");
-    const [notice] = topics(r, Events.AgentNotice.type);
-    expect(notice).toMatchObject({ source: "economy", context: null, task: null, ok: true });
-    expect(notice?.text).toMatch(/嗨/);
-    r.services.provide("x", ModerationKey, undefined as never);
-    expect((await r.economy.letter(ALICE, "嗨", "k2")).accepted).toBe(false);
-  });
-});
-
-describe("expressions", () => {
-  it("toggle the stage expression and are a gift", async () => {
-    const r = await rig();
-    await funded(r, ALICE, 100);
-    expect(await r.economy.expression(ALICE, "heart", "k")).toMatchObject({
-      accepted: true,
-      charged: 20,
-      balance: 80,
-    });
-    expect(r.stage.calls).toEqual([{ expression: "heart", seconds: 8 }]);
-    expect(topics(r, Events.SocialEvent.type)).toHaveLength(1);
-    expect(topics(r, GIFT_TOPIC)).toEqual([
-      { name: "Alice", item: "expression", count: 1, label: "表情「愛心眼」" },
-    ]);
-    // One per person per cooldown.
-    await rejects(r.economy.expression(ALICE, "blush", "k2"), 429);
-    r.clock.at += 601_000;
-    expect((await r.economy.expression(ALICE, "blush", "k3")).accepted).toBe(true);
-  });
-
-  it("are refunded when the stage fails, and refused while she sings or the stage is down", async () => {
-    const r = await rig();
-    await funded(r, ALICE, 100);
-    r.stage.ok = false;
-    const failed = await r.economy.expression(ALICE, "squint", "k");
-    expect(failed).toMatchObject({ accepted: false, charged: 0, balance: 100 });
-    expect(await r.economy.expression(ALICE, "squint", "k")).toMatchObject({ accepted: false });
-    expect(topics(r, Events.SocialEvent.type)).toEqual([]);
-    const lines = (await r.economy.wallet(ALICE)).recent.map((l) => l.delta);
-    expect(lines.slice(0, 2)).toEqual([20, -20]);
-    // A refunded one does not start the cooldown.
-    r.stage.ok = true;
-    r.singing.now = true;
-    expect(await r.economy.expression(ALICE, "squint", "k2")).toMatchObject({
-      accepted: false,
-      charged: 0,
-    });
-    expect((await r.economy.wallet(ALICE)).shop.find((s) => s.id === "expression:heart")?.why).toBe(
-      "她正在唱歌",
-    );
-    r.singing.now = false;
-    r.registry.unregister("stage.expression");
-    expect(await r.economy.expression(ALICE, "squint", "k3")).toMatchObject({ accepted: false });
-    expect(await ledgerOf(r.store).balance("p", walletOf(r.store, ALICE))).toBe(100);
-  });
-});
-
 describe("screen messages", () => {
   it("are charged, shown on the stream and told to her without opening a turn", async () => {
     const r = await rig();
@@ -692,10 +613,9 @@ describe("screen messages", () => {
       charged: 30,
       balance: 70,
     });
-    expect(topics(r, SCREEN_TOPIC)).toEqual([
-      { kind: "message", name: "Alice", text: "加油 喔", song: null },
-    ]);
-    expect(r.observed.at(-1)).toEqual({
+    expect(topics(r, SCREEN_TOPIC)).toEqual([{ name: "Alice", text: "加油 喔" }]);
+    // Her purse note may land after it, so look for the line instead of taking the last.
+    expect(r.observed).toContainEqual({
       source: "economy.screen_message",
       summary: "Alice把一則留言放上了大螢幕:「加油 喔」",
     });
@@ -790,35 +710,60 @@ describe("frames", () => {
 
 describe("paid things other parts sell", () => {
   it("charge once per key, within the day's limit, and refund once", async () => {
-    const r = await rig({ card_rerolls_per_day: 1 });
+    const r = await rig({ card_foils_per_day: 1 });
     await funded(r, ALICE, 100);
-    const first = await r.economy.purchase(ALICE, "card_reroll", "k1", "SERIAL");
-    expect(first).toMatchObject({ charged: 30, balance: 70, duplicate: false });
-    expect(await r.economy.purchase(ALICE, "card_reroll", "k1")).toMatchObject({
+    const first = await r.economy.purchase(ALICE, "card_foil", "k1", "SERIAL");
+    expect(first).toMatchObject({ charged: 50, balance: 50, duplicate: false });
+    expect(await r.economy.purchase(ALICE, "card_foil", "k1")).toMatchObject({
       entry_id: first.entry_id,
-      balance: 70,
+      balance: 50,
       duplicate: true,
     });
-    await rejects(r.economy.purchase(ALICE_TWO, "card_reroll", "k2"), 429);
+    await rejects(r.economy.purchase(ALICE_TWO, "card_foil", "k2"), 429);
     // A refunded one does not count toward the day's limit.
     expect(await r.economy.refund(ALICE, first.entry_id)).toBe(true);
     expect(await r.economy.refund(ALICE, first.entry_id)).toBe(false);
-    expect(await r.economy.purchase(ALICE, "card_reroll", "k3")).toMatchObject({ balance: 70 });
+    expect(await r.economy.purchase(ALICE, "card_foil", "k3")).toMatchObject({ balance: 50 });
     // Someone else's row is not theirs to refund.
     expect(await r.economy.refund(BOB, first.entry_id)).toBe(false);
     const view = await r.economy.wallet(ALICE);
-    expect(view.recent.map((l) => l.label)).toContain("抽卡重製券");
+    expect(view.recent.map((l) => l.label)).toContain("閃卡加工");
     expect(view.shop.find((s) => s.id === "fortune")).toMatchObject({ kind: "fortune", price: 10 });
   });
 
   it("are refused to strangers, when short, and when off sale", async () => {
     const r = await rig({ fortunes_per_day: 0 });
     await funded(r, ALICE, 5);
-    await rejects(r.economy.purchase(DAVE, "song_ticket", "k"), 403);
-    await rejects(r.economy.purchase(ALICE, "song_ticket", "k"), 402);
+    await rejects(r.economy.purchase(DAVE, "card_foil", "k"), 403);
+    await rejects(r.economy.purchase(ALICE, "card_foil", "k"), 402);
     await rejects(r.economy.purchase(ALICE, "fortune", "k"), 400);
     expect(r.economy.price("fortune")).toEqual({ price: 10, per_day: 0 });
     expect((await r.economy.wallet(ALICE)).shop.some((s) => s.id === "fortune")).toBe(false);
+  });
+
+  it("keep their names on a statement once they are not sold any more", async () => {
+    const r = await rig();
+    await funded(r, ALICE, 100);
+    for (const [reason, delta] of [
+      ["card_reroll", -30],
+      ["card_pose", -20],
+      ["draw", -30],
+    ] as const) {
+      await ledgerOf(r.store).post({
+        id: `old-${reason}`,
+        person: walletOf(r.store, ALICE),
+        delta,
+        reason,
+        ref: null,
+        idem_key: null,
+        ts: new Date(r.clock.at - DAY).toISOString(),
+      });
+    }
+    const view = await r.economy.wallet(ALICE);
+    expect(view.recent.map((l) => l.label)).toEqual(
+      expect.arrayContaining(["重抽卡片", "指定立繪", "抽收藏"]),
+    );
+    expect(view.shop.some((s) => s.id === "card_reroll" || s.id === "card_pose")).toBe(false);
   });
 });
 
@@ -900,19 +845,17 @@ describe("the module", () => {
       expect(registry.get("economy.checkin")?.tool?.name).toBe("checkin_for_speaker");
       expect(registry.get("economy.look")?.tool?.name).toBe("check_coins");
       expect(registry.get("economy.wallet")).toBeUndefined();
-      expect(registry.get("economy.make_deal")?.tool?.name).toBe("make_deal");
-      expect(registry.get("economy.deal_done")?.tool?.name).toBe("deal_done");
-      expect(registry.get("economy.cancel_deal")?.tool?.name).toBe("cancel_deal");
+      expect(registry.get("economy.make_deal")).toBeUndefined();
+      expect(registry.get("economy.commission")).toBeUndefined();
+      expect(registry.get("economy.buy_from_shop")).toBeUndefined();
+      expect(registry.get("economy.draw")).toBeUndefined();
+      expect(registry.get("economy.collection")).toBeUndefined();
       // Economy 2.0: her tools, and the two services others call.
       for (const name of [
         "economy.quests",
-        "economy.draw",
         "economy.place_bet",
         "economy.open_prediction",
-        "economy.commission",
-        "economy.deliver_commission",
         "economy.fund_room",
-        "economy.buy_from_shop",
       ]) {
         expect(registry.get(name), name).toBeDefined();
       }
@@ -939,29 +882,6 @@ describe("the module", () => {
       await sup.stopAll();
     }
     expect(registry.get("economy.give")).toBeUndefined();
-  });
-});
-
-describe("the singer's payment port", () => {
-  it("charges a ticket, screens a dedication before charging, and refunds", async () => {
-    const r = await rig();
-    await funded(r, ALICE, 100);
-    const pay = songPayments(r.economy);
-    const ticket = await pay.charge(ALICE, "song_ticket", "k1", "song:x");
-    expect(ticket).toEqual({ entryId: expect.any(String) });
-    // Words that fail the screen are refused before any charge.
-    expect(await pay.charge(ALICE, "dedication", "k2", "song:x", "BADWORD")).toHaveProperty(
-      "refused",
-    );
-    expect((await r.economy.wallet(ALICE)).balance).toBe(75);
-    const ded = await pay.charge(ALICE, "dedication", "k3", "song:x", "給你");
-    expect(ded).toEqual({ entryId: expect.any(String) });
-    expect((await r.economy.wallet(ALICE)).balance).toBe(60);
-    if ("entryId" in ded) expect(await pay.refund(ALICE, ded.entryId)).toBe(true);
-    expect((await r.economy.wallet(ALICE)).balance).toBe(75);
-    // Strangers and a short purse come back as a reason, not a throw.
-    expect(await pay.charge(DAVE, "dedication", "k4", "song:x", "hi")).toHaveProperty("refused");
-    expect(await pay.charge(BOB, "song_ticket", "k5", "song:x")).toHaveProperty("refused");
   });
 });
 

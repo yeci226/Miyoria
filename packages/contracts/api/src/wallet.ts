@@ -2,19 +2,15 @@
 // a blocked person) reads an empty wallet and gets 403 for every spend, in the same words.
 //
 // A spend takes an `Idempotency-Key` header: the same key answers what it answered first. `402` is
-// not enough coins, `409` a refusal in the words of the page, `429` a limit.
+// not enough coins, `409` a refusal in the words of the page, `429` a limit. A danmaku line is
+// charged when it is sent and given back by itself when the overlay could not show it.
 
 import { z } from "zod";
-import { EmptyRequestSchema } from "./member.js";
+import { IssuedFortuneSchema } from "./fortune.js";
 import { IdempotencyHeaders, route } from "./route.js";
 
 export const FeedItemSchema = z.enum(["rice", "big_bowl", "dessert"]).meta({ id: "ApiFeedItem" });
 export type FeedItem = z.output<typeof FeedItemSchema>;
-
-export const GiftExpressionSchema = z
-  .enum(["heart", "blush", "squint"])
-  .meta({ id: "ApiGiftExpression" });
-export type GiftExpression = z.output<typeof GiftExpressionSchema>;
 
 /** How hungry she is, in words: never the number. */
 export const HungerSchema = z.enum(["full", "ok", "hungry", "starving"]).meta({ id: "ApiHunger" });
@@ -34,9 +30,9 @@ export type EarnLine = z.output<typeof EarnLineSchema>;
 
 export const ShopItemSchema = z
   .object({
-    /** `rice`, `letter`, `expression:heart`, `frame:sakura`, `card_reroll`, ... */
+    /** `rice`, `frame:sakura`, `card_foil`, ... */
     id: z.string(),
-    kind: z.enum(["feed", "letter", "expression", "frame", "card", "song", "stream", "fortune"]),
+    kind: z.enum(["feed", "frame", "card", "stream", "fortune"]),
     label: z.string(),
     price: z.number(),
     available: z.boolean(),
@@ -50,20 +46,6 @@ export const LedgerLineSchema = z
   .object({ ts: z.string(), delta: z.number(), label: z.string() })
   .meta({ id: "ApiLedgerLine" });
 export type LedgerLine = z.output<typeof LedgerLineSchema>;
-
-/** One deal as the wallet shows it. */
-export const DealViewSchema = z
-  .object({
-    /** What she said she would do. */
-    task: z.string(),
-    /** `一碗白飯`, `3 碗白飯`. */
-    reward_label: z.string(),
-    status: z.enum(["open", "owed", "settled", "broken", "refunded"]),
-    /** When the next deadline falls; `null` once it ended. */
-    due_at: z.string().nullable(),
-  })
-  .meta({ id: "ApiDealView" });
-export type DealView = z.output<typeof DealViewSchema>;
 
 /** `GET /api/member/wallet`. */
 export const WalletViewSchema = z
@@ -82,17 +64,34 @@ export const WalletViewSchema = z
     hungry: HungerSchema.nullable(),
     /** Newest first, at most 20. */
     recent: z.array(LedgerLineSchema),
-    /** Her deals with this person, newest first, at most 10. */
-    deals: z.array(DealViewSchema),
     /** On the sponsor board (on unless they left; `false` for strangers). */
     on_board: z.boolean(),
+    /** What a sender pays on top of a transfer, as a share of it (rounded up, at least 1 coin); burned. */
+    transfer_fee: z.number(),
   })
   .meta({ id: "ApiWalletView" });
 export type WalletView = z.output<typeof WalletViewSchema>;
 
-/** `POST /api/member/checkin`. */
+/** Body of `POST /api/member/checkin`: `fortune` adds today's fortune slip to the check-in (paid). */
+export const CheckinRequestSchema = z
+  .strictObject({ fortune: z.boolean().optional() })
+  .meta({ id: "ApiCheckinRequest" });
+export type CheckinRequest = z.input<typeof CheckinRequestSchema>;
+
+/**
+ * `POST /api/member/checkin`. With `fortune` asked: the slip (`fortune`, today's own when one was
+ * drawn already, `fortune_charged` 0 then) or why there is none (`fortune_note`; the check-in
+ * itself stands). `balance` is after the slip's price.
+ */
 export const CheckinResultSchema = z
-  .object({ gained: z.number(), streak: z.number(), balance: z.number() })
+  .object({
+    gained: z.number(),
+    streak: z.number(),
+    balance: z.number(),
+    fortune: IssuedFortuneSchema.optional(),
+    fortune_charged: z.number().optional(),
+    fortune_note: z.string().optional(),
+  })
   .meta({ id: "ApiCheckinResult" });
 export type CheckinResult = z.output<typeof CheckinResultSchema>;
 
@@ -114,25 +113,13 @@ export const FeedResultSchema = z
   .meta({ id: "ApiFeedResult" });
 export type FeedResult = z.output<typeof FeedResultSchema>;
 
-/** Body of `POST /api/member/letter`. */
-export const LetterRequestSchema = z
-  .strictObject({ text: z.string().max(2_000) })
-  .meta({ id: "ApiLetterRequest" });
-export type LetterRequest = z.input<typeof LetterRequestSchema>;
-
 /** Body of `POST /api/member/screen`: a message on the stream (`409` when she is not live). */
 export const ScreenRequestSchema = z
   .strictObject({ text: z.string().max(500) })
   .meta({ id: "ApiScreenRequest" });
 export type ScreenRequest = z.input<typeof ScreenRequestSchema>;
 
-/** Body of `POST /api/member/expression`. */
-export const ExpressionRequestSchema = z
-  .strictObject({ expression: GiftExpressionSchema })
-  .meta({ id: "ApiExpressionRequest" });
-export type ExpressionRequest = z.input<typeof ExpressionRequestSchema>;
-
-/** `POST /api/member/letter`, `/screen` and `/expression`. */
+/** `POST /api/member/screen`. */
 export const SpendResultSchema = z
   .object({
     accepted: z.boolean(),
@@ -142,6 +129,40 @@ export const SpendResultSchema = z
   })
   .meta({ id: "ApiSpendResult" });
 export type SpendResult = z.output<typeof SpendResultSchema>;
+
+/**
+ * `GET /api/member/danmaku`: what sending a danmaku line (a short line that crosses her stream)
+ * costs this member now. `why` says, in the page's words, why they cannot send one right now
+ * (`null`: they can); the send answers the same refusals.
+ */
+export const DanmakuViewSchema = z
+  .object({
+    /** Danmaku are on (the owner's setting). */
+    open: z.boolean(),
+    /** She is live and the overlay can take a line. */
+    live: z.boolean(),
+    currency: z.string(),
+    price: z.number(),
+    /** Longest line, in characters. */
+    max_chars: z.number(),
+    /** Seconds between two lines of one person. */
+    cooldown_s: z.number(),
+    per_day: z.number(),
+    /** Lines of theirs today that were not given back. */
+    sent_today: z.number(),
+    /** Seconds until they may send the next one; `0` now. */
+    wait_s: z.number(),
+    balance: z.number(),
+    why: z.string().nullable(),
+  })
+  .meta({ id: "ApiDanmakuView" });
+export type DanmakuView = z.output<typeof DanmakuViewSchema>;
+
+/** Body of `POST /api/member/danmaku`: one line (`409` when she is not live). */
+export const DanmakuRequestSchema = z
+  .strictObject({ text: z.string().max(500) })
+  .meta({ id: "ApiDanmakuRequest" });
+export type DanmakuRequest = z.input<typeof DanmakuRequestSchema>;
 
 /** Body of `POST /api/member/transfer`. */
 export const TransferRequestSchema = z
@@ -156,8 +177,10 @@ export type TransferRequest = z.input<typeof TransferRequestSchema>;
 /** `POST /api/member/transfer`. */
 export const TransferResultSchema = z
   .object({
-    /** What left their wallet (and reached the other's). */
+    /** What reached the other's wallet. */
     sent: z.number(),
+    /** The fee on top of it, taken from them and burned. */
+    fee: z.number(),
     balance: z.number(),
     /** The receiver, as their ledger names them. */
     to: z.string(),
@@ -202,16 +225,24 @@ export const wallet = {
     .meta({ audience: "member", permission: null, limited: true })
     .route({ method: "GET", path: "/api/member/wallet" })
     .output(WalletViewSchema),
-  /** Once a local day (the Discord command counts too); `409` after. */
+  /** Once a local day (the Discord command counts too); `409` after. Optionally with a paid fortune slip, which a day already checked in can still buy alone (`gained` 0). */
   checkin: route
     .meta({ audience: "member", permission: null, limited: true })
     .route({ method: "POST", path: "/api/member/checkin" })
-    .input(z.object({ body: EmptyRequestSchema }))
+    .input(z.object({ body: CheckinRequestSchema }))
     .output(CheckinResultSchema),
   feed: spend("/api/member/feed", FeedRequestSchema).output(FeedResultSchema),
-  letter: spend("/api/member/letter", LetterRequestSchema).output(SpendResultSchema),
   screen: spend("/api/member/screen", ScreenRequestSchema).output(SpendResultSchema),
-  expression: spend("/api/member/expression", ExpressionRequestSchema).output(SpendResultSchema),
+  /** What a danmaku line costs this member now, and why they cannot send one (if so). */
+  danmakuView: route
+    .meta({ audience: "member", permission: null, limited: true })
+    .route({ method: "GET", path: "/api/member/danmaku" })
+    .output(DanmakuViewSchema),
+  /**
+   * A danmaku line on her stream (`409` when she is not live, `429` a limit): charged now, given
+   * back by itself when the overlay could not show it.
+   */
+  danmaku: spend("/api/member/danmaku", DanmakuRequestSchema).output(SpendResultSchema),
   /** Coins to another member (`403` in the same words for every reason they cannot take them). */
   transfer: spend("/api/member/transfer", TransferRequestSchema).output(TransferResultSchema),
   board: route

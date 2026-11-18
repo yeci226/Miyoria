@@ -86,7 +86,14 @@ describe("the handshake", () => {
     // No `protocol`: an extension of protocol 1, which had no such field.
     expect(ExtInitializeResultSchema.parse({})).toEqual({
       protocol: 1,
-      contributions: { tools: [], commands: [], prompts: [], subscriptions: [], executor: null },
+      contributions: {
+        tools: [],
+        commands: [],
+        prompts: [],
+        subscriptions: [],
+        executor: null,
+        status: false,
+      },
     });
     expect(ExtInitializeResultSchema.parse({ protocol: 2 }).protocol).toBe(2);
     expect(ExtInitializeResultSchema.safeParse({ protocol: "2" }).success).toBe(false);

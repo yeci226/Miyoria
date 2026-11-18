@@ -5,7 +5,7 @@
 // reached; it leaves as treats, expressions she buys herself, and bounties.
 //
 // * A share (`her_share`, floored) of what someone pays to feed her, write her, send an expression
-//   or put a message or a dedication on screen goes in the purse, keyed on the source row, so it
+//   or put a message on screen goes in the purse, keyed on the source row, so it
 //   is paid once and taken back once if that charge is refunded.
 // * She sees what she has and what she is saving for in her working context: the `purse` bucket
 //   (one entry, replaced when it changes) and `purse_news` (what just happened).
@@ -26,27 +26,13 @@ import {
   toTimestamp,
 } from "@miyoria/types";
 import type { EconomyService, Member } from "./economy.js";
-import {
-  BountyStoreKey,
-  type CoinEntry,
-  type CoinPost,
-  DealStoreKey,
-  GoalStoreKey,
-  PURSE,
-} from "./records.js";
+import { BountyStoreKey, type CoinEntry, type CoinPost, PURSE } from "./records.js";
 import { EconomyError, GIFT_EXPRESSIONS, type GiftExpression } from "./types.js";
 
 /** The platform of the purse's account. */
 export const PURSE_PLATFORM = "self";
 /** Ledger reasons whose price she gets a share of. */
-export const SHARED_REASONS: readonly string[] = [
-  "feed",
-  "letter",
-  "expression",
-  "screen_message",
-  "dedication",
-];
-const DAY_MS = 86_400_000;
+export const SHARED_REASONS: readonly string[] = ["feed", "screen_message"];
 const MAX_ROWS = 2_000;
 const MAX_NEWS = 6;
 const NOT_ENOUGH = "你的錢包不夠";
@@ -120,12 +106,12 @@ export class Purse {
   // ---- her share ------------------------------------------------------------------------
 
   /**
-   * Her share of what `entry` charged, once. Only the paid gifts have one, unless `force` (a
-   * deal's escrow is hers when she is given it). Never throws: a gift is not undone by this.
+   * Her share of what `entry` charged, once. Only the paid gifts have one. Never throws: a gift is
+   * not undone by this.
    */
-  async share(entry: CoinEntry, force = false): Promise<number> {
+  async share(entry: CoinEntry): Promise<number> {
     try {
-      if (entry.delta >= 0 || (!force && !SHARED_REASONS.includes(entry.reason))) return 0;
+      if (entry.delta >= 0 || !SHARED_REASONS.includes(entry.reason)) return 0;
       const amount = Math.floor(-entry.delta * this.e.config.her_share);
       if (amount < 1) return 0;
       const post = await this.credit(amount, "her_share", entry.id, `share:${entry.id}`);
@@ -141,7 +127,7 @@ export class Purse {
   /** A charge was refunded: her share of it goes back (as much as she still has of it). */
   async claw(entry: CoinEntry): Promise<void> {
     try {
-      if (!SHARED_REASONS.includes(entry.reason) && entry.reason !== "deal_escrow") return;
+      if (!SHARED_REASONS.includes(entry.reason)) return;
       const ledger = this.e.ledger();
       const shared = await ledger.byKey(this.e.profile, PURSE, `share:${entry.id}`);
       if (!shared) return;
@@ -297,31 +283,7 @@ export class Purse {
   async describe(): Promise<string> {
     const s = this.e.services;
     const c = this.e.config;
-    const now = this.e.now();
     const parts = [`你的小錢包有 ${await this.balance()} ${c.currency}(別人送你的禮物分你一份)`];
-    const days = (iso: string) => Math.max(Math.ceil((Date.parse(iso) - now) / DAY_MS), 0);
-    const goals = await s.get(GoalStoreKey)?.list(this.e.profile, { limit: 10 });
-    for (const g of goals ?? []) {
-      if (g.status === "open") {
-        const raised = (await s.get(GoalStoreKey)?.pledges(g.id))?.reduce(
-          (n, p) => n + p.amount,
-          0,
-        );
-        parts.push(
-          `你在存的目標「${g.title}」:${raised ?? 0}/${g.target},還有 ${days(g.deadline)} 天,` +
-            `湊到了你要:${g.promise}`,
-        );
-      } else if (
-        g.status === "reached" &&
-        g.fulfilled_at === undefined &&
-        g.closed_at !== null &&
-        now - Date.parse(g.closed_at) < c.goal_keep_days * DAY_MS
-      ) {
-        parts.push(
-          `你答應過大家、還沒做到的(目標「${g.title}」湊到了):${g.promise}(做到了用 goal_done 記下來)`,
-        );
-      }
-    }
     const bounties = await s.get(BountyStoreKey)?.list(this.e.profile, {
       statuses: ["open"],
       limit: 10,
@@ -329,40 +291,7 @@ export class Purse {
     for (const b of bounties ?? []) {
       parts.push(`你貼的懸賞[${shortId(b.id)}]「${b.task}」${b.reward} ${c.currency}`);
     }
-    for (const line of await this.owedMeals()) parts.push(line);
     return `${parts.join("。")}。`;
-  }
-
-  /**
-   * Who still owes her a meal: they promised a reward for something she did, did not pay in time
-   * (the deal is `broken`) and have not fed her since, for `owe_days` after it broke. She remembers
-   * it as a fact, not a grudge: it changes nothing about how she treats anyone (the deal's own
-   * trust and affinity cost was paid when it broke).
-   */
-  async owedMeals(): Promise<string[]> {
-    const deals = this.e.services.get(DealStoreKey);
-    if (!deals) return [];
-    const c = this.e.config;
-    const now = this.e.now();
-    const since = toTimestamp(now - c.owe_days * DAY_MS);
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const deal of await deals.byStatus(this.e.profile, ["broken"], { since, limit: 50 })) {
-      if (deal.closed_at === null || now - Date.parse(deal.closed_at) > c.owe_days * DAY_MS)
-        continue;
-      const who = await this.e.member(deal.account);
-      if (!who || seen.has(who.person.id)) continue;
-      const fed = await this.e.ledger().entries(this.e.profile, who.wallet, {
-        reasons: ["feed"],
-        limit: 20,
-      });
-      if (fed.some((r) => r.ts > (deal.closed_at as string))) continue;
-      seen.add(who.person.id);
-      out.push(
-        `${safeName(who.name)}欠你一頓飯(他答應「${safeName(deal.task, 40)}」的獎勵沒有付,還沒補)`,
-      );
-    }
-    return out;
   }
 
   /** Writes the purse into her working context when it changed. */

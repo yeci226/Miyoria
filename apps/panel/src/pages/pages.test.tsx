@@ -37,8 +37,44 @@ const WORLD_BASE: WorldView = {
 const posts = (fetch: ReturnType<typeof mockFetch>) =>
   fetch.mock.calls.filter(([, init]) => init?.method && init.method !== "GET").map(([u, init]) => `${init?.method} ${String(u)}`);
 
+/** The system page's table instead of its card grid (the choice is remembered per browser). */
+const listView = () => window.localStorage.setItem("miyoria.panel.system.view", "list");
+
 describe("System", () => {
+  it("shows the modules as cards by section, with the card's facts and next thing", async () => {
+    mockFetch((_method, url) => {
+      if (url.pathname === "/api/modules") {
+        return {
+          body: [
+            mod("market", {
+              name: "Market",
+              icon: "gavel",
+              category: "play",
+              settings: true,
+              card: { facts: [{ label: "最高出價", value: 180, unit: "魚幣" }], next: { label: "結標", at: "2026-11-23T12:00:00.000Z" } },
+              pending: null,
+            }),
+            mod("voice", { category: "platform", state: "failed", reason: "TTS worker unreachable", card: null }),
+            mod("party", { category: "play", enabled: false, state: "disabled" }),
+          ],
+        };
+      }
+      return undefined;
+    });
+    renderRoute("/system");
+    const market = await screen.findByRole("article", { name: "Market" });
+    expect(within(market).getByText("最高出價")).toBeInTheDocument();
+    expect(within(market).getByText("180")).toBeInTheDocument();
+    expect(within(market).getByText(/^結標 · /)).toBeInTheDocument();
+    expect(within(market).getByRole("link", { name: /設定/ })).toHaveAttribute("href", "/system/market");
+    expect(screen.getByRole("heading", { name: /^玩/ })).toBeInTheDocument();
+    const voice = screen.getByRole("article", { name: "VOICE" });
+    expect(within(voice).getByRole("alert")).toHaveTextContent("TTS worker unreachable");
+    expect(within(screen.getByRole("article", { name: "PARTY" })).getByRole("button", { name: "啟用" })).toBeInTheDocument();
+  });
+
   it("confirms before disabling a module and posts the action", async () => {
+    listView();
     const modules = [mod("api"), mod("voice", { state: "failed", reason: "TTS worker unreachable" })];
     const fetch = mockFetch((method, url) => {
       if (method === "GET" && url.pathname === "/api/modules") return { body: modules };
@@ -67,6 +103,7 @@ describe("System", () => {
   });
 
   it("keeps the confirm dialog open when the action fails", async () => {
+    listView();
     mockFetch((method, url) => {
       if (url.pathname === "/api/modules") return { body: [mod("voice")] };
       if (method === "POST") return { status: 409, body: { error: "voice is busy" } };
@@ -314,6 +351,7 @@ const stage = (over: Partial<StageState> = {}): StageState => ({
   speaking: false,
   node: "stage",
   streaming: false,
+  obs_warning: null,
   ...over,
 });
 
@@ -396,6 +434,21 @@ describe("Live", () => {
     await user.click(within(scenes).getByRole("radio", { name: "Game" }));
     await waitFor(() => expect(switched).toEqual({ scene: "Game" }));
     expect(await screen.findByText("已切到「Game」")).toBeInTheDocument();
+  });
+
+  it("says when OBS is not on Miyoria's scene collection", async () => {
+    const warning = "OBS 不在「Miyoria」這份場景集合上(現在是「我的場景」)";
+    mockFetch((method, url) => {
+      if (url.pathname === "/api/stage" && method === "GET") {
+        return { body: stage({ obs_warning: warning }) };
+      }
+      if (url.pathname === "/api/voice") return { body: { sessions: [] } };
+      if (url.pathname === "/api/queue") return { body: { paused: false, items: [] } };
+      return undefined;
+    });
+    renderRoute("/live");
+    const status = await screen.findByText((_, el) => el?.tagName === "P" && (el.textContent ?? "").startsWith(warning));
+    expect(status).toHaveAttribute("role", "status");
   });
 
   it("requests, sings and stops songs, and shows a song being prepared", async () => {

@@ -7,6 +7,7 @@ import type {
   VoiceParticipant,
 } from "@miyoria/types";
 import { defaultPartyConfig, type PartyConfig } from "../src/config.js";
+import { bareTitle } from "../src/games/song.js";
 import type { SoupCase, SoupJudge, SoupVerdict } from "../src/judge.js";
 import {
   type PartyEnded,
@@ -21,6 +22,18 @@ export const VOICE: ContextKey = { platform: "discord", scope: "g1", channel: "v
 /** The text chat of the voice channel: same channel id, kind `channel`. */
 export const VOICE_CHAT: ContextKey = { ...VOICE, kind: "channel" };
 export const OTHER_VOICE: ContextKey = { ...VOICE, channel: "v2" };
+/** A text channel of the same server where turtle soup can be played. */
+export const TEXT: ContextKey = {
+  platform: "discord",
+  scope: "g1",
+  channel: "t1",
+  kind: "channel",
+};
+export const SONGS: SongClipInfo[] = [
+  { id: "s1", title: "晴天 (Live)", artist: null },
+  { id: "s2", title: "小幸運", artist: null },
+];
+
 export const HER: AccountRef = { platform: "discord", id: "100" };
 export const AMY: AccountRef = { platform: "discord", id: "1" };
 export const BOB: AccountRef = { platform: "discord", id: "2" };
@@ -89,6 +102,14 @@ export class FakeClips implements SongClips {
     });
   }
 
+  /** The title of the song whose clip played last, as people say it. */
+  current(): string {
+    const id = this.played.at(-1)?.id;
+    const song = this.songs.find((s) => s.id === id);
+    if (!song) throw new Error("no clip is playing");
+    return bareTitle(song.title);
+  }
+
   /** The clip playing ends with `outcome`. */
   end(outcome: ClipOutcome): void {
     this.#ends.shift()?.(outcome);
@@ -121,9 +142,15 @@ export interface Rig {
   table: Table;
   out: Recorder;
   cfg: PartyConfig;
+  /** The songs and the referee the table was given (unless a test passed its own). */
+  clips: FakeClips;
+  judge: FakeJudge;
 }
 
-/** A table with her in `VOICE` with Amy and Bob. Use with `vi.useFakeTimers()`. */
+/**
+ * A table with her in `VOICE` with Amy and Bob, two songs to play and a referee that says yes.
+ * Use with `vi.useFakeTimers()`.
+ */
 export function rig(
   overrides: Partial<Omit<TableDeps, "output" | "config">> & {
     config?: Partial<PartyConfig>;
@@ -131,13 +158,17 @@ export function rig(
 ): Rig {
   const out = new Recorder();
   const cfg = { ...defaultPartyConfig(), ...overrides.config };
+  const clips = new FakeClips(SONGS);
+  const judge = new FakeJudge();
   const table = new Table({
     clock: { now: () => Date.now() },
     random: () => 0,
+    clips: () => clips,
+    judge: () => judge,
     ...overrides,
     config: cfg,
     output: out,
   });
   table.members(VOICE, ROOM);
-  return { table, out, cfg };
+  return { table, out, cfg, clips, judge };
 }

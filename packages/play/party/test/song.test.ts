@@ -1,0 +1,133 @@
+// 猜歌: the hidden answer stays with the program until the round is over, the first right answer
+// scores, near misses wait for her ruling, time runs out on fake timers.
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PartyError } from "../src/game.js";
+import { bareTitle } from "../src/games/song.js";
+import { amy, bob, FakeClips, rig, VOICE } from "./helpers.js";
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("song guessing", () => {
+  const SONGS = [
+    { id: "s1", title: "晴天 (Live)", artist: "周杰倫" },
+    { id: "s2", title: "小幸運", artist: null, aliases: ["小幸运"] },
+  ];
+
+  it("needs songs to play", () => {
+    const { table } = rig({ clips: () => null });
+    expect(() => table.start(VOICE, "song")).toThrow(/沒有歌可以放/);
+    const empty = rig({ clips: () => new FakeClips([]) });
+    expect(() => empty.table.start(VOICE, "song")).toThrow(PartyError);
+  });
+
+  it("plays a clip in her channel and takes the title as people say it", async () => {
+    const clips = new FakeClips(SONGS);
+    const { table, out, cfg } = rig({ clips: () => clips });
+    const game = table.start(VOICE, "song").game;
+    expect(game.next()).toContain("片段開始放了");
+    expect(clips.played).toHaveLength(1);
+    expect(clips.played[0]?.durationMs).toBe(cfg.clip_secs * 1000);
+    expect(clips.played[0]?.context).toBe(VOICE);
+    const id = clips.played[0]?.id;
+    const song = SONGS.find((s) => s.id === id);
+    if (!song) throw new Error("unknown song");
+    // Her view says a clip plays, never which.
+    expect(game.view().join("\n")).not.toContain(bareTitle(song.title));
+    if (song.artist) {
+      table.input(VOICE, bob, song.artist);
+      expect(out.last()?.summary).toContain("猜到歌手");
+    }
+    table.input(VOICE, amy, `是${bareTitle(song.title)}吧`);
+    expect(out.last()?.summary).toContain(`Amy 猜對了第 1 首`);
+    await vi.advanceTimersByTimeAsync(0);
+    // The clip stops once someone got it.
+    expect(game.view().join("\n")).toContain("已經結束");
+  });
+
+  it("starts the clip where the song says it is worth guessing, else at the start", () => {
+    const clips = new FakeClips([
+      { id: "a", title: "甲", artist: null, clipStartMs: 12_000 },
+      { id: "b", title: "乙", artist: null },
+    ]);
+    const { table } = rig({ clips: () => clips });
+    const game = table.start(VOICE, "song", { rounds: 2 }).game;
+    game.next();
+    game.next();
+    const starts = new Map(clips.played.map((p) => [p.id, p.startMs]));
+    expect(starts.get("a")).toBe(12_000);
+    expect(starts.get("b")).toBe(0);
+  });
+
+  it("tells her when a clip cannot play", async () => {
+    const clips = new FakeClips(SONGS);
+    const { table, out } = rig({ clips: () => clips });
+    table.start(VOICE, "song").game.next();
+    clips.end("failed");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(out.last()?.summary).toContain("片段放不出來");
+  });
+  it("lets her rule on a near miss without telling her the answer", () => {
+    const clips = new FakeClips([{ id: "a", title: "晴天", artist: null }]);
+    const { table, out } = rig({ clips: () => clips });
+    const game = table.start(VOICE, "song").game;
+    game.next();
+    // One character of two wrong is not a hit: that is hers to rule on.
+    table.input(VOICE, bob, "情天");
+    expect(out.notes.at(-1)?.summary).toContain("Bob 說「情天」,跟歌名差 1 個字(答案 2 個字)");
+    expect(out.text()).not.toContain("晴天");
+    // Said again: no second note for the same person in the same round.
+    table.input(VOICE, bob, "情天啦");
+    const near = out.notes.filter((n) => n.key.includes(":near:"));
+    expect(near).toHaveLength(1);
+    expect(near[0]?.untrusted).toBe(true);
+    expect(game.view().join(" ")).toContain("等你判定:Bob");
+    expect(game.judge(true, null)).toContain("算 Bob 猜對了第 1 首,是「晴天」");
+    // That was the last song: the game is over.
+    expect(table.session(VOICE)).toBeNull();
+  });
+
+  it("gives the answer when time is up, and ends after the last song", async () => {
+    const clips = new FakeClips([{ id: "a", title: "晴天", artist: null }]);
+    const { table, out, cfg } = rig({ clips: () => clips });
+    const game = table.start(VOICE, "song").game;
+    game.next();
+    await vi.advanceTimersByTimeAsync(cfg.song_answer_secs * 1000);
+    expect(out.notes.find((n) => n.key.endsWith(":timeout"))?.summary).toContain(
+      "第 1 首時間到,沒人猜到,是「晴天」",
+    );
+    expect(table.session(VOICE)).toBeNull();
+    expect(out.ends.map((e) => e.reason)).toEqual(["done"]);
+    // An answer after the time is up is nothing.
+    table.input(VOICE, amy, "晴天");
+    expect(out.notes.some((n) => n.summary.includes("Amy 猜對"))).toBe(false);
+  });
+
+  it("never shows her the answer of the open song, and lets her guess along", () => {
+    const clips = new FakeClips([{ id: "a", title: "哈姆雷特", artist: null }]);
+    const { table } = rig({ clips: () => clips });
+    const game = table.start(VOICE, "song").game;
+    game.next();
+    expect(game.view().join(" ")).not.toContain("哈姆雷特");
+    expect([game.hint(), game.hint(), game.hint(), game.hint()]).toEqual([
+      "答案是 4 個字",
+      "第一個字是「哈」",
+      "前兩個字是「哈姆」",
+      "沒有更多提示了。",
+    ]);
+    expect(game.play("不知道")).toBe("不對。");
+    expect(game.play("哈姆雷特")).toContain("你猜對了!");
+    expect(() => game.play("哈姆雷特")).toThrow(PartyError);
+  });
+
+  it("strips what is not the title", () => {
+    expect(bareTitle("晴天 (Live)")).toBe("晴天");
+    expect(bareTitle("【官方MV】小幸運")).toBe("小幸運");
+  });
+});

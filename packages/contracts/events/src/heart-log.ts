@@ -79,7 +79,7 @@ export type HeartChangedData = z.output<typeof HeartChangedSchema>;
  * - `task_together`: a task or bounty done with her or for her;
  * - `gift`: a gift to her (`weight`: its value in coins);
  * - `card`: a card of hers given, traded or kept;
- * - `deal_kept`, `deal_broken`: a promise or a paid deal kept or broken.
+ * - `deal_kept`, `deal_broken`: deals are gone; kept so evidence already stored still reads.
  */
 export const HeartEvidenceKindSchema = z
   .enum([

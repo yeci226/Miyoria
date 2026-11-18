@@ -59,7 +59,13 @@ kind = "worker"
 [install]
 runtime = "none"
 [[install.files]]
-url = "https://huggingface.co/x/y.onnx"
+hf = "x/y"
+file = "y.onnx"
+revision = "${"a".repeat(40)}"
+sha256 = "${"0".repeat(64)}"
+size = 200
+what = "a model"
+licence = "MIT"
 path = "smart/model.onnx"
 [run]
 command = ["x"]

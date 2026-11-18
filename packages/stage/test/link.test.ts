@@ -159,14 +159,16 @@ class Node {
     this.ws.send(JSON.stringify(value));
   }
 
-  hello(token: string): void {
-    this.sendJson({
-      type: "hello",
-      version: 1,
-      token,
-      node: "test-stage",
-      capabilities: ["vts", "obs"],
-    });
+  hello(token: string, capabilities: string[] = ["vts", "obs"]): void {
+    this.sendJson({ type: "hello", version: 1, token, node: "test-stage", capabilities });
+  }
+
+  /** The next message of `type` (others are skipped). */
+  async recvType(type: string): Promise<Json> {
+    for (;;) {
+      const msg = await this.recvJson();
+      if (msg.type === type) return msg;
+    }
   }
 
   async #wait<T>(take: () => T | undefined, what: string): Promise<T> {
@@ -276,6 +278,8 @@ describe("stage.link", () => {
       scenes: [],
       hotkeys: [],
       overlay_url: null,
+      obs_collection: null,
+      obs_warning: null,
     });
     expect(env.source).toBe("stage.link");
 
@@ -387,6 +391,42 @@ describe("stage.link", () => {
       kind: "singing",
       detail: "アイドル",
       duration_ms: 200_000,
+    });
+  });
+
+  it("tells_the_node_she_uses_a_tool_and_plays_a_game", async () => {
+    const h = await Harness.start();
+    const node = await h.node();
+    node.sendJson({ type: "status", vts: false, obs: false, scene: null, streaming: false });
+    const turn = newId();
+    h.publish(Events.AgentToolRunning, {
+      turn,
+      context: voiceCtx(),
+      tool: "web_search",
+      state: "started",
+    });
+    expect(await node.recvJson()).toMatchObject({
+      type: "activity",
+      kind: "tool",
+      label: "查資料中",
+    });
+    h.publish(Events.AgentToolRunning, {
+      turn,
+      context: voiceCtx(),
+      tool: "web_search",
+      state: "ended",
+    });
+    expect(await node.recvJson()).toMatchObject({ type: "activity", kind: null });
+    h.publish(Events.GameDirectorSession, {
+      state: "started",
+      game: "minecraft",
+      game_name: "Minecraft",
+      context: voiceCtx(),
+    });
+    expect(await node.recvJson()).toMatchObject({
+      type: "activity",
+      kind: "game",
+      detail: "Minecraft",
     });
   });
 
@@ -519,6 +559,19 @@ describe("stage.link", () => {
     expect(registry.get(["stream", "status"])?.ephemeral).toBe(false);
     expect(reply.text).toContain("直播中");
     expect(reply.text).toContain("Game");
+    expect(reply.text).not.toContain("場景集合");
+
+    // OBS on another scene collection: the card says so.
+    call = registry.dispatch(invocation("stream status"));
+    await answer(node, {
+      vts: false,
+      obs: true,
+      scene: "Game",
+      streaming: false,
+      obs_collection: "我的場景",
+      obs_warning: "OBS 不在「Miyoria」這份場景集合上(現在是「我的場景」)",
+    });
+    expect((await call).text).toContain("OBS 不在「Miyoria」這份場景集合上");
 
     const paths = registry.specs().map((s) => commandName(s));
     for (const p of STREAM_COMMAND_PATHS) expect(paths, `${p} registered`).toContain(p);
@@ -702,5 +755,43 @@ describe("scene director on the link", () => {
     const stop = await answer(node, { ...SCENES, scene: "Bye", streaming: false });
     expect(stop).toMatchObject({ type: "stream", action: "stop" });
     expect((await call).text).toBe("已停止直播。");
+  });
+});
+
+describe("danmaku over the link", () => {
+  const LINE = {
+    id: "L1",
+    name: "Mia",
+    text: "好可愛",
+    max_on_screen: 12,
+    queue_max: 20,
+    max_wait_ms: 30_000,
+  };
+
+  it("sends a line to a node that answers danmaku, and publishes its answer", async () => {
+    const h = await Harness.start();
+    const answers = h.subscribe([Events.StageDanmaku.type]);
+    const node = await Node.connect(h.url());
+    node.hello(TOKEN, ["overlay", "danmaku"]);
+    expect((await node.recvJson()).type).toBe("welcome");
+    await waitUntil(() => h.link().isConnected());
+    h.publish(Events.EconomyDanmaku, LINE);
+    expect(await node.recvType("danmaku")).toEqual({ type: "danmaku", ...LINE });
+    node.sendJson({ type: "danmaku_done", id: "L1", outcome: "shown" });
+    expect((await nextEvent(answers)).data).toEqual({ id: "L1", outcome: "shown" });
+    h.publish(Events.EconomyDanmakuClear, {});
+    expect(await node.recvType("danmaku_clear")).toEqual({ type: "danmaku_clear" });
+  });
+
+  it("answers no_overlay at once without a node, to a node too old to answer, and for a bad line", async () => {
+    const h = await Harness.start();
+    const answers = h.subscribe([Events.StageDanmaku.type]);
+    h.publish(Events.EconomyDanmaku, LINE);
+    expect((await nextEvent(answers)).data).toEqual({ id: "L1", outcome: "no_overlay" });
+    await h.node(); // announces no `danmaku`
+    h.publish(Events.EconomyDanmaku, { ...LINE, id: "L2" });
+    expect((await nextEvent(answers)).data).toEqual({ id: "L2", outcome: "no_overlay" });
+    h.publish(Events.EconomyDanmaku, { ...LINE, id: "L3", text: " " });
+    expect((await nextEvent(answers)).data).toEqual({ id: "L3", outcome: "no_overlay" });
   });
 });

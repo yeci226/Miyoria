@@ -1,15 +1,16 @@
 // Achievements and titles (docs/design/v4-plan.md §10). An achievement is a milestone of what the
-// person already did (read off their ledger and collection), paid once: a `small` or a `big`
-// reward (`achievement_small`, `achievement_big`) under the day's `achievement_cap`. Unlocking is a
+// person already did (read off their ledger), paid once: a `small` or a `big` reward
+// (`achievement_small`, `achievement_big`) under the day's `achievement_cap`. Unlocking is a
 // ledger row (reason `achievement`, ref the id, key `achv:<id>`), so it is paid once per person
 // across all their accounts and survives restarts. When the day's cap is reached nothing is posted
 // and the milestone is simply found again at the next check. She is told with a silent note (one
 // per person and achievement); people see it where the earning that unlocked it is reported
 // (notices.ts).
 //
-// A title is the name an achievement gives (a series' completed set gives its own), shown beside
-// the person's wallet; titles from her shop come with the shop (shop.ts). Nothing here ranks
-// anyone and no number or title reaches her feelings for the person (docs/design/v4-plan.md §15).
+// A title is the name an achievement gives, shown beside the person's wallet; titles her shop sold
+// (it is gone) and achievements of things that are gone (drawing collectibles) stay with whoever
+// has them. Nothing here ranks anyone and no number or title reaches her feelings for the person
+// (docs/design/v4-plan.md §15).
 
 import type { AccountRef } from "@miyoria/types";
 import { type EconomyService, localDay, type Member } from "./economy.js";
@@ -25,14 +26,8 @@ export interface Stats {
   songs: number;
   quests: number;
   games: number;
-  draws: number;
   bets: number;
-  commissions: number;
   room_funds: number;
-  /** Distinct collectibles owned. */
-  items: number;
-  /** Ids of the series owned completely. */
-  series: ReadonlySet<string>;
 }
 
 interface Def {
@@ -122,32 +117,11 @@ const BASE: readonly Def[] = [
     test: (s) => s.games >= 20,
   },
   {
-    id: "first_draw",
-    label: "第一次抽收藏",
-    title: "抽卡新手",
-    size: "small",
-    test: (s) => s.draws >= 1,
-  },
-  {
-    id: "items_10",
-    label: "集到 10 種收藏",
-    title: "收藏家",
-    size: "big",
-    test: (s) => s.items >= 10,
-  },
-  {
     id: "first_bet",
     label: "第一次參加預測",
     title: "預言家",
     size: "small",
     test: (s) => s.bets >= 1,
-  },
-  {
-    id: "first_commission",
-    label: "第一次委託她",
-    title: "委託人",
-    size: "small",
-    test: (s) => s.commissions >= 1,
   },
   {
     id: "first_room",
@@ -157,6 +131,31 @@ const BASE: readonly Def[] = [
     test: (s) => s.room_funds >= 1,
   },
 ];
+
+/**
+ * Achievements of drawing collectibles (removed; the cards plugin took its place): never reached
+ * again, but whoever has one keeps it, its label and its title. `series:<id>` were one per
+ * configured series; these are the default ones, and an id no longer known reads as `SERIES_GONE`.
+ */
+const RETIRED: readonly Omit<Def, "test">[] = [
+  { id: "first_draw", label: "第一次抽收藏", title: "抽卡新手", size: "small" },
+  { id: "items_10", label: "集到 10 種收藏", title: "收藏家", size: "big" },
+  { id: "series:glasses", label: "集齊「眼鏡系列」", title: "眼鏡收藏家", size: "big" },
+  { id: "series:hands", label: "集齊「手上的東西」", title: "牽手達人", size: "big" },
+  { id: "series:sky", label: "集齊「背景系列」", title: "旅行家", size: "big" },
+];
+const SERIES_GONE: Omit<Def, "id" | "test"> = {
+  label: "集齊一個收藏系列",
+  title: "收藏家",
+  size: "big",
+};
+
+/** What an earned achievement that can no longer be reached reads as; `null` for any other id. */
+function retired(id: string): Omit<Def, "test"> | null {
+  const known = RETIRED.find((d) => d.id === id);
+  if (known) return known;
+  return id.startsWith("series:") ? { id, ...SERIES_GONE } : null;
+}
 
 const MAX_ROWS = 2_000;
 
@@ -175,16 +174,9 @@ export function longestStreak(days: ReadonlySet<number>): number {
 export class AchievementDesk {
   constructor(private readonly e: EconomyService) {}
 
-  /** Every achievement there is: the fixed ones and one per series. */
-  defs(): Def[] {
-    const series: Def[] = this.e.config.collection_series.map((s) => ({
-      id: `series:${s.id}`,
-      label: `集齊「${s.label}」`,
-      title: s.title,
-      size: "big",
-      test: (st: Stats) => st.series.has(s.id),
-    }));
-    return [...BASE, ...series];
+  /** Every achievement that can be reached. */
+  defs(): readonly Def[] {
+    return BASE;
   }
 
   async #stats(who: Member): Promise<Stats> {
@@ -193,17 +185,14 @@ export class AchievementDesk {
       ledger.entries(this.e.profile, who.wallet, { reasons, limit: MAX_ROWS });
     const offset = this.e.config.utc_offset_minutes;
     const days = new Set((await count(["checkin"])).map((r) => localDay(Date.parse(r.ts), offset)));
-    const [feeds, songs, quests, plays, draws, bets, commissions, room] = await Promise.all([
+    const [feeds, songs, quests, plays, bets, room] = await Promise.all([
       count(["feed"]),
       count(["song"]),
       count(["quest"]),
       count(["play"]),
-      count(["draw"]),
       count(["bet"]),
-      count(["commission"]),
       count(["room_fund"]),
     ]);
-    const owned = await this.e.v2.collection.owned(who);
     return {
       checkins: days.size,
       best_streak: longestStreak(days),
@@ -211,12 +200,8 @@ export class AchievementDesk {
       songs: songs.length,
       quests: quests.filter((r) => r.ref !== "all").length,
       games: plays.filter((r) => (r.ref ?? "").startsWith("game_")).length,
-      draws: draws.length,
       bets: bets.length,
-      commissions: commissions.length,
       room_funds: room.length,
-      items: owned.items.size,
-      series: owned.series,
     };
   }
 
@@ -265,20 +250,34 @@ export class AchievementDesk {
     if (!who) return { achievements: [], titles: [] };
     await this.e.v2.afterEarn(who);
     const have = await this.#unlockedRows(who);
-    const list: AchievementView[] = this.defs().map((d) => {
-      const row = have.get(d.id);
-      return {
-        id: d.id,
-        label: d.label,
-        title: d.title,
-        reward: d.size === "big" ? this.e.config.achievement_big : this.e.config.achievement_small,
-        unlocked_at: row?.ts ?? null,
-      };
-    });
+    const reward = (d: Omit<Def, "test">) =>
+      d.size === "big" ? this.e.config.achievement_big : this.e.config.achievement_small;
+    const list: AchievementView[] = this.defs().map((d) => ({
+      id: d.id,
+      label: d.label,
+      title: d.title,
+      reward: reward(d),
+      unlocked_at: have.get(d.id)?.ts ?? null,
+    }));
+    // The ones that can no longer be reached are listed only when they were.
+    for (const [id, row] of have) {
+      const d = retired(id);
+      if (!d) continue;
+      list.push({ id, label: d.label, title: d.title, reward: reward(d), unlocked_at: row.ts });
+    }
     const titles = [
       ...list.filter((a) => a.unlocked_at !== null).map((a) => a.title),
-      ...(await this.e.v2.shopDesk.titles(who)),
+      ...(await this.#bought(who)),
     ];
     return { achievements: list, titles: [...new Set(titles)] };
+  }
+
+  /** Titles her shop sold before it went: documents of kind `title`, kept with their owner. */
+  async #bought(who: Member): Promise<string[]> {
+    const docs = await this.e.docs().list(this.e.profile, "title", {
+      owners: who.accounts,
+      limit: 100,
+    });
+    return docs.map((d) => String((d.data as { title?: unknown }).title ?? ""));
   }
 }

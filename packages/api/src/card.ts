@@ -1,102 +1,82 @@
-// Member cards (她發給你的卡): a snapshot of how she sees someone at the moment they asked, with a
-// random serial, kept so the QR code on it can be checked later.
+// Her cards (她發給你的卡) on the API: the daily card (docs/design/v5-play.md §2) issued through the
+// cards plugin (`CardsKey`), and the member cards of before it, kept exactly as they were (owner
+// decision: 舊卡保持原樣).
 //
-// * `GET /api/member/card`, `POST /api/member/card` `{}`: their latest card, and a new one (routes
-//   in `member.ts`; what goes on a card is `cardView` there).
-// * `GET /api/public/card/{serial}`: anyone may check a code; unknown, deleted and malformed
-//   serials get the same 404.
+// * `GET /api/member/card`, `POST /api/member/card` `{ foil? }`: their latest card and what the day
+//   allows, and a new daily card (routes in `member.ts`; what goes on a card is `cardView` there).
+//   A daily card costs `[modules.cards] price` fish coins, the first of the day too, at most
+//   `daily_cap` a day; the parts are drawn by the public odds and her expression follows the
+//   relationship. Frames and the foil finish still apply; the foil is paid with the card through
+//   the cards (`CardWallet.foil`). The day and the balance (for the card and its foil) are checked
+//   before she is asked to write anything, so a refused card costs no model call.
+// * `GET /api/public/card/{serial}`: anyone may check a code, daily or older; unknown, deleted and
+//   malformed serials get the same 404. A daily card's check also lists the titles its holder made
+//   public (`cards_titles.public`); a private title is never on it.
+// * A card she dropped in a channel is picked up from its button (`claimDropCard`, through
+//   `KeepsakesKey`): free, written like a daily card.
 //
-// A card holds what the member page showed, in words, and the frame they chose, nothing else: it
-// is built field by field from the stored snapshot, so a field added to the snapshot stays private
-// until named here.
+// A card holds what the member page showed, in words, the frame they chose, and on a daily card
+// the parts drawn onto it: it is built field by field from the stored snapshot, so a field added to
+// the snapshot stays private until named here.
 
-import { randomBytes } from "node:crypto";
 import type {
-  CardField,
-  CardPoseChoice,
+  CardPart,
   CardPrices,
   IssuedCard,
   MemberCard,
   MemberCards,
+  PublicCard,
 } from "@miyoria/contracts/api";
-import { type Economy, EconomyError, EconomyKey, type PaidItem } from "@miyoria/economy";
-import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
+import { type Economy, EconomyKey, STRANGER } from "@miyoria/economy";
 import {
-  type MemberCardRecord,
-  type MemberCardStore,
-  MemberCardStoreKey,
-  StoreError,
-} from "@miyoria/store";
+  CARD_TEXTS,
+  type CardFace,
+  type CardRecord,
+  type CardRelationship,
+  CardsKey,
+  CardWalletKey,
+  cardRelationship,
+  type DailyRefusal,
+  type DropRefusal,
+  portraitPose,
+  refusalText,
+} from "@miyoria/play/cards";
+import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
+import { type MemberCardRecord, MemberCardStoreKey } from "@miyoria/store";
 import {
   type AccountRef,
   HeartKey,
   isJsonObject,
-  type JsonObject,
   type JsonValue,
   type PersonId,
-  toTimestamp,
 } from "@miyoria/types";
-import { type CardWords, POSE_WORDS } from "./card-words.js";
+import type { CardWords } from "./card-words.js";
 import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { clientKey, localDay } from "./public.js";
+import { heartRows } from "./heart-rows.js";
+import { clientKey } from "./public.js";
 import type { SessionRecord } from "./session.js";
 import type { ApiContext, ApiState } from "./state.js";
 
 const log = getLogger("api.card");
 
-/** Most cards a person may be issued per local day. */
+/** Most cards a person may be issued per local day when the cards plugin cannot say. */
 export const CARDS_PER_DAY = 5;
 /** Cards an export lists at most. */
 const MAX_EXPORTED = 1_000;
+/** Recent older cards looked at for "latest". */
+const RECENT = 100;
 
-const OVER_LIMIT = "今天的卡已經發完了,明天再來";
 const NO_STORE = "這個 Core 還不能發卡";
 const NO_SUCH_CARD = "這張卡不存在或已經作廢";
 const NO_WALLET = "錢包現在不能用";
-const BAD_POSE = "這張立繪現在不能選";
-const NOTHING_TO_REROLL = "今天沒有可以重抽的卡";
-
-/**
- * Pictures of her per affinity band (`bondBand`, the whole scale); `stranger` for someone she does
- * not know (or will not say). The bands past 非常好 take its pictures.
- */
-const NEAREST: readonly string[] = ["heart", "blush", "squint"];
-export const CARD_POSES: Readonly<Record<string, readonly string[]>> = {
-  stranger: ["calm", "finger"],
-  很差: ["cold"],
-  不太好: ["sweat", "smug"],
-  普通: ["calm", "finger", "smug"],
-  不錯: ["smile", "finger", "hand"],
-  很好: ["blush", "squint", "hand"],
-  非常好: NEAREST,
-  很親近: NEAREST,
-  心意相通: NEAREST,
-  像家人一樣: NEAREST,
-  無可取代: NEAREST,
-  永恆的羈絆: NEAREST,
-};
 
 // ---- serials --------------------------------------------------------------------------------
 
-/** Crockford base32: no I, L, O or U. */
-const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const SERIAL_CHARS = 12;
 const MAX_SERIAL_INPUT = 64;
 
 function formatSerial(body: string): string {
   return `MYR-${body.slice(0, 4)}-${body.slice(4, 8)}-${body.slice(8, 12)}`;
-}
-
-/** A fresh `MYR-XXXX-XXXX-XXXX`: 60 bits from the system's CSPRNG. */
-export function newSerial(): string {
-  let bits = randomBytes(8).readBigUInt64BE(0);
-  let body = "";
-  for (let i = 0; i < SERIAL_CHARS; i++) {
-    body = ALPHABET[Number(bits & 31n)] + body;
-    bits >>= 5n;
-  }
-  return formatSerial(body);
 }
 
 /**
@@ -112,26 +92,13 @@ export function normalizeSerial(input: string): string | null {
   return formatSerial(body);
 }
 
-// ---- cards ----------------------------------------------------------------------------------
-
-/** One of the band's poses, by `random` in [0, 1). */
-/** The poses a card of `affinity` may use. */
-export function posesFor(affinity: string | null): readonly string[] {
-  const poses = (affinity !== null ? CARD_POSES[affinity] : undefined) ?? CARD_POSES.stranger;
-  return poses && poses.length > 0 ? poses : ["calm"];
-}
-
-export function pickPose(affinity: string | null, random: () => number): string {
-  const list = posesFor(affinity);
-  const i = Math.min(Math.max(Math.floor(random() * list.length), 0), list.length - 1);
-  return list[i] as string;
-}
+// ---- cards as the API shows them --------------------------------------------------------------
 
 const text = (v: JsonValue | undefined): string | null => (typeof v === "string" ? v : null);
 
-function fieldsOf(v: JsonValue | undefined): CardField[] {
+function fieldsOf(v: JsonValue | undefined): IssuedCard["fields"] {
   if (!Array.isArray(v)) return [];
-  const out: CardField[] = [];
+  const out: IssuedCard["fields"] = [];
   for (const f of v) {
     if (!isJsonObject(f)) continue;
     const label = text(f.label);
@@ -141,8 +108,8 @@ function fieldsOf(v: JsonValue | undefined): CardField[] {
   return out;
 }
 
-/** A stored card as it may leave, or `null` when the snapshot is not one. */
-function issuedCard(r: MemberCardRecord): IssuedCard | null {
+/** An older member card as it may leave, or `null` when the snapshot is not one. */
+function olderCard(r: MemberCardRecord): IssuedCard | null {
   const s = r.snapshot;
   const name = text(s.name);
   const pose = text(s.pose);
@@ -171,15 +138,47 @@ function issuedCard(r: MemberCardRecord): IssuedCard | null {
     frame: text(s.frame),
     foil: s.foil === true,
     voided_at: text(s.voided_at),
+    rarity: null,
+    parts: [],
+    expression: null,
   };
 }
 
-/** The serial a reroll replaced; such cards do not count toward the day's cards. */
-const rerollOf = (r: MemberCardRecord): string | null => text(r.snapshot.reroll_of);
+/** Someone she has not met reads as before: no relationship on the card at all. */
+const STRANGER_TIER = "陌生人";
 
-function snapshotOf(card: IssuedCard): JsonObject {
-  const { serial: _serial, issued_at: _at, fields, ...rest } = card;
-  return { ...rest, fields: fields.map((f) => ({ label: f.label, text: f.text })) };
+/** A daily card as it may leave: its words, the parts drawn onto it and her expression. */
+export function dailyCard(c: CardRecord): IssuedCard {
+  const r = c.relationship;
+  const known = r.tier !== STRANGER_TIER;
+  const parts: CardPart[] = c.parts
+    .filter((p) => !p.blank)
+    .map((p) => ({ id: p.id, slot: p.slot, name: p.name, rarity: p.rarity }));
+  return {
+    serial: c.serial,
+    issued_at: c.created_at,
+    name: c.face.name,
+    avatar_url: c.face.avatar_url,
+    number: c.face.number,
+    call_name: c.face.call_name,
+    relationship: known ? r.tier_label : null,
+    affinity: known ? r.closeness : null,
+    trust: known ? r.trust : null,
+    familiarity: known ? r.familiarity : null,
+    public_feeling: known ? r.public_feeling : null,
+    line: c.face.line,
+    stamp: c.face.stamp,
+    fields: c.face.fields,
+    // Her picture until the rendered one exists: the fixed portrait nearest her expression.
+    pose: portraitPose(c.expression.id),
+    frame: c.frame,
+    foil: c.foil,
+    voided_at: null,
+    rarity: c.rarity,
+    parts,
+    expression: c.expression.name,
+    kind: c.kind,
+  };
 }
 
 /** Whose cards these are. */
@@ -191,86 +190,55 @@ export interface CardHolder {
   person: PersonId | null;
 }
 
-/** Start of the current local day, as public stats count days. */
-function todayStart(state: ApiState): string {
-  const offset = state.publicSide.config.utc_offset_minutes;
-  return toTimestamp(localDay(state.now(), offset) * 86_400_000 - offset * 60_000);
-}
-
-/** Recent cards looked at for "today" and "latest"; a day holds a handful. */
-const RECENT = 100;
-
-interface Today {
-  /** Cards that count toward the day's limit (a reroll's card replaces one, so it does not). */
-  issued: number;
-  rerolls: number;
-  /** Their newest card that is not voided, with the record it came from. */
-  latest: MemberCardRecord | null;
-}
-
-async function todayOf(
-  state: ApiState,
-  store: MemberCardStore,
-  holder: CardHolder,
-): Promise<Today> {
-  const since = Date.parse(todayStart(state));
+/** Their newest older card that is not voided. */
+async function latestOlder(state: ApiState, holder: CardHolder): Promise<IssuedCard | null> {
+  const store = state.optional(MemberCardStoreKey);
+  if (!store) return null;
   const recent = await store.listFor(state.profile(), holder.accounts, RECENT);
-  let issued = 0;
-  let rerolls = 0;
-  for (const r of recent) {
-    if (Date.parse(r.issued_at) < since) continue;
-    if (rerollOf(r) === null) issued++;
-    else rerolls++;
-  }
-  const latest = recent.find((r) => text(r.snapshot.voided_at) === null) ?? null;
-  return { issued, rerolls, latest };
+  const latest = recent.find((r) => text(r.snapshot.voided_at) === null);
+  return latest ? olderCard(latest) : null;
 }
 
 /** What `item` costs and whether it is on sale, or `null` without a wallet. */
-function offer(
-  economy: Economy | undefined,
-  item: PaidItem,
-): { price: number; per_day: number } | null {
+function offer(economy: Economy | undefined, item: "card_foil"): number | null {
   if (!economy) return null;
   const { price, per_day } = economy.price(item);
-  return per_day > 0 ? { price, per_day } : null;
+  return per_day > 0 ? price : null;
 }
 
-function posesOf(affinity: string | null): CardPoseChoice[] {
-  return posesFor(affinity).map((id) => ({ id, label: POSE_WORDS[id] ?? id }));
-}
-
-/**
- * `GET /api/member/card`. `view` is what the member page shows them now: its affinity band says
- * which pictures they may choose.
- */
-export async function memberCards(
-  state: ApiState,
-  holder: CardHolder,
-  view: MemberCard,
-): Promise<MemberCards> {
-  const store = state.optional(MemberCardStoreKey);
+/** `GET /api/member/card`: their latest card, today's count, the prices, their coins, the pity. */
+export async function memberCards(state: ApiState, holder: CardHolder): Promise<MemberCards> {
+  const cards = state.optional(CardsKey);
   const economy = state.optional(EconomyKey);
-  const reroll = offer(economy, "card_reroll");
+  const person = holder.person;
+  const newest = cards && person ? (cards.cards(person, { limit: 1 })[0] ?? null) : null;
+  const latest = newest ? dailyCard(newest) : await latestOlder(state, holder);
   const prices: CardPrices = {
-    pose: offer(economy, "card_pose")?.price ?? null,
-    foil: offer(economy, "card_foil")?.price ?? null,
-    reroll: reroll?.price ?? null,
+    card: cards ? cards.config.price : null,
+    foil: offer(economy, "card_foil"),
   };
-  const poses = posesOf(view.affinity);
-  if (!store) {
-    return { latest: null, today: 0, per_day: CARDS_PER_DAY, poses, prices, rerolls_left: 0 };
+  if (!cards) {
+    return { latest, today: 0, per_day: CARDS_PER_DAY, prices, balance: null, pity: null };
   }
-  const today = await todayOf(state, store, holder);
-  const start = Date.parse(todayStart(state));
-  const fresh = today.latest !== null && Date.parse(today.latest.issued_at) >= start;
+  const per_day = cards.config.daily_cap;
+  if (person === null) {
+    return { latest, today: 0, per_day, prices, balance: null, pity: null };
+  }
+  let balance: number | null = null;
+  try {
+    balance =
+      (await state.optional(CardWalletKey)?.balance({ person, account: holder.session.account })) ??
+      null;
+  } catch (error) {
+    log.warn({ error: errorMessage(error) }, "cannot read a balance for the cards");
+  }
   return {
-    latest: today.latest ? issuedCard(today.latest) : null,
-    today: today.issued,
-    per_day: CARDS_PER_DAY,
-    poses,
+    latest,
+    today: per_day - cards.dailyLeft(person),
+    per_day,
     prices,
-    rerolls_left: reroll && fresh ? Math.max(reroll.per_day - today.rerolls, 0) : 0,
+    balance,
+    pity: cards.pity(person),
   };
 }
 
@@ -284,98 +252,34 @@ async function frameOf(state: ApiState, account: AccountRef): Promise<string | n
   }
 }
 
-/** Issues run one at a time, so two clicks cannot both take the last card of the day. */
-const issuing = new WeakMap<ApiState, Promise<unknown>>();
+/** What each refusal of a daily card answers with. */
+const REFUSAL_STATUS: Readonly<Record<DailyRefusal["reason"], number>> = {
+  daily_cap: 429,
+  capped: 429,
+  insufficient: 402,
+  no_wallet: 503,
+  no_foil: 400,
+  refused: 403,
+};
 
-function serialized<T>(state: ApiState, run: () => Promise<T>): Promise<T> {
-  const before = issuing.get(state) ?? Promise.resolve();
-  const next = before.then(run, run);
-  issuing.set(
-    state,
-    next.catch(() => undefined),
-  );
-  return next;
-}
-
-/** Whether they may still be given a card today (checked again when it is issued). */
-export async function canIssue(state: ApiState, holder: CardHolder): Promise<boolean> {
-  const store = state.optional(MemberCardStoreKey);
-  if (!store) return false;
-  return (await todayOf(state, store, holder)).issued < CARDS_PER_DAY;
-}
-
-/** What a card is issued with besides her words. */
-interface Extras {
-  pose: string | null;
-  foil: boolean;
-  /** The card a reroll replaces: no day limit, and it keeps its number. */
-  replaces: IssuedCard | null;
-}
-
-async function issue(
-  state: ApiState,
-  store: MemberCardStore,
-  holder: CardHolder,
-  view: MemberCard,
-  words: CardWords | null,
-  extras: Extras,
-): Promise<IssuedCard> {
-  const profile = state.profile();
-  if (!extras.replaces && (await todayOf(state, store, holder)).issued >= CARDS_PER_DAY) {
-    throw new ApiError(429, OVER_LIMIT);
+/** A refusal of the cards as the error the routes answer with. */
+function refusedCard(r: DailyRefusal): ApiError {
+  // A wallet that has no balance for them will not take their coins: for the economy, someone she
+  // does not know or has blocked, who are answered alike.
+  if (r.reason === "refused" && r.message === CARD_TEXTS.no_wallet) {
+    return new ApiError(403, STRANGER);
   }
-  const card: IssuedCard = {
-    serial: newSerial(),
-    issued_at: toTimestamp(state.now()),
-    name: holder.session.name,
-    avatar_url: holder.session.avatar_url,
-    number: extras.replaces?.number ?? (await store.countFor(profile, holder.accounts)) + 1,
-    call_name: view.call_name,
-    relationship: view.relationship,
-    affinity: view.affinity,
-    trust: view.trust,
-    familiarity: view.familiarity,
-    public_feeling: view.public_feeling,
-    line: words?.line ?? null,
-    stamp: words?.stamp ?? null,
-    fields: words?.fields ?? [],
-    pose: extras.pose ?? words?.pose ?? pickPose(view.affinity, state.random),
-    frame: await frameOf(state, holder.session.account),
-    foil: extras.foil,
-    voided_at: null,
-  };
-  const snapshot = snapshotOf(card);
-  if (extras.replaces) snapshot.reroll_of = extras.replaces.serial;
-  // 60 bits do not collide; a retry costs nothing if they ever do.
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await store.issue({
-        serial: card.serial,
-        profile,
-        account: holder.session.account,
-        person: holder.person,
-        issued_at: card.issued_at,
-        snapshot,
-      });
-      cardEvidence(state, holder, card, extras.replaces !== null);
-      return card;
-    } catch (error) {
-      if (!(error instanceof StoreError) || !/already exists/.test(error.message) || attempt >= 2) {
-        throw error;
-      }
-      card.serial = newSerial();
-    }
-  }
+  const status = REFUSAL_STATUS[r.reason];
+  return new ApiError(status, r.reason === "no_wallet" ? NO_WALLET : refusalText(r));
 }
 
 /** A card she gave them is evidence for her nightly reflection on them (`card`). Never throws. */
-function cardEvidence(state: ApiState, holder: CardHolder, card: IssuedCard, reroll: boolean) {
-  if (holder.person === null) return;
+function cardEvidence(state: ApiState, person: PersonId, card: IssuedCard) {
   try {
     state.optional(HeartKey)?.evidence?.({
-      person: holder.person,
+      person,
       kind: "card",
-      detail: `${reroll ? "重抽了" : "拿到了"}你的第 ${card.number} 張卡片${card.foil ? "(閃卡)" : ""}`,
+      detail: `拿到了你的第 ${card.number} 張卡片${card.rarity ? `(${card.rarity})` : ""}${card.foil ? "(閃卡)" : ""}`,
       weight: null,
       at: state.now(),
     });
@@ -384,169 +288,177 @@ function cardEvidence(state: ApiState, holder: CardHolder, card: IssuedCard, rer
   }
 }
 
-function paid(error: unknown): never {
-  if (error instanceof EconomyError) throw new ApiError(error.status, error.message);
-  throw error;
-}
-
-async function giveBack(economy: Economy, account: AccountRef, entries: readonly string[]) {
-  for (const id of entries) {
-    try {
-      await economy.refund(account, id);
-    } catch (error) {
-      log.warn({ error: errorMessage(error) }, "cannot refund a card charge");
-    }
-  }
-}
-
-/** Charges for what they asked; every charge made so far is given back if one is refused. */
-async function charge(
-  economy: Economy,
-  account: AccountRef,
-  items: readonly [PaidItem, string][],
-  ref: string | null,
-): Promise<{ entries: string[]; duplicate: boolean }> {
-  const entries: string[] = [];
-  let duplicate = false;
-  try {
-    for (const [item, key] of items) {
-      const p = await economy.purchase(account, item, key, ref);
-      entries.push(p.entry_id);
-      duplicate ||= p.duplicate;
-    }
-  } catch (error) {
-    if (!duplicate) await giveBack(economy, account, entries);
-    paid(error);
-  }
-  return { entries, duplicate };
-}
-
-/** Their newest card, for a retry whose charge was already made. */
-async function lastIssued(
-  state: ApiState,
-  store: MemberCardStore,
-  holder: CardHolder,
-): Promise<IssuedCard> {
-  const card = (await todayOf(state, store, holder)).latest;
-  const out = card ? issuedCard(card) : null;
-  if (!out) throw new ApiError(409, NOTHING_TO_REROLL);
-  return out;
-}
-
 /** What they ask for on top of a plain card. */
 export interface CardOrder {
-  /** A picture of her from their band, or null to let her choose. */
-  pose: string | null;
   foil: boolean;
-  /** The request's Idempotency-Key; each charge derives its own from it. */
+  /** The request's Idempotency-Key. */
   key: string;
 }
 
+/** A daily card issued, and what this request took for it (nothing for a retry's answer). */
+export interface IssuedDaily {
+  card: IssuedCard;
+  charged: number;
+}
+
 /**
- * `POST /api/member/card`: a card of `view`, what the member page shows them right now, with what
- * she writes on it (`write`, run once the card is paid for; null for no words). A chosen pose and
- * a foil finish are charged first and given back if no card follows.
+ * `POST /api/member/card`: a daily card of `view`, what the member page shows them right now,
+ * with what she writes on it (`write`, asked only once the day and the coins allow the card; null
+ * for no words). `hidden`: someone she will not say anything about gets a stranger's card. A foil
+ * finish is paid with the card, through the cards (both charges keyed by the card's serial, both
+ * given back if no card follows). A retry with the same Idempotency-Key (`order.key`), after a
+ * restart too, answers the card the first try made, as it was: the cards keep the key on the card,
+ * and the serial and the foil ordered before the charges.
  */
 export async function issueCard(
   state: ApiState,
   holder: CardHolder,
   view: MemberCard,
   write: () => Promise<CardWords | null>,
-  order: CardOrder = { pose: null, foil: false, key: "" },
+  order: CardOrder = { foil: false, key: "" },
+  hidden = false,
 ): Promise<IssuedCard> {
-  const store = state.optional(MemberCardStoreKey);
-  if (!store) throw ApiError.unavailable(NO_STORE);
-  const { pose, foil } = order;
-  if (pose !== null && !posesFor(view.affinity).includes(pose)) throw ApiError.badRequest(BAD_POSE);
-  const items: [PaidItem, string][] = [];
-  if (pose !== null) items.push(["card_pose", `${order.key}:pose`]);
-  if (foil) items.push(["card_foil", `${order.key}:foil`]);
-  const account = holder.session.account;
-  const economy = state.optional(EconomyKey);
-  if (items.length > 0 && !economy) throw ApiError.unavailable(NO_WALLET);
-  // Nobody pays for a card the day's limit would refuse.
-  if (items.length > 0 && !(await canIssue(state, holder))) throw new ApiError(429, OVER_LIMIT);
-  const bought = economy && items.length > 0 ? await charge(economy, account, items, null) : null;
-  if (bought?.duplicate) return lastIssued(state, store, holder);
-  try {
-    const words = await write();
-    return await serialized(state, () =>
-      issue(state, store, holder, view, words, { pose, foil, replaces: null }),
-    );
-  } catch (error) {
-    if (economy && bought) await giveBack(economy, account, bought.entries);
-    throw error;
-  }
+  return (await issueDaily(state, holder, view, write, order, hidden)).card;
 }
 
-/**
- * `POST /api/member/card/reroll`: today's newest card, not voided, is replaced by a new one she
- * writes afresh (`card_reroll`, charged on the old serial). The old one is voided; if the new one
- * cannot be issued the charge is given back and the old one stands.
- */
-export async function rerollCard(
+/** `issueCard`, with what it charged. */
+export async function issueDaily(
   state: ApiState,
   holder: CardHolder,
   view: MemberCard,
   write: () => Promise<CardWords | null>,
-  key: string,
-): Promise<IssuedCard> {
-  const store = state.optional(MemberCardStoreKey);
-  if (!store) throw ApiError.unavailable(NO_STORE);
-  const economy = state.optional(EconomyKey);
-  if (!economy) throw ApiError.unavailable(NO_WALLET);
+  order: CardOrder = { foil: false, key: "" },
+  hidden = false,
+): Promise<IssuedDaily> {
+  const cards = state.optional(CardsKey);
+  if (!cards) throw ApiError.unavailable(NO_STORE);
+  const person = holder.person;
+  if (person === null) throw new ApiError(403, STRANGER);
+  // Before the day's limit is asked: the card a retry is for may be the day's last.
+  const again = cards.dailyByKey(person, order.key);
+  if (again) return { card: dailyCard(again), charged: 0 };
   const account = holder.session.account;
-  const rerollable = async (): Promise<MemberCardRecord> => {
-    const latest = (await todayOf(state, store, holder)).latest;
-    if (!latest || Date.parse(latest.issued_at) < Date.parse(todayStart(state))) {
-      throw new ApiError(409, NOTHING_TO_REROLL);
-    }
-    return latest;
-  };
-  const old = await rerollable();
-  const bought = await charge(economy, account, [["card_reroll", key]], old.serial);
-  if (bought.duplicate) return lastIssued(state, store, holder);
-  try {
+  const payer = { person, account };
+  // Nobody pays for a card the day or the wallet would refuse.
+  const quote = await cards.quote(payer, order);
+  if (!quote.ok) throw refusedCard(quote);
+  // Her line for them goes on the card as the page shows it (nobody else named, moderation passed),
+  // never as it is stored: anyone with the serial can read the card.
+  const relationship: CardRelationship = hidden
+    ? cardRelationship(null)
+    : {
+        ...cardRelationship(heartRows(state)?.get(person) ?? null),
+        public_feeling: view.public_feeling,
+      };
+  const older = await state
+    .optional(MemberCardStoreKey)
+    ?.countFor(state.profile(), holder.accounts);
+  const face = async (): Promise<CardFace> => {
     const words = await write();
-    return await serialized(state, async () => {
-      // Another reroll may have got here first.
-      const current = await rerollable();
-      const replaces = issuedCard(current);
-      if (current.serial !== old.serial || !replaces) throw new ApiError(409, NOTHING_TO_REROLL);
-      const profile = state.profile();
-      await store.amend(profile, current.serial, {
-        ...current.snapshot,
-        voided_at: toTimestamp(state.now()),
-      });
-      try {
-        return await issue(state, store, holder, view, words, {
-          pose: null,
-          foil: replaces.foil,
-          replaces,
-        });
-      } catch (error) {
-        await store.amend(profile, current.serial, current.snapshot);
-        throw error;
-      }
-    });
-  } catch (error) {
-    await giveBack(economy, account, bought.entries);
-    throw error;
+    return {
+      name: holder.session.name,
+      avatar_url: holder.session.avatar_url,
+      call_name: view.call_name,
+      line: words?.line ?? null,
+      stamp: words?.stamp ?? null,
+      fields: words?.fields ?? [],
+      number: (older ?? 0) + cards.count(person) + 1,
+    };
+  };
+  const result = await cards.issueDaily(payer, face, {
+    frame: await frameOf(state, account),
+    foil: order.foil,
+    relationship,
+    key: order.key,
+  });
+  if (!result.ok) throw refusedCard(result);
+  const card = dailyCard(result.issued.card);
+  if (!result.issued.again) cardEvidence(state, person, card);
+  return { card, charged: result.charged };
+}
+
+/** What a refused pick-up answers with. */
+const DROP_STATUS: Readonly<Record<DropRefusal, number>> = {
+  drop_gone: 404,
+  drop_expired: 410,
+  drop_taken: 409,
+  drop_cap: 429,
+  drop_skipped: 409,
+  no_face: 403,
+};
+
+/**
+ * Picks up the card she dropped as `drop` in a channel (docs/design/v5-play.md §6.2) for the
+ * holder: free, written like a daily card of `view` (her words through `write`, asked only once
+ * the drop is theirs). Someone she does not know, or will not say anything about, cannot pick one
+ * up, and is answered like a stranger.
+ */
+export async function claimDropCard(
+  state: ApiState,
+  holder: CardHolder,
+  view: MemberCard,
+  write: () => Promise<CardWords | null>,
+  drop: string,
+  hidden: boolean,
+): Promise<IssuedCard> {
+  const cards = state.optional(CardsKey);
+  if (!cards) throw ApiError.unavailable(NO_STORE);
+  const person = holder.person;
+  if (person === null || hidden) throw new ApiError(403, STRANGER);
+  const relationship: CardRelationship = {
+    ...cardRelationship(heartRows(state)?.get(person) ?? null),
+    public_feeling: view.public_feeling,
+  };
+  const older = await state
+    .optional(MemberCardStoreKey)
+    ?.countFor(state.profile(), holder.accounts);
+  const result = await cards.claimDrop(person, drop, async () => {
+    const words = await write();
+    return {
+      face: {
+        name: holder.session.name,
+        avatar_url: holder.session.avatar_url,
+        call_name: view.call_name,
+        line: words?.line ?? null,
+        stamp: words?.stamp ?? null,
+        fields: words?.fields ?? [],
+        number: (older ?? 0) + cards.count(person) + 1,
+      },
+      relationship,
+    };
+  });
+  if (!result.ok) {
+    const message = result.reason === "no_face" ? STRANGER : CARD_TEXTS[result.reason];
+    throw new ApiError(DROP_STATUS[result.reason], message);
   }
+  const card = dailyCard(result.issued.card);
+  if (!result.issued.again) cardEvidence(state, person, card);
+  return card;
 }
 
-/** Their cards for the export, newest first. */
-export async function cardsOf(state: ApiState, accounts: readonly AccountRef[]) {
+/** Their cards for the export, newest first: daily cards, then the older ones. */
+export async function cardsOf(
+  state: ApiState,
+  accounts: readonly AccountRef[],
+  person: PersonId | null,
+): Promise<IssuedCard[]> {
+  const cards = state.optional(CardsKey);
+  const daily = cards && person ? cards.cards(person, { limit: 500 }).map(dailyCard) : [];
   const store = state.optional(MemberCardStoreKey);
-  if (!store) return [];
-  const records = await store.listFor(state.profile(), accounts, MAX_EXPORTED);
-  return records.map(issuedCard).filter((c): c is IssuedCard => c !== null);
+  const older = store ? await store.listFor(state.profile(), accounts, MAX_EXPORTED) : [];
+  return [...daily, ...older.map(olderCard).filter((c): c is IssuedCard => c !== null)];
 }
 
-/** Deletes every card of `accounts` (forgetting); they then fail the check. */
-export async function deleteCards(state: ApiState, accounts: readonly AccountRef[]) {
+/** Deletes every card of theirs (forgetting), daily and older; they then fail the check. */
+export async function deleteCards(
+  state: ApiState,
+  accounts: readonly AccountRef[],
+  person: PersonId | null,
+): Promise<number> {
+  const cards = state.optional(CardsKey);
+  const daily = cards && person ? cards.deleteCards(person) : 0;
   const store = state.optional(MemberCardStoreKey);
-  return store ? store.deleteFor(state.profile(), accounts) : 0;
+  return daily + (store ? await store.deleteFor(state.profile(), accounts) : 0);
 }
 
 // ---- the public check -----------------------------------------------------------------------
@@ -554,24 +466,45 @@ export async function deleteCards(state: ApiState, accounts: readonly AccountRef
 /** What every answer of the check carries: a card can be deleted, so nobody may keep the answer. */
 const CHECK_HEADERS = { "cache-control": "no-store", "x-content-type-options": "nosniff" };
 
-/** `GET /api/public/card/{serial}`. */
-async function checkCard(state: ApiState, c: ApiContext, input: string): Promise<IssuedCard> {
+/** The card behind a canonical serial, daily or older; `null` when there is none. */
+async function bySerial(state: ApiState, serial: string): Promise<IssuedCard | null> {
+  const daily = state.optional(CardsKey)?.card(serial);
+  if (daily) return dailyCard(daily);
+  const store = state.optional(MemberCardStoreKey);
+  if (!store) return null;
+  const found = await store.bySerial(state.profile(), serial);
+  return found && isJsonObject(found.snapshot) ? olderCard(found) : null;
+}
+
+/**
+ * The titles the holder of a daily card chose to show others (a title is theirs alone until they
+ * make it public); none on an older member card, or when the cards cannot say.
+ */
+function shownTitles(state: ApiState, serial: string): string[] {
+  const cards = state.optional(CardsKey);
+  const daily = cards?.card(serial);
+  if (!cards || !daily) return [];
+  return cards.publicTitles(daily.person).map((t) => t.title);
+}
+
+/** `GET /api/public/card/{serial}`: the card, and its holder's public titles. */
+async function checkCard(state: ApiState, c: ApiContext, input: string): Promise<PublicCard> {
   const wait = state.publicSide.admitCardCheck(clientKey(c));
   if (wait !== null) throw ApiError.tooMany(wait);
   const missing = () => new ApiError(404, NO_SUCH_CARD, CHECK_HEADERS);
   const serial = normalizeSerial(input);
-  const store = state.optional(MemberCardStoreKey);
-  if (serial === null || !store) throw missing();
-  let found: MemberCardRecord | null;
+  if (serial === null) throw missing();
+  let card: IssuedCard | null;
+  let titles: string[];
   try {
-    found = await store.bySerial(state.profile(), serial);
+    card = await bySerial(state, serial);
+    titles = card ? shownTitles(state, serial) : [];
   } catch (error) {
     log.warn({ error: errorMessage(error) }, "cannot check a card");
     throw new ApiError(503, "not available right now", CHECK_HEADERS);
   }
-  const card = found && isJsonObject(found.snapshot) ? issuedCard(found) : null;
   if (!card) throw missing();
-  return card;
+  return { ...card, titles };
 }
 
 /** `GET /api/public/card/{serial}`; served only while the public side is on (see `rpc.ts`). */
@@ -589,11 +522,9 @@ export const cardCheckRpc = {
  */
 export async function publicCard(state: ApiState, input: string): Promise<IssuedCard | null> {
   const serial = normalizeSerial(input);
-  const store = state.optional(MemberCardStoreKey);
-  if (serial === null || !store) return null;
+  if (serial === null) return null;
   try {
-    const found = await store.bySerial(state.profile(), serial);
-    const card = found && isJsonObject(found.snapshot) ? issuedCard(found) : null;
+    const card = await bySerial(state, serial);
     return card && card.voided_at === null ? card : null;
   } catch (error) {
     log.warn({ error: errorMessage(error) }, "cannot read a card for its preview");

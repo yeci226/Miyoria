@@ -31,6 +31,7 @@ import {
 } from "@miyoria/runtime/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
 import {
+  PlaceDirectoryKey,
   PlatformHistoriesKey,
   PlatformSinksKey,
   ProfileIdKey,
@@ -48,6 +49,7 @@ import {
 } from "./emoji-describe.js";
 import { GatewayBridge, Shared } from "./handler.js";
 import { PLATFORM, parseUserIds } from "./mapping.js";
+import { DiscordPlaces } from "./places.js";
 
 /** How long to wait for the gateway to close after a shutdown request. */
 export const SHUTDOWN_GRACE_MS = 3_000;
@@ -109,6 +111,8 @@ export class DiscordBotModule implements Module {
 
   readonly manifest: ModuleManifest = defineManifest(DiscordBotModule.ID, "Discord bot", {
     description: "Discord bot account: text messages and slash commands",
+    icon: "message-circle",
+    category: "platform",
     requires: [CommandsModule.ID],
     // Starts after `world`, whose `PresencePrivacy` decides whose presence may be published.
     optional: ["world"],
@@ -132,6 +136,8 @@ export class DiscordBotModule implements Module {
     this.#running = shared;
     const client = createClient({ presence: config.presence_intents });
     new GatewayBridge(ctx, shared).attach(client);
+    // The servers and channels for the panel's pickers, from the connected guild cache.
+    ctx.provide(PlaceDirectoryKey, new DiscordPlaces(client, () => shared.ready));
     this.#startEmoji(ctx, shared);
     // The token stays in this closure; it is never logged or put in an error message.
     const token = config.token;

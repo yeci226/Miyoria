@@ -188,6 +188,25 @@ function miyoPages(): PanelPage[] {
       ],
     },
     {
+      id: "party",
+      label: "派對遊戲",
+      description: "請她開一場猜歌或海龜湯",
+      intro: [
+        "猜歌要在語音頻道玩;海龜湯在語音頻道或這個文字頻道都可以,文字頻道裡問題和她的回答都是一般訊息。",
+        "開了之後她主持。也可以直接跟她說「開海龜湯」。",
+      ],
+      actions: [
+        {
+          id: "party-soup",
+          label: "海龜湯",
+          path: "game party",
+          args: { game: "soup" },
+          style: "primary",
+        },
+        { id: "party-song", label: "猜歌", path: "game party", args: { game: "song" } },
+      ],
+    },
+    {
       id: "stream",
       label: "直播",
       description: "OBS 開關台與場景",
@@ -507,7 +526,8 @@ function mePages(policyUrl: string | null): PanelPage[] {
       id: "profile",
       label: "我的資料",
       description: "她怎麼稱呼你、帳號連結",
-      status: [{ path: "me profile", label: "她對你的印象" }],
+      // A status line shows the words only: no picture is drawn for it.
+      status: [{ path: "me profile", label: "她對你的印象", args: { picture: false } }],
       actions: [
         {
           id: "call",
@@ -540,7 +560,7 @@ function mePages(policyUrl: string | null): PanelPage[] {
       label: "錢包",
       description: "魚幣、簽到、餵她",
       refresh: true,
-      status: [{ path: "me wallet", label: "我的錢包" }],
+      status: [{ path: "me wallet", label: "我的錢包", args: { picture: false } }],
       actions: [
         { id: "checkin", label: "簽到", path: "me checkin", style: "primary" },
         { id: "rice", label: "餵一碗", path: "me feed", args: { item: "rice" } },
@@ -555,38 +575,35 @@ function mePages(policyUrl: string | null): PanelPage[] {
           },
         },
         {
+          id: "danmaku",
+          label: "發彈幕",
+          path: "me danmaku",
+          ask: {
+            title: "發一則彈幕（她直播時，從畫面右邊飄過）",
+            fields: [field("text", "彈幕（沒顯示出來的會自動退回）", { maxLength: 100 })],
+          },
+        },
+        {
           id: "give",
           label: "轉給別人",
           path: "me give",
           ask: {
-            title: "轉魚幣給別人",
-            fields: [USER_FIELD, field("amount", "多少魚幣", { placeholder: "1 到 50" })],
+            title: "轉魚幣給別人（另收手續費，會燒掉）",
+            fields: [USER_FIELD, field("amount", "對方收到多少魚幣", { placeholder: "1 到 50" })],
           },
         },
         { id: "board", label: "排行榜", path: "me board" },
       ],
     },
     {
-      // The economy's second generation (quests, collection, predictions, commissions, her room,
-      // her shop). Commands come from the economy module; without it the page is hidden.
+      // The economy's second generation (quests, titles, predictions, her room). Commands come from the economy module; without it the page is hidden.
       id: "play",
-      label: "玩與收藏",
-      description: "每日任務、抽收藏、預測、委託、小店、她的房間",
+      label: "一起玩",
+      description: "每日任務、稱號、預測、她的房間",
       refresh: true,
       status: [{ path: "me quests", label: "今天的任務" }],
       actions: [
-        { id: "draw", label: "抽收藏", path: "me draw", style: "primary" },
-        { id: "album", label: "收藏冊", path: "me album" },
         { id: "titles", label: "稱號", path: "me titles" },
-        {
-          id: "giveitem",
-          label: "送重複的收藏",
-          path: "me giveitem",
-          ask: {
-            title: "送收藏給別人",
-            fields: [USER_FIELD, field("item", "哪一個收藏（名字）")],
-          },
-        },
         { id: "predictions", label: "看預測", path: "me predictions" },
         {
           id: "bet",
@@ -601,13 +618,6 @@ function mePages(policyUrl: string | null): PanelPage[] {
             ],
           },
         },
-        { id: "shop", label: "她的小店", path: "me shop" },
-        {
-          id: "shop-buy",
-          label: "買小店的東西",
-          path: "me shop",
-          ask: { title: "買小店的東西", fields: [field("item", "東西的名字或代號")] },
-        },
         { id: "room", label: "她的房間", path: "me room" },
         {
           id: "room-fund",
@@ -618,66 +628,23 @@ function mePages(policyUrl: string | null): PanelPage[] {
             fields: [field("item", "要出錢的東西（名字或代號）"), field("amount", "出多少魚幣")],
           },
         },
-        {
-          id: "commission",
-          label: "委託她做一件事",
-          path: "me commission",
-          ask: {
-            title: "委託她做一件事",
-            fields: [
-              field("kind", "種類", {
-                placeholder: "poem 詩 / name 取名 / tool 小工具 / song 唱歌 / voice 一句語音",
-              }),
-              field("brief", "想請她做什麼", { style: "paragraph", maxLength: 300 }),
-            ],
-          },
-        },
-        { id: "commissions", label: "我的委託", path: "me commissions" },
       ],
     },
     {
-      // The card and the slip come from the commands module itself (the api module gives them);
-      // the letter from the economy module.
+      // The card comes from the commands module itself (the api module gives it). The fortune slip
+      // is the paid add-on of the check-in (`me checkin fortune:true`).
       id: "keepsakes",
-      label: "卡片與籤詩",
-      description: "她給你的卡片、今日籤詩、寫信給她",
-      actions: [
-        { id: "card", label: "我的卡片", path: "me card", style: "primary" },
-        { id: "fortune", label: "抽今日籤詩", path: "me fortune" },
-        {
-          id: "letter",
-          label: "寫信給她",
-          path: "me letter",
-          ask: {
-            title: "寫信給她",
-            fields: [field("text", "信的內容（120 字內）", { style: "paragraph", maxLength: 120 })],
-          },
-        },
-      ],
+      label: "卡片",
+      description: "她給你的卡片",
+      actions: [{ id: "card", label: "我的卡片", path: "me card", style: "primary" }],
     },
     {
       id: "wishes",
       label: "她的願望",
-      description: "她的目標、懸賞",
+      description: "她的懸賞",
       refresh: true,
-      status: [
-        { path: "me goals", label: "她的目標" },
-        { path: "me bounties", label: "她的懸賞" },
-      ],
-      actions: [
-        {
-          id: "pledge",
-          label: "投給目標",
-          path: "me pledge",
-          style: "primary",
-          ask: {
-            title: "投給她的目標",
-            fields: [field("amount", "多少魚幣", { placeholder: "例如 20" })],
-          },
-        },
-        { id: "goals", label: "看目標", path: "me goals" },
-        { id: "bounties", label: "看懸賞", path: "me bounties" },
-      ],
+      status: [{ path: "me bounties", label: "她的懸賞" }],
+      actions: [{ id: "bounties", label: "看懸賞", path: "me bounties", style: "primary" }],
     },
     {
       id: "memory",

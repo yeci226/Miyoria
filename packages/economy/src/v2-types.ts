@@ -4,7 +4,6 @@
 
 import type { AccountRef } from "@miyoria/types";
 import { serviceKey } from "@miyoria/types";
-import type { Rarity } from "./config.js";
 
 // ---- quests ----------------------------------------------------------------------------------
 
@@ -39,72 +38,6 @@ export interface QuestResult {
   all_done: boolean;
   /** Achievements this quest unlocked (paid); absent when none. */
   unlocked?: AchievementUnlocked[];
-}
-
-// ---- collection ------------------------------------------------------------------------------
-
-export interface ItemRef {
-  id: string;
-  label: string;
-  rarity: Rarity;
-}
-
-/** One rarity of the published odds of a draw. */
-export interface OddsRow {
-  rarity: Rarity;
-  /** Its share of one draw, in percent (two decimals). */
-  percent: number;
-  items: { id: string; label: string }[];
-}
-
-export interface SeriesView {
-  id: string;
-  label: string;
-  /** The title of whoever owns every item. */
-  title: string;
-  items: (ItemRef & { owned: number })[];
-  owned_distinct: number;
-  total: number;
-  complete: boolean;
-}
-
-/** A person's album, with the odds and the pity counter (nothing here is a rank). */
-export interface AlbumView {
-  /** She knows the person (a stranger gets an empty album). */
-  member: boolean;
-  series: SeriesView[];
-  odds: OddsRow[];
-  price: number;
-  draws_today: number;
-  draws_per_day: number;
-  /** After this many draws without an SR or better one is guaranteed; `0`: no pity. */
-  pity: number;
-  /** Draws since the last SR or better one. */
-  since_best: number;
-}
-
-export interface DrawResult {
-  /** The ledger row of the charge. */
-  entry_id: string;
-  item: ItemRef & { series: string };
-  charged: number;
-  balance: number;
-  /** The key was used before: nothing new was charged. */
-  duplicate: boolean;
-  /** First copy of this collectible the person has. */
-  new: boolean;
-  /** The pity made this one an SR or better. */
-  by_pity: boolean;
-  /** Achievements this draw unlocked (paid); absent when none. */
-  unlocked?: AchievementUnlocked[];
-}
-
-export interface GiveItemResult {
-  item: string;
-  label: string;
-  /** The receiver's display name (untrusted). */
-  to: string;
-  duplicate: boolean;
 }
 
 // ---- achievements ----------------------------------------------------------------------------
@@ -187,34 +120,6 @@ export interface ResolveResult {
   refunded: boolean;
 }
 
-// ---- commissions -----------------------------------------------------------------------------
-
-export const COMMISSION_KINDS = ["poem", "name", "tool", "song", "voice"] as const;
-export type CommissionKind = (typeof COMMISSION_KINDS)[number];
-
-export interface CommissionView {
-  id: string;
-  kind: CommissionKind;
-  label: string;
-  brief: string;
-  price: number;
-  status: "open" | "delivered" | "declined" | "expired";
-  created_at: string;
-  due_at: string;
-  result: string | null;
-  note: string | null;
-}
-
-export interface CommissionResult {
-  id: string;
-  kind: CommissionKind;
-  label: string;
-  price: number;
-  balance: number;
-  /** The same key asked twice: nothing was charged again. */
-  duplicate: boolean;
-}
-
 // ---- her room --------------------------------------------------------------------------------
 
 export interface RoomView {
@@ -232,30 +137,6 @@ export interface RoomView {
 export interface RoomFundResult {
   item: RoomView;
   /** What was taken (cut to what was missing). */
-  charged: number;
-  balance: number;
-  duplicate: boolean;
-}
-
-// ---- her shop --------------------------------------------------------------------------------
-
-export interface ShopView {
-  /** `false` for someone she does not know (the shelf is still shown). */
-  member: boolean;
-  /** When the shelf is restocked. */
-  renews_at: string;
-  items: {
-    id: string;
-    label: string;
-    kind: "title" | "collectible";
-    price: number;
-    /** A title: `true` once held; a collectible: how many copies. */
-    owned: boolean | number;
-  }[];
-}
-
-export interface ShopBuyResult {
-  item: { id: string; label: string; kind: "title" | "collectible" };
   charged: number;
   balance: number;
   duplicate: boolean;
@@ -294,23 +175,6 @@ export interface Economy2 {
    * heard something new). `topic` is required for `new_topic`.
    */
   completeQuest(account: AccountRef, quest: QuestId, topic?: string): Promise<QuestResult>;
-  /** The album, the odds and the pity counter of `account` (an empty album for a stranger). */
-  album(account: AccountRef): Promise<AlbumView>;
-  /** The odds of one draw as published. */
-  odds(): OddsRow[];
-  /** The configured odds of a rarity alone, for things that are not a collectible (a card). */
-  rarityOdds(): { rarity: Rarity; percent: number }[];
-  /** A rarity by the configured weights, for the card service to roll a portrait card with. */
-  rollRarity(): Rarity;
-  /** Draws a collectible (`EconomyError`: 402 short, 403 a stranger, 429 the day's limit). */
-  draw(account: AccountRef, key: string): Promise<DrawResult>;
-  /** One spare copy of a collectible to another person she knows. */
-  giveItem(from: AccountRef, to: AccountRef, item: string, key: string): Promise<GiveItemResult>;
-  /**
-   * A portrait card was issued with these traits: the ones that are collectibles fill the owner's
-   * album. Returns how many were new to them.
-   */
-  recordCard(account: AccountRef, serial: string, traits: readonly string[]): Promise<number>;
   /** The achievements and titles of `account`. */
   achievements(account: AccountRef): Promise<AchievementsView>;
   /** The predictions open now and the ones settled lately; `account` adds their own stake. */
@@ -337,31 +201,10 @@ export interface Economy2 {
   resolvePrediction(ref: string, option: string | number): Promise<ResolveResult>;
   /** Calls a prediction off: every stake is given back. */
   cancelPrediction(ref: string): Promise<ResolveResult>;
-  /** The kinds of commission on offer with their prices. */
-  commissionMenu(): { kind: CommissionKind; label: string; price: number }[];
-  /** Commissions her for one thing, charging the price (`EconomyError` 400/402/403/429). */
-  commission(
-    account: AccountRef,
-    kind: CommissionKind,
-    brief: string,
-    key: string,
-  ): Promise<CommissionResult>;
-  /** A person's own commissions, newest first. */
-  commissions(account: AccountRef): Promise<CommissionView[]>;
-  /** What is waiting for her, oldest first. */
-  commissionsWaiting(): Promise<CommissionView[]>;
-  /** Hands in the result; part of the price is hers. */
-  deliverCommission(ref: string, text: string): Promise<CommissionView>;
-  /** She will not do it: the price goes back. */
-  declineCommission(ref: string, why: string): Promise<CommissionView>;
   /** Her room: every item with how far the audience got. */
   room(): Promise<RoomView[]>;
   /** Puts coins into an item of her room (`EconomyError` 400/402/403/409/429). */
   fundRoom(account: AccountRef, item: string, amount: number, key: string): Promise<RoomFundResult>;
-  /** This week's shelf. */
-  shop(account: AccountRef): Promise<ShopView>;
-  /** Buys one thing off the shelf (`EconomyError` 402 short, 403 a stranger, 409 not on the shelf). */
-  buyFromShop(account: AccountRef, item: string, key: string): Promise<ShopBuyResult>;
   /** Coins issued against recovered per day, for the panel (admin only: it is about the whole economy). */
   health(): Promise<HealthView>;
 }

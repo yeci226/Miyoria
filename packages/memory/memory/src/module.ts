@@ -122,6 +122,8 @@ export class MemoryModule implements Module {
   static readonly ID = "memory";
 
   readonly manifest: ModuleManifest = defineManifest(MemoryModule.ID, "Memory", {
+    icon: "library",
+    category: "her",
     description: "Long-term memory: consolidation, recall, followups",
     requires: ["llm"],
     optional: ["commands"],

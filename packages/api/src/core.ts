@@ -5,7 +5,6 @@ import { PersonaHandleKey } from "@miyoria/brain/agent";
 import type {
   CostReport,
   DecisionRecord,
-  ModuleInfo,
   PersonaOverride,
   PersonaSectionInfo,
   SetPersonaRequest,
@@ -27,6 +26,7 @@ import { withEventMeta } from "@orpc/server";
 import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
 import { contextParam } from "./extract.js";
+import { moduleCards } from "./settings.js";
 import { type ApiContext, type ApiState, actorOf } from "./state.js";
 
 const log = getLogger("api.server");
@@ -96,10 +96,6 @@ export async function runModuleAction(
   await state.audit(c, `${auditPrefix}.${action}`, id, detail, failure === null);
   if (failure !== null) throw ApiError.internal(failure);
   return findModule(sup.list(), id);
-}
-
-function listModules(state: ApiState): ModuleInfo[] {
-  return state.service(SupervisorKey, "supervisor").list();
 }
 
 /** `GET /api/decisions?limit=&context=`: `context` is a JSON-encoded `ContextKey`. */
@@ -200,7 +196,8 @@ export const personaRpc = {
 /** The module, decision and LLM usage routes on the route table. */
 export const coreRpc = {
   modules: {
-    list: os.modules.list.handler(({ context }) => listModules(context.state)),
+    // Each module with its icon, section and card (`settings.ts`).
+    list: os.modules.list.handler(({ context }) => moduleCards(context.state)),
     action: os.modules.action.handler(({ input, context }) =>
       runModuleAction(context.state, context.c, input.params.id, input.params.action, "module"),
     ),

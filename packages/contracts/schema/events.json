@@ -840,6 +840,33 @@
         "result"
       ]
     },
+    "EventsAgentToolRunning": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/$defs/WireContextKey"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "started",
+            "ended"
+          ]
+        }
+      },
+      "required": [
+        "turn",
+        "context",
+        "tool",
+        "state"
+      ]
+    },
     "EventsArbiterDecision": {
       "type": "object",
       "properties": {
@@ -1343,6 +1370,102 @@
         "browse"
       ]
     },
+    "EventsCardDrawn": {
+      "type": "object",
+      "properties": {
+        "serial": {
+          "type": "string"
+        },
+        "person": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "rarity": {
+          "$ref": "#/$defs/EventsCardRarity"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expression": {
+          "type": "string"
+        },
+        "price": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "pity_hit": {
+          "type": "boolean"
+        },
+        "pity_since": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "wished": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "new_parts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "serial",
+        "person",
+        "kind",
+        "rarity",
+        "parts",
+        "expression",
+        "price",
+        "pity_hit",
+        "pity_since",
+        "wished",
+        "new_parts"
+      ]
+    },
+    "EventsCardRarity": {
+      "type": "string",
+      "enum": [
+        "N",
+        "R",
+        "SR",
+        "SSR"
+      ]
+    },
+    "EventsCardTitled": {
+      "type": "object",
+      "properties": {
+        "person": {
+          "type": "string"
+        },
+        "series": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "serial": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "person",
+        "series",
+        "title",
+        "serial"
+      ]
+    },
     "EventsClusterHostApproved": {
       "type": "object",
       "properties": {
@@ -1644,6 +1767,44 @@
         "folded_up_to",
         "lines",
         "session_lines"
+      ]
+    },
+    "EventsDanmakuClear": {
+      "type": "object",
+      "properties": {}
+    },
+    "EventsDanmakuLine": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "max_on_screen": {
+          "type": "number"
+        },
+        "queue_max": {
+          "type": "number"
+        },
+        "max_wait_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "text",
+        "max_on_screen",
+        "queue_max",
+        "max_wait_ms"
       ]
     },
     "EventsDecisionTrace": {
@@ -2872,9 +3033,7 @@
       "enum": [
         "rice",
         "big_bowl",
-        "dessert",
-        "letter",
-        "expression"
+        "dessert"
       ]
     },
     "EventsGoLiveState": {
@@ -3805,6 +3964,265 @@
         "failed"
       ]
     },
+    "EventsKaraokeScored": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "song": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "person": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": "number"
+        },
+        "pitch": {
+          "type": "number"
+        },
+        "stability": {
+          "type": "number"
+        },
+        "rhythm": {
+          "type": "number"
+        },
+        "expression": {
+          "type": "number"
+        },
+        "unranked": {
+          "type": "boolean"
+        },
+        "source": {
+          "default": "estimate",
+          "type": "string",
+          "enum": [
+            "estimate",
+            "voice"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "song",
+        "title",
+        "person",
+        "total",
+        "pitch",
+        "stability",
+        "rhythm",
+        "expression",
+        "unranked"
+      ]
+    },
+    "EventsKaraokeStage": {
+      "type": "object",
+      "properties": {
+        "room": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 12
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "lobby",
+                "countdown",
+                "singing",
+                "results"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "rounds_left": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "song": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageLinkKaraokeSong"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shift": {
+          "type": "integer",
+          "minimum": -12,
+          "maximum": 12
+        },
+        "members": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StageLinkKaraokeMember"
+          }
+        },
+        "position_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": -86400000,
+              "maximum": 86400000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "board": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StageLinkKaraokeLine"
+          }
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currency": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "air": {
+          "$ref": "#/$defs/StageLinkKaraokeAir"
+        }
+      },
+      "required": [
+        "room",
+        "state",
+        "round",
+        "rounds_left",
+        "song",
+        "shift",
+        "members",
+        "position_ms",
+        "board",
+        "note",
+        "currency",
+        "air"
+      ]
+    },
+    "EventsKaraokeStageLyrics": {
+      "type": "object",
+      "properties": {
+        "room": {
+          "type": "string",
+          "maxLength": 12
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "song": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "lyrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersKaraokeLyricsV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "video": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StageLinkKaraokeBacking"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "room",
+        "round",
+        "song",
+        "lyrics",
+        "video",
+        "backing"
+      ]
+    },
+    "EventsKaraokeStageVoice": {
+      "type": "object",
+      "properties": {
+        "room": {
+          "type": "string",
+          "maxLength": 12
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "at_ms": {
+          "type": "number",
+          "minimum": -86400000,
+          "maximum": 86400000
+        },
+        "audio": {
+          "type": "string",
+          "maxLength": 44000
+        }
+      },
+      "required": [
+        "room",
+        "round",
+        "at_ms",
+        "audio"
+      ]
+    },
     "EventsKnowledgeChanged": {
       "type": "object",
       "properties": {
@@ -4466,6 +4884,124 @@
         "completion_tokens",
         "cached_prompt_tokens",
         "reasoning_tokens"
+      ]
+    },
+    "EventsLotClosed": {
+      "type": "object",
+      "properties": {
+        "lot": {
+          "type": "string"
+        },
+        "week": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "kind": {
+          "type": "string"
+        },
+        "winner_bid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "winner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "price": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bids": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "bidders": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "extended": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "lot",
+        "week",
+        "kind",
+        "winner_bid",
+        "winner",
+        "price",
+        "bids",
+        "bidders",
+        "extended"
+      ]
+    },
+    "EventsLotteryDrawn": {
+      "type": "object",
+      "properties": {
+        "week": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "tickets": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "buyers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "pot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "prize": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "burned": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "winner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refunded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "week",
+        "tickets",
+        "buyers",
+        "pot",
+        "prize",
+        "burned",
+        "winner",
+        "refunded"
       ]
     },
     "EventsMemberUpdate": {
@@ -5903,31 +6439,16 @@
     "EventsScreenLine": {
       "type": "object",
       "properties": {
-        "kind": {
-          "type": "string",
-          "enum": [
-            "message",
-            "dedication"
-          ]
-        },
         "name": {
           "type": "string"
         },
         "text": {
           "type": "string"
-        },
-        "song": {
-          "type": [
-            "string",
-            "null"
-          ]
         }
       },
       "required": [
-        "kind",
         "name",
-        "text",
-        "song"
+        "text"
       ]
     },
     "EventsSelfFeel": {
@@ -6309,6 +6830,9 @@
             "string",
             "null"
           ]
+        },
+        "by": {
+          "type": "string"
         }
       },
       "required": [
@@ -6350,6 +6874,29 @@
       "required": [
         "reason",
         "path"
+      ]
+    },
+    "EventsStageDanmaku": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "shown",
+            "no_overlay",
+            "queue_full",
+            "too_late",
+            "cleared",
+            "lost"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "outcome"
       ]
     },
     "EventsStageError": {
@@ -6404,6 +6951,18 @@
                 "string",
                 "null"
               ]
+            },
+            "obs_collection": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "obs_warning": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -6414,7 +6973,9 @@
             "streaming",
             "scenes",
             "hotkeys",
-            "overlay_url"
+            "overlay_url",
+            "obs_collection",
+            "obs_warning"
           ]
         },
         {
@@ -8426,6 +8987,241 @@
         "emotion"
       ]
     },
+    "StageLinkKaraokeAir": {
+      "type": "object",
+      "properties": {
+        "backing": {
+          "type": "boolean"
+        },
+        "relay": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 60
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "delay_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000
+        },
+        "backing_gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "voice_gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "duck_gain": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "backing",
+        "relay",
+        "delay_ms",
+        "backing_gain",
+        "voice_gain",
+        "duck_gain"
+      ]
+    },
+    "StageLinkKaraokeBacking": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "pcm",
+            "m4a"
+          ]
+        },
+        "rate": {
+          "type": "integer",
+          "minimum": 8000,
+          "maximum": 192000
+        }
+      },
+      "required": [
+        "path",
+        "format",
+        "rate"
+      ]
+    },
+    "StageLinkKaraokeLine": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "color": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "rank": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 110
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "voice",
+                "estimate"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "move": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "same"
+          ]
+        },
+        "winner": {
+          "type": "boolean"
+        },
+        "coins": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "finished": {
+          "type": "boolean"
+        },
+        "on_air": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "color",
+        "rank",
+        "total",
+        "source",
+        "move",
+        "winner",
+        "coins",
+        "finished",
+        "on_air"
+      ]
+    },
+    "StageLinkKaraokeMember": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "color": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "singer",
+            "spectator"
+          ]
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "opener": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "color",
+        "role",
+        "ready",
+        "opener"
+      ]
+    },
+    "StageLinkKaraokeSong": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "artist": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 86400000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "artist",
+        "duration_ms"
+      ]
+    },
     "WireAccountRef": {
       "type": "object",
       "properties": {
@@ -8747,6 +9543,217 @@
         "is_self",
         "muted",
         "deafened"
+      ]
+    },
+    "WorkersKaraokeLineStatus": {
+      "type": "string",
+      "enum": [
+        "matched",
+        "uncertain",
+        "failed",
+        "unchecked"
+      ]
+    },
+    "WorkersKaraokeLineV2": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkersKaraokeLineStatus"
+        },
+        "source": {
+          "$ref": "#/$defs/WorkersKaraokeLyricsSource"
+        },
+        "similarity": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "heard": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "aligned": {
+          "type": "boolean"
+        },
+        "pieces": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkersKaraokePiece"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "edited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "text",
+        "status",
+        "source",
+        "similarity",
+        "heard",
+        "aligned",
+        "pieces",
+        "edited"
+      ]
+    },
+    "WorkersKaraokeLyricsCheck": {
+      "type": "object",
+      "properties": {
+        "matched": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "uncertain": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "kept",
+            "doubtful",
+            "wrong_song",
+            "unchecked"
+          ]
+        }
+      },
+      "required": [
+        "matched",
+        "uncertain",
+        "failed",
+        "verdict"
+      ]
+    },
+    "WorkersKaraokeLyricsSource": {
+      "type": "string",
+      "enum": [
+        "found",
+        "heard"
+      ]
+    },
+    "WorkersKaraokeLyricsV2": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/WorkersKaraokeLyricsSource"
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timing": {
+          "type": "string",
+          "enum": [
+            "line",
+            "char"
+          ]
+        },
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersKaraokeLyricsCheck"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersKaraokeLineV2"
+          }
+        }
+      },
+      "required": [
+        "provider",
+        "source",
+        "language",
+        "timing",
+        "check",
+        "lines"
+      ]
+    },
+    "WorkersKaraokePiece": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "sung": {
+          "type": "boolean"
+        },
+        "start": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "end": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reading": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "roman": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "text",
+        "sung",
+        "start",
+        "end",
+        "reading",
+        "roman"
       ]
     }
   }

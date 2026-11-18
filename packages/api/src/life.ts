@@ -124,9 +124,9 @@ export const ACTIVITY_ROWS: readonly ActivityRow[] = [
   {
     id: "business",
     label: "經營",
-    does: "開懸賞、辦募資、進貨小店",
+    does: "開懸賞",
     leaves: "公告",
-    capabilities: ["economy.post_bounty", "economy.propose_goal"],
+    capabilities: ["economy.post_bounty"],
     people: "someone",
     hours: [10, 24],
     per_day: 2,

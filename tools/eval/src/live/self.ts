@@ -202,7 +202,7 @@ export class SelfSubject implements Subject {
   unsupported(scene: Scene): string | null {
     const unknown = (scene.tools?.tools ?? []).filter((t) => FAKE_TOOL_SPECS[t] === undefined);
     if (unknown.length > 0) return `no fake tool definition for ${unknown.join(", ")}`;
-    if (scene.lines.length === 0) return "the scene has no line";
+    if (scene.lines.length === 0 && scene.world === undefined) return "the scene has no line";
     if (scene.place === "dm" && scene.address !== "dm") return "a DM scene is addressed by `dm`";
     if (scene.place === "text" && scene.address === "dm") return "`dm` needs the place to be a DM";
     return null;
@@ -246,23 +246,25 @@ export class SelfSubject implements Subject {
     const accountFor = (who: string): AccountRef =>
       accounts.get(who) ?? { platform: PLATFORM, id: `guest-${who}` };
     let ts = clock.now() - scene.lines.length * 1000;
-    transcript.append(
-      session.id,
-      scene.lines.map((line, i) => {
-        ts += 1000;
-        const lastLine = i === scene.lines.length - 1;
-        return {
-          kind: "other" as const,
-          account: accountFor(line.who),
-          author: line.who,
-          content: line.text,
-          message_id: `m${i + 1}`,
-          addressed: lastLine && scene.address !== "none",
-          at: toTimestamp(ts),
-        };
-      }),
-      { context },
-    );
+    if (scene.lines.length > 0) {
+      transcript.append(
+        session.id,
+        scene.lines.map((line, i) => {
+          ts += 1000;
+          const lastLine = i === scene.lines.length - 1;
+          return {
+            kind: "other" as const,
+            account: accountFor(line.who),
+            author: line.who,
+            content: line.text,
+            message_id: `m${i + 1}`,
+            addressed: lastLine && scene.address !== "none",
+            at: toTimestamp(ts),
+          };
+        }),
+        { context },
+      );
+    }
 
     // Tools: the fake world's, always on unless hidden for this scene.
     const calls: ReplyCall[] = [];
@@ -349,9 +351,11 @@ export class SelfSubject implements Subject {
     const from = last === undefined ? null : { account: accountFor(last.who), name: last.who };
     const message = { context, id: `m${scene.lines.length}` };
     const wake: Wake =
-      scene.address === "none" || from === null
-        ? { kind: "glance", lines: scene.lines.length }
-        : { kind: "addressed", reason: scene.address, from, message };
+      scene.world !== undefined
+        ? { kind: "world", what: scene.world }
+        : scene.address === "none" || from === null
+          ? { kind: "glance", lines: scene.lines.length }
+          : { kind: "addressed", reason: scene.address, from, message };
 
     const before = o.meter.usage();
     const started = Date.now();

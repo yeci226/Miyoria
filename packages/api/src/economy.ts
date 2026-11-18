@@ -3,7 +3,6 @@
 //
 // * `GET /api/economy/health`: coins issued against recovered per day. `available: false` until a
 //   store provides the ledger totals; then there are no days, not made-up ones.
-// * `GET /api/economy/commissions`: what people commissioned that she has not handed in.
 // * `GET /api/economy/predictions`: open predictions and the ones settled lately (without anyone's
 //   stake).
 // * `GET /api/economy/room`: her room, every item with how far the audience got.
@@ -45,10 +44,6 @@ export const economyRpc = {
   health: os.economy.health.handler(async ({ context }) => {
     const v2 = economyView(context.state);
     return { currency: v2.currency, ...(await guard(() => v2.health())) };
-  }),
-  commissions: os.economy.commissions.handler(async ({ context }) => {
-    const v2 = economyView(context.state);
-    return { currency: v2.currency, commissions: await guard(() => v2.commissionsWaiting()) };
   }),
   predictions: os.economy.predictions.handler(async ({ context }) => {
     const v2 = economyView(context.state);

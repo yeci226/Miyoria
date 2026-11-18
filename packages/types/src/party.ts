@@ -5,6 +5,8 @@
 //   game without it simply ends without rewards.
 // * `SongClips`: songs she has a cover of, and a short clip of one played in her voice channel,
 //   for the song-guessing game. The singing module provides it; without it that game is off.
+// * `GameSecrets`: whether a line of hers would give away what a game hides (a turtle soup's
+//   bottom). The party module provides it; the brain's line guard asks it.
 
 import type { AccountRef, ContextKey } from "./platform.js";
 import { serviceKey } from "./service-key.js";
@@ -84,3 +86,24 @@ export interface SongClips {
 }
 
 export const SongClipsKey = serviceKey<SongClips>("SongClips");
+
+// ---- what a game keeps hidden ---------------------------------------------------------------
+
+/** A line of hers that would give away what a game keeps hidden (a turtle soup's bottom). */
+export interface GameSecretLeak {
+  /** The word that gives it away. */
+  word: string;
+  /** What she says in its place (the referee's plain answer); `null`: nothing, it is not said. */
+  instead: string | null;
+}
+
+/**
+ * The game going on where she talks, asked by the line guard before every line of hers: whether
+ * the line would give away what the game hides. The party module provides it; without it nothing
+ * is checked.
+ */
+export interface GameSecrets {
+  leak(place: ContextKey, text: string): GameSecretLeak | null;
+}
+
+export const GameSecretsKey = serviceKey<GameSecrets>("GameSecrets");

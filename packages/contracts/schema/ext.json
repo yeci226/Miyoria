@@ -297,6 +297,10 @@
               "type": "null"
             }
           ]
+        },
+        "status": {
+          "default": false,
+          "type": "boolean"
         }
       }
     },
@@ -932,6 +936,77 @@
           ]
         }
       ]
+    },
+    "ExtStatusResult": {
+      "type": "object",
+      "properties": {
+        "facts": {
+          "default": [],
+          "maxItems": 4,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "unit": {
+                "type": "string",
+                "maxLength": 16
+              }
+            },
+            "required": [
+              "label",
+              "value"
+            ]
+          }
+        },
+        "next": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "at"
+          ]
+        },
+        "last_error": {
+          "type": "object",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 400
+            }
+          },
+          "required": [
+            "at",
+            "message"
+          ]
+        }
+      }
     },
     "ExtSteerOutcome": {
       "type": "string",

@@ -147,6 +147,11 @@ export const StageStateSchema = z
     node: z.string().nullable(),
     /** OBS is streaming. */
     streaming: z.boolean(),
+    /**
+     * Something about OBS the owner should fix, from the stage node (OBS is not on Miyoria's
+     * scene collection); `null` when all is well or no node is connected.
+     */
+    obs_warning: z.string().nullable(),
   })
   .meta({ id: "ApiStageState" });
 export type StageState = z.output<typeof StageStateSchema>;

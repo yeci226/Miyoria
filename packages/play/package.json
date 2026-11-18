@@ -1,7 +1,7 @@
 {
   "name": "@miyoria/play",
   "version": "0.1.0",
-  "description": "party: Voice party games she hosts and plays: turtle soup, song guessing, word chains and quizzes; game: Game director: picks goals, acts through game adapter tools, comments live; queue: User request queue: fair ordering, voting mode, persistence and commands",
+  "description": "party: Party games she hosts: turtle soup (voice or text channel) and song guessing (voice); game: Game director: picks goals, acts through game adapter tools, comments live; queue: User request queue: fair ordering, voting mode, persistence and commands; cards: Her cards for each person (module `cards`): the paid daily card, its draw by public odds with a pity, the expression by relationship, the dex with series titles and the old collectibles, the wishlist; market: The weekly market (module `market`): the song priority ticket, a weekly auction of one lot in a channel and a weekly lottery; karaoke: Karaoke on the member page (module `karaoke`): songs prepared by the song worker, the score shared with the browser, sessions, results and her comment",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -21,6 +21,41 @@
       "@miyoria/source": "./queue/src/index.ts",
       "types": "./dist/queue/src/index.d.ts",
       "default": "./dist/queue/src/index.js"
+    },
+    "./cards": {
+      "@miyoria/source": "./cards/src/index.ts",
+      "types": "./dist/cards/src/index.d.ts",
+      "default": "./dist/cards/src/index.js"
+    },
+    "./market": {
+      "@miyoria/source": "./market/src/index.ts",
+      "types": "./dist/market/src/index.d.ts",
+      "default": "./dist/market/src/index.js"
+    },
+    "./karaoke": {
+      "@miyoria/source": "./karaoke/src/index.ts",
+      "types": "./dist/karaoke/src/index.d.ts",
+      "default": "./dist/karaoke/src/index.js"
+    },
+    "./karaoke/testing": {
+      "@miyoria/source": "./karaoke/src/testing.ts",
+      "types": "./dist/karaoke/src/testing.d.ts",
+      "default": "./dist/karaoke/src/testing.js"
+    },
+    "./karaoke/score": {
+      "@miyoria/source": "./karaoke/src/score/index.ts",
+      "types": "./dist/karaoke/src/score/index.d.ts",
+      "default": "./dist/karaoke/src/score/index.js"
+    },
+    "./karaoke/lyrics": {
+      "@miyoria/source": "./karaoke/src/lyrics/index.ts",
+      "types": "./dist/karaoke/src/lyrics/index.d.ts",
+      "default": "./dist/karaoke/src/lyrics/index.js"
+    },
+    "./karaoke/edit": {
+      "@miyoria/source": "./karaoke/src/edit/index.ts",
+      "types": "./dist/karaoke/src/edit/index.d.ts",
+      "default": "./dist/karaoke/src/edit/index.js"
     }
   },
   "files": [
@@ -33,12 +68,14 @@
   },
   "dependencies": {
     "@miyoria/commands": "workspace:*",
+    "@miyoria/contracts": "workspace:*",
     "@miyoria/gate": "workspace:*",
     "@miyoria/heart": "workspace:*",
     "@miyoria/llm": "workspace:*",
     "@miyoria/runtime": "workspace:*",
     "@miyoria/store": "workspace:*",
     "@miyoria/types": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.5",
     "opencc-js": "^1.4.2",
     "zod": "^4.6.7"
   },

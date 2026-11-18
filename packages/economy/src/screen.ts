@@ -35,5 +35,5 @@ export function waitMinutes(ms: number): number {
 }
 
 export function screenEvent(name: string, text: string): ScreenEvent {
-  return { kind: "message", name, text, song: null };
+  return { name, text };
 }

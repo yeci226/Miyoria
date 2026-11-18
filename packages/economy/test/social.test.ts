@@ -16,9 +16,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EconomyConfigSchema } from "../src/config.js";
 import { EconomyService } from "../src/economy.js";
 import { CoinLedgerStoreKey } from "../src/records.js";
-import { inIdOf, NO_RECEIVER, NO_TRANSFERS, OWN_ACCOUNT, otherName } from "../src/transfer.js";
+import {
+  inIdOf,
+  NO_RECEIVER,
+  NO_TRANSFERS,
+  OWN_ACCOUNT,
+  otherName,
+  transferFee,
+} from "../src/transfer.js";
 import { EconomyError } from "../src/types.js";
-import { economyOf, ledgerOf, walletOf } from "./ledger.js";
+import { ledgerOf, walletOf } from "./ledger.js";
 
 const DAY = 86_400_000;
 const T0 = Date.UTC(2026, 10, 8, 4, 0, 0);
@@ -113,11 +120,13 @@ describe("transfers", () => {
     const r = await rig();
     await post(r, ALICE, 80, "checkin");
     const out = await r.economy.transfer(ALICE, BOB, 30, "k1");
-    expect(out).toEqual({ sent: 30, balance: 50, to: "Bob∶*x*" });
-    expect(await balance(r, ALICE)).toBe(50);
+    // 5% of 30 is 1.5: the fee rounds up to 2, on top of the amount.
+    expect(out).toEqual({ sent: 30, fee: 2, balance: 48, to: "Bob∶*x*" });
+    expect(await balance(r, ALICE)).toBe(48);
     expect(await balance(r, BOB)).toBe(30);
-    const mine = (await r.economy.wallet(ALICE)).recent[0];
+    const [fee, mine] = (await r.economy.wallet(ALICE)).recent;
     const theirs = (await r.economy.wallet(BOB)).recent[0];
+    expect(fee).toMatchObject({ delta: -2, label: "轉帳手續費" });
     expect(mine).toMatchObject({ delta: -30, label: "轉給 Bob∶*x*" });
     expect(theirs).toMatchObject({ delta: 30, label: "Alice 轉給你" });
     const rowOut = (
@@ -142,12 +151,7 @@ describe("transfers", () => {
     const r = await rig();
     await post(r, ALICE, 80, "checkin");
     await r.economy.transfer(ALICE, BOB, 10, "k1");
-    const spent = await ledgerOf(r.store).spent(
-      "p",
-      ["feed", "letter", "expression"],
-      "2000-01-01T00:00:00Z",
-      10,
-    );
+    const spent = await ledgerOf(r.store).spent("p", ["feed"], "2000-01-01T00:00:00Z", 10);
     expect(spent).toEqual([]);
   });
 
@@ -158,7 +162,7 @@ describe("transfers", () => {
     const again = await r.economy.transfer(ALICE, BOB, 20, "same");
     expect(again).toEqual(first);
     expect(await balance(r, BOB)).toBe(20);
-    expect(await balance(r, ALICE)).toBe(60);
+    expect(await balance(r, ALICE)).toBe(59);
   });
 
   it("refuses bad amounts and an unfunded sender", async () => {
@@ -168,7 +172,59 @@ describe("transfers", () => {
     await refused(r.economy.transfer(ALICE, BOB, 1.5, "b"), 400);
     await refused(r.economy.transfer(ALICE, BOB, 51, "c"), 400, "一次轉 1 到 50 魚幣");
     await refused(r.economy.transfer(ALICE, BOB, 41, "d"), 402);
+    // The fee counts: 40 and its fee of 2 are more than 40.
+    await refused(r.economy.transfer(ALICE, BOB, 40, "e"), 402, "魚幣不夠(要 42,含手續費 2)");
     expect(await balance(r, ALICE)).toBe(40);
+    expect(await balance(r, BOB)).toBe(0);
+  });
+
+  it("rounds the fee up to at least one coin, and charges none at a rate of 0", () => {
+    expect([1, 10, 20, 21, 60, 100, 140].map((n) => transferFee(n, 0.05))).toEqual([
+      1, 1, 1, 2, 3, 5, 7,
+    ]);
+    expect(transferFee(30, 0.1)).toBe(3);
+    expect(transferFee(30, 0)).toBe(0);
+  });
+
+  it("burns the fee: it leaves the sender, reaches nobody and is not spent on her", async () => {
+    const r = await rig();
+    await post(r, ALICE, 80, "checkin");
+    await r.economy.transfer(ALICE, BOB, 40, "k");
+    expect((await balance(r, ALICE)) + (await balance(r, BOB))).toBe(80 - 2);
+    const rows = await ledgerOf(r.store).entries("p", walletOf(r.store, ALICE), {
+      reasons: ["transfer_fee"],
+      limit: 9,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ delta: -2, reason: "transfer_fee" });
+    expect(await r.economy.board()).toEqual([]);
+    // The day limit counts the amount, not the fee.
+    const limited = await rig({ transfer_out_per_day: 50 });
+    await post(limited, ALICE, 200, "checkin");
+    await limited.economy.transfer(ALICE, BOB, 50, "a");
+    await refused(limited.economy.transfer(ALICE, BOB, 1, "b"), 429);
+  });
+
+  it("charges no fee when the rate is 0, and none for a transfer that was refused", async () => {
+    const free = await rig({ transfer_fee: 0 });
+    await post(free, ALICE, 80, "checkin");
+    expect(await free.economy.transfer(ALICE, BOB, 30, "k")).toEqual({
+      sent: 30,
+      fee: 0,
+      balance: 50,
+      to: "Bob∶*x*",
+    });
+    const r = await rig({ transfer_in_per_day: 20 });
+    await post(r, ALICE, 80, "checkin");
+    await refused(r.economy.transfer(ALICE, BOB, 30, "k"), 403, NO_RECEIVER);
+    expect(await balance(r, ALICE)).toBe(80);
+  });
+
+  it("tells the wallet what the fee is", async () => {
+    const r = await rig({ transfer_fee: 0.1 });
+    await post(r, ALICE, 10, "checkin");
+    expect((await r.economy.wallet(ALICE)).transfer_fee).toBe(0.1);
+    expect((await r.economy.wallet(DAVE)).transfer_fee).toBe(0.1);
   });
 
   it("refuses a stranger sender and answers every receiver that cannot take it alike", async () => {
@@ -231,7 +287,8 @@ describe("transfers", () => {
     expect(await balance(r, BOB)).toBe(25);
     await r.economy.transfer(ALICE, BOB, 25, "crash");
     expect(await balance(r, BOB)).toBe(25);
-    expect(await balance(r, ALICE)).toBe(55);
+    // The retry took the fee the first try had not reached, once.
+    expect(await balance(r, ALICE)).toBe(80 - 25 - 2);
   });
 
   it("gives the sender's row back when the receiver's limit refuses the second", async () => {
@@ -264,7 +321,7 @@ describe("the sponsor board", () => {
     const r = await rig();
     await post(r, ALICE, -40, "feed", { ref: "rice:4" });
     await post(r, BOB, -90, "feed", { ref: "big_bowl:1" });
-    await post(r, FRANK, -15, "letter");
+    await post(r, FRANK, -15, "screen_message");
     const lines = await r.economy.board();
     expect(lines).toEqual([
       { rank: 1, name: "Bob∶*x*", spent: 90 },
@@ -283,8 +340,6 @@ describe("the sponsor board", () => {
   it("counts everything spent on her, within the window, and not transfers or refunds", async () => {
     const r = await rig();
     await post(r, ALICE, -10, "feed", { ref: "rice:1" });
-    await post(r, ALICE, -15, "letter");
-    await post(r, ALICE, -20, "expression", { ref: "heart" });
     await post(r, ALICE, -30, "screen_message");
     await post(r, ALICE, -15, "dedication");
     await post(r, ALICE, -25, "song_ticket");
@@ -302,7 +357,7 @@ describe("the sponsor board", () => {
     // Refunded.
     const gone = await post(r, ALICE, -40, "dedication");
     await post(r, ALICE, 40, "refund", { ref: gone });
-    expect(await r.economy.board()).toEqual([{ rank: 1, name: "Alice", spent: 277 }]);
+    expect(await r.economy.board()).toEqual([{ rank: 1, name: "Alice", spent: 242 }]);
   });
 
   it("lists a fortune-only spender and leaves out a transfer-only one", async () => {
@@ -312,40 +367,19 @@ describe("the sponsor board", () => {
     expect(await r.economy.board()).toEqual([{ rank: 1, name: "Alice", spent: 5 }]);
   });
 
-  it("counts a deal's escrow only once it was released to her", async () => {
+  it("counts what a removed feature held only while it was not given back", async () => {
     const r = await rig();
-    const held = await post(r, BOB, -10, "deal_escrow", { id: "ESC1" });
-    const paid = await post(r, BOB, -40, "deal_escrow", { id: "ESC2" });
-    const sent = (id: string, escrow: string, status: string) =>
-      economyOf(r.store)
-        .deals.create({
-          id,
-          account: BOB,
-          item: "rice",
-          count: 1,
-          value: 10,
-          task: "t",
-          prepaid: true,
-          escrow,
-          status: "open",
-          created_at: new Date(T0).toISOString(),
-          done_at: null,
-          due_at: null,
-          closed_at: null,
-        } as never)
-        .then(async () => {
-          if (status !== "open")
-            await economyOf(r.store).deals.transition(id, ["open"], { status } as never);
-        });
-    await sent("D1", held, "open");
-    await sent("D2", paid, "settled");
+    // Escrow rows of before deals went: a kept deal counts, one the migration returned does not.
+    await post(r, BOB, -40, "deal_escrow", { id: "ESC2" });
+    await post(r, BOB, -10, "deal_escrow", { id: "ESC1" });
+    await post(r, BOB, 10, "refund_removed", { ref: "ESC1" });
     expect(await r.economy.board()).toEqual([{ rank: 1, name: "Bob∶*x*", spent: 40 }]);
   });
 
   it("is one person across linked accounts, off when any account left, and off for all", async () => {
     const r = await rig();
     await post(r, ALICE, -30, "feed", { ref: "rice:3" });
-    await post(r, ALICE_TWO, -20, "letter");
+    await post(r, ALICE_TWO, -20, "frame");
     expect(await r.economy.board()).toEqual([{ rank: 1, name: "Alice", spent: 50 }]);
     await r.economy.setOnBoard(ALICE_TWO, false);
     expect(await r.economy.board()).toEqual([]);

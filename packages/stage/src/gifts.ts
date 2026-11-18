@@ -21,7 +21,7 @@ interface Group {
   count: number;
 }
 
-/** Items that are fed; the rest are handed over (a letter, an expression). */
+/** Items that are fed; the rest are handed over. */
 const FED = new Set(["rice", "big_bowl", "dessert"]);
 
 const isControl = (ch: string): boolean => {

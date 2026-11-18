@@ -581,7 +581,8 @@ describe("oauth", () => {
     expect(revoked.status, JSON.stringify(revoked.body)).toBe(401);
 
     cookie = await h.loginCookie("owner-code");
-    expect(await h.persisted()).toHaveLength(2);
+    // The revoked admin's session ended at its first request after the revoke.
+    expect(await h.persisted()).toHaveLength(1);
     let response = await fetch(`${h.base()}/api/auth/logout`, {
       method: "POST",
       headers: { cookie: `miyoria_session=${cookie}` },
@@ -598,7 +599,54 @@ describe("oauth", () => {
     expect(cleared.startsWith("miyoria_session=;")).toBe(true);
     expect(cleared).toContain("Max-Age=0");
     expect((await h.withCookie("GET", "/api/auth/session", cookie, false)).status).toBe(401);
-    expect(await h.persisted(), "only the revoked admin's left").toHaveLength(1);
+    expect(await h.persisted()).toHaveLength(0);
+  });
+
+  it("a_session_whose_tier_no_longer_fits_ends_and_the_next_login_gets_the_right_one", async () => {
+    const h = await harnessWith(true);
+    // Someone without panel access gets a member session (the public side is on).
+    const member = await h.loginCookie("stranger-code");
+    expect((await h.withCookie("GET", "/api/member/session", member, false)).status).toBe(200);
+    expect((await h.withCookie("GET", "/api/queue", member, false)).status).toBe(401);
+
+    // Made an admin through the API: the member session ends at its next request.
+    const assigned = await raw(h.base(), "POST", "/api/auth/assignments", {
+      token: TOKEN,
+      json: { account: discord(STRANGER), role: "admin", scope: { type: "global" } },
+    });
+    expect(assigned.status, JSON.stringify(assigned.body)).toBe(200);
+    expect((await h.withCookie("GET", "/api/member/session", member, false)).status).toBe(401);
+    expect(await h.persisted()).toHaveLength(0);
+
+    // A new login is an admin session; losing the role ends that one too.
+    const admin = await h.loginCookie("stranger-code");
+    expect((await h.withCookie("GET", "/api/queue", admin, false)).status).toBe(200);
+    await h.auth.revoke("test", discord(STRANGER), "admin", { type: "global" });
+    expect((await h.withCookie("GET", "/api/queue", admin, false)).status).toBe(401);
+    expect((await h.withCookie("GET", "/api/member/session", admin, false)).status).toBe(401);
+  });
+
+  it("module_settings_need_admin_settings_of_that_module", async () => {
+    const h = await harnessWith(true);
+    await h.auth.upsertRole("test", {
+      name: "helper",
+      rank: 60,
+      grants: ["admin.panel.access", "admin.panel.write", "admin.settings.party"],
+      denies: [],
+      builtin: false,
+    });
+    await h.auth.assign("test", discord(VIEWER), "helper", { type: "global" });
+    const helper = await h.loginCookie("viewer-code");
+    const body = { expected: 0, set: {}, reset: [] };
+    const refused = await h.withCookie("PUT", "/api/modules/api/settings", helper, true, body);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toContain("admin.settings.api");
+    // Past the permission (no settings service in this harness): 503, not 403.
+    await h.auth.assign("test", discord(ADMIN), "admin", { type: "global" });
+    const admin = await h.loginCookie("admin-code");
+    expect((await h.withCookie("PUT", "/api/modules/api/settings", admin, true, body)).status).toBe(
+      503,
+    );
   });
 
   it("sessions_persist_hashed_and_expire", async () => {

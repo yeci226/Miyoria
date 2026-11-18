@@ -406,7 +406,7 @@ function behaviour(open: () => Promise<Store>): void {
   // Reading decisions and turn outcomes back per place and since a time is pinned in
   // decision-log.test.ts on fresh databases: they are the whole database's (one character).
 
-  // The coin ledger, the wallets, the deals, fortune slips, goals, bounties and economy 2.0's
+  // The coin ledger, the wallets, fortune slips, bounties and economy 2.0's
   // documents are the economy plugin's tables (v5-data §8 step 9a):
   // `packages/economy/test/tables.test.ts` pins them.
 
@@ -1037,7 +1037,7 @@ function behaviour(open: () => Promise<Store>): void {
       relationships: 1,
       relationship_deltas: 1,
       member_cards: 1,
-      // The coins, deals, slips, goals, bounties and documents are the economy plugin's, which
+      // The coins, slips, bounties and documents are the economy plugin's, which
       // this store was not opened with: no tables, nothing to count.
       self_state: 1,
       self_feelings: 1,

@@ -10,7 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Segmented } from "@/components/ui/segmented";
 import { fmtInt } from "@/lib/format";
+import { CardsArea } from "./cards/CardsArea";
+import { KaraokeLink } from "./karaoke/link";
 import { LiveStage } from "./live/LiveStage";
+import { Market } from "./Market";
 import { DAY_MS, localMidnight, MemberActions, MemberActivity, MemberLists, MemberProfile } from "./Member";
 import { STATE, stateLabel, usePublicSongs, usePublicStatus } from "./status";
 import { WalletMain } from "./Wallet";
@@ -188,6 +191,7 @@ function Header({ member, onLogout, onBack }: { member: MemberSession; onLogout:
         </p>
       )}
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        <KaraokeLink />
         {onBack && (
           <Button variant="outline" size="sm" onClick={onBack}>
             <ArrowLeft aria-hidden />
@@ -241,6 +245,8 @@ export function PublicSite({
           </div>
           <Now />
           <MemberLists />
+          <CardsArea />
+          <Market />
           <WalletMain />
           <Songs />
         </Page>

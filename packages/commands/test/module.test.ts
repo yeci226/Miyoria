@@ -109,7 +109,6 @@ describe("commands module", () => {
       "admin module restart",
       "help",
       "me card",
-      "me fortune",
     ]);
     expect(reg.groupDescription("admin module")).toBe("管理模組");
     expect(reg.get(["admin", "module", "enable"])?.args[0]?.autocomplete).toBe(true);

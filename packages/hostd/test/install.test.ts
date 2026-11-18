@@ -1,9 +1,7 @@
 // The installer against a fake `uv` (an injected runner) and local servers: nothing is downloaded
 // from the internet and no real environment is built.
 
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -11,7 +9,6 @@ import {
   environmentState,
   execaRunner,
   extrasOf,
-  fileDest,
   INSTALL_RECORD_FILE,
   type InstallDeps,
   inspectService,
@@ -31,19 +28,12 @@ import {
 import { TMP } from "./fakes.js";
 
 let root: string;
-const servers: Server[] = [];
 
 beforeEach(() => {
   mkdirSync(TMP, { recursive: true });
   root = mkdtempSync(join(TMP, "inst-"));
 });
-afterEach(async () => {
-  for (const s of servers.splice(0)) {
-    await new Promise<void>((done) => {
-      s.close(() => done());
-      s.closeAllConnections();
-    });
-  }
+afterEach(() => {
   rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
@@ -351,147 +341,6 @@ describe("uv sync", () => {
       },
     );
     expect(inspectService(entry, host, deps()).models[0]?.present).toBe(true);
-  });
-});
-
-// ---- files -------------------------------------------------------------------------------------
-
-function serve(
-  body: Buffer,
-  options: { honourRange?: boolean } = {},
-): Promise<{ url: string; hits: string[] }> {
-  const hits: string[] = [];
-  return new Promise((resolve) => {
-    const server = createServer((req, res) => {
-      const range = req.headers.range;
-      hits.push(range ?? "full");
-      if (range !== undefined && options.honourRange !== false) {
-        const start = Number(/bytes=(\d+)-/.exec(range)?.[1] ?? 0);
-        const part = body.subarray(start);
-        res.writeHead(206, { "content-length": part.length });
-        res.end(part);
-        return;
-      }
-      res.writeHead(200, { "content-length": body.length });
-      res.end(body);
-    });
-    servers.push(server);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address !== null ? address.port : 0;
-      resolve({ url: `http://127.0.0.1:${port}/model.onnx`, hits });
-    });
-  });
-}
-
-const sha = (data: Buffer) => createHash("sha256").update(data).digest("hex");
-
-function withFile(url: string, sum?: string): Record<string, string> {
-  return {
-    f: `name = "f"\nkind = "worker"\n[install]\nruntime = "none"\n[[install.files]]\nurl = "${url}"\n${
-      sum !== undefined ? `sha256 = "${sum}"\n` : ""
-    }path = "smart/model.onnx"\n[run]\ncommand = ["x"]\n`,
-  };
-}
-
-describe("install.files", () => {
-  const data = Buffer.from("0123456789".repeat(100));
-
-  it("downloads into <state>/models/<path> and checks the checksum", async () => {
-    const server = await serve(data);
-    const { host, catalog } = workspace(
-      'name = "h"\n[services.f]\n',
-      withFile(server.url, sha(data)),
-    );
-    const result = await installService(
-      entryOf(catalog, "f"),
-      host,
-      deps({ allowedHosts: ["127.0.0.1"] }),
-    );
-    expect(result.files).toEqual([{ path: "smart/model.onnx", state: "downloaded" }]);
-    const dest = join(host.state.models, "smart", "model.onnx");
-    expect(fileDest(host, "smart/model.onnx")).toBe(dest);
-    expect(readFileSync(dest)).toEqual(data);
-    expect(existsSync(`${dest}.part`)).toBe(false);
-
-    // A second run keeps the file and does not ask the server again.
-    const again = await installService(
-      entryOf(catalog, "f"),
-      host,
-      deps({ allowedHosts: ["127.0.0.1"] }),
-    );
-    expect(again.files).toEqual([{ path: "smart/model.onnx", state: "present" }]);
-    expect(server.hits).toEqual(["full"]);
-  });
-
-  it("continues a .part file with a Range request", async () => {
-    const server = await serve(data);
-    const { host, catalog } = workspace(
-      'name = "h"\n[services.f]\n',
-      withFile(server.url, sha(data)),
-    );
-    const dest = join(host.state.models, "smart", "model.onnx");
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(`${dest}.part`, data.subarray(0, 300));
-    const result = await installService(
-      entryOf(catalog, "f"),
-      host,
-      deps({ allowedHosts: ["127.0.0.1"] }),
-    );
-    expect(result.files[0]?.state).toBe("downloaded");
-    expect(server.hits).toEqual(["bytes=300-"]);
-    expect(readFileSync(dest)).toEqual(data);
-  });
-
-  it("starts again when the server ignores the Range request", async () => {
-    const server = await serve(data, { honourRange: false });
-    const { host, catalog } = workspace('name = "h"\n[services.f]\n', withFile(server.url));
-    const dest = join(host.state.models, "smart", "model.onnx");
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(`${dest}.part`, Buffer.from("garbage"));
-    await installService(entryOf(catalog, "f"), host, deps({ allowedHosts: ["127.0.0.1"] }));
-    expect(readFileSync(dest)).toEqual(data);
-  });
-
-  it("fails on a checksum mismatch and leaves no file behind", async () => {
-    const server = await serve(data);
-    const { host, catalog } = workspace(
-      'name = "h"\n[services.f]\n',
-      withFile(server.url, "0".repeat(64)),
-    );
-    const result = await installService(
-      entryOf(catalog, "f"),
-      host,
-      deps({ allowedHosts: ["127.0.0.1"] }),
-    );
-    expect(result.ok).toBe(false);
-    expect(result.files[0]?.state).toBe("failed");
-    expect(result.files[0]?.detail).toContain("SHA-256");
-    const dest = join(host.state.models, "smart", "model.onnx");
-    expect(existsSync(dest)).toBe(false);
-    expect(existsSync(`${dest}.part`)).toBe(false);
-  });
-
-  it("refuses a host that is not on the list, and --no-files downloads nothing", async () => {
-    const server = await serve(data);
-    const { host, catalog } = workspace('name = "h"\n[services.f]\n', withFile(server.url));
-    const refused = await installService(entryOf(catalog, "f"), host, deps());
-    expect(refused.files[0]).toMatchObject({ state: "failed" });
-    expect(refused.files[0]?.detail).toContain("not on the list");
-    const skipped = await installService(
-      entryOf(catalog, "f"),
-      host,
-      deps({ allowedHosts: ["127.0.0.1"] }),
-      { noFiles: true },
-    );
-    expect(skipped.files).toEqual([{ path: "smart/model.onnx", state: "missing" }]);
-    expect(server.hits).toEqual([]);
-  });
-
-  it("keeps a path inside the model folder", () => {
-    const { host } = workspace('name = "h"\n[services.asr]\n');
-    expect(() => fileDest(host, "../outside")).toThrow();
-    expect(() => fileDest(host, "/abs/path")).toThrow();
   });
 });
 

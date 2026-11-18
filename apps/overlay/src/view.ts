@@ -1,8 +1,10 @@
 // DOM for the overlay. Holds the reducer state plus the time-based bits the reducer must not know about
 // (typewriter position, linger timers) and paints them from one animation-frame loop. Everything that
 // appears, disappears or changes goes through motion.ts, so nothing pops.
+import type { OverlayReply } from "@miyoria/contracts/overlay";
 import { ActivityCapsule } from "./activity.js";
 import type { OverlayConfig } from "./config.js";
+import { DanmakuLayer } from "./danmaku-view.js";
 import {
   type Action,
   initialState,
@@ -13,6 +15,7 @@ import {
   shownActivity,
 } from "./feed.js";
 import { emotionColor } from "./emotion.js";
+import { KaraokeLayer } from "./karaoke-view.js";
 import { isPresent, present, reflow, removeAfterExit, Swap } from "./motion.js";
 import {
   advance,
@@ -26,7 +29,7 @@ import { MAX_TOUCHES, type Touch, TouchSet } from "./touch.js";
 import { Wave } from "./wave.js";
 
 const QUEUE_SHOWN = 5;
-/** How long one paid message / dedication stays up before the next one comes. */
+/** How long one paid message stays up before the next one comes. */
 export const SCREEN_SHOW_MS = 12_000;
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -97,19 +100,41 @@ export class Overlay {
   private readonly touchLayer: HTMLElement;
   private readonly touches = new TouchSet();
   private readonly touchEls = new Map<number, HTMLElement>();
+  /** Paid lines crossing the top of the picture; null when `show=` leaves them out. */
+  private readonly danmaku: DanmakuLayer | null;
+  /** The karaoke room on the stream; null when `show=` leaves it out. */
+  private readonly karaoke: KaraokeLayer | null;
   /** The card whose time is running, and its timer. */
   private screenShown: number | null = null;
   private screenTimer: ReturnType<typeof setTimeout> | undefined;
 
+  /** `reply` takes the page's answers about danmaku lines (to the socket, or nowhere in the demo). */
   constructor(
     root: HTMLElement,
     private readonly cfg: OverlayConfig,
+    reply: (r: OverlayReply) => void = () => {},
   ) {
     root.replaceChildren();
     const main = el("main", "overlay", root);
 
     this.wave = new Wave(main);
     this.wave.hidden = !cfg.show.has("wave");
+
+    // Paid lines crossing the top of the picture. Under every plate (the panel, the gift line, the
+    // paid message), so those stay readable; a line passes behind them and comes out again.
+    this.danmaku = cfg.show.has("danmaku") ? new DanmakuLayer(main, cfg.danmakuBand, reply) : null;
+
+    // The karaoke room on the stream: its screen (the round's video) under everything on the page,
+    // its plates and lyrics over the danmaku lane like every other plate. Nothing of it is on the
+    // page until a room is.
+    if (cfg.show.has("karaoke")) {
+      const under = document.createElement("div");
+      under.className = "karaoke-under";
+      main.prepend(under);
+      this.karaoke = new KaraokeLayer(under, main, cfg.karaokeRuby, cfg.demo || cfg.debug);
+    } else {
+      this.karaoke = null;
+    }
 
     this.subtitle = el("section", "subtitle is-hidden", main);
     const p = el("p", "subtitle__text", this.subtitle);
@@ -167,7 +192,7 @@ export class Overlay {
     this.gift.setAttribute("role", "status");
     this.giftText = new Swap(el("span", "gift__text", this.gift));
 
-    // Paid messages and song dedications, one at a time (top centre, under the gift line).
+    // Paid messages, one at a time (top centre, under the gift line).
     this.screen = el("div", "shout is-out", main);
     this.screen.hidden = true;
     this.screen.setAttribute("role", "status");
@@ -195,10 +220,41 @@ export class Overlay {
       this.showTouch(action);
       return;
     }
+    // With the layer hidden, lines are not answered at all (the node does not wait for this page).
+    if (action.type === "danmaku") {
+      this.danmaku?.receive(action, performance.now());
+      return;
+    }
+    if (action.type === "danmaku_clear") {
+      this.danmaku?.clear();
+      return;
+    }
+    if (action.type === "karaoke") {
+      this.karaoke?.scene(action.scene, performance.now());
+      return;
+    }
+    if (action.type === "karaoke_lyrics") {
+      this.karaoke?.lyrics(action.lyrics);
+      return;
+    }
+    if (action.type === "karaoke_voice") {
+      this.karaoke?.voice(action.voice);
+      return;
+    }
+    if (action.type === "connection") {
+      if (action.connected) this.danmaku?.ready();
+      else {
+        this.danmaku?.disconnect();
+        // Nobody drives the room without the feed; the Stage gives it again on reconnect.
+        this.karaoke?.scene(null, performance.now());
+      }
+    }
     const prev = this.state;
     this.state = reduce(prev, action);
     if (this.state === prev) return;
     if (action.type === "speaking" && !this.state.speaking) this.quietSince = this.lastFrame;
+    // The karaoke round's sound dips under her lines (and a dropped feed ends her speaking).
+    this.karaoke?.speaking(this.state.speaking);
     if (this.state.subtitleSeq !== this.seenSeq) this.onSubtitle();
     this.renderPanel();
   }
@@ -218,6 +274,8 @@ export class Overlay {
       this.maybeHide(now, total);
     }
     this.wave.frame(dt, now);
+    this.danmaku?.frame(now);
+    this.karaoke?.frame(performance.now());
     for (const id of this.touches.expire(performance.now())) this.dropTouch(id);
     present(this.offline, this.cfg.debug && !this.state.connected);
   }
@@ -394,14 +452,13 @@ export class Overlay {
   }
 }
 
-/** The card on the screen for a paid message or dedication. */
+/** The card on the screen for a paid message. */
 function screenCard(item: HTMLElement, card: ScreenCard): void {
   item.classList.add("shout__card");
   const head = el("div", "shout__head", item);
-  el("span", "shout__tag", head, card.kind === "dedication" ? "點歌獻詞" : "留言");
+  el("span", "shout__tag", head, "留言");
   el("span", "shout__name", head, card.name);
   el("div", "shout__text", item, card.text);
-  if (card.song) el("div", "shout__song", item, `\u266A ${card.song}`);
 }
 
 /** Keys of queue items; a repeated item gets its occurrence number. */

@@ -108,6 +108,7 @@ describe("manifest", () => {
       version: "1",
       name: null,
       description: null,
+      icon: null,
       kind: [],
       game: null,
       runtime: "node",

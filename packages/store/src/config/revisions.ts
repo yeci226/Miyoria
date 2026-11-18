@@ -238,6 +238,11 @@ export class ConfigModuleState {
     this.#revisions = revisions;
   }
 
+  /** The revisions the flags live in; Core's settings layer writes the rest of a module's section. */
+  get revisions(): ConfigRevisions {
+    return this.#revisions;
+  }
+
   /** `null` when the flag was never set (the config default applies). */
   async get(module: ModuleId): Promise<boolean | null> {
     return moduleFlags(this.#revisions.current()?.doc).get(module) ?? null;

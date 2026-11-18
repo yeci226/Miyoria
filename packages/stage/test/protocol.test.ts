@@ -51,6 +51,8 @@ describe("parseStageMessage", () => {
         scenes: ["Talk", "Sing"],
         hotkeys: ["wave"],
         overlay_url: "http://pc:7884/overlay/",
+        obs_collection: "我的場景",
+        obs_warning: "OBS 不在「Miyoria」這份場景集合上(現在是「我的場景」)",
       }),
     ).toStrictEqual({
       type: "status",
@@ -62,6 +64,8 @@ describe("parseStageMessage", () => {
       scenes: ["Talk", "Sing"],
       hotkeys: ["wave"],
       overlay_url: "http://pc:7884/overlay/",
+      obs_collection: "我的場景",
+      obs_warning: "OBS 不在「Miyoria」這份場景集合上(現在是「我的場景」)",
     });
   });
 
@@ -77,6 +81,8 @@ describe("parseStageMessage", () => {
       scenes: [],
       hotkeys: [],
       overlay_url: null,
+      obs_collection: null,
+      obs_warning: null,
     });
   });
 
@@ -90,6 +96,8 @@ describe("parseStageMessage", () => {
       scenes: [],
       hotkeys: [],
       overlay_url: null,
+      obs_collection: null,
+      obs_warning: null,
     });
   });
 
@@ -103,6 +111,8 @@ describe("parseStageMessage", () => {
       scenes: [],
       hotkeys: [],
       overlay_url: null,
+      obs_collection: null,
+      obs_warning: null,
     });
   });
 
@@ -359,29 +369,17 @@ describe("parseCoreMessage", () => {
     expect(() => core({ ...gift, label: "l".repeat(25) })).toThrow(ZodError);
   });
 
-  it("screen, a message and a dedication", () => {
-    expect(
-      core({ type: "screen", kind: "message", name: "Mia", text: "hi", song: null }),
-    ).toStrictEqual({ type: "screen", kind: "message", name: "Mia", text: "hi", song: null });
-    expect(
-      core({ type: "screen", kind: "dedication", name: "Mia", text: "", song: "Song" }),
-    ).toStrictEqual({ type: "screen", kind: "dedication", name: "Mia", text: "", song: "Song" });
+  it("screen, a paid message", () => {
+    expect(core({ type: "screen", name: "Mia", text: "hi" })).toStrictEqual({
+      type: "screen",
+      name: "Mia",
+      text: "hi",
+    });
   });
 
-  it("screen: song must be present (null is the empty value), the lengths are bounded", () => {
-    expect(() => core({ type: "screen", kind: "message", name: "n", text: "t" })).toThrow(ZodError);
-    expect(() =>
-      core({ type: "screen", kind: "message", name: "n".repeat(33), text: "t", song: null }),
-    ).toThrow(ZodError);
-    expect(() =>
-      core({ type: "screen", kind: "message", name: "n", text: "t".repeat(201), song: null }),
-    ).toThrow(ZodError);
-    expect(() =>
-      core({ type: "screen", kind: "message", name: "n", text: "t", song: "s".repeat(129) }),
-    ).toThrow(ZodError);
-    expect(() => core({ type: "screen", kind: "ad", name: "n", text: "t", song: null })).toThrow(
-      ZodError,
-    );
+  it("screen: the lengths are bounded", () => {
+    expect(() => core({ type: "screen", name: "n".repeat(33), text: "t" })).toThrow(ZodError);
+    expect(() => core({ type: "screen", name: "n", text: "t".repeat(201) })).toThrow(ZodError);
   });
 
   it("touch, at and beyond the picture's edges", () => {

@@ -1,5 +1,5 @@
 // The economy plugin's tables (`tables.ts`): the coin ledger's guarantees, the wallets' choices,
-// the deals, and the economy's tables as data categories. A wallet is a person (with whoever they
+// and the economy's tables as data categories. A wallet is a person (with whoever they
 // absorbed) or her purse. One database is one character: the profile a caller names is not part
 // of any key.
 
@@ -16,11 +16,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   type Bounty,
   type CoinEntry,
-  type Deal,
   type EconomyDoc,
   type FortuneRecord,
-  type Goal,
-  type GoalPledge,
   PURSE,
 } from "../src/records.js";
 import { type EconomyTables, economyTables } from "../src/tables.js";
@@ -275,10 +272,10 @@ describe("the coin ledger", () => {
     const absorbed = person(discord("1b"), "Alice two");
     const bob = person(discord("2"), "Bob");
     await economy.ledger.post(coin(id, -30, "feed", null, 1_000));
-    await economy.ledger.post(coin(absorbed, -20, "letter", null, 2_000));
+    await economy.ledger.post(coin(absorbed, -20, "expression", null, 2_000));
     await economy.ledger.post(coin(bob, -10, "feed", null, 3_000));
     store.persons.merge(id, absorbed);
-    expect(await economy.ledger.spent("p", ["feed", "letter"], at(0), 10)).toEqual([
+    expect(await economy.ledger.spent("p", ["feed", "expression"], at(0), 10)).toEqual([
       { person: id, account: discord("1"), spent: 50 },
       { person: bob, account: discord("2"), spent: 10 },
     ]);
@@ -319,90 +316,6 @@ describe("the wallets", () => {
   });
 });
 
-describe("the deals", () => {
-  it("are kept per account, statuses move once and only from where they were", async () => {
-    const { economy, person } = await rig();
-    const deals = economy.deals;
-    const mine = discord("1");
-    const linked = discord("1b");
-    const other = discord("2");
-    for (const a of [mine, linked, other]) person(a);
-    const wallet = [mine, linked];
-    const deal = (account: AccountRef, ms: number, task: string): Deal => ({
-      id: newId(),
-      account,
-      item: "rice",
-      count: 2,
-      value: 20,
-      task,
-      prepaid: false,
-      escrow: null,
-      status: "open",
-      created_at: at(ms),
-      done_at: null,
-      due_at: null,
-      closed_at: null,
-    });
-    const first = deal(mine, 1_000, "meow");
-    const second = deal(linked, 2_000, "sing");
-    const third = deal(other, 3_000, "dance");
-    for (const d of [first, second, third]) await deals.create(d);
-    expect(await deals.get(first.id)).toEqual(first);
-    expect(await deals.get(newId())).toBeNull();
-
-    // Every account of the person; newest first.
-    const ours = await deals.forAccounts("p", wallet, { limit: 10 });
-    expect(ours.map((d) => d.task)).toEqual(["sing", "meow"]);
-    expect(await deals.forAccounts("p", wallet, { limit: 1 })).toHaveLength(1);
-    expect(await deals.forAccounts("p", wallet, { since: at(1_500), limit: 9 })).toEqual([second]);
-    expect(await deals.forAccounts("p", [], { limit: 9 })).toEqual([]);
-    expect(await deals.forAccounts("p", wallet, { statuses: [], limit: 9 })).toEqual([]);
-    expect(await deals.forAccounts("p", [discord("never")], { limit: 9 })).toEqual([]);
-    // One database is one character: another profile sees the same deals.
-    expect(await deals.forAccounts("other", wallet, { limit: 9 })).toHaveLength(2);
-
-    // A status moves once, from where it was, with the times it sets.
-    const done = { status: "owed" as const, done_at: at(5_000), due_at: at(9_000) };
-    expect(await deals.transition(first.id, ["open"], done)).toBe(true);
-    expect(await deals.transition(first.id, ["open"], done)).toBe(false);
-    expect(await deals.transition(first.id, [], done)).toBe(false);
-    expect(await deals.transition(newId(), ["open"], done)).toBe(false);
-    expect(await deals.get(first.id)).toMatchObject({
-      status: "owed",
-      done_at: at(5_000),
-      due_at: at(9_000),
-      closed_at: null,
-    });
-    // Fields left out stay, `null` clears.
-    expect(
-      await deals.transition(first.id, ["owed"], {
-        status: "broken",
-        closed_at: at(9_500),
-        due_at: null,
-      }),
-    ).toBe(true);
-    expect(await deals.get(first.id)).toMatchObject({
-      status: "broken",
-      done_at: at(5_000),
-      due_at: null,
-      closed_at: at(9_500),
-    });
-
-    const open = await deals.byStatus("p", ["open", "owed"], { limit: 10 });
-    expect(open.map((d) => d.task)).toEqual(["sing", "dance"]);
-    expect(await deals.byStatus("p", ["broken"], { limit: 10 })).toHaveLength(1);
-    expect(await deals.byStatus("p", [], { limit: 10 })).toEqual([]);
-    expect(await deals.byStatus("p", ["open"], { since: at(2_500), limit: 10 })).toEqual([third]);
-    const broken = await deals.forAccounts("p", wallet, { statuses: ["broken"], limit: 10 });
-    expect(broken.map((d) => d.id)).toEqual([first.id]);
-
-    // A prepaid deal keeps its escrow row; an account she never saw is made on first use.
-    const paid = { ...deal(discord("new"), 4_000, "escrowed"), prepaid: true, escrow: newId() };
-    await deals.create(paid);
-    expect(await deals.get(paid.id)).toMatchObject({ prepaid: true, escrow: paid.escrow });
-  });
-});
-
 describe("as data", () => {
   it("are counted, exported and wiped with the relationships, and go with their person", async () => {
     const { economy, person, store } = await rig();
@@ -410,30 +323,14 @@ describe("as data", () => {
     await economy.ledger.post(coin(id, 10, "checkin", null, 1_000));
     await economy.ledger.post(coin(PURSE, 3, "her_share", null, 1_000));
     await economy.ledger.setOnBoard("p", id, false);
-    await economy.deals.create({
-      id: newId(),
-      account: discord("1"),
-      item: "rice",
-      count: 1,
-      value: 10,
-      task: "t",
-      prepaid: false,
-      escrow: null,
-      status: "open",
-      created_at: at(1_000),
-      done_at: null,
-      due_at: null,
-      closed_at: null,
-    });
     const parts = async () =>
       (await store.profileData.inventory("p")).categories
         .find((c) => c.id === "relationships")
-        ?.parts.filter((p) => ["coin_ledger", "coin_wallets", "deals"].includes(p.id))
+        ?.parts.filter((p) => ["coin_ledger", "coin_wallets"].includes(p.id))
         .map((p) => [p.id, p.count]);
     expect(await parts()).toEqual([
       ["coin_ledger", 2],
       ["coin_wallets", 1],
-      ["deals", 1],
     ]);
     const backup = await store.profileData.export("p", ["relationships"]);
     expect(backup.parts.coin_ledger?.map((r) => [r.person_id, r.delta])).toEqual([
@@ -443,81 +340,21 @@ describe("as data", () => {
     expect(await store.profileData.wipe("p", ["relationships"])).toMatchObject({
       coin_ledger: 2,
       coin_wallets: 1,
-      deals: 1,
     });
     expect(await parts()).toEqual([
       ["coin_ledger", 0],
       ["coin_wallets", 0],
-      ["deals", 0],
     ]);
     // People go after what names them.
     expect(resolveCategories(["people"])).toContain("relationships");
   });
 });
 
-describe("goals and bounties", () => {
-  it("keep pledges per goal, and statuses move once and only from where they were", async () => {
-    const { economy, person } = await rig();
-    const { goals, bounties } = economy;
-    const goal = (ms: number, title: string): Goal => ({
-      id: newId(),
-      title,
-      promise: "meow",
-      target: 50,
-      status: "open",
-      created_at: at(ms),
-      deadline: at(ms + 5_000),
-      closed_at: null,
-    });
-    const first = goal(1_000, "mic");
-    const second = goal(2_000, "lamp");
-    for (const g of [first, second]) await goals.create(g);
-    expect(await goals.get(first.id)).toEqual(first);
-    expect(await goals.get(newId())).toBeNull();
-    expect((await goals.list("p", { limit: 9 })).map((g) => g.title)).toEqual(["lamp", "mic"]);
-    expect(await goals.list("p", { statuses: [], limit: 9 })).toEqual([]);
-    // One database is one character: another profile sees the same goals.
-    expect(await goals.list("other", { limit: 9 })).toHaveLength(2);
-
-    const pledge = (g: Goal, who: AccountRef, amount: number, ms: number): GoalPledge => ({
-      id: newId(),
-      goal: g.id,
-      account: who,
-      amount,
-      created_at: at(ms),
-    });
-    const a = pledge(first, discord("a"), 20, 1_100);
-    const b = pledge(first, discord("b"), 5, 1_200);
-    person(discord("a"));
-    for (const p of [b, a]) await goals.addPledge(p);
-    await goals.addPledge(pledge(second, discord("c"), 1, 2_100));
-    expect(await goals.pledges(first.id)).toEqual([a, b]);
-    await expect(goals.addPledge(a)).rejects.toThrow();
-    // A pledge is for a goal that exists.
-    await expect(
-      goals.addPledge({ ...pledge(first, discord("a"), 1, 1), goal: "none" }),
-    ).rejects.toThrow(StoreError);
-
+describe("bounties", () => {
+  it("keep their statuses moving once and only from where they were", async () => {
+    const { economy } = await rig();
+    const { bounties } = economy;
     const closed = at(3_000);
-    expect(
-      await goals.transition(first.id, ["open"], { status: "reached", closed_at: closed }),
-    ).toBe(true);
-    expect(await goals.transition(first.id, ["open"], { status: "expired" })).toBe(false);
-    expect(await goals.transition(first.id, [], { status: "open" })).toBe(false);
-    expect(await goals.get(first.id)).toMatchObject({ status: "reached", closed_at: closed });
-    expect((await goals.list("p", { statuses: ["open"], limit: 9 })).map((g) => g.title)).toEqual([
-      "lamp",
-    ]);
-    // A kept promise: only a reached goal, and the first mark stands.
-    expect(await goals.get(first.id)).not.toHaveProperty("fulfilled_at");
-    expect(await goals.fulfill(second.id, "owner", at(3_500))).toBe(false);
-    expect(await goals.fulfill(first.id, "self", at(4_000))).toBe(true);
-    expect(await goals.fulfill(first.id, "owner", at(5_000))).toBe(false);
-    expect(await goals.get(first.id)).toMatchObject({
-      fulfilled_at: at(4_000),
-      fulfilled_by: "self",
-    });
-    expect(await goals.get(second.id)).not.toHaveProperty("fulfilled_at");
 
     const bounty = (ms: number, task: string): Bounty => ({
       id: newId(),

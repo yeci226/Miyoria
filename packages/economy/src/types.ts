@@ -1,13 +1,13 @@
 // The shapes shared with the panel, the stage overlay and the Discord commands. Changing one
 // changes the contract (docs/design/economy.md).
 
-import { type AccountRef, type ContextKey, Events, serviceKey } from "@miyoria/types";
+import { type AccountRef, Events, serviceKey } from "@miyoria/types";
 import type { AchievementUnlocked } from "./v2-types.js";
 
 export type FeedItem = "rice" | "big_bowl" | "dessert";
 export type GiftExpression = "heart" | "blush" | "squint";
 /** What `economy.gift` names. */
-export type GiftItem = FeedItem | "letter" | "expression";
+export type GiftItem = FeedItem;
 
 export const FEED_ITEMS: readonly FeedItem[] = ["rice", "big_bowl", "dessert"];
 export const GIFT_EXPRESSIONS: readonly GiftExpression[] = ["heart", "blush", "squint"];
@@ -23,28 +23,12 @@ export interface EarnLine {
 }
 
 /**
- * Paid things another part of her sells (docs/design/economy.md §13): the card routes, the singer,
- * the overlay, the fortune. The economy only charges, caps per day and refunds; what is bought is
+ * Paid things another part of her sells (docs/design/economy.md §13): the card routes, the overlay, the fortune. The economy only charges, caps per day and refunds; what is bought is
  * the caller's. Prices and daily limits are `[modules.economy]` keys of the same name.
  */
-export type PaidItem =
-  | "card_reroll"
-  | "card_pose"
-  | "card_foil"
-  | "song_ticket"
-  | "dedication"
-  | "screen_message"
-  | "fortune";
+export type PaidItem = "card_foil" | "screen_message" | "fortune";
 
-export const PAID_ITEMS: readonly PaidItem[] = [
-  "card_reroll",
-  "card_pose",
-  "card_foil",
-  "song_ticket",
-  "dedication",
-  "screen_message",
-  "fortune",
-];
+export const PAID_ITEMS: readonly PaidItem[] = ["card_foil", "screen_message", "fortune"];
 
 /** Most coins one hand adjustment may add or take (docs/design/economy.md §14). */
 export const MAX_ADJUST = 100_000;
@@ -68,9 +52,9 @@ export interface Purchase {
 }
 
 export interface ShopItem {
-  /** `rice`, `letter`, `expression:heart`, `frame:sakura`, `card_reroll`, ... */
+  /** `rice`, `frame:sakura`, `card_foil`, ... */
   id: string;
-  kind: "feed" | "letter" | "expression" | "frame" | "card" | "song" | "stream" | "fortune";
+  kind: "feed" | "frame" | "card" | "stream" | "fortune";
   label: string;
   price: number;
   available: boolean;
@@ -84,17 +68,6 @@ export interface LedgerLine {
 }
 
 export type Hunger = "full" | "ok" | "hungry" | "starving";
-
-/** One deal as the wallet shows it (docs/design/economy.md §12). */
-export interface DealView {
-  /** What she said she would do. */
-  task: string;
-  /** `一碗白飯`, `3 碗白飯`. */
-  reward_label: string;
-  status: "open" | "owed" | "settled" | "broken" | "refunded";
-  /** When the next deadline falls (`open`: do it by; `owed`: pay by); `null` once it ended. */
-  due_at: string | null;
-}
 
 export interface WalletView {
   currency: string;
@@ -111,10 +84,10 @@ export interface WalletView {
   hungry: Hunger | null;
   /** Newest first, at most 20. */
   recent: LedgerLine[];
-  /** Her deals with this person, newest first, at most 10; cancelled ones are not shown. */
-  deals: DealView[];
   /** Whether they are on the sponsor board (on unless they left; `false` for strangers). */
   on_board: boolean;
+  /** The share of a transfer the sender pays on top, burned (`transfer_fee`; the amount is rounded up). */
+  transfer_fee: number;
 }
 
 export interface CheckinResult {
@@ -141,6 +114,30 @@ export interface SpendResult {
   charged: number;
   balance: number;
   message: string;
+}
+
+/** Ledger reasons of a danmaku line (danmaku.ts): the charge, and the charge given back. */
+export const DANMAKU_REASON = "danmaku";
+export const DANMAKU_REFUND_REASON = "danmaku_refund";
+
+/** `GET /api/member/danmaku`: what a danmaku line costs this person now. */
+export interface DanmakuView {
+  /** Danmaku are on (`danmaku_on`). */
+  open: boolean;
+  /** She is live and a line can reach the overlay. */
+  live: boolean;
+  currency: string;
+  price: number;
+  max_chars: number;
+  cooldown_s: number;
+  per_day: number;
+  /** Lines of theirs today that were not given back. */
+  sent_today: number;
+  /** Seconds until they may send the next one; `0` now. */
+  wait_s: number;
+  balance: number;
+  /** Why they cannot send one now, in the page's words; `null` when they can. */
+  why: string | null;
 }
 
 export interface FramesResult {
@@ -177,14 +174,21 @@ export interface Economy {
   wallet(account: AccountRef): Promise<WalletView>;
   checkin(account: AccountRef): Promise<CheckinResult>;
   feed(account: AccountRef, item: FeedItem, count: number, key: string): Promise<FeedResult>;
-  letter(account: AccountRef, text: string, key: string): Promise<SpendResult>;
-  expression(account: AccountRef, expression: GiftExpression, key: string): Promise<SpendResult>;
   /**
    * A message (1 to 60 characters) on the stream's screen while she is live: charged as
    * `screen_message`, once per person per cooldown. Refused without charging when the stage is
    * down or the text does not pass.
    */
   screenMessage(account: AccountRef, text: string, key: string): Promise<SpendResult>;
+  /**
+   * A danmaku line on the stream while she is live (danmaku.ts): charged as `danmaku`, given back
+   * by itself when the overlay did not show it. `EconomyError`: 400 empty, too long or with a link
+   * or mention, 402 short, 403 a stranger, 409 off, muted or not live, 429 the cooldown or the
+   * day's limit; moderation's refusal is `accepted: false`, nothing charged.
+   */
+  danmaku(account: AccountRef, text: string, key: string): Promise<SpendResult>;
+  /** What a danmaku line costs this person now, and why they cannot send one (if so). */
+  danmakuView(account: AccountRef): Promise<DanmakuView>;
   frame(
     account: AccountRef,
     req: { buy?: string; select?: string | null },
@@ -227,36 +231,12 @@ export interface Economy {
   refund(account: AccountRef, entryId: string): Promise<boolean>;
   /** What `item` costs now, and how many one person may buy a day (`0`: off sale). */
   price(item: PaidItem): { price: number; per_day: number };
-  /**
-   * Her crowdfunding goals (docs/design/economy.md §13): the open one and the ones that ended
-   * lately. Anyone may read them; a stranger's `my_pledge` is 0.
-   */
-  goals(account: AccountRef): Promise<GoalView[]>;
-  /**
-   * Holds `amount` for the open goal `goal` (`EconomyError`: 400 a bad amount, 402 short, 403 a
-   * stranger, 409 the goal is over, 429 the most one person may pledge). The same key twice
-   * answers what the first did. Pledges are returned if the goal is not met. `context` is where
-   * the pledge was made: when it meets the target, a card says so there (none without one).
-   */
-  pledge(
-    account: AccountRef,
-    goal: string,
-    amount: number,
-    key: string,
-    context?: ContextKey | null,
-  ): Promise<PledgeResult>;
-  /** Reached goals, kept or still owed, newest first (the panel). */
-  reachedGoals(): Promise<ReachedGoalView[]>;
-  /**
-   * Marks a reached goal's promise kept (`goalId` `null`: the newest one owed). `EconomyError`
-   * 409 when it is not reached or was marked already (the first mark stands).
-   */
-  fulfillGoal(goalId: string | null, by: "owner" | "self"): Promise<ReachedGoalView>;
   /** The bounties she has open. */
   bounties(): Promise<BountyView[]>;
   /**
-   * Coins from one person to another she knows (`EconomyError`: 400 a bad amount or yourself,
-   * 402 short, 403 a stranger on either side, in the same words, 429 the sender's day). Not a gift
+   * Coins from one person to another she knows, plus a fee of the sender's that is burned
+   * (`transfer_fee`; `EconomyError`: 400 a bad amount or yourself, 402 short of the amount and the
+   * fee, 403 a stranger on either side, in the same words, 429 the sender's day). Not a gift
    * to her. The same key twice answers what the first did.
    */
   transfer(from: AccountRef, to: AccountRef, amount: number, key: string): Promise<TransferResult>;
@@ -268,8 +248,10 @@ export interface Economy {
 
 /** What a transfer did. */
 export interface TransferResult {
-  /** What left the sender's wallet (and reached the other's). */
+  /** What reached the other's wallet. */
   sent: number;
+  /** The fee on top of it, taken from the sender and burned. */
+  fee: number;
   /** The sender's balance after. */
   balance: number;
   /** The receiver, as the sender's ledger names them. */
@@ -286,49 +268,6 @@ export interface BoardLine {
   spent: number;
 }
 
-/** One of her goals as people see it. */
-export interface GoalView {
-  id: string;
-  title: string;
-  /** What she will do when it is reached. */
-  promise: string;
-  target: number;
-  raised: number;
-  /** What this person put in. */
-  my_pledge: number;
-  /** When it ends if it has not been reached. */
-  deadline: string;
-  status: "open" | "reached" | "expired" | "cancelled";
-  /** A reached goal whose promise she kept (marked by the owner or by her). */
-  fulfilled: boolean;
-}
-
-/** A reached goal for the owner: what she promised and whether she kept it. */
-export interface ReachedGoalView {
-  id: string;
-  title: string;
-  promise: string;
-  target: number;
-  /** When it was reached. */
-  reached_at: string | null;
-  /** When the promise was marked kept; `null` while it is owed. */
-  fulfilled_at: string | null;
-  fulfilled_by: "owner" | "self" | null;
-}
-
-/** What a pledge did. */
-export interface PledgeResult {
-  /** What was held (less than asked when the goal needed less). */
-  pledged: number;
-  raised: number;
-  target: number;
-  /** This pledge met the target. */
-  reached: boolean;
-  balance: number;
-  /** The key was used before: nothing new was held. */
-  duplicate: boolean;
-}
-
 /** One bounty she has open. */
 export interface BountyView {
   id: string;
@@ -338,18 +277,15 @@ export interface BountyView {
   expires_at: string;
 }
 
-/** Bus topic of what goes on the stream overlay's screen line (a paid message, a dedication). */
+/** Bus topic of what goes on the stream overlay's screen line (a paid message). */
 export const SCREEN_TOPIC = Events.EconomyScreen.type;
 
 /** Payload of `economy.screen`; texts were already screened. */
 export interface ScreenEvent {
-  kind: "message" | "dedication";
   /** Who paid (display name, untrusted). */
   name: string;
-  /** The message, or the dedication's words. */
+  /** The message; already screened. */
   text: string;
-  /** A dedication: the song's title. */
-  song: string | null;
 }
 
 export const EconomyKey = serviceKey<Economy>("Economy");

@@ -305,11 +305,8 @@ describe("gift line merge", () => {
   it("a gift of several counts for all of them; other items are handed over", () => {
     const m = new GiftMerger();
     expect(m.add(rice("Owen", 3), 0)).toBe("Owen 餵了她 3 碗白飯");
-    expect(m.add({ name: "Owen", item: "letter", count: 1, label: "一封信" }, 0)).toBe(
-      "Owen 送了她一封信",
-    );
-    expect(m.add({ name: "Mia", item: "expression", count: 2, label: "表情" }, 0)).toBe(
-      "Mia 送了她 表情 x2",
+    expect(m.add({ name: "Mia", item: "flower", count: 2, label: "花" }, 0)).toBe(
+      "Mia 送了她 花 x2",
     );
   });
 

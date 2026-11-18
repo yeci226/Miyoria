@@ -1,9 +1,14 @@
-// 海龜湯: she reads the surface, people ask yes-or-no questions, she answers. She hosts without
+// 海龜湯: she reads the surface, people ask yes-or-no questions, she answers (spoken in a voice
+// channel, as ordinary messages in a text channel: the engine is the same). She hosts without
 // knowing the bottom: every question goes through `party_ask` to the referee (judge.ts), which
-// sees the bottom and answers one fixed word. The bottom reaches her only once the soup is over
-// (solved, given up, out of time), so until then she cannot let it slip.
+// sees the bottom and answers one fixed word (`party_ask` gives her only that word, never the
+// bottom or the referee's reasons). The bottom reaches her only once the soup is over (solved,
+// given up, out of time). The puzzles are well known, though, and she may remember one: a line of
+// hers with a word of the bottom nobody asked about is not said (`leak`, asked by the line guard
+// through `GameSecrets`), and the referee's plain answer is said in its place.
 
 import { errorMessage } from "@miyoria/runtime/kernel";
+import type { GameSecretLeak } from "@miyoria/types";
 import { SOUP_PUZZLES, type SoupPuzzle } from "../content.js";
 import {
   type EndReason,
@@ -24,6 +29,14 @@ const ANSWERS: Readonly<Record<Exclude<SoupVerdict, "solved">, string>> = {
   close: "很接近了",
 };
 
+/** The referee's answer as a line of hers, said in place of one that gave the bottom away. */
+const PLAIN: Readonly<Record<Exclude<SoupVerdict, "solved">, string>> = {
+  yes: "是。",
+  no: "不是。",
+  irrelevant: "不重要,跟真相無關。",
+  close: "很接近了!",
+};
+
 const SOLVE_POINTS = 3;
 /** Questions shown to her (the newest), so she knows what was settled. */
 const SHOWN_QUESTIONS = 8;
@@ -33,11 +46,15 @@ export class SoupGame implements Game {
   readonly title = GAME_TITLES.soup;
   readonly scored = true;
   readonly rules =
-    "你是主持人,但湯底你也不知道,由裁判判定。有人問是非題或說出他猜的真相,就用 party_ask 把那句話交給裁判,照結果回答「是 / 不是 / 不重要 / 很接近了」,不要自己編答案。猜中了程式會公布湯底。party_host:hint 給一個提示、next 放棄並公布湯底、end 結束。";
+    "你是主持人,但湯底你也不知道,由裁判判定。有人問是非題或說出他猜的真相,就用 party_ask 把那句話交給裁判,照結果回答「是 / 不是 / 不重要 / 很接近了」,不要自己編答案。回答只用提問的人自己說過的字:可以重複他的話,但不要補上他沒說的東西,也不要給方向或舉例;這題你就算聽過、記得答案,也只說裁判的結果。猜中了程式會公布湯底。party_host:hint 給一個提示、next 放棄並公布湯底、end 結束。";
   readonly #host: Host;
   readonly #judge: SoupJudge;
   readonly #puzzle: SoupPuzzle;
   readonly #asked: { question: string; answer: string }[] = [];
+  /** Every question handed to the referee, whole: its words are no secret any more. */
+  readonly #heard: string[] = [];
+  /** The plain answer of the last question, until it was said in place of a leaking line. */
+  #plain: string | null = null;
   readonly #deadline: number;
   #hints = 0;
   #over = false;
@@ -54,7 +71,11 @@ export class SoupGame implements Game {
 
   begin(): string {
     this.#host.setTimer("time", this.#host.cfg.soup_mins * 60_000);
-    return `海龜湯「${this.#puzzle.title}」開始。先把湯面念給大家聽:「${this.#puzzle.surface}」大家可以問是非題,${this.#host.cfg.soup_mins} 分鐘內要猜出真相。`;
+    const how =
+      this.#host.context.kind === "voice"
+        ? "先把湯面念給大家聽"
+        : "先把湯面貼在頻道裡,問題和你的回答都用一般訊息";
+    return `海龜湯「${this.#puzzle.title}」開始。${how}:「${this.#puzzle.surface}」大家可以問是非題,${this.#host.cfg.soup_mins} 分鐘內要猜出真相。`;
   }
 
   async ask(question: string, player: Player | null): Promise<string> {
@@ -74,10 +95,33 @@ export class SoupGame implements Game {
     // Someone else's question may have solved it while this one was with the referee.
     if (this.#over) return "已經有人先猜中了。";
     if (player !== null && !player.her) player.active = true;
+    this.#heard.push(text);
     if (verdict === "solved") return this.#solved(player);
     const answer = ANSWERS[verdict];
     this.#asked.push({ question: quote(text, 40), answer });
+    this.#plain = PLAIN[verdict];
     return `裁判:${answer}。`;
+  }
+
+  /**
+   * A word of the bottom in a line of hers that no question asked so far, no hint given and not
+   * the surface says (`SoupPuzzle.keywords`): she may know this puzzle without being told. The
+   * line is not said; the last question's plain answer is said in its place, once.
+   */
+  leak(text: string): GameSecretLeak | null {
+    if (this.#over) return null;
+    const known = [
+      this.#puzzle.surface,
+      ...this.#heard,
+      ...this.#puzzle.hints.slice(0, this.#hints),
+    ];
+    const word = this.#puzzle.keywords.find(
+      (k) => text.includes(k) && !known.some((said) => said.includes(k)),
+    );
+    if (word === undefined) return null;
+    const instead = this.#plain;
+    this.#plain = null;
+    return { word, instead };
   }
 
   #solved(player: Player | null): string {

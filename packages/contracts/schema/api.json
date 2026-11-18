@@ -917,6 +917,124 @@
         "scope"
       ]
     },
+    "ApiAuctionView": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "lot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiLotView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "opens_at": {
+                  "type": "string"
+                },
+                "plan": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/ApiLotKind"
+                        },
+                        {
+                          "type": "string",
+                          "const": "skip"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "opens_at",
+                "plan"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mine": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "leading": {
+                  "type": "boolean"
+                },
+                "won": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "amount",
+                "leading",
+                "won"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "name": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount",
+              "name",
+              "at"
+            ]
+          }
+        }
+      },
+      "required": [
+        "currency",
+        "running",
+        "lot",
+        "next",
+        "mine",
+        "history"
+      ]
+    },
     "ApiAuthMethods": {
       "type": "object",
       "properties": {
@@ -982,6 +1100,48 @@
             "context"
           ]
         }
+      ]
+    },
+    "ApiBidRequest": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "amount"
+      ],
+      "additionalProperties": false
+    },
+    "ApiBidResult": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "ends_at": {
+          "type": "string"
+        },
+        "extended": {
+          "type": "boolean"
+        },
+        "balance": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "amount",
+        "ends_at",
+        "extended",
+        "balance"
       ]
     },
     "ApiBoardChoice": {
@@ -1079,6 +1239,90 @@
         "exhausted"
       ]
     },
+    "ApiCardCatalogue": {
+      "type": "object",
+      "properties": {
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiCataloguePart"
+          }
+        },
+        "series": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "title"
+            ]
+          }
+        }
+      },
+      "required": [
+        "parts",
+        "series"
+      ]
+    },
+    "ApiCardDex": {
+      "type": "object",
+      "properties": {
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiDexPart"
+          }
+        },
+        "series": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiDexSeries"
+          }
+        },
+        "titles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiCardTitle"
+          }
+        },
+        "legacy": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ApiLegacyItem"
+              }
+            }
+          },
+          "required": [
+            "name",
+            "items"
+          ]
+        }
+      },
+      "required": [
+        "parts",
+        "series",
+        "titles",
+        "legacy"
+      ]
+    },
     "ApiCardField": {
       "type": "object",
       "properties": {
@@ -1094,25 +1338,269 @@
         "text"
       ]
     },
-    "ApiCardPoseChoice": {
+    "ApiCardOdds": {
+      "type": "object",
+      "properties": {
+        "rarities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "percent": {
+                "type": "number"
+              },
+              "shown": {
+                "type": "string"
+              },
+              "rarity": {
+                "type": "string",
+                "enum": [
+                  "N",
+                  "R",
+                  "SR",
+                  "SSR"
+                ]
+              }
+            },
+            "required": [
+              "percent",
+              "shown",
+              "rarity"
+            ]
+          }
+        },
+        "pity": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "after": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "rarities": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "percent": {
+                        "type": "number"
+                      },
+                      "shown": {
+                        "type": "string"
+                      },
+                      "rarity": {
+                        "type": "string",
+                        "enum": [
+                          "N",
+                          "R",
+                          "SR",
+                          "SSR"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "percent",
+                      "shown",
+                      "rarity"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "after",
+                "rarities"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "slot": {
+                "type": "string",
+                "enum": [
+                  "hand",
+                  "accessory",
+                  "outfit",
+                  "pose",
+                  "background"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "parts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "percent": {
+                      "type": "number"
+                    },
+                    "shown": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rarity": {
+                      "type": "string",
+                      "enum": [
+                        "N",
+                        "R",
+                        "SR",
+                        "SSR"
+                      ]
+                    },
+                    "series": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "series_name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "percent",
+                    "shown",
+                    "id",
+                    "name",
+                    "rarity",
+                    "series",
+                    "series_name"
+                  ]
+                }
+              },
+              "empty": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "percent": {
+                        "type": "number"
+                      },
+                      "shown": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "percent",
+                      "shown"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "slot",
+              "name",
+              "parts",
+              "empty"
+            ]
+          }
+        },
+        "price": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "per_day": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "rarities",
+        "pity",
+        "slots",
+        "price",
+        "per_day"
+      ]
+    },
+    "ApiCardPart": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string"
         },
-        "label": {
+        "slot": {
+          "type": "string",
+          "enum": [
+            "hand",
+            "accessory",
+            "outfit",
+            "pose",
+            "background"
+          ]
+        },
+        "name": {
           "type": "string"
+        },
+        "rarity": {
+          "type": "string",
+          "enum": [
+            "N",
+            "R",
+            "SR",
+            "SSR"
+          ]
         }
       },
       "required": [
         "id",
-        "label"
+        "slot",
+        "name",
+        "rarity"
+      ]
+    },
+    "ApiCardPity": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "pity": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "until": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "since",
+        "pity",
+        "until"
       ]
     },
     "ApiCardPrices": {
       "type": "object",
       "properties": {
-        "pose": {
+        "card": {
           "type": [
             "number",
             "null"
@@ -1123,18 +1611,120 @@
             "number",
             "null"
           ]
-        },
-        "reroll": {
-          "type": [
-            "number",
-            "null"
-          ]
         }
       },
       "required": [
-        "pose",
-        "foil",
-        "reroll"
+        "card",
+        "foil"
+      ]
+    },
+    "ApiCardTitle": {
+      "type": "object",
+      "properties": {
+        "series": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "public": {
+          "type": "boolean"
+        },
+        "earned_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "series",
+        "title",
+        "public",
+        "earned_at"
+      ]
+    },
+    "ApiCardWishlist": {
+      "type": "object",
+      "properties": {
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiCardPart"
+          }
+        },
+        "max": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "parts",
+        "max"
+      ]
+    },
+    "ApiCataloguePart": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "slot": {
+          "type": "string",
+          "enum": [
+            "hand",
+            "accessory",
+            "outfit",
+            "pose",
+            "background"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "rarity": {
+          "type": "string",
+          "enum": [
+            "N",
+            "R",
+            "SR",
+            "SSR"
+          ]
+        },
+        "series": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "series_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "drop_only": {
+          "type": "boolean"
+        },
+        "blank": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "wishable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "slot",
+        "name",
+        "rarity",
+        "series",
+        "series_name",
+        "drop_only",
+        "blank",
+        "enabled",
+        "wishable"
       ]
     },
     "ApiCauseChain": {
@@ -1283,6 +1873,15 @@
         "channels"
       ]
     },
+    "ApiCheckinRequest": {
+      "type": "object",
+      "properties": {
+        "fortune": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "ApiCheckinResult": {
       "type": "object",
       "properties": {
@@ -1294,6 +1893,15 @@
         },
         "balance": {
           "type": "number"
+        },
+        "fortune": {
+          "$ref": "#/$defs/ApiIssuedFortune"
+        },
+        "fortune_charged": {
+          "type": "number"
+        },
+        "fortune_note": {
+          "type": "string"
         }
       },
       "required": [
@@ -1722,75 +2330,6 @@
         "restarts"
       ]
     },
-    "ApiCommissionKind": {
-      "type": "string",
-      "enum": [
-        "poem",
-        "name",
-        "tool",
-        "song",
-        "voice"
-      ]
-    },
-    "ApiCommissionView": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ApiCommissionKind"
-        },
-        "label": {
-          "type": "string"
-        },
-        "brief": {
-          "type": "string"
-        },
-        "price": {
-          "type": "number"
-        },
-        "status": {
-          "type": "string",
-          "enum": [
-            "open",
-            "delivered",
-            "declined",
-            "expired"
-          ]
-        },
-        "created_at": {
-          "type": "string"
-        },
-        "due_at": {
-          "type": "string"
-        },
-        "result": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "note": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "kind",
-        "label",
-        "brief",
-        "price",
-        "status",
-        "created_at",
-        "due_at",
-        "result",
-        "note"
-      ]
-    },
     "ApiCompiledBlock": {
       "type": "object",
       "properties": {
@@ -2088,6 +2627,73 @@
         "month"
       ]
     },
+    "ApiDanmakuRequest": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "ApiDanmakuView": {
+      "type": "object",
+      "properties": {
+        "open": {
+          "type": "boolean"
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "price": {
+          "type": "number"
+        },
+        "max_chars": {
+          "type": "number"
+        },
+        "cooldown_s": {
+          "type": "number"
+        },
+        "per_day": {
+          "type": "number"
+        },
+        "sent_today": {
+          "type": "number"
+        },
+        "wait_s": {
+          "type": "number"
+        },
+        "balance": {
+          "type": "number"
+        },
+        "why": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "open",
+        "live",
+        "currency",
+        "price",
+        "max_chars",
+        "cooldown_s",
+        "per_day",
+        "sent_today",
+        "wait_s",
+        "balance",
+        "why"
+      ]
+    },
     "ApiDataCategoryId": {
       "type": "string",
       "enum": [
@@ -2324,39 +2930,6 @@
         "notes"
       ]
     },
-    "ApiDealView": {
-      "type": "object",
-      "properties": {
-        "task": {
-          "type": "string"
-        },
-        "reward_label": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string",
-          "enum": [
-            "open",
-            "owed",
-            "settled",
-            "broken",
-            "refunded"
-          ]
-        },
-        "due_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "task",
-        "reward_label",
-        "status",
-        "due_at"
-      ]
-    },
     "ApiDecisionRecord": {
       "type": "object",
       "properties": {
@@ -2464,6 +3037,94 @@
       "enum": [
         "voice",
         "text"
+      ]
+    },
+    "ApiDexPart": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "slot": {
+          "type": "string",
+          "enum": [
+            "hand",
+            "accessory",
+            "outfit",
+            "pose",
+            "background"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "rarity": {
+          "type": "string",
+          "enum": [
+            "N",
+            "R",
+            "SR",
+            "SSR"
+          ]
+        },
+        "series": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "first_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "slot",
+        "name",
+        "rarity",
+        "series",
+        "count",
+        "first_at"
+      ]
+    },
+    "ApiDexSeries": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "owned": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "total": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "title",
+        "owned",
+        "total",
+        "complete"
       ]
     },
     "ApiDirective": {
@@ -3092,18 +3753,6 @@
         "no_checkout"
       ]
     },
-    "ApiExpressionRequest": {
-      "type": "object",
-      "properties": {
-        "expression": {
-          "$ref": "#/$defs/ApiGiftExpression"
-        }
-      },
-      "required": [
-        "expression"
-      ],
-      "additionalProperties": false
-    },
     "ApiExtensionInfo": {
       "type": "object",
       "properties": {
@@ -3416,25 +4065,6 @@
       ],
       "additionalProperties": false
     },
-    "ApiFortuneDraw": {
-      "type": "object",
-      "properties": {
-        "fortune": {
-          "$ref": "#/$defs/ApiIssuedFortune"
-        },
-        "charged": {
-          "type": "number"
-        },
-        "balance": {
-          "type": "number"
-        }
-      },
-      "required": [
-        "fortune",
-        "charged",
-        "balance"
-      ]
-    },
     "ApiFortuneField": {
       "type": "object",
       "properties": {
@@ -3576,14 +4206,6 @@
         }
       }
     },
-    "ApiGiftExpression": {
-      "type": "string",
-      "enum": [
-        "heart",
-        "blush",
-        "squint"
-      ]
-    },
     "ApiGoLiveRequest": {
       "type": "object",
       "properties": {
@@ -3699,20 +4321,6 @@
         "close_reason"
       ]
     },
-    "ApiGoalList": {
-      "type": "object",
-      "properties": {
-        "goals": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ApiGoalView"
-          }
-        }
-      },
-      "required": [
-        "goals"
-      ]
-    },
     "ApiGoalStatus": {
       "type": "string",
       "enum": [
@@ -3784,55 +4392,6 @@
             "kind"
           ]
         }
-      ]
-    },
-    "ApiGoalView": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        },
-        "promise": {
-          "type": "string"
-        },
-        "target": {
-          "type": "number"
-        },
-        "raised": {
-          "type": "number"
-        },
-        "my_pledge": {
-          "type": "number"
-        },
-        "deadline": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string",
-          "enum": [
-            "open",
-            "reached",
-            "expired",
-            "cancelled"
-          ]
-        },
-        "fulfilled": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "id",
-        "title",
-        "promise",
-        "target",
-        "raised",
-        "my_pledge",
-        "deadline",
-        "status",
-        "fulfilled"
       ]
     },
     "ApiGoalsView": {
@@ -4279,10 +4838,6 @@
     "ApiIssueCardRequest": {
       "type": "object",
       "properties": {
-        "pose": {
-          "type": "string",
-          "maxLength": 16
-        },
         "foil": {
           "type": "boolean"
         }
@@ -4383,6 +4938,43 @@
             "string",
             "null"
           ]
+        },
+        "rarity": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "N",
+                "R",
+                "SR",
+                "SSR"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiCardPart"
+          }
+        },
+        "expression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "daily",
+            "milestone",
+            "keepsake",
+            "drop"
+          ]
         }
       },
       "required": [
@@ -4403,7 +4995,10 @@
         "pose",
         "frame",
         "foil",
-        "voided_at"
+        "voided_at",
+        "rarity",
+        "parts",
+        "expression"
       ]
     },
     "ApiIssuedFortune": {
@@ -4553,6 +5148,1900 @@
         "notice",
         "talk",
         "asked"
+      ]
+    },
+    "ApiKaraokeAdminResults": {
+      "type": "object",
+      "properties": {
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "session": {
+                "type": "string"
+              },
+              "person": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "song": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "total": {
+                "type": "number"
+              },
+              "client_total": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "unranked": {
+                "type": "boolean"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "voice",
+                  "estimate"
+                ]
+              },
+              "voice_state": {
+                "$ref": "#/$defs/ApiKaraokeVoiceState"
+              },
+              "estimate_total": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "latency_ms": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "calibrated": {
+                "type": "boolean"
+              },
+              "browser": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session",
+              "person",
+              "name",
+              "song",
+              "title",
+              "total",
+              "client_total",
+              "unranked",
+              "reasons",
+              "source",
+              "voice_state",
+              "estimate_total",
+              "latency_ms",
+              "calibrated",
+              "browser",
+              "at"
+            ]
+          }
+        }
+      },
+      "required": [
+        "results"
+      ]
+    },
+    "ApiKaraokeAudioReply": {
+      "type": "object",
+      "properties": {
+        "stream": {
+          "type": "string",
+          "enum": [
+            "live",
+            "estimate"
+          ]
+        },
+        "relay": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stream",
+        "relay"
+      ]
+    },
+    "ApiKaraokeBoardLine": {
+      "type": "object",
+      "properties": {
+        "member": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "color": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "total": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "voice",
+            "estimate"
+          ]
+        },
+        "move": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "same"
+          ]
+        },
+        "pitch": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "track": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "track"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "member",
+        "name",
+        "color",
+        "rank",
+        "total",
+        "source",
+        "move",
+        "pitch"
+      ]
+    },
+    "ApiKaraokeClock": {
+      "type": "object",
+      "properties": {
+        "t0": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "t0"
+      ],
+      "additionalProperties": false
+    },
+    "ApiKaraokeClockReply": {
+      "type": "object",
+      "properties": {
+        "t0": {
+          "type": "number"
+        },
+        "server_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "t0",
+        "server_ms"
+      ]
+    },
+    "ApiKaraokeEditDoc": {
+      "type": "object",
+      "properties": {
+        "lyrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersKaraokeLyricsV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersKaraokeNote"
+          }
+        },
+        "pitch_shift": {
+          "type": "integer",
+          "minimum": -24,
+          "maximum": 24
+        }
+      },
+      "required": [
+        "lyrics",
+        "notes",
+        "pitch_shift"
+      ]
+    },
+    "ApiKaraokeEditEntry": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "save",
+            "restore"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "notes": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "pitch_shift": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "action",
+        "name",
+        "at",
+        "revision",
+        "lines",
+        "notes",
+        "pitch_shift"
+      ]
+    },
+    "ApiKaraokeEditRestore": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "ApiKaraokeEditSave": {
+      "type": "object",
+      "properties": {
+        "lyrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersKaraokeLyricsV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersKaraokeNote"
+          }
+        },
+        "pitch_shift": {
+          "type": "integer",
+          "minimum": -24,
+          "maximum": 24
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "lyrics",
+        "notes",
+        "pitch_shift",
+        "revision"
+      ]
+    },
+    "ApiKaraokeEditView": {
+      "type": "object",
+      "properties": {
+        "song": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "artist": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "duration_s": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "artist",
+            "duration_s"
+          ]
+        },
+        "reference": {
+          "$ref": "#/$defs/WorkersKaraokeReferenceV2"
+        },
+        "original": {
+          "$ref": "#/$defs/ApiKaraokeEditDoc"
+        },
+        "edit": {
+          "type": "object",
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "pitch_shift": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "saved_by": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worker_changed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "revision",
+            "pitch_shift",
+            "saved_by",
+            "saved_at",
+            "worker_changed"
+          ]
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiKaraokeEditEntry"
+          }
+        },
+        "results": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "backing_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "song",
+        "reference",
+        "original",
+        "edit",
+        "history",
+        "results",
+        "backing_url"
+      ]
+    },
+    "ApiKaraokeOverview": {
+      "type": "object",
+      "properties": {
+        "open": {
+          "type": "boolean"
+        },
+        "admin": {
+          "default": false,
+          "type": "boolean"
+        },
+        "preparing": {
+          "type": "boolean"
+        },
+        "songs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiKaraokeSongView"
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "daily": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "used": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "max_minutes": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "daily",
+            "used",
+            "max_minutes"
+          ]
+        },
+        "tolerance_cents": {
+          "type": "number"
+        },
+        "comments": {
+          "type": "boolean"
+        },
+        "recent": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiKaraokeResultSummary"
+          }
+        }
+      },
+      "required": [
+        "open",
+        "preparing",
+        "songs",
+        "limits",
+        "tolerance_cents",
+        "comments",
+        "recent"
+      ]
+    },
+    "ApiKaraokePitch": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "track": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "from",
+        "track"
+      ],
+      "additionalProperties": false
+    },
+    "ApiKaraokeRequest": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "ApiKaraokeRequestResult": {
+      "type": "object",
+      "properties": {
+        "song": {
+          "$ref": "#/$defs/ApiKaraokeSongView"
+        },
+        "created": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "song",
+        "created"
+      ]
+    },
+    "ApiKaraokeResult": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "voice",
+            "estimate"
+          ]
+        },
+        "voice": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "$ref": "#/$defs/ApiKaraokeVoiceState"
+            },
+            "estimate_total": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "checks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ApiKaraokeVoiceCheck"
+              }
+            },
+            "upload": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "state",
+            "estimate_total",
+            "checks"
+          ]
+        },
+        "song": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "artist": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "artist"
+          ]
+        },
+        "at": {
+          "type": "string"
+        },
+        "total": {
+          "type": "number"
+        },
+        "pitch": {
+          "type": "object",
+          "properties": {
+            "score": {
+              "type": "number"
+            },
+            "max": {
+              "type": "number"
+            },
+            "hit": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "score",
+            "max",
+            "hit"
+          ]
+        },
+        "stability": {
+          "type": "object",
+          "properties": {
+            "score": {
+              "type": "number"
+            },
+            "max": {
+              "type": "number"
+            },
+            "wobble_cents": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "held": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "score",
+            "max",
+            "wobble_cents",
+            "held"
+          ]
+        },
+        "rhythm": {
+          "type": "object",
+          "properties": {
+            "score": {
+              "type": "number"
+            },
+            "max": {
+              "type": "number"
+            },
+            "calibrated": {
+              "type": "boolean"
+            },
+            "measured": {
+              "type": "boolean"
+            },
+            "offset_ms": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "spread_ms": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "onsets": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "found": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "feel": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "early",
+                    "late",
+                    "steady"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "score",
+            "max",
+            "calibrated",
+            "measured",
+            "offset_ms",
+            "spread_ms",
+            "onsets",
+            "found",
+            "feel"
+          ]
+        },
+        "expression": {
+          "type": "object",
+          "properties": {
+            "score": {
+              "type": "number"
+            },
+            "max": {
+              "type": "number"
+            },
+            "vibrato_s": {
+              "type": "number"
+            },
+            "long_tones": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "scoops": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "falls": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "score",
+            "max",
+            "vibrato_s",
+            "long_tones",
+            "scoops",
+            "falls"
+          ]
+        },
+        "phrases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "start": {
+                "type": "number"
+              },
+              "end": {
+                "type": "number"
+              },
+              "score": {
+                "type": "number"
+              },
+              "hit": {
+                "type": "number"
+              },
+              "sung": {
+                "type": "number"
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "index",
+              "start",
+              "end",
+              "score",
+              "hit",
+              "sung",
+              "text"
+            ]
+          }
+        },
+        "facts": {
+          "type": "object",
+          "properties": {
+            "coverage": {
+              "type": "number"
+            },
+            "best": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "weakest": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "octave": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "offset_cents": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "sung_s": {
+              "type": "number"
+            },
+            "reference_s": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "coverage",
+            "best",
+            "weakest",
+            "octave",
+            "offset_cents",
+            "sung_s",
+            "reference_s"
+          ]
+        },
+        "unranked": {
+          "type": "boolean"
+        },
+        "client_total": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "latency_ms": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "best_before": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "comment": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "waiting",
+                "said",
+                "none"
+              ]
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "text"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "source",
+        "voice",
+        "song",
+        "at",
+        "total",
+        "pitch",
+        "stability",
+        "rhythm",
+        "expression",
+        "phrases",
+        "facts",
+        "unranked",
+        "client_total",
+        "latency_ms",
+        "best_before",
+        "comment"
+      ]
+    },
+    "ApiKaraokeResultSummary": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "song": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "total": {
+          "type": "number"
+        },
+        "unranked": {
+          "type": "boolean"
+        },
+        "at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "song",
+        "title",
+        "total",
+        "unranked",
+        "at"
+      ]
+    },
+    "ApiKaraokeRoomAir": {
+      "type": "object",
+      "properties": {
+        "backing": {
+          "type": "boolean"
+        },
+        "delay_ms": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "lead": {
+          "type": "boolean"
+        },
+        "singers": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "relay": {
+          "type": "object",
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "member": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "live": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "allowed",
+            "reason",
+            "member",
+            "live"
+          ]
+        }
+      },
+      "required": [
+        "backing",
+        "delay_ms",
+        "lead",
+        "singers",
+        "relay"
+      ]
+    },
+    "ApiKaraokeRoomEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "room"
+            },
+            "room": {
+              "$ref": "#/$defs/ApiKaraokeRoomView"
+            }
+          },
+          "required": [
+            "type",
+            "room"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "board"
+            },
+            "round": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "at_ms": {
+              "type": "number"
+            },
+            "lines": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ApiKaraokeBoardLine"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "round",
+            "at_ms",
+            "lines"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "trend"
+            },
+            "round": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "trend": {
+              "type": "string",
+              "enum": [
+                "rising",
+                "dropping",
+                "holding"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "voice",
+                "estimate"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "round",
+            "trend",
+            "source"
+          ]
+        }
+      ]
+    },
+    "ApiKaraokeRoomJoin": {
+      "type": "object",
+      "properties": {
+        "as": {
+          "default": "singer",
+          "type": "string",
+          "enum": [
+            "singer",
+            "spectator"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApiKaraokeRoomMember": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "singer",
+            "spectator"
+          ]
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "opener": {
+          "type": "boolean"
+        },
+        "color": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "hear": {
+          "type": "boolean"
+        },
+        "skip": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "role",
+        "ready",
+        "opener",
+        "color",
+        "hear",
+        "skip"
+      ]
+    },
+    "ApiKaraokeRoomPlace": {
+      "type": "object",
+      "properties": {
+        "member": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "color": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "rank": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pitch": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "stability": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "rhythm": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "expression": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "voice",
+                "estimate"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished": {
+          "type": "boolean"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiKaraokeVoiceCheck"
+          }
+        },
+        "coins": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "winner": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "member",
+        "name",
+        "color",
+        "rank",
+        "total",
+        "pitch",
+        "stability",
+        "rhythm",
+        "expression",
+        "source",
+        "finished",
+        "checks",
+        "coins",
+        "winner",
+        "note"
+      ]
+    },
+    "ApiKaraokeRoomReady": {
+      "type": "object",
+      "properties": {
+        "ready": {
+          "type": "boolean"
+        },
+        "latency_ms": {
+          "default": 0,
+          "type": "integer",
+          "minimum": -500,
+          "maximum": 1500
+        },
+        "calibrated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ready"
+      ],
+      "additionalProperties": false
+    },
+    "ApiKaraokeRoomRelay": {
+      "type": "object",
+      "properties": {
+        "hear": {
+          "type": "boolean"
+        },
+        "skip": {
+          "type": "boolean"
+        },
+        "lead": {
+          "type": "boolean"
+        },
+        "member": {
+          "type": "string",
+          "maxLength": 32
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApiKaraokeRoomResult": {
+      "type": "object",
+      "properties": {
+        "round": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "song": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "artist": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "artist"
+          ]
+        },
+        "settling": {
+          "type": "boolean"
+        },
+        "places": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiKaraokeRoomPlace"
+          }
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "round",
+        "song",
+        "settling",
+        "places",
+        "note"
+      ]
+    },
+    "ApiKaraokeRoomSong": {
+      "type": "object",
+      "properties": {
+        "song": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "shift": {
+          "default": 0,
+          "type": "integer",
+          "minimum": -6,
+          "maximum": 6
+        }
+      },
+      "required": [
+        "song"
+      ],
+      "additionalProperties": false
+    },
+    "ApiKaraokeRoomState": {
+      "type": "string",
+      "enum": [
+        "lobby",
+        "countdown",
+        "singing",
+        "results",
+        "closed"
+      ]
+    },
+    "ApiKaraokeRoomTerms": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string"
+        },
+        "price": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "prize": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "finish": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "rounds": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "max_singers": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "currency",
+        "price",
+        "prize",
+        "finish",
+        "rounds",
+        "max_singers"
+      ]
+    },
+    "ApiKaraokeRoomView": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ApiKaraokeRoomState"
+        },
+        "closed_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "song": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiKaraokeSongView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shift": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiKaraokeRoomMember"
+          }
+        },
+        "me": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "singer",
+                    "spectator"
+                  ]
+                },
+                "opener": {
+                  "type": "boolean"
+                },
+                "singing": {
+                  "type": "boolean"
+                },
+                "session": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ApiKaraokeSession"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "role",
+                "opener",
+                "singing",
+                "session"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "round": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "rounds_left": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "start_at_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiKaraokeRoomResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terms": {
+          "$ref": "#/$defs/ApiKaraokeRoomTerms"
+        },
+        "air": {
+          "$ref": "#/$defs/ApiKaraokeRoomAir"
+        }
+      },
+      "required": [
+        "code",
+        "state",
+        "closed_reason",
+        "song",
+        "shift",
+        "members",
+        "me",
+        "round",
+        "rounds_left",
+        "start_at_ms",
+        "result",
+        "terms",
+        "air"
+      ]
+    },
+    "ApiKaraokeRooms": {
+      "type": "object",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "terms": {
+          "$ref": "#/$defs/ApiKaraokeRoomTerms"
+        },
+        "balance": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mine": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "available",
+        "reason",
+        "terms",
+        "balance",
+        "mine"
+      ]
+    },
+    "ApiKaraokeSession": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "song": {
+          "$ref": "#/$defs/ApiKaraokeSongView"
+        },
+        "backing_url": {
+          "type": "string"
+        },
+        "reference_url": {
+          "type": "string"
+        },
+        "video_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "tolerance_cents": {
+          "type": "number"
+        },
+        "frame_hz": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "shift": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "recording": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "max_bytes": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "max_seconds": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "max_bytes",
+                "max_seconds"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "song",
+        "backing_url",
+        "reference_url",
+        "video_url",
+        "expires_at",
+        "tolerance_cents",
+        "frame_hz",
+        "shift",
+        "recording"
+      ]
+    },
+    "ApiKaraokeSongView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "artist": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_s": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "preparing",
+            "ready",
+            "failed"
+          ]
+        },
+        "stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress": {
+          "type": "number"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lyrics": {
+          "type": "boolean"
+        },
+        "lyrics_source": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "found",
+                "heard"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "video": {
+          "type": "boolean"
+        },
+        "mine": {
+          "type": "boolean"
+        },
+        "best": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "sung": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "artist",
+        "duration_s",
+        "state",
+        "stage",
+        "progress",
+        "position",
+        "error",
+        "lyrics",
+        "lyrics_source",
+        "notes",
+        "video",
+        "mine",
+        "best",
+        "sung"
+      ]
+    },
+    "ApiKaraokeStart": {
+      "type": "object",
+      "properties": {
+        "shift": {
+          "default": 0,
+          "type": "integer",
+          "minimum": -6,
+          "maximum": 6
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApiKaraokeSubmit": {
+      "type": "object",
+      "properties": {
+        "track": {
+          "type": "string",
+          "maxLength": 80000
+        },
+        "latency_ms": {
+          "type": "integer",
+          "minimum": -500,
+          "maximum": 1500
+        },
+        "calibrated": {
+          "type": "boolean"
+        },
+        "client_total": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "browser": {
+          "default": "",
+          "type": "string",
+          "maxLength": 60
+        },
+        "recording": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "track",
+        "latency_ms",
+        "calibrated",
+        "client_total"
+      ],
+      "additionalProperties": false
+    },
+    "ApiKaraokeVoiceAccepted": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/ApiKaraokeVoiceState"
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    "ApiKaraokeVoiceCheck": {
+      "type": "string",
+      "enum": [
+        "quiet",
+        "bleed"
+      ]
+    },
+    "ApiKaraokeVoiceState": {
+      "type": "string",
+      "enum": [
+        "none",
+        "waiting",
+        "scoring",
+        "scored",
+        "failed"
       ]
     },
     "ApiKnowledgeDoc": {
@@ -5027,6 +7516,42 @@
         "unanswered"
       ]
     },
+    "ApiLegacyItem": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "rarity": {
+          "type": "string"
+        },
+        "series": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "first_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "name",
+        "rarity",
+        "series",
+        "count",
+        "first_at"
+      ]
+    },
     "ApiLesson": {
       "type": "object",
       "properties": {
@@ -5084,19 +7609,6 @@
         "source",
         "display_name"
       ]
-    },
-    "ApiLetterRequest": {
-      "type": "object",
-      "properties": {
-        "text": {
-          "type": "string",
-          "maxLength": 2000
-        }
-      },
-      "required": [
-        "text"
-      ],
-      "additionalProperties": false
     },
     "ApiLifeActivityId": {
       "type": "string",
@@ -5183,6 +7695,188 @@
         "at",
         "minutes",
         "capability"
+      ]
+    },
+    "ApiListedCard": {
+      "type": "object",
+      "properties": {
+        "serial": {
+          "type": "string"
+        },
+        "issued_at": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "avatar_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "number": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "call_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relationship": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "affinity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trust": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "familiarity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "public_feeling": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stamp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiCardField"
+          }
+        },
+        "pose": {
+          "type": "string"
+        },
+        "frame": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "foil": {
+          "type": "boolean"
+        },
+        "voided_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rarity": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "N",
+                "R",
+                "SR",
+                "SSR"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiCardPart"
+          }
+        },
+        "expression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "daily",
+            "milestone",
+            "keepsake",
+            "drop"
+          ]
+        },
+        "price": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "pity_hit": {
+          "type": "boolean"
+        },
+        "wished": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "portrait": {
+          "type": "string",
+          "enum": [
+            "live",
+            "fixed"
+          ]
+        }
+      },
+      "required": [
+        "serial",
+        "issued_at",
+        "name",
+        "avatar_url",
+        "number",
+        "call_name",
+        "relationship",
+        "affinity",
+        "trust",
+        "familiarity",
+        "public_feeling",
+        "line",
+        "stamp",
+        "fields",
+        "pose",
+        "frame",
+        "foil",
+        "voided_at",
+        "rarity",
+        "parts",
+        "expression",
+        "price",
+        "pity_hit",
+        "wished",
+        "portrait"
       ]
     },
     "ApiLlmCallDetail": {
@@ -6042,6 +8736,721 @@
         "proposal"
       ]
     },
+    "ApiLotKind": {
+      "type": "string",
+      "enum": [
+        "call_name",
+        "frame"
+      ]
+    },
+    "ApiLotNameRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "give_up": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ApiLotNameResult": {
+      "type": "object",
+      "properties": {
+        "call_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "applied_until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refunded": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "call_name",
+        "applied_until",
+        "refunded"
+      ]
+    },
+    "ApiLotPlan": {
+      "type": "object",
+      "properties": {
+        "week": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "opens_at": {
+          "type": "string"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiLotKind"
+            },
+            {
+              "type": "string",
+              "const": "skip"
+            }
+          ]
+        }
+      },
+      "required": [
+        "week",
+        "opens_at",
+        "plan"
+      ]
+    },
+    "ApiLotPlanRequest": {
+      "type": "object",
+      "properties": {
+        "lot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiLotKind"
+            },
+            {
+              "type": "string",
+              "const": "skip"
+            }
+          ]
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "lot"
+      ],
+      "additionalProperties": false
+    },
+    "ApiLotView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "week": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "kind": {
+          "$ref": "#/$defs/ApiLotKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "closing",
+            "naming",
+            "applied",
+            "done",
+            "refunded",
+            "cancelled"
+          ]
+        },
+        "picked_by": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "her",
+            "rotation"
+          ]
+        },
+        "opens_at": {
+          "type": "string"
+        },
+        "ends_at": {
+          "type": "string"
+        },
+        "extended": {
+          "type": "boolean"
+        },
+        "opening_bid": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "step": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "min_bid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "top": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "name"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bids": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "bidders": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "winner": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "name",
+                "price"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "call_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name_due": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "applied_until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "week",
+        "kind",
+        "name",
+        "detail",
+        "state",
+        "picked_by",
+        "opens_at",
+        "ends_at",
+        "extended",
+        "opening_bid",
+        "step",
+        "min_bid",
+        "top",
+        "bids",
+        "bidders",
+        "winner",
+        "call_name",
+        "name_due",
+        "applied_until"
+      ]
+    },
+    "ApiLotteryResult": {
+      "type": "object",
+      "properties": {
+        "week": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "drawn",
+            "refunded"
+          ]
+        },
+        "drawn_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tickets": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "buyers": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "pot": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "prize": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "burned": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "winner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "week",
+        "state",
+        "drawn_at",
+        "tickets",
+        "buyers",
+        "pot",
+        "prize",
+        "burned",
+        "winner"
+      ]
+    },
+    "ApiLotteryView": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "price": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "per_person": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "min_buyers": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "prize_share": {
+          "type": "number"
+        },
+        "week": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "drawing",
+            "drawn",
+            "refunding",
+            "refunded"
+          ]
+        },
+        "draw_at": {
+          "type": "string"
+        },
+        "tickets": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "buyers": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "pot": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "mine": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "tickets": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "tickets"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiLotteryResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "currency",
+        "running",
+        "price",
+        "per_person",
+        "min_buyers",
+        "prize_share",
+        "week",
+        "state",
+        "draw_at",
+        "tickets",
+        "buyers",
+        "pot",
+        "mine",
+        "last"
+      ]
+    },
+    "ApiMarketHistory": {
+      "type": "object",
+      "properties": {
+        "lots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "week": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "kind": {
+                "$ref": "#/$defs/ApiLotKind"
+              },
+              "name": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "closing",
+                  "naming",
+                  "applied",
+                  "done",
+                  "refunded",
+                  "cancelled"
+                ]
+              },
+              "picked_by": {
+                "type": "string",
+                "enum": [
+                  "owner",
+                  "her",
+                  "rotation"
+                ]
+              },
+              "opens_at": {
+                "type": "string"
+              },
+              "ends_at": {
+                "type": "string"
+              },
+              "extended": {
+                "type": "boolean"
+              },
+              "opening_bid": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "step": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "min_bid": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "top": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "amount": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "amount",
+                      "name"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "bids": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "bidders": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "winner": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "price": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "price"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "call_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name_due": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "applied_until": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "price": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "week",
+              "kind",
+              "name",
+              "detail",
+              "state",
+              "picked_by",
+              "opens_at",
+              "ends_at",
+              "extended",
+              "opening_bid",
+              "step",
+              "min_bid",
+              "top",
+              "bids",
+              "bidders",
+              "winner",
+              "call_name",
+              "name_due",
+              "applied_until",
+              "note",
+              "price"
+            ]
+          }
+        },
+        "weeks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiLotteryResult"
+          }
+        },
+        "offered": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiLotKind"
+          }
+        },
+        "next": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "opens_at": {
+                  "type": "string"
+                },
+                "plan": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/ApiLotKind"
+                        },
+                        {
+                          "type": "string",
+                          "const": "skip"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "opens_at",
+                "plan"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "lots",
+        "weeks",
+        "offered",
+        "next"
+      ]
+    },
+    "ApiMarketSettleRequest": {
+      "type": "object",
+      "properties": {
+        "what": {
+          "type": "string",
+          "enum": [
+            "auction",
+            "lottery"
+          ]
+        }
+      },
+      "required": [
+        "what"
+      ],
+      "additionalProperties": false
+    },
     "ApiMcpServerInfo": {
       "type": "object",
       "properties": {
@@ -6240,26 +9649,49 @@
         "per_day": {
           "type": "number"
         },
-        "poses": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ApiCardPoseChoice"
-          }
-        },
         "prices": {
           "$ref": "#/$defs/ApiCardPrices"
         },
-        "rerolls_left": {
-          "type": "number"
+        "balance": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pity": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "since": {
+                  "type": "number"
+                },
+                "pity": {
+                  "type": "number"
+                },
+                "until": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "since",
+                "pity",
+                "until"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "latest",
         "today",
         "per_day",
-        "poses",
         "prices",
-        "rerolls_left"
+        "balance",
+        "pity"
       ]
     },
     "ApiMemberDay": {
@@ -6404,6 +9836,9 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 120
+        },
+        "priority": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -6853,6 +10288,214 @@
         "cost_usd"
       ]
     },
+    "ApiModuleActionResult": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "ApiModuleCard": {
+      "type": "object",
+      "properties": {
+        "facts": {
+          "maxItems": 4,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "number"
+                ]
+              },
+              "unit": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "value"
+            ]
+          }
+        },
+        "next": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "at"
+          ]
+        },
+        "last_error": {
+          "type": "object",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "message"
+          ]
+        },
+        "actions": {
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "confirm": {
+                "type": "string"
+              },
+              "capability": {
+                "type": "string"
+              },
+              "args": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/WireJsonValue"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ]
+          }
+        }
+      },
+      "required": [
+        "facts"
+      ]
+    },
+    "ApiModuleCategory": {
+      "type": "string",
+      "enum": [
+        "her",
+        "platform",
+        "play",
+        "system"
+      ]
+    },
+    "ApiModuleDetail": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/ApiModuleStateKind"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recent_restarts": {
+          "type": "number"
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
+          "$ref": "#/$defs/ApiModuleCategory"
+        },
+        "settings": {
+          "type": "boolean"
+        },
+        "card": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiModuleCard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "optional": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "enabled",
+        "state",
+        "reason",
+        "recent_restarts",
+        "required",
+        "requires",
+        "optional",
+        "dependents"
+      ]
+    },
     "ApiModuleInfo": {
       "type": "object",
       "properties": {
@@ -6879,6 +10522,34 @@
         },
         "recent_restarts": {
           "type": "number"
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
+          "$ref": "#/$defs/ApiModuleCategory"
+        },
+        "settings": {
+          "type": "boolean"
+        },
+        "card": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiModuleCard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -6889,6 +10560,102 @@
         "state",
         "reason",
         "recent_restarts"
+      ]
+    },
+    "ApiModuleSettings": {
+      "type": "object",
+      "properties": {
+        "module": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "number"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiSettingGroup"
+          }
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiSettingField"
+          }
+        },
+        "values": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ApiSettingValue"
+          }
+        },
+        "updated": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "number"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "by": {
+                  "type": "string"
+                },
+                "by_label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "version",
+                "at",
+                "by",
+                "by_label"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "guard": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pending": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "can_edit": {
+          "type": "boolean"
+        },
+        "currency": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "module",
+        "name",
+        "revision",
+        "groups",
+        "fields",
+        "values",
+        "updated",
+        "guard",
+        "pending",
+        "can_edit",
+        "currency"
       ]
     },
     "ApiModuleStateKind": {
@@ -6933,6 +10700,167 @@
       },
       "required": [
         "position"
+      ]
+    },
+    "ApiMyBids": {
+      "type": "object",
+      "properties": {
+        "bids": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "lot": {
+                "type": "string"
+              },
+              "week": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "kind": {
+                "$ref": "#/$defs/ApiLotKind"
+              },
+              "name": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "leading",
+                  "outbid",
+                  "won",
+                  "lost",
+                  "cancelled",
+                  "refunded"
+                ]
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "lot",
+              "week",
+              "kind",
+              "name",
+              "amount",
+              "state",
+              "at"
+            ]
+          }
+        }
+      },
+      "required": [
+        "bids"
+      ]
+    },
+    "ApiMyCard": {
+      "type": "object",
+      "properties": {
+        "card": {
+          "$ref": "#/$defs/ApiIssuedCard"
+        },
+        "pity_hit": {
+          "type": "boolean"
+        },
+        "wished": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "price": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "card",
+        "pity_hit",
+        "wished",
+        "price"
+      ]
+    },
+    "ApiMyCards": {
+      "type": "object",
+      "properties": {
+        "cards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiListedCard"
+          }
+        }
+      },
+      "required": [
+        "cards"
+      ]
+    },
+    "ApiMyTickets": {
+      "type": "object",
+      "properties": {
+        "weeks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "week": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "draw_at": {
+                "type": "string"
+              },
+              "tickets": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "paid": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "drawing",
+                  "drawn",
+                  "refunding",
+                  "refunded"
+                ]
+              },
+              "won": {
+                "type": "boolean"
+              },
+              "prize": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "week",
+              "draw_at",
+              "tickets",
+              "paid",
+              "state",
+              "won",
+              "prize"
+            ]
+          }
+        }
+      },
+      "required": [
+        "weeks"
       ]
     },
     "ApiNoteAuthor": {
@@ -7776,6 +11704,35 @@
         "by"
       ]
     },
+    "ApiPersonCards": {
+      "type": "object",
+      "properties": {
+        "cards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiMyCard"
+          }
+        },
+        "dex": {
+          "$ref": "#/$defs/ApiCardDex"
+        },
+        "pity": {
+          "$ref": "#/$defs/ApiCardPity"
+        },
+        "wishlist": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiCardPart"
+          }
+        }
+      },
+      "required": [
+        "cards",
+        "dex",
+        "pity",
+        "wishlist"
+      ]
+    },
     "ApiPersonEmotionName": {
       "type": "string",
       "enum": [
@@ -8351,6 +12308,110 @@
         "body"
       ]
     },
+    "ApiPlaceRoom": {
+      "type": "object",
+      "properties": {
+        "platform": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "text",
+            "voice",
+            "thread"
+          ]
+        },
+        "space": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ]
+        },
+        "category": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "position": {
+          "type": "number"
+        },
+        "usable": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "platform",
+        "id",
+        "context",
+        "name",
+        "kind",
+        "space",
+        "category",
+        "position",
+        "usable",
+        "reason"
+      ]
+    },
+    "ApiPlaceRooms": {
+      "type": "object",
+      "properties": {
+        "ready": {
+          "type": "boolean"
+        },
+        "rooms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiPlaceRoom"
+          }
+        }
+      },
+      "required": [
+        "ready",
+        "rooms"
+      ]
+    },
     "ApiPlaySongRequest": {
       "type": "object",
       "properties": {
@@ -8367,51 +12428,6 @@
           ]
         }
       }
-    },
-    "ApiPledgeRequest": {
-      "type": "object",
-      "properties": {
-        "amount": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000000
-        }
-      },
-      "required": [
-        "amount"
-      ],
-      "additionalProperties": false
-    },
-    "ApiPledgeResult": {
-      "type": "object",
-      "properties": {
-        "pledged": {
-          "type": "number"
-        },
-        "raised": {
-          "type": "number"
-        },
-        "target": {
-          "type": "number"
-        },
-        "reached": {
-          "type": "boolean"
-        },
-        "balance": {
-          "type": "number"
-        },
-        "duplicate": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "pledged",
-        "raised",
-        "target",
-        "reached",
-        "balance",
-        "duplicate"
-      ]
     },
     "ApiPredictionView": {
       "type": "object",
@@ -8834,6 +12850,170 @@
         "entries"
       ]
     },
+    "ApiPublicCard": {
+      "type": "object",
+      "properties": {
+        "serial": {
+          "type": "string"
+        },
+        "issued_at": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "avatar_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "number": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "call_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relationship": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "affinity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trust": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "familiarity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "public_feeling": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stamp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiCardField"
+          }
+        },
+        "pose": {
+          "type": "string"
+        },
+        "frame": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "foil": {
+          "type": "boolean"
+        },
+        "voided_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rarity": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "N",
+                "R",
+                "SR",
+                "SSR"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiCardPart"
+          }
+        },
+        "expression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "daily",
+            "milestone",
+            "keepsake",
+            "drop"
+          ]
+        },
+        "titles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "serial",
+        "issued_at",
+        "name",
+        "avatar_url",
+        "number",
+        "call_name",
+        "relationship",
+        "affinity",
+        "trust",
+        "familiarity",
+        "public_feeling",
+        "line",
+        "stamp",
+        "fields",
+        "pose",
+        "frame",
+        "foil",
+        "voided_at",
+        "rarity",
+        "parts",
+        "expression",
+        "titles"
+      ]
+    },
     "ApiPublicDay": {
       "type": "object",
       "properties": {
@@ -9204,58 +13384,6 @@
         "status"
       ]
     },
-    "ApiReachedGoal": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        },
-        "promise": {
-          "type": "string"
-        },
-        "target": {
-          "type": "number"
-        },
-        "reached_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "fulfilled_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "fulfilled_by": {
-          "anyOf": [
-            {
-              "type": "string",
-              "enum": [
-                "owner",
-                "self"
-              ]
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "title",
-        "promise",
-        "target",
-        "reached_at",
-        "fulfilled_at",
-        "fulfilled_by"
-      ]
-    },
     "ApiReasoningLevel": {
       "type": "string",
       "enum": [
@@ -9564,6 +13692,25 @@
         "platform_role"
       ]
     },
+    "ApiRevertSettingsRequest": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expected": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "version",
+        "expected"
+      ]
+    },
     "ApiReviewToolRequest": {
       "type": "object",
       "properties": {
@@ -9770,6 +13917,79 @@
       "required": [
         "sandbox",
         "tools"
+      ]
+    },
+    "ApiSaveSettingsRequest": {
+      "type": "object",
+      "properties": {
+        "expected": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "set": {
+          "default": {},
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/WireJsonValue"
+          }
+        },
+        "reset": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "expected"
+      ]
+    },
+    "ApiSaveSettingsResult": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "number"
+        },
+        "applied": {
+          "type": "string",
+          "enum": [
+            "restarted",
+            "deferred",
+            "stored",
+            "unchanged"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ApiModuleStateKind"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "revision",
+        "applied",
+        "state",
+        "reason"
       ]
     },
     "ApiSavedPrompt": {
@@ -10161,6 +14381,18 @@
         "quote"
       ]
     },
+    "ApiSetCardTitleRequest": {
+      "type": "object",
+      "properties": {
+        "public": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "public"
+      ],
+      "additionalProperties": false
+    },
     "ApiSetChannelLevelRequest": {
       "type": "object",
       "properties": {
@@ -10231,6 +14463,430 @@
         "scene"
       ]
     },
+    "ApiSetWishlistRequest": {
+      "type": "object",
+      "properties": {
+        "parts": {
+          "maxItems": 3,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          }
+        }
+      },
+      "required": [
+        "parts"
+      ],
+      "additionalProperties": false
+    },
+    "ApiSettingField": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/ApiSettingKind"
+        },
+        "label": {
+          "type": "string"
+        },
+        "help": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "group": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "order": {
+          "type": "number"
+        },
+        "apply": {
+          "type": "string",
+          "enum": [
+            "module",
+            "core"
+          ]
+        },
+        "danger": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secret": {
+          "type": "boolean"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "cluster",
+            "space"
+          ]
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "ms",
+                "s",
+                "min",
+                "h",
+                "day"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "labels": {
+          "anyOf": [
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "room": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "text",
+                "voice",
+                "thread"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "multiple": {
+          "type": "boolean"
+        },
+        "ref": {
+          "type": "string",
+          "enum": [
+            "id",
+            "context"
+          ]
+        },
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "step": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "int": {
+          "type": "boolean"
+        },
+        "max_length": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pattern": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "options": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slider": {
+          "type": "boolean"
+        },
+        "long": {
+          "type": "boolean"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireJsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "keys",
+        "kind",
+        "label",
+        "help",
+        "group",
+        "order",
+        "apply",
+        "danger",
+        "secret",
+        "scope",
+        "unit",
+        "labels",
+        "room",
+        "multiple",
+        "ref",
+        "min",
+        "max",
+        "step",
+        "int",
+        "max_length",
+        "pattern",
+        "options",
+        "slider",
+        "long",
+        "default"
+      ]
+    },
+    "ApiSettingGroup": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ]
+    },
+    "ApiSettingKind": {
+      "type": "string",
+      "enum": [
+        "switch",
+        "number",
+        "text",
+        "select",
+        "multi",
+        "channel",
+        "role",
+        "person",
+        "time",
+        "weekday",
+        "duration",
+        "coins",
+        "ratio",
+        "rows"
+      ]
+    },
+    "ApiSettingProblem": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "message"
+      ]
+    },
+    "ApiSettingValue": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireJsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "default",
+            "file",
+            "panel"
+          ]
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WireJsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "file_set": {
+          "type": "boolean"
+        },
+        "set": {
+          "type": "boolean"
+        },
+        "env": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "invalid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "value",
+        "source",
+        "file",
+        "file_set",
+        "set",
+        "env",
+        "invalid"
+      ]
+    },
+    "ApiSettingsChange": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number"
+        },
+        "at": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "by_label": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "before": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/WireJsonValue"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "after": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/WireJsonValue"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "label",
+              "before",
+              "after"
+            ]
+          }
+        }
+      },
+      "required": [
+        "version",
+        "at",
+        "by",
+        "by_label",
+        "note",
+        "changes"
+      ]
+    },
+    "ApiSettingsHistory": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApiSettingsChange"
+          }
+        },
+        "next_before": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "next_before"
+      ]
+    },
     "ApiShopItem": {
       "type": "object",
       "properties": {
@@ -10241,11 +14897,8 @@
           "type": "string",
           "enum": [
             "feed",
-            "letter",
-            "expression",
             "frame",
             "card",
-            "song",
             "stream",
             "fortune"
           ]
@@ -10647,6 +15300,12 @@
         },
         "streaming": {
           "type": "boolean"
+        },
+        "obs_warning": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -10660,7 +15319,8 @@
         "overlay_url",
         "speaking",
         "node",
-        "streaming"
+        "streaming",
+        "obs_warning"
       ]
     },
     "ApiStageStreamRequest": {
@@ -11853,6 +16513,52 @@
         "manual"
       ]
     },
+    "ApiTicketRequest": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "ApiTicketResult": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "mine": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "charged": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "balance": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "count",
+        "mine",
+        "charged",
+        "balance"
+      ]
+    },
     "ApiTimeContext": {
       "type": "object",
       "properties": {
@@ -11905,6 +16611,9 @@
         "sent": {
           "type": "number"
         },
+        "fee": {
+          "type": "number"
+        },
         "balance": {
           "type": "number"
         },
@@ -11914,6 +16623,7 @@
       },
       "required": [
         "sent",
+        "fee",
         "balance",
         "to"
       ]
@@ -12876,14 +17586,11 @@
             "$ref": "#/$defs/ApiLedgerLine"
           }
         },
-        "deals": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ApiDealView"
-          }
-        },
         "on_board": {
           "type": "boolean"
+        },
+        "transfer_fee": {
+          "type": "number"
         }
       },
       "required": [
@@ -12898,8 +17605,8 @@
         "frames",
         "hungry",
         "recent",
-        "deals",
-        "on_board"
+        "on_board",
+        "transfer_fee"
       ]
     },
     "ApiWorkspaceFile": {
@@ -13368,6 +18075,432 @@
         "is_self",
         "muted",
         "deafened"
+      ]
+    },
+    "WorkersKaraokeLineStatus": {
+      "type": "string",
+      "enum": [
+        "matched",
+        "uncertain",
+        "failed",
+        "unchecked"
+      ]
+    },
+    "WorkersKaraokeLineV2": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/WorkersKaraokeLineStatus"
+        },
+        "source": {
+          "$ref": "#/$defs/WorkersKaraokeLyricsSource"
+        },
+        "similarity": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "heard": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "aligned": {
+          "type": "boolean"
+        },
+        "pieces": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WorkersKaraokePiece"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "edited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "text",
+        "status",
+        "source",
+        "similarity",
+        "heard",
+        "aligned",
+        "pieces",
+        "edited"
+      ]
+    },
+    "WorkersKaraokeLyricsCheck": {
+      "type": "object",
+      "properties": {
+        "matched": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "uncertain": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "kept",
+            "doubtful",
+            "wrong_song",
+            "unchecked"
+          ]
+        }
+      },
+      "required": [
+        "matched",
+        "uncertain",
+        "failed",
+        "verdict"
+      ]
+    },
+    "WorkersKaraokeLyricsSource": {
+      "type": "string",
+      "enum": [
+        "found",
+        "heard"
+      ]
+    },
+    "WorkersKaraokeLyricsV2": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/WorkersKaraokeLyricsSource"
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timing": {
+          "type": "string",
+          "enum": [
+            "line",
+            "char"
+          ]
+        },
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersKaraokeLyricsCheck"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersKaraokeLineV2"
+          }
+        }
+      },
+      "required": [
+        "provider",
+        "source",
+        "language",
+        "timing",
+        "check",
+        "lines"
+      ]
+    },
+    "WorkersKaraokeMadeV2": {
+      "type": "object",
+      "properties": {
+        "pitch": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "lyrics": {
+          "type": "string"
+        },
+        "asr": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "aligner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "pitch",
+        "notes",
+        "lyrics",
+        "asr",
+        "aligner"
+      ]
+    },
+    "WorkersKaraokeNote": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": "number"
+        },
+        "midi": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "pitch",
+            "lyric"
+          ]
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "char": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "midi",
+        "source",
+        "line",
+        "char"
+      ]
+    },
+    "WorkersKaraokePiece": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "sung": {
+          "type": "boolean"
+        },
+        "start": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "end": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reading": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "roman": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "text",
+        "sung",
+        "start",
+        "end",
+        "reading",
+        "roman"
+      ]
+    },
+    "WorkersKaraokePitch": {
+      "type": "object",
+      "properties": {
+        "hz": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "start": {
+          "type": "number"
+        },
+        "midi": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "required": [
+        "hz",
+        "start",
+        "midi"
+      ]
+    },
+    "WorkersKaraokeQuality": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "voiced_ratio": {
+          "type": "number"
+        },
+        "notes": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "lead_split": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok",
+        "reason",
+        "voiced_ratio",
+        "notes",
+        "lead_split"
+      ]
+    },
+    "WorkersKaraokeReferenceV2": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "miyoria.karaoke.reference"
+        },
+        "version": {
+          "type": "number",
+          "const": 2
+        },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "artist": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_s": {
+          "type": "number"
+        },
+        "backing": {
+          "type": "string"
+        },
+        "pitch": {
+          "$ref": "#/$defs/WorkersKaraokePitch"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkersKaraokeNote"
+          }
+        },
+        "lyrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkersKaraokeLyricsV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "$ref": "#/$defs/WorkersKaraokeQuality"
+        },
+        "made": {
+          "$ref": "#/$defs/WorkersKaraokeMadeV2"
+        }
+      },
+      "required": [
+        "format",
+        "version",
+        "id",
+        "title",
+        "artist",
+        "duration_s",
+        "backing",
+        "pitch",
+        "notes",
+        "lyrics",
+        "quality",
+        "made"
       ]
     }
   }

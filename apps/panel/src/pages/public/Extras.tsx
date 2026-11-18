@@ -1,33 +1,38 @@
-// The newer places to spend on the member page (docs/design/economy.md §13): today's fortune slip,
-// sending coins to a friend, the sponsor board, her crowdfunding goal and her bounties. A Core
+// The newer places to spend on the member page (docs/design/economy.md §13): today's fortune slip
+// (drawn with the check-in, see Wallet.tsx),
+// sending coins to a friend, the sponsor board and her bounties. A Core
 // without a route leaves its block out; someone she does not know never gets this far (the
 // wallet says so first).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Dices } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
 import { isNotProvided } from "@/api/http";
-import type { BountyView, GoalView } from "@miyoria/contracts/api";
+import type { BountyView } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { ConfirmDialog } from "@/components/confirm";
-import { EmptyLine, QueryView, SkeletonRows } from "@/components/query-state";
+import { QueryView, SkeletonRows } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { fmtInt, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
-import { cn } from "@/lib/utils";
 import { FortuneSlip } from "./FortuneSlip";
 import { newKey, priceText, usePatchWallet, useWallet } from "./spend";
 
-const FORTUNE = ["member", "fortune"] as const;
+/** The query of today's slip: the check-in puts the slip it drew here. */
+export const FORTUNE = ["member", "fortune"] as const;
 const BOARD = ["public", "board"] as const;
-const GOALS = ["member", "goals"] as const;
 const BOUNTIES = ["member", "bounties"] as const;
 const POLL_MS = 60_000;
 /** A transfer is at most this many coins; the Core says no above its own limit. */
 export const TRANSFER_MAX = 50;
+
+/** What the sender pays on top of `amount` at the Core's rate: rounded up, at least 1, none at 0. */
+export function transferFee(amount: number, rate: number): number {
+  if (rate <= 0) return 0;
+  return Math.max(1, Math.ceil(Number((amount * rate).toFixed(6))));
+}
 
 /** An older Core has no such route: asking again will not change that. */
 const retry = (n: number, e: Error) => !isNotProvided(e) && n < 2;
@@ -35,29 +40,20 @@ const retry = (n: number, e: Error) => !isNotProvided(e) && n < 2;
 // ---------------------------------------------------------------------------
 // fortune
 
-/** Today's slip, or a button to draw one: once a day, she writes it. */
-export function Fortune() {
+/** Today's slip and what one costs; the wallet's check-in buys it and puts it here. */
+export function useFortuneToday() {
   const api = useApi();
-  const client = useQueryClient();
-  const { patch, refresh } = usePatchWallet();
-  const currency = useWallet().data?.currency ?? "幣";
-  const today = useQuery({
+  return useQuery({
     queryKey: FORTUNE,
     queryFn: ({ signal }) => api.rpc.fortune.today(undefined, { signal }),
     retry,
   });
-  const draw = useMutation({
-    mutationFn: () => api.rpc.fortune.draw({ headers: { "idempotency-key": newKey() }, body: {} }),
-    onSuccess: (r) => {
-      client.setQueryData(FORTUNE, (old: typeof today.data) => (old ? { ...old, fortune: r.fortune } : old));
-      patch((v) => ({ ...v, balance: r.balance }));
-      void refresh();
-    },
-    onError: (e) => {
-      notify.error(e);
-      void refresh();
-    },
-  });
+}
+
+/** Today's slip; there is a button for none: it is drawn with the check-in (an add-on of it). */
+export function Fortune() {
+  const currency = useWallet().data?.currency ?? "幣";
+  const today = useFortuneToday();
   if (today.isError && isNotProvided(today.error)) return null;
   return (
     <Card aria-label="今日籤詩">
@@ -69,13 +65,9 @@ export function Fortune() {
           t.fortune ? (
             <FortuneSlip fortune={t.fortune} />
           ) : (
-            <div className="grid justify-items-start gap-2">
-              <p className="text-[13px] text-muted-foreground">每天一張,是她現在為你寫的。</p>
-              <Button variant="secondary" busy={draw.isPending} onClick={() => draw.mutate()}>
-                <Dices aria-hidden />
-                抽籤 · {priceText(t.price, currency)}
-              </Button>
-            </div>
+            <p className="text-[13px] text-muted-foreground">
+              每天一張,是她現在為你寫的。簽到時可以加買({priceText(t.price, currency)}),簽過到了也能只買籤詩,在錢包那邊。
+            </p>
           )
         }
       </QueryView>
@@ -101,13 +93,14 @@ export function Transfer() {
   const n = Number(amount);
   const idOk = /^[0-9]{1,25}$/.test(to.trim());
   const amountOk = Number.isInteger(n) && n >= 1 && n <= TRANSFER_MAX;
+  const fee = transferFee(n, w?.transfer_fee ?? 0);
   const send = useMutation({
     mutationFn: () => api.rpc.wallet.transfer({ headers: { "idempotency-key": newKey() }, body: { to_discord_id: to.trim(), amount: n } }),
     onSuccess: (r) => {
       setAsking(false);
       setAmount("");
       patch((v) => ({ ...v, balance: r.balance }));
-      notify.ok(`已轉 ${fmtInt(r.sent)} ${w?.currency ?? ""}給 ${r.to}`);
+      notify.ok(`已轉 ${fmtInt(r.sent)} ${w?.currency ?? ""}給 ${r.to},手續費 ${fmtInt(r.fee)}`);
       void refresh();
     },
     onError: (e) => {
@@ -160,7 +153,9 @@ export function Transfer() {
         <Button type="submit" variant="outline" disabled={!idOk || !amountOk}>
           轉出
         </Button>
-        <p className="text-xs text-muted-foreground">只能轉給她認識的人,每天有上限。</p>
+        <p className="text-xs text-muted-foreground">
+          只能轉給她認識的人,每天有上限。另收{fmtInt(Math.round(w.transfer_fee * 100))}% 手續費(至少 1),由你付,不會到任何人手上。
+        </p>
       </form>
       <ConfirmDialog
         open={asking}
@@ -171,7 +166,8 @@ export function Transfer() {
         onClose={() => setAsking(false)}
       >
         <p>
-          把 {priceText(n, w.currency)} 轉給 ID {to.trim()}。轉出後無法收回。
+          把 {priceText(n, w.currency)} 轉給 ID {to.trim()},另付手續費 {priceText(fee, w.currency)}(燒掉),共扣{" "}
+          {priceText(n + fee, w.currency)}。轉出後無法收回。
         </p>
       </ConfirmDialog>
     </Card>
@@ -250,149 +246,7 @@ export function Board() {
 }
 
 // ---------------------------------------------------------------------------
-// goals and bounties
-
-const ENDED: Record<GoalView["status"], string> = {
-  open: "進行中",
-  reached: "達成了",
-  expired: "沒湊到,已退回",
-  cancelled: "她取消了,已退回",
-};
-
-function Progress({ raised, target }: { raised: number; target: number }) {
-  const pct = target > 0 ? Math.min(100, Math.round((raised / target) * 100)) : 0;
-  return (
-    <div
-      role="progressbar"
-      aria-label="募資進度"
-      aria-valuemin={0}
-      aria-valuemax={target}
-      aria-valuenow={Math.min(raised, target)}
-      className="h-1.5 overflow-hidden rounded-[2px] bg-muted"
-    >
-      <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
-
-function OpenGoal({ goal, currency }: { goal: GoalView; currency: string }) {
-  const api = useApi();
-  const client = useQueryClient();
-  const { patch, refresh } = usePatchWallet();
-  const [amount, setAmount] = useState("");
-  const id = useId();
-  const n = Number(amount);
-  const ok = Number.isInteger(n) && n >= 1;
-  const pledge = useMutation({
-    mutationFn: () => api.rpc.agency.pledge({ params: { id: goal.id }, headers: { "idempotency-key": newKey() }, body: { amount: n } }),
-    onSuccess: (r) => {
-      setAmount("");
-      patch((v) => ({ ...v, balance: r.balance }));
-      notify.ok(r.reached ? "目標達成了" : `投了 ${priceText(r.pledged, currency)}`);
-      void client.invalidateQueries({ queryKey: GOALS });
-      void refresh();
-    },
-    onError: (e) => {
-      notify.error(e);
-      void client.invalidateQueries({ queryKey: GOALS });
-    },
-  });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (ok) pledge.mutate();
-  };
-  return (
-    <div className="grid gap-2.5">
-      <div className="grid gap-0.5">
-        <h3 className="text-sm font-medium">{goal.title}</h3>
-        <p className="text-[13px]">她答應:{goal.promise}</p>
-      </div>
-      <Progress raised={goal.raised} target={goal.target} />
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 text-xs text-muted-foreground">
-        <span className="tabular-nums">
-          {fmtInt(goal.raised)} / {fmtInt(goal.target)} {currency}
-        </span>
-        <span>{fmtRelative(goal.deadline)}截止</span>
-      </div>
-      {goal.my_pledge > 0 && (
-        <p className="text-xs text-muted-foreground">你已經投了 {priceText(goal.my_pledge, currency)}</p>
-      )}
-      <form className="flex items-end gap-2" onSubmit={submit}>
-        <div className="grid min-w-0 flex-1 gap-1">
-          <label htmlFor={id} className="text-xs text-muted-foreground">
-            投多少
-          </label>
-          <Input
-            id={id}
-            type="number"
-            inputMode="numeric"
-            min={1}
-            step={1}
-            className="tabular-nums"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-          />
-        </div>
-        <Button type="submit" variant="secondary" busy={pledge.isPending} disabled={!ok}>
-          投入
-        </Button>
-      </form>
-      <p className="text-xs text-muted-foreground">錢先放在託管,湊滿才給她,沒湊滿會退回。</p>
-    </div>
-  );
-}
-
-/** The goal she has open, and the ones that ended lately. */
-export function Goals() {
-  const api = useApi();
-  const currency = useWallet().data?.currency ?? "幣";
-  const goals = useQuery({
-    queryKey: GOALS,
-    queryFn: ({ signal }) => api.rpc.agency.goals(undefined, { signal }),
-    refetchInterval: POLL_MS,
-    retry,
-  });
-  if (goals.isError && isNotProvided(goals.error)) return null;
-  return (
-    <Card aria-label="她的目標">
-      <CardHeader>
-        <CardTitle>她的目標</CardTitle>
-      </CardHeader>
-      <QueryView query={goals} skeleton={<SkeletonRows count={3} />}>
-        {({ goals: list }) => {
-          const open = list.filter((g) => g.status === "open");
-          const ended = list.filter((g) => g.status !== "open");
-          return (
-            <div className="grid gap-4">
-              {open.length === 0 && <EmptyLine>她現在沒有提目標</EmptyLine>}
-              {open.map((g) => (
-                <OpenGoal key={g.id} goal={g} currency={currency} />
-              ))}
-              {ended.length > 0 && (
-                <ul className="divide-y divide-line-soft">
-                  {ended.map((g) => (
-                    <li key={g.id} className="flex items-baseline gap-3 py-(--row-y)">
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">{g.title}</span>
-                      <span
-                        className={cn(
-                          "shrink-0 text-xs",
-                          g.status === "reached" ? "text-foreground" : "text-muted-foreground",
-                        )}
-                      >
-                        {ENDED[g.status]}
-                        {g.status === "reached" && g.fulfilled && ",她做到了"}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          );
-        }}
-      </QueryView>
-    </Card>
-  );
-}
+// bounties
 
 function BountyRow({ b, currency }: { b: BountyView; currency: string }) {
   return (

@@ -9,6 +9,12 @@
 // as one unreachable for too long. With a single worker none of the failover rules apply: it is
 // used as it is.
 
+import type {
+  WorkersKaraokeKeyReply,
+  WorkersKaraokeStreamAnswer,
+  WorkersKaraokeStreamRequest,
+  WorkersKaraokeVoicePitch,
+} from "@miyoria/contracts/workers";
 import {
   type GpuContext,
   type SingWorker,
@@ -28,6 +34,12 @@ export interface FailoverOptions {
   now?: () => number;
   /** Told when a worker is found unreachable (by its id): the registry rests it too. */
   failed?: (id: string, error: unknown) => void;
+  /**
+   * Asked before the list is read: the owner calls `update` when the workers known now are not
+   * the ones listed. A list that was empty when it was made (the registry of another module was
+   * not there yet) would otherwise stay empty, since nothing else asks again.
+   */
+  refresh?: () => void;
 }
 
 /** One worker of the list. */
@@ -65,9 +77,14 @@ export class FailoverSingWorker implements SingWorker {
   readonly #retryMs: number;
   readonly #now: () => number;
   readonly #failed: ((id: string, error: unknown) => void) | null;
+  #refresh: (() => void) | null = null;
   /** Which worker took a job / has a song, as answers come in (lost on restart, then searched). */
   readonly #jobs = new Map<string, Endpoint>();
   readonly #songs = new Map<string, Endpoint>();
+  /** Which worker made a karaoke song (its own namespace on the worker: never in `songs()`). */
+  readonly #karaoke = new Map<string, Endpoint>();
+  /** The worker each karaoke room streams its singers' voices to. */
+  readonly #streams = new Map<string, Endpoint>();
   /** Jobs given up on (made again elsewhere, or cancelled while unreachable), to cancel later. */
   readonly #abandoned = new Map<string, Endpoint>();
 
@@ -76,6 +93,13 @@ export class FailoverSingWorker implements SingWorker {
     this.#now = options.now ?? Date.now;
     this.#failed = options.failed ?? null;
     this.update(workers);
+    this.#refresh = options.refresh ?? null;
+  }
+
+  /** The list as it is now, after asking the owner whether it changed. */
+  #list(): Endpoint[] {
+    this.#refresh?.();
+    return this.#all;
   }
 
   /** The workers in order of preference now. */
@@ -128,7 +152,7 @@ export class FailoverSingWorker implements SingWorker {
 
   /** Where new work goes now: the first worker that answers. */
   current(): string | null {
-    return this.#all.find((ep) => ep.downSince === null)?.name ?? null;
+    return this.#list().find((ep) => ep.downSince === null)?.name ?? null;
   }
 
   async submit(query: SongQuery, signal?: AbortSignal): Promise<WorkerJob> {
@@ -233,9 +257,78 @@ export class FailoverSingWorker implements SingWorker {
     return this.#forSong(song, (w) => w.download(song, file, dest, signal));
   }
 
+  /** From the worker that made it when known, else the first that has it. */
+  async karaokeFile(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void> {
+    const owner = this.#karaoke.get(song);
+    const order =
+      owner === undefined ? this.#all : [owner, ...this.#all.filter((e) => e !== owner)];
+    const [ep] = await this.#find(order, (w) => w.karaokeFile(song, file, dest, signal));
+    this.#karaoke.set(song, ep);
+  }
+
+  /** On the worker that made it when known, else the first that has it. */
+  async karaokeKey(
+    song: string,
+    semitones: number,
+    signal?: AbortSignal,
+  ): Promise<WorkersKaraokeKeyReply> {
+    const owner = this.#karaoke.get(song);
+    const order =
+      owner === undefined ? this.#all : [owner, ...this.#all.filter((e) => e !== owner)];
+    const [ep, reply] = await this.#find(order, (w) => w.karaokeKey(song, semitones, signal));
+    this.#karaoke.set(song, ep);
+    return reply;
+  }
+
+  /**
+   * Any worker can read a recording: the first that answers, as for a new job. A timed-out one is
+   * not asked again elsewhere (it may be reading it: the recording is not sent twice).
+   */
+  async karaokeVoice(
+    bytes: Uint8Array,
+    type: string,
+    signal?: AbortSignal,
+  ): Promise<WorkersKaraokeVoicePitch> {
+    let last: unknown = null;
+    for (const ep of this.#candidates()) {
+      try {
+        return await this.#attempt(ep, (w) => w.karaokeVoice(bytes, type, signal));
+      } catch (error) {
+        if (!isUnreachable(error) || maybeReceived(error)) throw error;
+        last = error;
+      }
+    }
+    throw last ?? unreachable(this.#all.length === 0 ? NO_WORKER : "no song worker answers");
+  }
+
+  /**
+   * A karaoke room's live voice streams go to one worker for the whole room (their audio lives
+   * there): the first that answers the room's first batch. That worker away, the batch fails at
+   * once; the room is never moved to another (the streams would start over half way).
+   */
+  async karaokeStream(
+    request: WorkersKaraokeStreamRequest,
+    signal?: AbortSignal,
+  ): Promise<WorkersKaraokeStreamAnswer> {
+    const owner = this.#streams.get(request.room);
+    if (owner !== undefined) {
+      if (this.#resting(owner)) {
+        throw unreachable(`the song worker at ${owner.name} is unreachable (room ${request.room})`);
+      }
+      return this.#attempt(owner, (w) => w.karaokeStream(request, signal));
+    }
+    const [ep] = this.#candidates();
+    if (ep === undefined) throw unreachable(NO_WORKER);
+    this.#streams.set(request.room, ep);
+    while (this.#streams.size > MAX_STREAM_ROOMS) {
+      this.#streams.delete(this.#streams.keys().next().value as string);
+    }
+    return this.#attempt(ep, (w) => w.karaokeStream(request, signal));
+  }
+
   /** Healthy while any worker is; otherwise why each one is not. */
   async health(signal?: AbortSignal): Promise<string | null> {
-    const all = this.#all;
+    const all = this.#list();
     if (all.length === 0) return NO_WORKER;
     const whys = await Promise.all(all.map((ep) => ep.worker.health(signal)));
     const now = this.#now();
@@ -254,8 +347,9 @@ export class FailoverSingWorker implements SingWorker {
   /** Workers for new work: those not passed over right now, or all of them when none is left. */
   #candidates(): Endpoint[] {
     const now = this.#now();
-    const up = this.#all.filter((ep) => !this.#resting(ep, now));
-    return up.length > 0 ? up : this.#all;
+    const all = this.#list();
+    const up = all.filter((ep) => !this.#resting(ep, now));
+    return up.length > 0 ? up : all;
   }
 
   /** Found unreachable a moment ago: not asked again until `retryMs` passed. Gone: never. */
@@ -373,10 +467,13 @@ export class FailoverSingWorker implements SingWorker {
   #own(ep: Endpoint, job: WorkerJob): void {
     this.#jobs.set(job.id, ep);
     if (job.song_id !== null) this.#songs.set(job.song_id, ep);
+    if (job.karaoke) this.#karaoke.set(job.karaoke.id, ep);
   }
 }
 
 const NO_WORKER = "no song worker is known";
+/** Karaoke rooms whose stream worker is remembered (far more than ever sing at once). */
+const MAX_STREAM_ROOMS = 64;
 
 function isUnreachable(error: unknown): boolean {
   return error instanceof SingWorkerError && error.unreachable;

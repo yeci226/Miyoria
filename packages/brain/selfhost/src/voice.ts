@@ -466,7 +466,19 @@ export class VoiceHost implements VoiceRunner {
           agent.log.debug({ turn: event.turn, lines: event.count }, "feel lines left out");
         } else if (event.kind !== "tag_stripped") state.tally.count(event.kind, event.count);
         break;
+      case "tool_start":
+        agent.ctx.publish(
+          Events.AgentToolRunning,
+          { turn: event.turn, context, tool: event.name, state: "started" },
+          { turn: event.turn },
+        );
+        break;
       case "tool_call":
+        agent.ctx.publish(
+          Events.AgentToolRunning,
+          { turn: event.turn, context, tool: event.name, state: "ended" },
+          { turn: event.turn },
+        );
         if (event.job !== null) {
           this.#jobs.set(event.job, {
             context,
@@ -497,6 +509,7 @@ export class VoiceHost implements VoiceRunner {
         );
         break;
       case "refusal":
+      case "speaking":
       case "started":
         break;
     }

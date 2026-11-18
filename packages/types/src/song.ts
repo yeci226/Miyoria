@@ -105,7 +105,7 @@ export type SongPrepare = SongPrepareData;
 /** A `SongPrepare` from an untyped payload, or `null`. */
 export function parseSongPrepare(payload: JsonValue): SongPrepare | null {
   if (!isJsonObject(payload)) return null;
-  const { no, title, stage, progress, exclusive } = payload;
+  const { no, title, stage, progress, exclusive, by } = payload;
   if (no !== null && (typeof no !== "number" || !Number.isFinite(no))) return null;
   return {
     no,
@@ -116,5 +116,6 @@ export function parseSongPrepare(payload: JsonValue): SongPrepare | null {
         ? Math.min(Math.max(progress, 0), 1)
         : 0,
     exclusive: typeof exclusive === "string" ? exclusive : null,
+    ...(typeof by === "string" && by !== "" ? { by } : {}),
   };
 }

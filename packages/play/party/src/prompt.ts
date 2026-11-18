@@ -1,7 +1,8 @@
 // Prompt section `party`: the game going on where she talks, as far as her role may see it (no
 // open answer, no turtle-soup bottom), with how to host it. Without a game, when two or more
 // people are in her voice channel, one line reminds her that she can suggest one (v4-plan §7.6);
-// nothing starts unless she calls `party_start`.
+// anyone may also ask her for one, in voice or (turtle soup) in a text channel. Nothing starts
+// unless she calls `party_start`.
 
 import type { PromptContributor, PromptRequest, PromptSection } from "@miyoria/types";
 import type { Table } from "./table.js";
@@ -17,8 +18,8 @@ export class PartyPrompt implements PromptContributor {
   constructor(private readonly table: Table) {}
 
   async contribute(request: PromptRequest): Promise<PromptSection[]> {
-    // Only in the voice channel itself or its text chat: a turn in another channel of the server
-    // is not about the game.
+    // Only where the game is (its voice channel, that channel's text chat, or the text channel a
+    // turtle soup is played in): a turn in another channel of the server is not about the game.
     const session = this.table.session(request.context);
     if (session === null) {
       const voice = request.context;
@@ -27,7 +28,7 @@ export class PartyPrompt implements PromptContributor {
         {
           key: PROMPT_KEY,
           title: "派對遊戲",
-          body: "語音裡人夠多,冷場時你可以提議一起玩(party_start):海龜湯、猜歌、接龍、問答。要不要玩你自己決定。",
+          body: "語音裡人夠多,冷場時你可以提議一起玩(party_start):海龜湯、猜歌。要不要玩你自己決定。",
           order: ORDER,
         },
       ];

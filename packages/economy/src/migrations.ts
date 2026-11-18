@@ -3,7 +3,8 @@
 // Generated from the Drizzle tables in `schema.ts` with `pnpm --filter @miyoria/store schema:sql
 // economy` (drizzle-kit, plus `STRICT`) and never edited after they are released: the runner
 // refuses a database whose recorded checksum differs. The store's drift test proves the migrated
-// database and the Drizzle tables agree.
+// database and the Drizzle tables agree. Version 1 is that; the later ones are hand-written SQL
+// that retires a feature (phase 5): refunds what it held, then drops its tables.
 
 import type { PluginSchema } from "@miyoria/store";
 
@@ -133,9 +134,99 @@ CREATE INDEX \`economy_ledger_person_idx\` ON \`economy_ledger\` (\`person_id\`,
 CREATE INDEX \`economy_ledger_reason_idx\` ON \`economy_ledger\` (\`reason\`,\`ts\`);
 `;
 
-/** The coin ledger, the wallets, deals, fortune slips, goals, bounties and the 2.0 documents. */
+/**
+ * Gives back what a removed feature still held (phase 5, docs/design/v5-play.md §10): one
+ * `refund_removed` row per held ledger row (`held` selects their ids), shaped like a refund (the
+ * original row as `ref`, key `refund:<id>`), and its `economy.posted` event. A row that was
+ * refunded already is skipped, so it is safe to run on any database. The new ids are the
+ * original's with the first random character changed (still a ULID, and not the next one a
+ * monotonic generator would make); the event's balance is the person's
+ * own rows up to the refund. Versions 2 to 5 use it: never edit it once released.
+ */
+const refundHeld = (
+  held: string,
+): string => `INSERT INTO economy_ledger (id, person_id, delta, reason, ref, idem_key, ts)
+SELECT substr(e.id, 1, 10) || CASE substr(e.id, 11, 1) WHEN '0' THEN '1' ELSE '0' END || substr(e.id, 12),
+  e.person_id, -e.delta, 'refund_removed', e.id, 'refund:' || e.id,
+  CAST(strftime('%s', 'now') AS INTEGER) * 1000000
+FROM economy_ledger e
+WHERE e.delta < 0 AND e.id IN (${held})
+  AND NOT EXISTS (SELECT 1 FROM economy_ledger r WHERE r.ref = e.id
+    AND r.reason IN ('refund', 'refund_removed'));
+
+INSERT INTO events (id, at, type, v, source, person_id, scope, tier, key, data)
+SELECT substr(l.ref, 1, 10) || CASE substr(l.ref, 11, 1) WHEN '2' THEN '3' ELSE '2' END || substr(l.ref, 12),
+  l.ts, 'economy.posted', 1, 'economy',
+  CASE l.person_id WHEN 'self' THEN NULL ELSE l.person_id END, 'owner', 'keep',
+  'ledger:' || l.id,
+  json_object('entry_id', l.id, 'person_id', l.person_id, 'delta', l.delta, 'reason', l.reason,
+    'ref', l.ref, 'idem_key', l.idem_key, 'balance',
+    (SELECT SUM(b.delta) FROM economy_ledger b WHERE b.person_id = l.person_id AND b.seq <= l.seq))
+FROM economy_ledger l
+WHERE l.reason = 'refund_removed'
+  AND NOT EXISTS (SELECT 1 FROM events x WHERE x.key = 'ledger:' || l.id);`;
+
+/**
+ * Deals are gone: the escrow of every prepaid deal she had not yet done goes back to its payer (a
+ * `refund_removed` row), then the table is dropped. A paid deal (`settled`) already was hers.
+ */
+const RETIRE_DEALS = `${refundHeld(
+  "SELECT escrow_entry FROM economy_deals WHERE prepaid = 1 AND status = 'open' AND escrow_entry IS NOT NULL",
+)}
+
+DROP TABLE economy_deals;`;
+
+/**
+ * Commissions are gone: the price of every commission still waiting for her (its document is
+ * `open`; the document's id is the charge's ledger row) goes back to whoever paid it, and the
+ * document is marked declined with a note. Delivered, declined and expired commissions stay as
+ * documents: they are what people were given, and nothing reads them any more.
+ */
+const RETIRE_COMMISSIONS = `${refundHeld("SELECT id FROM economy_docs WHERE kind = 'commission' AND status = 'open'")}
+
+UPDATE economy_docs
+SET status = 'declined', version = version + 1,
+  updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000000,
+  data = json_set(data, '$.note', '委託功能已移除,錢已退回')
+WHERE kind = 'commission' AND status = 'open';`;
+
+/**
+ * Goals are gone: a pledge whose goal was never funded (no `goal_funds` row of the purse for it)
+ * goes back to its pledger, then both tables are dropped. The pledges of a funded goal were
+ * hers already and stay as spent.
+ */
+const RETIRE_GOALS = `${refundHeld(
+  "SELECT l.id FROM economy_ledger l WHERE l.reason = 'goal_pledge' AND NOT EXISTS (SELECT 1 FROM economy_ledger f WHERE f.reason = 'goal_funds' AND f.ref = l.ref)",
+)}
+
+DROP TABLE economy_goal_pledges;
+DROP TABLE economy_goals;`;
+
+/**
+ * Song tickets and dedications are gone: the singer's set list (the settings row `sing:setlist` of
+ * `plugin_state`) still holds the ledger rows of the ones charged for songs not yet sung (state
+ * `preparing`, `ready` or `playing`); they go back to their payers. A song sung already keeps its
+ * charge. A database without that row has nothing to give back.
+ */
+const RETIRE_SONG_EXTRAS = refundHeld(
+  `SELECT json_extract(e.value, '$.ticket_entry') FROM plugin_state s, json_each(s.value, '$.entries') e
+  WHERE s.plugin = 'settings' AND s.key = 'sing:setlist'
+    AND json_extract(e.value, '$.state') IN ('preparing', 'ready', 'playing')
+  UNION
+  SELECT json_extract(e.value, '$.dedication_entry') FROM plugin_state s, json_each(s.value, '$.entries') e
+  WHERE s.plugin = 'settings' AND s.key = 'sing:setlist'
+    AND json_extract(e.value, '$.state') IN ('preparing', 'ready', 'playing')`,
+);
+
+/** The coin ledger, the wallets, fortune slips, bounties and the 2.0 documents. */
 export const economySchema: PluginSchema = {
   plugin: "economy",
-  requires: ["identity"],
-  migrations: [{ version: 1, name: "init", sql: INIT }],
+  requires: ["identity", "config"],
+  migrations: [
+    { version: 1, name: "init", sql: INIT },
+    { version: 2, name: "retire_deals", sql: RETIRE_DEALS },
+    { version: 3, name: "retire_commissions", sql: RETIRE_COMMISSIONS },
+    { version: 4, name: "retire_goals", sql: RETIRE_GOALS },
+    { version: 5, name: "retire_song_extras", sql: RETIRE_SONG_EXTRAS },
+  ],
 };

@@ -9,7 +9,7 @@ import {
   replyEphemeral,
 } from "@miyoria/commands";
 import { ServiceRegistry } from "@miyoria/runtime/kernel";
-import type { AccountRef, ContextKey } from "@miyoria/types";
+import { type AccountRef, type ContextKey, type Keepsakes, KeepsakesKey } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { EconomyCommands, PATHS, walletText } from "../src/commands.js";
 import { STRANGER } from "../src/economy.js";
@@ -19,7 +19,6 @@ import {
   EconomyError,
   EconomyKey,
   type FeedItem,
-  type GoalView,
   type WalletView,
 } from "../src/types.js";
 
@@ -47,8 +46,8 @@ function view(over: Partial<WalletView> = {}): WalletView {
     frames: { owned: [], selected: null },
     hungry: "hungry",
     recent: [],
-    deals: [],
     on_board: false,
+    transfer_fee: 0.05,
     ...over,
   };
 }
@@ -61,7 +60,6 @@ interface Fake {
     fail: EconomyError | null;
     full: boolean;
     board: { rank: number; name: string; spent: number }[];
-    goals: GoalView[];
     bounties: BountyView[];
     screenOk: boolean;
   };
@@ -74,7 +72,6 @@ function fake(): Fake {
     fail: null as EconomyError | null,
     full: false,
     board: [] as { rank: number; name: string; spent: number }[],
-    goals: [] as GoalView[],
     bounties: [] as BountyView[],
     screenOk: true,
   };
@@ -96,7 +93,7 @@ function fake(): Fake {
     transfer: async (_a: AccountRef, to: AccountRef, amount: number, key: string) => {
       calls.push(`transfer:${to.platform}:${to.id}:${amount}:${key}`);
       if (state.fail) throw state.fail;
-      return { sent: amount, balance: 90, to: "Bob" };
+      return { sent: amount, fee: 2, balance: 90, to: "Bob" };
     },
     board: async (limit?: number) => {
       calls.push(`board:${limit}`);
@@ -109,22 +106,16 @@ function fake(): Fake {
         return { accepted: false, charged: 0, balance: 120, message: "現在沒有開台" };
       return { accepted: true, charged: 30, balance: 90, message: "留言送上大螢幕了" };
     },
-    letter: async (_a: AccountRef, text: string, key: string) => {
-      calls.push(`letter:${text}:${key}`);
+    danmaku: async (_a: AccountRef, text: string, key: string) => {
+      calls.push(`danmaku:${text}:${key}`);
       if (state.fail) throw state.fail;
-      return { accepted: true, charged: 20, balance: 100, message: "信送出去了,她有空會看" };
-    },
-    goals: async () => state.goals,
-    pledge: async (_a: AccountRef, goal: string, amount: number, key: string) => {
-      calls.push(`pledge:${goal}:${amount}:${key}`);
-      if (state.fail) throw state.fail;
+      if (!state.screenOk)
+        return { accepted: false, charged: 0, balance: 120, message: "這則彈幕沒辦法上螢幕" };
       return {
-        pledged: amount,
-        raised: 300 + amount,
-        target: 500,
-        reached: false,
-        balance: 70,
-        duplicate: false,
+        accepted: true,
+        charged: 5,
+        balance: 115,
+        message: "彈幕送出了,沒顯示出來的會自動退回",
       };
     },
     bounties: async () => state.bounties,
@@ -273,6 +264,107 @@ describe("wallet commands", () => {
     expect((await run(registry, "me feed", { item: "rice" })).tone).toBe("warn");
   });
 
+  it("checkin_adds_a_paid_fortune_slip_only_when_asked", async () => {
+    const f = fake();
+    const drawn: string[] = [];
+    let refuse: string | null = null;
+    const keepsakes = {
+      drawFortune: async (_who: unknown, key: string) => {
+        drawn.push(key);
+        if (refuse) return { ok: false, status: 402, message: refuse };
+        return {
+          ok: true,
+          value: {
+            id: "f1",
+            date: "2026-11-17",
+            rank: "大吉",
+            title: "春風得意",
+            poem: ["月落烏啼", "江楓漁火"],
+            fields: [],
+            line: null,
+          },
+          charged: 10,
+          balance: 120,
+        };
+      },
+    } as unknown as Keepsakes;
+    const registry = new CommandRegistry(Permissions.fromStrings(["discord:1"]));
+    const services = new ServiceRegistry();
+    services.provide("test", EconomyKey, f.economy);
+    services.provide("test", KeepsakesKey, keepsakes);
+    new EconomyCommands().install(registry, services);
+
+    // Dispatches like the platform does: a follow-up is what the buyer alone sees.
+    const asWith = async (args: Record<string, string | number | boolean>, canFollow = true) => {
+      const followUps: CommandReply[] = [];
+      const reply = await registry.dispatch(
+        {
+          path: ["me", "checkin"],
+          args,
+          invoker: acct("5"),
+          invoker_display_name: "Bob",
+          context: ctx,
+          invoker_is_guild_admin: false,
+        },
+        canFollow ? { followUp: async (r: CommandReply) => void followUps.push(r) } : {},
+      );
+      return { reply, followUps };
+    };
+
+    const plain = await run(registry, "me checkin");
+    expect(plain.text).not.toContain("春風得意");
+    expect(drawn).toHaveLength(0);
+
+    // The shared reply says a slip was drawn, never what it says; the slip is a private follow-up.
+    const asked = await asWith({ fortune: true });
+    expect(asked.reply.text).toContain("簽到了，+10 魚幣");
+    expect(asked.reply.text).toContain("籤詩花了 10 魚幣，剩 120");
+    expect(asked.reply.text).toContain("只有你看得到");
+    expect(asked.reply.text).not.toContain("春風得意");
+    expect(asked.reply.text).not.toContain("月落烏啼");
+    expect(asked.followUps).toHaveLength(1);
+    expect(asked.followUps[0]?.ephemeral).toBe(true);
+    expect(asked.followUps[0]?.text).toContain("大吉　春風得意");
+    expect(asked.followUps[0]?.text).toContain("月落烏啼\n江楓漁火");
+    expect(drawn).toHaveLength(1);
+
+    // Where a private message cannot be sent, the slip is not put in the shared reply either.
+    const noFollow = await asWith({ fortune: true }, false);
+    expect(noFollow.reply.text).toContain("會員頁");
+    expect(noFollow.reply.text).not.toContain("春風得意");
+
+    // The slip is refused: the check-in stands, with the reason under it, and nothing private.
+    refuse = "魚幣不夠";
+    const short = await asWith({ fortune: true });
+    expect(short.reply.text).toContain("簽到了，+10 魚幣");
+    expect(short.reply.text).toContain("魚幣不夠");
+    expect(short.followUps).toHaveLength(0);
+    refuse = null;
+
+    // Already checked in: the slip alone is bought, with no second check-in and no reward.
+    f.state.view = view({ checked_in_today: true });
+    const checkins = f.calls.filter((c) => c === "checkin").length;
+    const before = drawn.length;
+    const only = await asWith({ fortune: true });
+    expect(only.reply.text).toContain("今天已經簽到過了");
+    expect(only.reply.text).not.toContain("簽到了，+");
+    expect(only.followUps[0]?.text).toContain("春風得意");
+    expect(drawn).toHaveLength(before + 1);
+    expect(f.calls.filter((c) => c === "checkin")).toHaveLength(checkins);
+    // Without the add-on, a second check-in is still the economy's own refusal.
+    f.state.fail = new EconomyError(409, "今天已經簽到過了");
+    const plainAgain = await run(registry, "me checkin");
+    expect(plainAgain.text).toBe("今天已經簽到過了");
+    expect(drawn).toHaveLength(before + 1);
+    f.state.fail = null;
+
+    // Without the service the check-in still stands.
+    const bare = setup();
+    const none = await run(bare.registry, "me checkin", { fortune: true });
+    expect(none.text).toContain("簽到了");
+    expect(none.text).toContain("籤詩現在抽不了");
+  });
+
   it("without_the_economy_the_commands_say_so", async () => {
     const { registry } = setup(false);
     const reply = await run(registry, "me wallet");
@@ -302,24 +394,25 @@ describe("wallet commands", () => {
       ["餵一碗", "me feed", { item: "rice" }],
       ["餵鋼盆", "me feed", { item: "big_bowl" }],
       ["留言上大螢幕", "me screen", undefined],
+      ["發彈幕", "me danmaku", undefined],
       ["轉給別人", "me give", undefined],
       ["排行榜", "me board", undefined],
     ]);
     const screen = page?.actions.find((a) => a.id === "screen");
     expect(screen?.ask?.fields.map((f) => f.arg)).toEqual(["text"]);
+    const danmaku = page?.actions.find((a) => a.id === "danmaku");
+    expect(danmaku?.ask?.fields.map((f) => f.arg)).toEqual(["text"]);
     expect(page?.actions.find((a) => a.id === "give")?.ask?.fields.map((f) => f.arg)).toEqual([
       "user",
       "amount",
     ]);
   });
 
-  it("the_me_panel_has_a_wishes_page_for_goals_and_bounties", () => {
+  it("the_me_panel_has_a_wishes_page_for_bounties", () => {
     const me = panelDefs().find((d) => d.command === "me");
     const page = me?.pages.find((p) => p.id === "wishes");
-    expect(page?.status?.map((s) => s.path)).toEqual(["me goals", "me bounties"]);
+    expect(page?.status?.map((s) => s.path)).toEqual(["me bounties"]);
     expect(page?.actions.map((a) => [a.path, a.ask?.fields.map((f) => f.arg)])).toEqual([
-      ["me pledge", ["amount"]],
-      ["me goals", undefined],
       ["me bounties", undefined],
     ]);
   });
@@ -340,85 +433,20 @@ describe("wallet commands", () => {
     expect((await run(registry, "me screen", { text: "  " })).tone).toBe("warn");
   });
 
-  it("letter_is_private_and_a_stranger_or_empty_text_gets_plain_information", async () => {
+  it("danmaku_sends_one_line_and_every_refusal_is_plain_information", async () => {
     const { registry, calls, state } = setup();
-    expect(registry.get(["me", "letter"])?.ephemeral).toBe(true);
-    const reply = await run(registry, "me letter", { text: " 謝謝你 " });
-    expect(reply.text).toContain("信送出去了,她有空會看，花了 20 魚幣，剩 100");
-    expect(calls[0]).toMatch(/^letter:謝謝你:discord:/);
-    expect((await run(registry, "me letter", { text: " " })).tone).toBe("warn");
-    state.fail = new EconomyError(403, "她還不認識你");
-    expect((await run(registry, "me letter", { text: "嗨" })).tone).toBe("info");
-  });
-
-  it("goals_show_the_open_one_with_my_pledge_and_quick_buttons", async () => {
-    const { registry, state, calls } = setup();
-    expect((await run(registry, "me goals")).text).toContain("沒有開著的目標");
-    const goal = (over: Partial<GoalView>): GoalView => ({
-      id: "g1",
-      title: "新泳裝",
-      promise: "穿給大家看",
-      target: 500,
-      raised: 300,
-      my_pledge: 40,
-      deadline: "2026-11-10T00:00:00.000Z",
-      status: "open",
-      fulfilled: false,
-      ...over,
-    });
-    state.goals = [goal({}), goal({ id: "g0", title: "舊的", status: "expired" })];
-    const reply = await run(registry, "me goals");
-    expect(reply.card?.title).toBe("她的目標");
-    expect(reply.text).toContain("新泳裝");
-    expect(reply.text).toContain("她答應：穿給大家看");
-    expect(reply.text).toContain("300 / 500 魚幣");
-    expect(reply.text).toContain("你投了 40");
-    expect(reply.text).toContain("舊的");
-    expect(buttons(reply).map((b) => b.label)).toEqual(["投 10", "投 50"]);
-
-    const pressed = await press(registry, "mi:me:goal:pledge:g1:50");
-    expect(pressed?.ephemeral).toBe(true);
-    expect(replyOf(pressed).text).toContain("現在 350 / 500");
-    expect(calls[0]).toMatch(/^pledge:g1:50:discord:/);
-    // A forged amount never reaches the ledger.
-    expect(replyOf(await press(registry, "mi:me:goal:pledge:g1:9999")).tone).toBe("error");
-    expect(calls).toHaveLength(1);
-
-    state.view = view({ can_earn: false });
-    expect(buttons(await run(registry, "me goals"))).toEqual([]);
-    // A reached goal says whether she kept the promise yet.
-    state.goals = [goal({ id: "g2", title: "唱歌", status: "reached" })];
-    expect((await run(registry, "me goals")).text).toContain("上一個：唱歌　達成了，她還沒做到");
-    state.goals = [goal({ id: "g2", title: "唱歌", status: "reached", fulfilled: true })];
-    expect((await run(registry, "me goals")).text).toContain("上一個：唱歌　達成了，她做到了");
-  });
-
-  it("pledge_goes_to_the_open_goal_privately_and_refusals_are_plain", async () => {
-    const { registry, state, calls } = setup();
-    expect(registry.get(["me", "pledge"])?.ephemeral).toBe(true);
-    const none = await run(registry, "me pledge", { amount: 20 });
-    expect(none.text).toContain("沒有開著的目標");
-    expect(calls).toHaveLength(0);
-    state.goals = [
-      {
-        id: "g1",
-        title: "t",
-        promise: "p",
-        target: 500,
-        raised: 0,
-        my_pledge: 0,
-        deadline: "2026-11-10T00:00:00.000Z",
-        status: "open",
-        fulfilled: false,
-      },
-    ];
-    const reply = await run(registry, "me pledge", { amount: 20 });
-    expect(reply.text).toBe("投了 20 魚幣，現在 320 / 500，剩 70。");
-    expect(calls[0]).toMatch(/^pledge:g1:20:discord:/);
-    state.fail = new EconomyError(429, "每個目標最多投 200 魚幣");
-    const refused = await run(registry, "me pledge", { amount: 20 });
-    expect(refused.text).toBe("每個目標最多投 200 魚幣");
-    expect(refused.tone).toBe("info");
+    expect(registry.get(["me", "danmaku"])?.ephemeral).toBeFalsy();
+    const reply = await run(registry, "me danmaku", { text: " 好可愛 " });
+    expect(reply.text).toBe("彈幕送出了,沒顯示出來的會自動退回。花了 5 魚幣，剩 115。");
+    expect(reply.card?.accent).toBe("neutral");
+    expect(calls[0]).toMatch(/^danmaku:好可愛:discord:/);
+    state.screenOk = false;
+    expect((await run(registry, "me danmaku", { text: "嗨" })).text).toBe("這則彈幕沒辦法上螢幕");
+    state.fail = new EconomyError(409, "她現在沒有開台,彈幕發不出去");
+    const down = await run(registry, "me danmaku", { text: "嗨" });
+    expect(down.tone).toBe("info");
+    expect(down.text).toContain("她現在沒有開台");
+    expect((await run(registry, "me danmaku", { text: "  " })).tone).toBe("warn");
   });
 
   it("bounties_list_what_she_has_posted", async () => {
@@ -444,7 +472,7 @@ describe("wallet commands", () => {
     const spec = registry.get(["me", "give"]);
     expect(spec?.ephemeral).toBe(true);
     const reply = await run(registry, "me give", { user: "77", amount: 25 });
-    expect(reply.text).toBe("轉了 25 魚幣給 Bob，剩 90。");
+    expect(reply.text).toBe("轉了 25 魚幣給 Bob，另付手續費 2（燒掉），剩 90。");
     expect(reply.card?.accent).toBe("neutral");
     expect(calls[0]).toMatch(/^transfer:discord:77:25:discord:/);
     // Another platform's account is not someone one can reach, in the receiver's usual words.

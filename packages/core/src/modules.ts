@@ -5,7 +5,7 @@
 // which is there before anything can say a word): llm, cluster, speech, voice.link, voice, scheduler, agent, commands,
 // auth, actions, directive, activity, heart, world, self, memory, arbiter, mind, knowledge, conversation,
 // reflect, queue, game, game.chat, sing, mcp,
-// stage.link, economy, web, sandbox (opt-in), imagegen (opt-in), party, eval, Discord bot, Admin API, terminal chat, then the
+// stage.link, economy, cards, market, web, sandbox (opt-in), imagegen (opt-in), party, eval, Discord bot, Admin API, terminal chat, then the
 // extension host and one `ext.<id>` per extension. `facts` also writes the raw record (chat lines,
 // her decisions, how each turn ended) from the bus.
 
@@ -40,7 +40,10 @@ import { FactsModule } from "@miyoria/memory/facts";
 import { ConversationModule, KnowledgeModule, ReflectModule } from "@miyoria/memory/learning";
 import { EmbeddingConfigSchema, MemoryModule } from "@miyoria/memory/memory";
 import { WorldModule } from "@miyoria/memory/world";
+import { CardsModule } from "@miyoria/play/cards";
 import { GameChatModule, GameHandleKey, GameModule } from "@miyoria/play/game";
+import { KaraokeModule } from "@miyoria/play/karaoke";
+import { MarketModule } from "@miyoria/play/market";
 import { PartyModule } from "@miyoria/play/party";
 import { QueueModule } from "@miyoria/play/queue";
 import * as extHost from "@miyoria/plugin-host/ext-host";
@@ -51,14 +54,15 @@ import { SchedulerModule } from "@miyoria/runtime/scheduler";
 import { SingModule } from "@miyoria/sing";
 import {
   AvatarProfile,
-  applyObsSetup,
+  MIYORIA,
+  type ObsPlaceStep,
+  type ObsSetupReport,
   type ObsSetupStep,
   ObsWebSocketAdmin,
   overlayUrl,
   parseStageConfig,
-  planObsSetup,
+  runObsSetup,
   runStage,
-  SOURCES,
   StageLinkModule,
 } from "@miyoria/stage";
 import { openStore as openStoreBackend, type Store } from "@miyoria/store";
@@ -209,6 +213,12 @@ async function coreModules({
     McpModule.fromAppConfig(config),
     new StageLinkModule(),
     new EconomyModule(profileId),
+    // Her cards for each person: the daily card, the odds, the pity, the dex and wishlists.
+    new CardsModule(),
+    // The weekly market: the song priority ticket, the weekly auction and the weekly lottery.
+    new MarketModule(),
+    // Karaoke on the member page: songs prepared on the song workers, scored again by Core.
+    new KaraokeModule({ baseDir }),
     new WebModule(),
     new SandboxModule(profileId, { baseDir }),
     new ImageGenModule({ baseDir, endpoints }),
@@ -271,9 +281,17 @@ export async function runStageNode(
 /** Default scene names when `[modules."stage.link".scenes] roles` names none. */
 const DEFAULT_SCENES = { sing: "唱歌", chat: "聊天" } as const;
 
+/** What `setupStageObs` did, and what `[stage.obs]` says now. */
+export interface StageObsSetupResult extends ObsSetupReport {
+  /** `[stage.obs] collection` / `profile` as the config has them. */
+  configured: { collection: string | null; profile: string | null };
+}
+
 /**
- * `miyoria stage obs-setup`: plans Miyoria's OBS layout against the OBS of `[stage.obs]` and,
- * unless `dryRun`, applies it. Returns the steps (each also goes to `onStep` as it runs).
+ * `miyoria stage obs-setup`: in the OBS of `[stage.obs]`, creates or switches to Miyoria's scene
+ * collection and profile (`collection` / `profile`: `undefined` = `[stage.obs]`'s, else
+ * `Miyoria`; `null` = keep the current one), then plans Miyoria's layout there and, unless
+ * `dryRun`, applies it. Each step also goes to `onStep` as it runs.
  */
 export async function setupStageObs(
   config: Config,
@@ -281,9 +299,12 @@ export async function setupStageObs(
     baseDir?: string;
     dryRun?: boolean;
     relayout?: boolean;
-    onStep?: (step: ObsSetupStep) => void;
+    collection?: string | null;
+    profile?: string | null;
+    profileSettings?: boolean;
+    onStep?: (step: ObsSetupStep | ObsPlaceStep) => void;
   } = {},
-): Promise<ObsSetupStep[]> {
+): Promise<StageObsSetupResult> {
   const baseDir = options.baseDir ?? process.cwd();
   const stage = parseStageConfig(config.section("stage") ?? {});
   const link = config.module("stage.link").config;
@@ -294,24 +315,37 @@ export async function setupStageObs(
   if (url === null) throw new Error(`[stage] overlay_bind 不是有效的位址:${stage.overlay_bind}`);
   const admin = await ObsWebSocketAdmin.connect(stage.obs);
   try {
-    const steps = planObsSetup(await admin.snapshot(SOURCES.frame), {
-      overlayUrl: url,
-      videoSource: stage.obs.song_video_source ?? "Miyoria 歌曲影片",
-      maskPath: resolve(baseDir, stage.data_dir, "mask-video-rounded.png"),
-      scenes: {
-        sing: role("sing") ?? DEFAULT_SCENES.sing,
-        chat: role("chat") ?? DEFAULT_SCENES.chat,
-        game: role("game"),
-        threads: role("threads"),
+    const report = await runObsSetup(
+      admin,
+      {
+        layout: {
+          overlayUrl: url,
+          videoSource: stage.obs.song_video_source ?? "Miyoria 歌曲影片",
+          maskPath: resolve(baseDir, stage.data_dir, "mask-video-rounded.png"),
+          scenes: {
+            sing: role("sing") ?? DEFAULT_SCENES.sing,
+            chat: role("chat") ?? DEFAULT_SCENES.chat,
+            game: role("game"),
+            threads: role("threads"),
+          },
+          relayout: options.relayout ?? false,
+        },
+        place: {
+          collection:
+            options.collection === undefined
+              ? (stage.obs.collection ?? MIYORIA)
+              : options.collection,
+          profile: options.profile === undefined ? (stage.obs.profile ?? MIYORIA) : options.profile,
+          profileSettings: options.profileSettings ?? false,
+        },
+        dryRun: options.dryRun ?? false,
       },
-      relayout: options.relayout ?? false,
-    });
-    if (options.dryRun) {
-      for (const step of steps) options.onStep?.(step);
-    } else {
-      await applyObsSetup(admin, steps, options.onStep);
-    }
-    return steps;
+      options.onStep ? { onStep: options.onStep } : {},
+    );
+    return {
+      ...report,
+      configured: { collection: stage.obs.collection, profile: stage.obs.profile },
+    };
   } finally {
     await admin.close().catch(() => {});
   }

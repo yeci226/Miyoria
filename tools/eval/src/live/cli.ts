@@ -1,4 +1,4 @@
-// `pnpm eval --live --config <miyoria.toml> [--suite persona,tools,relationship,memory,corrections] [--subject self]
+// `pnpm eval --live --config <miyoria.toml> [--suite persona,tools,relationship,memory,corrections,feel,play] [--subject self]
 //  [--repeat k] [--max-usd 0.5] [--out <dir>] [--profile <dir>] [--seed <text>]`
 //
 // Runs the live suites against the real model and writes the run to `--out` (default
@@ -12,6 +12,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PersonaHandle } from "@miyoria/brain/agent";
 import type { LlmRouter } from "@miyoria/llm/llm";
 import { errorMessage } from "@miyoria/runtime/kernel";
 import { Profile } from "@miyoria/runtime/profile";
@@ -136,9 +137,11 @@ export async function liveMain(argv: readonly string[], hooks: LiveHooks = {}): 
       subject,
       judge: routerJudge(model.router),
       meter: model.meter,
+      router: model.router,
       registry,
       suites,
       persona: profile.personaPrompt(),
+      handle: new PersonaHandle(profile),
       repeat,
       ...(seed === undefined ? {} : { seed }),
       commit: commitOf(REPO),

@@ -276,6 +276,7 @@ function stageState(state: ApiState, link: StageLink): StageState {
     speaking: state.monitor.speaking(),
     node,
     streaming: status.streaming,
+    obs_warning: node !== null && status.obs ? status.obs_warning : null,
   };
 }
 

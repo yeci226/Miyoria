@@ -203,6 +203,10 @@ token = "${MIYORIA_API_TOKEN:-}"
 # (Prometheus 用 authorization.credentials 帶 token)。設成 true 就不用驗證,
 # 但連得到 bind 位址(或前面的反向代理)的人都看得到。
 # metrics_public = false
+# 圖片訊息(錢包、個人卡、每週回顧、圖鑑、機率表這類算出來的圖)背後的那張圖,
+# 相對於工作目錄。留空 = 公開頁現在那一張(面板資料夾裡的 background.local.jpg);
+# 兩個都沒有就用面板的暮色漸層。
+# picture_background = ""
 
 # 管理面板用 Discord 登入(token 照樣能用)。三個值都填才會開啟;
 # redirect_uri 要跟 Developer Portal → OAuth2 → Redirects 裡的一模一樣,
@@ -365,7 +369,7 @@ dirs = ["extensions"]
 # currency = "魚幣"
 # checkin = 10                # 每天簽到一次(面板和 Discord 合計)
 # streak_bonus = 20           # 連續簽到的第 7、14、21… 天多給
-# talked = 10                 # 當天她看到你說過話(文字或語音),一天一次
+# talked = 5                  # 當天她看到你說過話(文字或語音),一天一次
 # voice_per_10min = 2         # 在她的語音頻道,而且這 10 分鐘裡有開口
 # voice_cap = 20
 # song_finished = 5           # 你點的歌她唱完了
@@ -375,58 +379,50 @@ dirs = ["extensions"]
 # rice = 10                   # 一碗白飯:hunger −0.15
 # big_bowl = 40               # 大碗(鋼盆):hunger −0.5,開台時出現钢盆表情幾秒
 # dessert = 25                # 甜點:hunger −0.05
-# letter = 15                 # 一封信(120 字內),她有空時讀
-# expression = 20             # 送她表情(愛心眼、臉紅、＞＜):開台中、沒在唱歌時;沒送出去就退錢
-# expression_cooldown_s = 600 # 每個人多久能送一次表情
-# full_below = 0.15           # hunger 低於這個就是吃飽了:不收、不扣錢
+# expression = 20             # 她用自己的錢包給自己換一個表情(buy_for_self):開台中、沒在唱歌時;沒出來就退回
+# feed_hunger_cap = 0.85      # 一個人一天最多讓她少餓多少(白飯 0.15、鋼盆 0.5、甜點 0.05);超過就吃不下、不扣錢
 # diminish = 0.6              # 同一個人當天第 n 份禮物,情緒乘上 0.6^(n-1)
-# gift_affinity = 0.4         # 每份付錢的禮物(餵食、表情,不含信)加的好感,再乘社交引擎的遞減
+# gift_affinity = 0.4         # 每份付錢的禮物(餵食)加的好感,再乘社交引擎的遞減
 # gift_trust = 0.1            # ...和信任
 # gift_affinity_cap = 1.5     # 禮物本身每人每天最多加的好感(也算進一般每日上限)
 # gift_trust_cap = 0.5        # ...和信任
-# deal_due_s = 600            # 約定:她說做完後,對方多久內要付
-# deal_timeout_s = 900        # 約定:她沒在這段時間內做完就作廢,託管退回
-# deals_per_day = 5           # 每個人每天最多幾個約定
-# deal_sweep_s = 30           # 多久掃一次到期的約定
-# deal_kept_trust = 0.3       # 約定付清了,多加的信任
-# broken_trust = 4            # 食言(她做了、沒收到):信任扣多少,不受每日增加上限限制
-# broken_affinity = 1.5       # ...好感扣多少
-# broken_growth = 1.5         # 同一個人之後每次食言扣的倍數
-# broken_cap = 3              # ...最多到第一次的幾倍
 # # ---- 花在卡片、歌、畫面上(docs/design/economy.md §13):價格,和一個人一天最多買幾次(每日 0 = 下架;退款的不算)
-# card_reroll = 30            # 重抽今天最新的一張卡(舊的作廢,她重新發一張)
-# card_rerolls_per_day = 2
-# card_pose = 20              # 選下一張卡用她的哪張圖(限好感等級允許的)
-# card_poses_per_day = 5
 # card_foil = 50              # 下一張卡的亮面,只是外觀
 # card_foils_per_day = 5
-# song_ticket = 25            # 超過每人點歌上限再多點一首;她沒唱就退錢
-# song_tickets_per_day = 3
-# dedication = 15             # 點歌附一句獻給誰,唱之前她會說,也顯示在 overlay
-# dedications_per_day = 3
 # screen_message = 30         # 在直播 overlay 顯示一則短訊息(她可能念出來)
 # screen_messages_per_day = 10
 # screen_message_cooldown_s = 600   # 每個人多久能送一則
-# fortune = 10                # 她幫你寫一張籤
+# # ---- 直播彈幕(docs/design/v5-play.md §11.6):她開台時,會員花魚幣發一則從畫面右邊飄過的短句。
+# # 送出時扣款,overlay 沒顯示出來(直播機沒連上、還沒輪到就關台、排隊滿了或等太久)就自動退回。
+# # 她不會每一則都被問:每 danmaku_note_s 秒最多收到一則摘要,裡面有幾則彈幕。不念出來。
+# # 不讓某個人發:/admin person tag user:<他> tag:no_danmaku
+# danmaku_on = true
+# danmaku = 5                 # 一則多少魚幣(燒掉,算進回收)
+# danmaku_max_chars = 30      # 最多幾個字(1 到 100)
+# danmaku_cooldown_s = 20     # 每個人隔多久能再發
+# danmaku_per_day = 50        # 每個人一天最多幾則(退回的不算)
+# danmaku_max_on_screen = 12  # 畫面上最多幾則,其他的排隊
+# danmaku_show_names = true   # 彈幕前面用小字寫發的人
+# danmaku_note_s = 60         # 多久告訴她一次(沒有彈幕就不說)
+# danmaku_queue_max = 20      # overlay 上最多幾則在排隊,再多的直接退回
+# danmaku_max_wait_s = 30     # 排隊超過這麼久就不顯示、退回
+# fortune = 10                # 簽到時加買的籤詩,她幫你寫一張
 # fortunes_per_day = 1
 # # ---- 人和人之間(§13):transfer_max = 0 或任一個每日上限 = 0 就關閉轉帳
-# transfer_max = 50           # 一次轉帳最多
+# transfer_max = 50           # 一次轉帳最多(收到的數量)
+# transfer_fee = 0.05         # 手續費:轉出數量的這個比例,進位、至少 1,由轉的人另付,燒掉(0 就不收)
 # transfer_out_per_day = 100  # 一個人一天最多轉出
 # transfer_in_per_day = 100   # 一個人一天最多收到
 # board_days = 30             # 贊助榜統計過去幾天花在她身上的
 # # ---- 她自己的錢包(§13):付費禮物的一部分是她的
-# her_share = 0.2             # 付費禮物(餵食、信、表情、螢幕訊息、獻詞)她留多少比例
+# her_share = 0.2             # 付費禮物(餵食、螢幕訊息、獻詞)她留多少比例
 # treat_per_person = 30       # 她請一個人一天最多
 # treat_total = 100           # 她請所有人一天最多
 # self_expressions_per_day = 3   # 她自己買表情一天幾次(價格是 expression)
-# goal_max_target = 2000      # 集資目標:一個最多要多少
-# goal_max_days = 7           # 最久開幾天
-# goal_pledge_max = 500       # 一個人最多出多少
-# goal_keep_days = 3          # 結束的目標留在清單上幾天
 # bounty_max = 50             # 懸賞:一個最多付多少
 # bounties_open = 3           # 同時最多幾個
 # bounty_days = 3             # 一個開幾天
-# agency_sweep_s = 60         # 多久結算一次結束的集資和懸賞
+# agency_sweep_s = 60         # 多久結算一次結束的懸賞
 # # ---- 經濟 2.0(docs/design/v4-plan.md §10)------------------------------------------------
 # # 一起玩、參與(play.ts):各種活動給多少、一種活動一天最多給一個人幾次、全部加起來一天最多。0 = 關掉
 # play_rewards = { game_join = 5, game_finish = 10, game_win = 5, sing_along = 5, headpat = 1, web_reaction = 1, prediction_join = 3 }
@@ -441,19 +437,6 @@ dirs = ["extensions"]
 # achievement_small = 10
 # achievement_big = 30
 # achievement_cap = 60
-# # 收藏(抽卡):一次多少、一天幾次、機率(權重,公開)、幾抽沒出 SR 以上就保底一張(0 = 不保底)
-# draw_price = 30
-# draws_per_day = 10
-# rarity_weights = { N = 70, R = 22, SR = 7, SSR = 1 }
-# draw_pity = 30
-# item_gifts_per_day = 3      # 一個人一天最多送出幾件收藏(0 = 不能送)
-# # collection_series = [ ... ] # 系列和收藏品(預設三個系列:眼鏡、手上的東西、背景);每個 { id, label, title, items = [{ id, label, rarity }] }
-# # 委託:各種的價格(0 = 不接那一種)、一個人一天最多幾件、同時最多幾件等她、幾天沒動就退回、她留下送達價格的幾成
-# commission_prices = { poem = 40, name = 30, tool = 120, song = 80, voice = 60 }
-# commissions_per_day = 3
-# commissions_open = 10
-# commission_days = 3
-# commission_share = 0.5
 # # 預測:一個人一場最多下注、一天最多、最長開放幾分鐘、同時最多幾場、關閉後沒結算幾小時就退回全部賭注
 # bet_max = 50
 # bet_daily_max = 100
@@ -462,10 +445,6 @@ dirs = ["extensions"]
 # prediction_expire_hours = 24
 # # 她的房間:大家一起出錢買的家具、衣服、背景(room_items = [{ id, label, kind = "furniture" | "outfit" | "background", price }])
 # room_pledge_max = 100       # 一個人對一件最多出多少
-# # 她每週的小店:可以進貨什麼(shop_catalog,每項 { id, label, kind(title 或 collectible), price, item })、一週上架幾件、賣出的錢她留幾成(其餘離開經濟)
-# shop_slots = 4              # 1 到 20
-# shop_her_share = 0.5
-# owe_days = 14               # 食言後「欠她一餐」算幾天,直到你餵她
 # # 經濟健康表:顯示幾天,和一週內發出去的幣被收回的比例低於多少就標「通膨」
 # health_days = 14            # 1 到 90
 # health_warn_ratio = 0.6
@@ -475,6 +454,124 @@ dirs = ["extensions"]
 #   { id = "abyss", label = "深海", price = 150 },
 #   { id = "gold", label = "金框", price = 300 },
 # ]
+
+# 她給你的卡(docs/design/v5-play.md §2、cards.md):每日卡用魚幣買,每天第一張也要錢;部件照公開的機率抽,
+# 表情由你們的關係決定,買不到也抽不到。卡不能交易、不能送。卡框和閃卡在 [modules.economy](frames、card_foil)。
+# 舊的「抽收藏」拿掉了,已經有的收藏留在圖鑑的「舊收藏」。下面都是預設值。
+# 不用錢的卡(不必設定):羈絆升到沒到過的分級時一張里程碑卡(每一級一張,最多 15 張);
+# 從舊紀錄搬過來的人第一次看自己的卡時一張紀念卡。都不算進每天的張數,也不動保底。
+# [modules.cards]
+# enabled = true
+# price = 30                  # 一張每日卡多少魚幣
+# daily_cap = 5               # 一個人一天最多幾張(她的當地日)
+# pity = 20                   # 連續幾張沒有 SR 以上的部件,下一張保證有
+# rarity_weights = { N = 70, R = 22, SR = 7, SSR = 1 }   # 稀有度的權重(公開的機率表照這個算)
+# utc_offset_minutes = 480    # 「今天」從哪個時區的午夜開始算
+# # 卡上的立繪(docs/design/cards.md §6):live2d = 照抽到的部件和表情用她的 Live2D 模型現場算圖,
+# # 算不出來(沒設模型、card-studio 沒建置、沒有 Edge / Chrome)就用 10 張固定立繪;fixed = 一律用固定立繪
+# portrait = "live2d"
+# portrait_model = "C:/Program Files (x86)/Steam/steamapps/common/VTube Studio/VTube Studio_Data/StreamingAssets/Live2DModels/DeepSeek-chan/大肥鱼.model3.json"   # 沒設 = 用固定立繪
+# portrait_studio = "tools/card-studio"        # card-studio 的資料夾(照它的 vendor.md 放好 Live2D 的檔案再 build)
+# portrait_cache = "data/cards/portraits"     # 算好的圖,依「抽到什麼」的雜湊存,同一張卡只算一次
+# portrait_cache_max_mb = 2048                # 算好的圖最多佔多少 MB(一張約 1 MB);超過就刪最久沒用到的,要用時再算
+# portrait_browser = "msedge"                 # 無頭瀏覽器:msedge 或 chrome
+# portrait_timeout_secs = 30                  # 一張圖最多等多久
+# # 頻道裡的掉落(v5-play.md §6.2):頻道熱鬧時她偶爾丟一張卡,第一個按「撿起來」的人拿走(免費,帶一個只有掉落才有的部件)
+# drops = false               # 預設關;開了也只在 drop_channels 列的頻道
+# drop_channels = []          # 要掉落的頻道 id,例如 ["123456789012345678"]
+# drop_window_mins = 10       # 熱鬧 = 這幾分鐘內
+# drop_min_people = 3         #   至少這麼多人
+# drop_min_lines = 20         #   一共說了這麼多句(她自己、機器人的不算)
+# drop_chance = 0.25          # 熱鬧時掉一張的機率,一段時間只擲一次
+# drops_per_channel_day = 2   # 一個頻道一天最多幾次
+# drop_gap_mins = 120         # 同一個頻道兩次之間至少隔多久
+# drop_delay_min_secs = 30    # 決定要掉之後隨機等一下才出現,不能算準
+# drop_delay_max_secs = 180
+# drop_expire_mins = 10       # 沒人撿就飄走
+# drops_per_person_day = 1    # 一個人一天最多撿幾張;上一張是你撿的,同一個頻道的下一張你撿不到
+
+# 每週的市集(docs/design/v5-play.md §4.5、§11.4):點歌優先券、每週拍賣、每週樂透。下面都是預設值。
+# 魚幣都走經濟的帳本;得標的錢、用掉的優先券和三成的樂透會燒掉。她自己不能出價、買券或中獎。
+# [modules.market]
+# enabled = true
+# utc_offset_minutes = 480    # 「今天」「這週」從哪個時區算
+# # ---- 點歌優先券:/queue song request 加 priority(會員頁點歌也能勾),排到沒用券的歌前面;用券的照先後
+# song_priority = 40          # 一張多少魚幣;歌沒準備成功或被取消就退回
+# song_priority_per_day = 2   # 一個人一天最多幾張(0 = 不賣)
+# # ---- 每週拍賣:一週一件,在 auction_channel 公開出價(按鈕加表單),出價先押住,被超過就馬上退回
+# auction = true              # false = 不開新的;正在拍的取消,押著的全退
+# auction_channel = ""        # 拍賣的頻道 id;留空 = 不辦拍賣
+# auction_weekday = 6         # 星期幾開(0 = 星期日 … 6 = 星期六)
+# auction_time = "20:00"      # 幾點開(她的時間)
+# auction_hours = 24          # 開多久
+# auction_opening_bid = 50    # 起標
+# auction_step = 5            # 每次至少加多少
+# auction_extend_mins = 5     # 最後幾分鐘有人出價就延長這麼久(0 = 不延長)
+# auction_extend_max_mins = 30   # 延長最多到原本結束後幾分鐘(0 = 不延長)
+# auction_lots = ["frame"]    # 拍什麼:只此一件的卡框;加 "call_name"(這一週她怎麼叫你)才會拍稱呼。不只一種時她挑,沒有模型就輪流
+# auction_call_days = 7       # 得標的稱呼用幾天,之後換回原本的
+# auction_name_hours = 72     # 得標的人幾小時內要給一個她接受的稱呼,不然退款
+# auction_purpose = "market"  # 她挑拍品用的模型([llm.purposes];沒設 = 聊天那一組)
+# # ---- 每週樂透:依張數抽一個人;少於 lottery_min_buyers 個人買就不開獎、全額退回
+# lottery = true              # false = 不賣;這週已經賣的全額退回
+# lottery_channel = ""        # 每週公告和開獎發在哪;留空 = 拍賣的頻道(兩個都空就不公告)
+# lottery_price = 10          # 一張多少魚幣
+# lottery_per_week = 20       # 一個人一週最多幾張
+# lottery_prize_share = 0.7   # 獎金是賣出的這個比例,其餘燒掉
+# lottery_weekday = 0         # 星期幾開獎(0 = 星期日)
+# lottery_time = "20:00"
+# lottery_min_buyers = 3      # 至少幾個不同的人買才開獎
+
+# 唱 K 第一步(docs/design/karaoke.md「做了什麼(第一步)」):會員頁一個人唱。貼連結或打歌名,
+# 唱歌 worker 做伴唱軌和參考旋律;在自己的瀏覽器唱、算音高,唱完 Core 用同一份評分重算,
+# 她在講評頻道講一句。麥克風的聲音不離開瀏覽器,只送每秒 50 格的音高軌(留 7 天)。沒有魚幣。
+# [modules.karaoke]
+# enabled = true
+# utc_offset_minutes = 480    # 「今天」從哪個時區算(每人每天的上限)
+# open = true                 # false = 會員不能點歌、唱、開房間;唱完的結果照常;面板管理員關著時也能用,可以先試
+# max_song_secs = 480         # 一首最長幾秒,超過的準備失敗
+# daily_songs = 10            # 每人每天能準備幾首新歌;已經準備好的歌不算(0 = 只能唱準備好的)
+# tolerance_cents = 50        # 離原唱幾 cents 內算唱對,兩倍遠就不算
+# voice_score = true          # 唱的時候錄下麥克風,唱完送唱歌 worker 讀音高算正式分數,算完兩邊都刪;false = 只有預估分數
+# comment = true              # 唱完讓她講評(她平常的一個回合,沒有另外的模型呼叫)
+# comment_channel = ""        # 講評的文字頻道,"discord:<伺服器 id>:<頻道 id>";留空 = 她只知道、不開口
+# voice_wait_secs = 90        # 講評最多等正式分數幾秒,等不到就用預估分數
+# video = true                # 背景影片:準備歌時留一份來源的畫面(最高 720p、沒有聲音),唱的時候放在歌詞後面
+# video_keep_hours = 24       # 影片在 Core 上最後一次唱過後留幾小時,再唱時從 worker 再拿
+# cache_dir = "data/karaoke"  # 伴唱軌和參考旋律在 Core 上放哪(相對 miyoria.toml);一天沒人唱就刪
+# 多人房間:她在語音頻道時,會員在會員頁開房間、用房號加入,大家同時唱同一首(房間開在講評頻道的伺服器)
+# rooms = true                # false = 不能開房間
+# room_price = 20             # 開房費(燒掉);一首都沒唱完就關掉的房間全退;0 = 免費
+# room_prize = 15             # 每一首的第一名:至少兩個人唱完、要是正式分數、沒有被標記;同分都給
+# room_finish = 3             # 唱完一首的人各拿這麼多
+# room_finish_share = 0.5     # 原唱有聲的地方唱到這麼多(而且音比亂唱準)才算唱完
+# room_prizes_per_day = 2     # 每人每天第一名獎勵最多幾次
+# room_finishes_per_day = 5   # 每人每天唱完獎勵最多幾次
+# room_rounds = 4             # 一間房最多唱幾首(開房費只收一次)
+# room_singers = 8            # 一間房最多幾個人唱(旁觀不算)
+# room_max = 2                # 同時最多幾間房
+# room_idle_mins = 10         # 房間閒置多久(沒有開始唱)就關掉
+# room_countdown_secs = 6     # 按開始後倒數幾秒,大家的伴奏同時開始
+# room_stream = true          # 唱的時候把麥克風即時送到唱歌 worker 算正式分數(不存);false = 唱的時候只有預估,唱完送錄音
+# 直播(第五步):她的直播(Go Live,OBS 的唱 K 場景)播伴奏和最多一個人的歌聲;她自己的語音頻道不播。
+# overlay 的瀏覽器來源要「讓 OBS 控制音訊」(stage obs-setup 會設好),聲音才進得了直播
+# stream_scene = true         # 直播畫面顯示唱 K 房間:等人時角落一塊,唱的時候歌詞、背景影片、即時排名、結果
+# stream_backing = true       # 直播的唱 K 場景播伴奏
+# stream_delay_ms = 2000      # 直播比唱的人晚多少(一間房固定一個);播出的歌聲太晚到的那一段是靜音,不會越拖越晚
+# relay_solo = true           # 一個人唱時可以播出他的歌聲(他自己勾「讓大家聽到我」,每一首預設不勾;聲音不存)
+# relay_lead = false          # 新房間預設「播出第一名的歌聲」(兩個人以上唱時一次播一個人;開房的人可以改,每人可以選不要播)
+# relay_hold_secs = 4         # 新的第一名要連續領先幾秒才換成他的聲音(盡量換在兩句中間)
+# relay_fade_ms = 200         # 換人時淡入淡出多久
+# stream_backing_gain = 0.8   # 直播伴奏的音量(0–1)
+# stream_voice_gain = 1.5     # 直播歌聲的音量(0–4)
+# stream_duck_gain = 0.35     # 她在語音頻道講話時,直播的唱 K 聲音降到這個比例
+# 歌詞:唱歌 worker 把查到的歌詞一行一行和主唱聽到的比對,對上的逐字對齊、照字切音符;
+# 查不到或對不上就用聽寫的。下面只影響之後準備的歌
+# aligner = "mms"             # mms(預設;難的歌準很多,權重 CC-BY-NC-4.0,只能非商業使用)| w2v(Apache-2.0;有收入的用途請用這個)
+# lyrics_matched = 0.75       # 一行和聽到的至少這麼像才算對上
+# lyrics_uncertain = 0.5      # 比這個低算對不上
+# lyrics_keep_share = 0.5     # 對上的行至少這麼多,整首就用查到的歌詞
+# lyrics_wrong_share = 0.2    # 對上的行比這個少 = 查錯歌,改用聽寫
 
 # 遊戲內聊天變成獨立的對話(每個世界 / 伺服器一段歷史)。玩家在 Discord 用 /me link 拿代碼,
 # 在遊戲聊天室打 `!link <代碼>` 就跟 Discord 帳號連在一起;沒連的玩家是陌生人。
@@ -1197,18 +1294,14 @@ max_per_day = 12                 # 她自己開話題:一天最多幾次(0 = 不
 # head = [0.62, 0.10, 0.88, 0.38]
 # body = [0.58, 0.35, 0.92, 1.00]
 
-# 語音派對遊戲(v4 §9.1;海龜湯、猜歌、接龍、問答、故事接龍):規則和計分是程式的狀態機,主持、吐槽、
-# 判定模糊答案是她。她叫 party_start 才會開始,不會自己跑,所以預設就開著。下面都是預設值
+# 派對遊戲(v4 §9.1、v5-play §5;猜歌只在語音,海龜湯在語音或文字頻道):規則和計分是程式的狀態機,
+# 主持、吐槽、判定模糊答案是她。誰都可以請她開一場(跟她說,或用 /miyo 的「派對遊戲」),她叫 party_start
+# 才會開始,不會自己跑,所以預設就開著。問答和兩種接龍已經刪了(舊的 quiz_* / chain_* / story_* 設定
+# 會被忽略,啟動時警告一次)。下面都是預設值
 # [modules.party]
-# quiz_rounds = 10               # 問答幾題(她沒指定時)
-# quiz_answer_secs = 40          # 一題答多久,之後公布答案
 # song_rounds = 8                # 猜歌幾首
 # song_answer_secs = 60          # 前奏開始後猜多久
 # clip_secs = 15                 # 猜歌的片段長度
-# chain_idle_secs = 45           # 接龍:這麼久沒人接就斷了
-# story_turn_secs = 60           # 故事接龍:輪到的人有這麼久,之後換下一個
-# story_max_lines = 12           # 故事接龍幾句完結
-# story_line_chars = 80          # 故事每句最多留幾字
 # soup_mins = 15                 # 海龜湯幾分鐘後公布湯底
 # judge_purpose = "party"        # 判海龜湯問題的模型([llm.purposes];沒設就用 chat)
 # judge_timeout_ms = 8000
@@ -1299,6 +1392,11 @@ enabled = false                # OBS:工具 → WebSocket 伺服器設定
 host = "127.0.0.1"
 port = 4455
 password = "${OBS_PASSWORD:-}"
+# `miyoria stage obs-setup` 把她的場景建在自己的場景集合和設定檔(預設都叫 Miyoria),不動你原本的。
+# 新的設定檔是空白的:從 OBS 推流的話,串流金鑰和編碼器要在 Miyoria 設定檔裡重新設;
+# VTube Studio 的透明背景也要自己打開一次。跑完它會印出下面這兩行,貼上就好:
+# collection = "Miyoria"   # OBS 不在這份場景集合時,Stage 不在 OBS 建任何東西,並在面板和 /stream status 提醒
+# profile = "Miyoria"      # OBS 不在這個設定檔時只記一行 log(精華要的重播緩衝在設定檔裡)
 # subtitle_source = "Miyoria 字幕"   # 她最新的一句話;OBS 沒有這個文字來源時自動建在目前場景下方
 # 唱歌時放原曲影片的媒體來源(要自己在「唱歌」場景建,見 docs/protocols/stage-link.md「唱歌時放影片」)
 # song_video_source = "Miyoria 歌曲影片"

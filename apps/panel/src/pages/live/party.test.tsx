@@ -13,7 +13,7 @@ const SNAPSHOT: PartySnapshot = {
     { id: "S2", game: "soup", title: "海龜湯", context: VOICE, state: "running", started_at: ago(300_000), scored: false, players: [player("你", 0, true), player("Owen", 0)] },
   ],
   recent: [
-    { id: "S1", game: "quiz", title: "問答", context: VOICE, reason: "done", started_at: ago(4_000_000), ended_at: ago(3_600_000), scored: true, players: [player("Owen", 30), player("你", 10, true), player("Amy", 0)] },
+    { id: "S1", game: "song", title: "猜歌", context: VOICE, reason: "done", started_at: ago(4_000_000), ended_at: ago(3_600_000), scored: true, players: [player("Owen", 30), player("你", 10, true), player("Amy", 0)] },
   ],
 };
 

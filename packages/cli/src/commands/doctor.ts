@@ -1,11 +1,13 @@
 // `miyoria doctor`: checks everything needed to run, one line per check. Core's own checks (config,
 // profile, LLM, Discord, database) come first; then, for every service enabled in host.toml, what
 // its descriptor says it needs (docs/design/v5-hostd.md §9). `--fix` does only the safe part: sync a
-// missing or stale environment and download missing `install.files`.
+// missing or stale environment and download missing or wrong `install.files` (listed and asked
+// once). `--print-hashes <service>` prints the checksums of the files a machine has, for the
+// descriptor.
 
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname } from "node:path";
+import { dirname, relative } from "node:path";
 import type { HostInfo } from "@miyoria/contracts/host";
 import { databaseUrl, loadProfile, resolveDatabaseUrl } from "@miyoria/core/light";
 import {
@@ -13,6 +15,7 @@ import {
   HostdClient,
   type LoadedHostConfig,
   loadCatalog,
+  presentFileHashes,
   probePort,
   tcpConnect,
 } from "@miyoria/hostd";
@@ -40,8 +43,23 @@ import {
 } from "../stack/host-checks.js";
 import { defaultRunner } from "../stack/system.js";
 import { dim, green, note, println, red, yellow } from "../ui.js";
-import { catalogRoot, type HostTarget, hostTarget, loadHost, rpcText } from "./host.js";
-import { openInstaller, printInstall, progressPrinter, type ServiceDeps } from "./services.js";
+import {
+  catalogRoot,
+  HostCommandError,
+  type HostTarget,
+  hostTarget,
+  loadHost,
+  rpcText,
+} from "./host.js";
+import {
+  confirmFiles,
+  filesToFetch,
+  openInstaller,
+  printFiles,
+  printInstall,
+  progressPrinter,
+  type ServiceDeps,
+} from "./services.js";
 
 /** Discord application flags for the message content intent. */
 const GATEWAY_MESSAGE_CONTENT = 1 << 18;
@@ -66,8 +84,10 @@ export interface DoctorOptions {
   hostConfig?: string;
   /** Replaces the system seams in tests. */
   deps?: DeepDeps;
-  /** The installer's seams (tests). */
+  /** The installer's seams (tests), and how the download question is answered. */
   services?: ServiceDeps;
+  /** Print the SHA-256 and size of this service's files on this machine, and nothing else. */
+  printHashes?: string;
 }
 
 function realDeps(): DeepDeps {
@@ -128,12 +148,29 @@ function hostInput(side: HostSide, deps: DeepDeps, options: DoctorOptions): Host
   };
 }
 
-/** `--fix`: sync what is missing or stale and download missing files. Returns the failures. */
+/**
+ * `--fix`: sync what is missing or stale and download the missing or wrong `install.files` (listed
+ * with sizes and licences and asked once). Returns the failures.
+ */
 async function applyFixes(side: HostSide, deps: DeepDeps, options: DoctorOptions): Promise<number> {
   const input = hostInput(side, deps, options);
   const { inspectService } = await import("@miyoria/hostd");
-  const installer = await openInstaller(side.target, side.host, options.services);
   let failures = 0;
+  const needs = await filesToFetch(side.entries, side.host);
+  let download = false;
+  try {
+    download = await confirmFiles(
+      needs,
+      side.host,
+      options.services ?? {},
+      "miyoria doctor --fix --yes",
+    );
+  } catch (error) {
+    if (!(error instanceof HostCommandError)) throw error;
+    println(`${red("✗")} ${error.message}`);
+    failures += 1;
+  }
+  const installer = await openInstaller(side.target, side.host, options.services);
   let any = false;
   for (const entry of side.entries) {
     const found = inspectService(entry, side.host, {
@@ -143,16 +180,18 @@ async function applyFixes(side: HostSide, deps: DeepDeps, options: DoctorOptions
       env: deps.env,
     });
     const envNeedsSync = found.runtime.kind === "managed" && found.runtime.state?.state !== "ready";
-    const filesMissing = found.files.some((f) => f.state === "missing");
-    if (!envNeedsSync && !filesMissing) continue;
+    const getFiles = download && needs.some((n) => n.service === entry.name);
+    if (!envNeedsSync && !getFiles) continue;
     any = true;
     println(`\n修復 ${entry.name}`);
     try {
       const result = await installer.install(
-        { service: entry.name, only_stale: true },
+        { service: entry.name, only_stale: true, ...(getFiles ? {} : { no_files: true }) },
         progressPrinter(),
       );
-      if (printInstall(result, { brief: true })) failures += 1;
+      const bad = printInstall(result, { brief: true });
+      if (getFiles) printFiles(result);
+      if (bad) failures += 1;
     } catch (error) {
       failures += 1;
       println(`${red("✗")} ${entry.name}  ${rpcText(error)}`);
@@ -160,6 +199,37 @@ async function applyFixes(side: HostSide, deps: DeepDeps, options: DoctorOptions
   }
   if (!any) println(dim("\n沒有可以自動修的項目"));
   return failures;
+}
+
+/**
+ * `--print-hashes <service>`: the SHA-256 and size of the service's files on this machine, in
+ * `service.toml` syntax, to fill in an `[[install.files]]` entry that waits for them. Its
+ * `install.manual` items are included (a folder file by file), so a file placed by hand can move
+ * to the automatic list. It reads files only.
+ */
+export async function printHashes(target: HostTarget, service: string): Promise<void> {
+  const host = loadHost(target);
+  const root = catalogRoot(target.hostToml);
+  const entry = loadCatalog(root).services.get(service);
+  if (entry === undefined) throw new DoctorError(`目錄裡沒有叫 ${service} 的服務`);
+  const { files, skipped } = await presentFileHashes(entry, host, root);
+  const descriptor = relative(root, entry.file).replaceAll("\\", "/");
+  println(`# ${service}:這台電腦上現有檔案的 SHA-256 和大小`);
+  println(
+    `# 把 sha256 和 size 抄進 ${descriptor} 對應的 [[install.files]];hf 的 revision 要另外查 commit`,
+  );
+  for (const f of files) {
+    println("");
+    println(`# ${f.file}${f.from === "install.files" ? "" : `(install.manual ${f.from})`}`);
+    println(`path = ${JSON.stringify(f.path)}`);
+    println(`sha256 = "${f.sha256}"`);
+    println(`size = ${f.size}`);
+  }
+  for (const s of skipped) {
+    println("");
+    println(`# 略過 ${s.path}:${s.why}`);
+  }
+  if (files.length === 0) println("\n# 這台電腦上沒有這個服務的檔案");
 }
 
 /** Prints the install findings; returns how many failed. */
@@ -225,6 +295,10 @@ async function installReport(
 export async function run(configPath: string, options: DoctorOptions = {}): Promise<void> {
   // The checks print their own lines; module logs would only interleave with them.
   if (!process.env.MIYORIA_LOG_LEVEL) configureLogging({ level: "warn" });
+  if (options.printHashes !== undefined) {
+    await printHashes(hostTarget(configPath, options.hostConfig), options.printHashes);
+    return;
+  }
   let failures = 0;
   const report = (ok: boolean, what: string, detail: string) => {
     if (!ok) failures++;

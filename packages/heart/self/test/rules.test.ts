@@ -196,12 +196,6 @@ describe("rule triggers", () => {
     await vi.waitFor(() => expect(h.self.drives().hunger).toBeCloseTo(0.6, 5));
   });
 
-  it("broken_promise: anger and resentment toward the person who did not pay", async () => {
-    const h = await boot();
-    h.publish(Events.SocialEvent, socialEvent("p2", "broken_promise", { source: "economy" }));
-    await vi.waitFor(() => expect(value(h, "anger")).toBeGreaterThan(0.15));
-  });
-
   it("praise: joy (medium) and, for a tsundere, a little shyness; attachment does not grow by itself", async () => {
     const h = await boot();
     h.publish(Events.SocialEvent, socialEvent("p1", "praise"));

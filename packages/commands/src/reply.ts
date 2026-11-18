@@ -54,7 +54,9 @@ export type CardBlock =
   /** One select menu. */
   | { type: "select"; select: CardSelect }
   /** Shows one of the reply's `files`. */
-  | { type: "file"; name: string };
+  | { type: "file"; name: string }
+  /** Shows one of the reply's `files` as a picture; `alt` is its text for screen readers. */
+  | { type: "image"; name: string; alt?: string };
 
 export interface Card {
   accent: Accent;
@@ -156,6 +158,20 @@ export function cardText(card: Card): string {
     }
   }
   return lines.join("\n");
+}
+
+/**
+ * A picture message's parts (docs/design/v5-play.md §11.5): its image block, with its summary as
+ * the alt text, and its file. Nothing without a picture, so a reply keeps its text either way.
+ */
+export function pictureParts(
+  file: { name: string; data: Uint8Array; contentType: string; alt: string } | null | undefined,
+): { blocks: CardBlock[]; files: ReplyFile[] } {
+  if (!file) return { blocks: [], files: [] };
+  return {
+    blocks: [{ type: "image", name: file.name, alt: file.alt }],
+    files: [{ name: file.name, data: file.data, contentType: file.contentType }],
+  };
 }
 
 export interface CardOptions {

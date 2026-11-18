@@ -32,6 +32,12 @@ import { notesSchema } from "../../memory/notes/src/migrations.js";
 import * as notesTables from "../../memory/notes/src/schema.js";
 import { transcriptSchema } from "../../memory/transcript/src/migrations.js";
 import * as transcriptTables from "../../memory/transcript/src/schema.js";
+import { CARDS_CATALOGUE_SQL, cardsSchema } from "../../play/cards/src/migrations.js";
+import * as cardsTables from "../../play/cards/src/schema.js";
+import { karaokeSchema } from "../../play/karaoke/src/migrations.js";
+import * as karaokeTables from "../../play/karaoke/src/schema.js";
+import { marketSchema } from "../../play/market/src/migrations.js";
+import * as marketTables from "../../play/market/src/schema.js";
 import { artifactSchema } from "../src/artifacts/migrations.js";
 import * as artifactTables from "../src/artifacts/schema.js";
 import { configSchema } from "../src/config/migrations.js";
@@ -99,11 +105,14 @@ export const DRIZZLE_PLUGINS: Record<string, DrizzlePlugin> = {
   config: { tables: configTables, schema: configSchema },
   artifact: { tables: artifactTables, schema: artifactSchema },
   auth: { tables: authTables, schema: authSchema },
+  cards: { tables: cardsTables, schema: cardsSchema, handWritten: CARDS_CATALOGUE_SQL },
   cluster: { tables: clusterTables, schema: clusterSchema },
   directive: { tables: directiveTables, schema: directiveSchema },
   economy: { tables: economyTables, schema: economySchema },
   heart: { tables: heartTables, schema: heartSchema },
   initiative: { tables: initiativeTables, schema: initiativeSchema },
+  karaoke: { tables: karaokeTables, schema: karaokeSchema },
+  market: { tables: marketTables, schema: marketSchema },
   memory: { tables: memoryTables, schema: memorySchema, handWritten: MEMORY_SEARCH_SQL },
   notes: { tables: notesTables, schema: notesSchema },
   transcript: { tables: transcriptTables, schema: transcriptSchema },

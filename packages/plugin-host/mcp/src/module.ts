@@ -34,6 +34,8 @@ interface Running {
 export class McpModule implements Module {
   static readonly ID = "mcp";
   readonly manifest: ModuleManifest = defineManifest(McpModule.ID, "MCP", {
+    icon: "plug",
+    category: "system",
     description: "MCP client for external tools, optional read-only MCP server",
   });
   readonly config: McpConfig;

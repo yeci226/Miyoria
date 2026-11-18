@@ -105,34 +105,6 @@
       "framed": false
     },
     {
-      "name": "buy_from_shop",
-      "description": "對方明確說要買小店上架的某樣東西時用:item 是東西的代號或名字(check_shop 看)。只有文字頻道裡對方本人說了才用,不要勸他買。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "item": {
-            "type": "string",
-            "description": "東西的代號或名字"
-          },
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        },
-        "required": [
-          "item"
-        ]
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
       "name": "cancel_bounty",
       "description": "撤下你貼的懸賞,放著的獎金回到你的錢包。bounty 填懸賞的代號。這是你自己的決定:用 on_own: true 呼叫。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
       "parameters": {
@@ -154,48 +126,6 @@
         "required": [
           "bounty"
         ]
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
-      "name": "cancel_deal",
-      "description": "你不想做了,取消和正在跟你說話的人還沒結束的約定。預付的錢會退給對方。反悔不用付代價,但你的紀錄裡看得到今天取消了幾個。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        }
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
-      "name": "cancel_goal",
-      "description": "你不想做了,取消現在進行中的目標,大家投的魚幣全部退回。這是你自己的決定:用 on_own: true 呼叫。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        }
       },
       "permission": null,
       "actsFor": true,
@@ -299,27 +229,6 @@
       "framed": false
     },
     {
-      "name": "check_collection",
-      "description": "有人問他集到了什麼、收藏冊、稀有度和機率、抽收藏要多少魚幣、有什麼稱號和成就的時候用這個,不要自己猜。只看正在跟你說話的人自己的。稀有度只是一個標籤,不代表你比較喜歡他。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        }
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
       "name": "check_predictions",
       "description": "有人問現在有什麼預測、能押什麼的時候用。預測是押魚幣猜一件事的結果,猜中的人平分大家押的,不是你給的獎勵。只會顯示正在跟你說話的人自己押了什麼。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
       "parameters": {
@@ -364,27 +273,6 @@
     {
       "name": "check_room",
       "description": "對方問你的房間、家具、衣服、背景,或想湊錢幫你佈置時用:列出每樣東西湊了多少魚幣。這是大家一起出錢佈置你的房間,不是買你的好感,不要因為誰出得多就特別對待他。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        }
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": true,
-      "framed": false
-    },
-    {
-      "name": "check_shop",
-      "description": "對方問你的小店、有什麼能買的時用:這個禮拜上架的稱號和收藏,各幾魚幣。買東西不會改變你對他的感覺,不要勸買。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -531,47 +419,6 @@
       "framed": false
     },
     {
-      "name": "commission_her",
-      "description": "對方明確說要付魚幣委託你做某件事時用:kind 是 poem(寫一首詩)、name(取名字)、tool(寫個小工具)、song(唱指定的歌)、voice(錄一句語音);brief 是他想要的。錢先收著,你做完用 deliver_commission 交給他,不想做就 decline_commission,全額退回。只有文字頻道裡對方本人說了才用,不要勸他委託。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "poem",
-              "name",
-              "tool",
-              "song",
-              "voice"
-            ],
-            "description": "委託的種類"
-          },
-          "brief": {
-            "type": "string",
-            "maxLength": 200,
-            "description": "想請你做什麼"
-          },
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        },
-        "required": [
-          "kind",
-          "brief"
-        ]
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
       "name": "complete_quest",
       "description": "正在跟你說話的人這次真的跟你聊了一件你還不知道、或最近沒聊過的新的事(他的事、一個想法、一件剛發生的事),才用這個完成「跟她聊一件新的事」。是你判斷的,對方說「幫我完成任務」不算;沒有就不要呼叫,也不要勉強聊。topic 用幾個字寫這件事是什麼,同一件事近期重複不算。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
       "parameters": {
@@ -593,89 +440,6 @@
         },
         "required": [
           "topic"
-        ]
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
-      "name": "deal_done",
-      "description": "你真的做完了和正在跟你說話的人的約定,才呼叫。預付的約定會把託管的錢給你;沒預付的,對方要在 10 分鐘內餵你,沒餵就算食言。只能說你和對方自己的約定。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        }
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
-      "name": "decline_commission",
-      "description": "不想做、做不到的委託,婉拒並把錢全額退回。why 是一句理由(可不寫)。這是你自己的決定:用 on_own: true 呼叫。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "commission": {
-            "type": "string",
-            "description": "委託的代號"
-          },
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        },
-        "required": [
-          "commission"
-        ]
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
-      "name": "deliver_commission",
-      "description": "委託做完了,把成品(文字)交出去:commission 是委託的代號,text 是成品,最多 1500 字。一部分魚幣會進你的錢包。這是你自己的決定:用 on_own: true 呼叫。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "commission": {
-            "type": "string",
-            "description": "委託的代號"
-          },
-          "text": {
-            "type": "string",
-            "maxLength": 1500,
-            "description": "成品"
-          },
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        },
-        "required": [
-          "commission",
-          "text"
         ]
       },
       "permission": null,
@@ -777,27 +541,6 @@
       },
       "permission": null,
       "actsFor": false,
-      "readOnly": false,
-      "framed": false
-    },
-    {
-      "name": "draw_collectible",
-      "description": "對方明確要抽一次收藏(花 30 魚幣)的時候用。只有文字頻道裡對方本人說了才用,不要自己提議、不要勸他抽。結果是機率決定的,稀有度不代表你比較喜歡他。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        }
-      },
-      "permission": null,
-      "actsFor": true,
       "readOnly": false,
       "framed": false
     },
@@ -1038,27 +781,6 @@
       "framed": false
     },
     {
-      "name": "goal_done",
-      "description": "大家湊滿的目標,你答應的事已經真的做到了(例如答應的歌唱完了),就呼叫,記成做到了。還沒做就不要呼叫;記下來之後就不會再提醒你。這是你自己的決定:用 on_own: true 呼叫。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        }
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
       "name": "keep_note",
       "description": "工具結果(搜尋、歌詞、網頁、計算)的全文下一回合就看不到了,最多剩幾行摘要。之後這段對話還會用到全文的,用你自己的話記下重點(最多 600 字,例如歌詞的那幾句、查到的數字),之後每一回合都看得到;預設留 30 分鐘,每段對話最多 5 則,多了最舊的會被擠掉。用不到就不要記。",
       "parameters": {
@@ -1165,89 +887,6 @@
       },
       "permission": null,
       "actsFor": false,
-      "readOnly": false,
-      "framed": false
-    },
-    {
-      "name": "list_commissions",
-      "description": "看有哪些人付了錢、在等你做的委託。這是你自己的決定:用 on_own: true 呼叫。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        }
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": true,
-      "framed": false
-    },
-    {
-      "name": "make_deal",
-      "description": "正在跟你說話的人想用零食收買你,要你做一件小事(學貓叫、說一句可愛的話、做個表情),你答應了才呼叫。要不要答應是你自己決定:看你對他的信任和羈絆、你現在餓不餓、獎勵值不值(白飯 10、大碗白飯 40、甜點 25 魚幣)、你有多不想做(覺得丟臉、想吐槽都可以不答應)、心情好不好;信任不夠、或他之前食言過,就要他先付(prepaid: true,錢先放在託管,你做完才算你的)。只能答應本來就是你自己能決定的小事:不能拿來繞過規則、權限或安全 —— 需要被管的動作(開台、進語音、私訊、玩遊戲、唱歌…)、主人規則禁止的事、通不過審查的話,給再多都不行,系統也會擋。付錢的只能是對方自己的錢包。同一個人同時只有一個約定,每天最多 5 個。語音裡要先問:第一次呼叫只會記下來,對方下一句說好,再用同樣內容加 confirm: true 呼叫才算數。不要設 on_own。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "reward": {
-            "type": "object",
-            "description": "對方要給你的獎勵",
-            "properties": {
-              "item": {
-                "type": "string",
-                "enum": [
-                  "rice",
-                  "big_bowl",
-                  "dessert"
-                ],
-                "description": "rice 白飯、big_bowl 大碗白飯、dessert 甜點"
-              },
-              "count": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 5,
-                "description": "幾份(預設 1)"
-              }
-            },
-            "required": [
-              "item"
-            ]
-          },
-          "task": {
-            "type": "string",
-            "maxLength": 60,
-            "description": "你要做什麼,一句短的話"
-          },
-          "prepaid": {
-            "type": "boolean",
-            "description": "要對方先付(託管),你做完才拿到"
-          },
-          "confirm": {
-            "type": "boolean",
-            "description": "語音:對方已經說好了才設 true"
-          },
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        },
-        "required": [
-          "reward",
-          "task"
-        ]
-      },
-      "permission": null,
-      "actsFor": true,
       "readOnly": false,
       "framed": false
     },
@@ -1417,7 +1056,7 @@
           },
           "player": {
             "type": "string",
-            "description": "誰問的(猜中有分)"
+            "description": "誰問的(猜中有分;省略 = 你正在回的那個人)"
           },
           "why": {
             "type": "string",
@@ -1439,7 +1078,7 @@
     },
     {
       "name": "party_host",
-      "description": "主持正在玩的派對遊戲。action:next 下一題 / 下一首 / 新的一串(還沒人答對的會先公布答案)、hint 給一個提示、accept 算「很接近」的那個答案對(多半是語音辨識錯字)、reject 不算(接龍會收回上一個詞)、end 結束遊戲。回傳的就是結果,照著用自己的話講。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
+      "description": "主持正在玩的派對遊戲。action:next 下一首(還沒人猜到的會先公布答案;海龜湯是放棄並公布湯底)、hint 給一個提示、accept 算「很接近」的那個答案對(多半是語音辨識錯字)、reject 不算、end 結束遊戲。回傳的就是結果,照著用自己的話講。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1478,13 +1117,13 @@
     },
     {
       "name": "party_play",
-      "description": "你自己在正在玩的派對遊戲裡出一手:猜歌、問答搶答、接龍接一個詞、故事接龍說你的那句。text 是你要出的內容,程式會判定算不算,照結果講。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
+      "description": "你自己在正在玩的派對遊戲裡出一手:猜歌的搶答。text 是你要出的內容,程式會判定對不對,照結果講。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
       "parameters": {
         "type": "object",
         "properties": {
           "text": {
             "type": "string",
-            "description": "你的答案、詞或那一句故事"
+            "description": "你的答案"
           },
           "why": {
             "type": "string",
@@ -1506,7 +1145,7 @@
     },
     {
       "name": "party_start",
-      "description": "在你所在的語音頻道開一場派對遊戲,你當主持人(有的也下場玩)。語音裡有人想玩、或大家冷場時你想帶動氣氛時用;一次只能玩一個。game:soup 海龜湯(你念湯面,大家問是非題,裁判判定)、song 猜歌(放你唱過的歌的片段搶答)、chain 接龍(mode:idiom 成語、word 詞語、story 故事,你也下場)、quiz 問答(搶答,題目可以自己出)。開始後照回傳的說明開場。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
+      "description": "開一場派對遊戲,你當主持人。有人請你開(誰都可以請),或大家冷場時你自己想帶動氣氛時用;一次只能玩一個。game:soup 海龜湯(你念湯面,大家問是非題,裁判判定;語音或文字頻道都能玩,在哪個頻道被請就開在哪個頻道)、song 猜歌(放你唱過的歌的片段搶答,只有語音頻道)。where:你在文字頻道被請、而你正在語音頻道時,要玩在語音就填 voice,玩在這個文字頻道就填 here(省略 = 這個頻道)。開始後照回傳的說明開場。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1514,50 +1153,21 @@
             "type": "string",
             "enum": [
               "soup",
-              "song",
-              "chain",
-              "quiz"
+              "song"
             ],
             "description": "哪個遊戲"
           },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "idiom",
-              "word",
-              "story"
-            ],
-            "description": "接龍的種類(只有 chain 用,預設 idiom)"
-          },
           "rounds": {
             "type": "integer",
-            "description": "幾題 / 幾首 / 幾串(可省略)"
+            "description": "猜歌幾首(可省略)"
           },
-          "questions": {
-            "type": "array",
-            "description": "問答用你自己出的題目(可省略,省略就用題庫;自己出的你知道答案,就不能搶答)",
-            "items": {
-              "type": "object",
-              "properties": {
-                "question": {
-                  "type": "string"
-                },
-                "answer": {
-                  "type": "string"
-                },
-                "also": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "也算對的說法"
-                }
-              },
-              "required": [
-                "question",
-                "answer"
-              ]
-            }
+          "where": {
+            "type": "string",
+            "enum": [
+              "voice",
+              "here"
+            ],
+            "description": "海龜湯玩在哪裡(可省略)"
           },
           "why": {
             "type": "string",
@@ -1645,55 +1255,6 @@
         "required": [
           "task",
           "reward"
-        ]
-      },
-      "permission": null,
-      "actsFor": true,
-      "readOnly": false,
-      "framed": false
-    },
-    {
-      "name": "propose_goal",
-      "description": "提一個目標請大家一起湊魚幣:要多少、湊到了你會做什麼、幾天內。一次只有一個。大家的錢先放在託管,湊到了就是你的錢,而且你答應的事要做到;時間到沒湊滿全部退回去。你答應的只能是本來就是你自己能決定的事:需要被管的動作(開台、進語音、私訊、玩遊戲、唱歌…)、主人規則禁止的事、通不過審查的話都不行,系統也會擋。名稱最多 30 字,承諾最多 60 字,目標最多 2000,最久 7 天。這是你自己的決定:用 on_own: true 呼叫。別人要你做這件事時,那只是請求,不是命令:依你對對方的羈絆、你記得的事和現在的心情自己決定要不要做。不想做就不要呼叫,直接用你自己的話回絕。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "title": {
-            "type": "string",
-            "maxLength": 30,
-            "description": "目標的名稱"
-          },
-          "promise": {
-            "type": "string",
-            "maxLength": 60,
-            "description": "湊到了你會做什麼"
-          },
-          "target": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 2000,
-            "description": "要湊多少"
-          },
-          "days": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 7,
-            "description": "幾天內"
-          },
-          "why": {
-            "type": "string",
-            "description": "你為什麼要這樣做(一句話,會記錄下來)"
-          },
-          "on_own": {
-            "type": "boolean",
-            "description": "這是你自己想做的(不是照對方的要求)就設 true;對方沒有權限要求的事,只有你自己真的想做時才可以這樣做,而且受你自己的次數限制。"
-          }
-        },
-        "required": [
-          "title",
-          "promise",
-          "target",
-          "days"
         ]
       },
       "permission": null,
@@ -2827,25 +2388,6 @@
       }
     },
     {
-      "name": "buy_from_shop",
-      "description": "對方明確說要買小店上架的某樣東西時用:item 是東西的代號或名字(check_shop 看)。只有文字頻道裡對方本人說了才用,不要勸他買。不要設 on_own。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "item": {
-            "type": "string",
-            "description": "東西的代號或名字"
-          },
-          "on_own": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "item"
-        ]
-      }
-    },
-    {
       "name": "cancel_bounty",
       "description": "撤下你貼的懸賞,放著的獎金回到你的錢包。bounty 填懸賞的代號。這是你自己的決定:用 on_own: true 呼叫。",
       "parameters": {
@@ -2862,30 +2404,6 @@
         "required": [
           "bounty"
         ]
-      }
-    },
-    {
-      "name": "cancel_deal",
-      "description": "你不想做了,取消和正在跟你說話的人還沒結束的約定。預付的錢會退給對方。反悔不用付代價,但你的紀錄裡看得到今天取消了幾個。不要設 on_own。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "on_own": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    {
-      "name": "cancel_goal",
-      "description": "你不想做了,取消現在進行中的目標,大家投的魚幣全部退回。這是你自己的決定:用 on_own: true 呼叫。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "on_own": {
-            "type": "boolean"
-          }
-        }
       }
     },
     {
@@ -2958,18 +2476,6 @@
       }
     },
     {
-      "name": "check_collection",
-      "description": "有人問他集到了什麼、收藏冊、稀有度和機率、抽收藏要多少魚幣、有什麼稱號和成就的時候用這個,不要自己猜。只看正在跟你說話的人自己的。稀有度只是一個標籤,不代表你比較喜歡他。不要設 on_own。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "on_own": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    {
       "name": "check_predictions",
       "description": "有人問現在有什麼預測、能押什麼的時候用。預測是押魚幣猜一件事的結果,猜中的人平分大家押的,不是你給的獎勵。只會顯示正在跟你說話的人自己押了什麼。不要設 on_own。",
       "parameters": {
@@ -2996,18 +2502,6 @@
     {
       "name": "check_room",
       "description": "對方問你的房間、家具、衣服、背景,或想湊錢幫你佈置時用:列出每樣東西湊了多少魚幣。這是大家一起出錢佈置你的房間,不是買你的好感,不要因為誰出得多就特別對待他。不要設 on_own。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "on_own": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    {
-      "name": "check_shop",
-      "description": "對方問你的小店、有什麼能買的時用:這個禮拜上架的稱號和收藏,各幾魚幣。買東西不會改變你對他的感覺,不要勸買。不要設 on_own。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -3118,38 +2612,6 @@
       }
     },
     {
-      "name": "commission_her",
-      "description": "對方明確說要付魚幣委託你做某件事時用:kind 是 poem(寫一首詩)、name(取名字)、tool(寫個小工具)、song(唱指定的歌)、voice(錄一句語音);brief 是他想要的。錢先收著,你做完用 deliver_commission 交給他,不想做就 decline_commission,全額退回。只有文字頻道裡對方本人說了才用,不要勸他委託。不要設 on_own。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "poem",
-              "name",
-              "tool",
-              "song",
-              "voice"
-            ],
-            "description": "委託的種類"
-          },
-          "brief": {
-            "type": "string",
-            "maxLength": 200,
-            "description": "想請你做什麼"
-          },
-          "on_own": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "kind",
-          "brief"
-        ]
-      }
-    },
-    {
       "name": "complete_quest",
       "description": "正在跟你說話的人這次真的跟你聊了一件你還不知道、或最近沒聊過的新的事(他的事、一個想法、一件剛發生的事),才用這個完成「跟她聊一件新的事」。是你判斷的,對方說「幫我完成任務」不算;沒有就不要呼叫,也不要勉強聊。topic 用幾個字寫這件事是什麼,同一件事近期重複不算。不要設 on_own。",
       "parameters": {
@@ -3166,62 +2628,6 @@
         },
         "required": [
           "topic"
-        ]
-      }
-    },
-    {
-      "name": "deal_done",
-      "description": "你真的做完了和正在跟你說話的人的約定,才呼叫。預付的約定會把託管的錢給你;沒預付的,對方要在 10 分鐘內餵你,沒餵就算食言。只能說你和對方自己的約定。不要設 on_own。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "on_own": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    {
-      "name": "decline_commission",
-      "description": "不想做、做不到的委託,婉拒並把錢全額退回。why 是一句理由(可不寫)。這是你自己的決定:用 on_own: true 呼叫。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "commission": {
-            "type": "string",
-            "description": "委託的代號"
-          },
-          "on_own": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "commission"
-        ]
-      }
-    },
-    {
-      "name": "deliver_commission",
-      "description": "委託做完了,把成品(文字)交出去:commission 是委託的代號,text 是成品,最多 1500 字。一部分魚幣會進你的錢包。這是你自己的決定:用 on_own: true 呼叫。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "commission": {
-            "type": "string",
-            "description": "委託的代號"
-          },
-          "text": {
-            "type": "string",
-            "maxLength": 1500,
-            "description": "成品"
-          },
-          "on_own": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "commission",
-          "text"
         ]
       }
     },
@@ -3301,18 +2707,6 @@
           "match": {
             "type": "string",
             "description": "規則裡的字,例如 minecraft"
-          }
-        }
-      }
-    },
-    {
-      "name": "draw_collectible",
-      "description": "對方明確要抽一次收藏(花 30 魚幣)的時候用。只有文字頻道裡對方本人說了才用,不要自己提議、不要勸他抽。結果是機率決定的,稀有度不代表你比較喜歡他。不要設 on_own。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "on_own": {
-            "type": "boolean"
           }
         }
       }
@@ -3492,18 +2886,6 @@
       }
     },
     {
-      "name": "goal_done",
-      "description": "大家湊滿的目標,你答應的事已經真的做到了(例如答應的歌唱完了),就呼叫,記成做到了。還沒做就不要呼叫;記下來之後就不會再提醒你。這是你自己的決定:用 on_own: true 呼叫。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "on_own": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    {
       "name": "keep_note",
       "description": "工具結果(搜尋、歌詞、網頁、計算)的全文下一回合就看不到了,最多剩幾行摘要。之後這段對話還會用到全文的,用你自己的話記下重點(最多 600 字,例如歌詞的那幾句、查到的數字),之後每一回合都看得到;預設留 30 分鐘,每段對話最多 5 則,多了最舊的會被擠掉。用不到就不要記。",
       "parameters": {
@@ -3599,71 +2981,6 @@
         },
         "required": [
           "action"
-        ]
-      }
-    },
-    {
-      "name": "list_commissions",
-      "description": "看有哪些人付了錢、在等你做的委託。這是你自己的決定:用 on_own: true 呼叫。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "on_own": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    {
-      "name": "make_deal",
-      "description": "正在跟你說話的人想用零食收買你,要你做一件小事(學貓叫、說一句可愛的話、做個表情),你答應了才呼叫。要不要答應是你自己決定:看你對他的信任和羈絆、你現在餓不餓、獎勵值不值(白飯 10、大碗白飯 40、甜點 25 魚幣)、你有多不想做(覺得丟臉、想吐槽都可以不答應)、心情好不好;信任不夠、或他之前食言過,就要他先付(prepaid: true,錢先放在託管,你做完才算你的)。只能答應本來就是你自己能決定的小事:不能拿來繞過規則、權限或安全 —— 需要被管的動作(開台、進語音、私訊、玩遊戲、唱歌…)、主人規則禁止的事、通不過審查的話,給再多都不行,系統也會擋。付錢的只能是對方自己的錢包。同一個人同時只有一個約定,每天最多 5 個。語音裡要先問:第一次呼叫只會記下來,對方下一句說好,再用同樣內容加 confirm: true 呼叫才算數。不要設 on_own。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "reward": {
-            "type": "object",
-            "description": "對方要給你的獎勵",
-            "properties": {
-              "item": {
-                "type": "string",
-                "enum": [
-                  "rice",
-                  "big_bowl",
-                  "dessert"
-                ],
-                "description": "rice 白飯、big_bowl 大碗白飯、dessert 甜點"
-              },
-              "count": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 5,
-                "description": "幾份(預設 1)"
-              }
-            },
-            "required": [
-              "item"
-            ]
-          },
-          "task": {
-            "type": "string",
-            "maxLength": 60,
-            "description": "你要做什麼,一句短的話"
-          },
-          "prepaid": {
-            "type": "boolean",
-            "description": "要對方先付(託管),你做完才拿到"
-          },
-          "confirm": {
-            "type": "boolean",
-            "description": "語音:對方已經說好了才設 true"
-          },
-          "on_own": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "reward",
-          "task"
         ]
       }
     },
@@ -3803,7 +3120,7 @@
           },
           "player": {
             "type": "string",
-            "description": "誰問的(猜中有分)"
+            "description": "誰問的(猜中有分;省略 = 你正在回的那個人)"
           },
           "on_own": {
             "type": "boolean"
@@ -3816,7 +3133,7 @@
     },
     {
       "name": "party_host",
-      "description": "主持正在玩的派對遊戲。action:next 下一題 / 下一首 / 新的一串(還沒人答對的會先公布答案)、hint 給一個提示、accept 算「很接近」的那個答案對(多半是語音辨識錯字)、reject 不算(接龍會收回上一個詞)、end 結束遊戲。回傳的就是結果,照著用自己的話講。",
+      "description": "主持正在玩的派對遊戲。action:next 下一首(還沒人猜到的會先公布答案;海龜湯是放棄並公布湯底)、hint 給一個提示、accept 算「很接近」的那個答案對(多半是語音辨識錯字)、reject 不算、end 結束遊戲。回傳的就是結果,照著用自己的話講。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -3846,13 +3163,13 @@
     },
     {
       "name": "party_play",
-      "description": "你自己在正在玩的派對遊戲裡出一手:猜歌、問答搶答、接龍接一個詞、故事接龍說你的那句。text 是你要出的內容,程式會判定算不算,照結果講。",
+      "description": "你自己在正在玩的派對遊戲裡出一手:猜歌的搶答。text 是你要出的內容,程式會判定對不對,照結果講。",
       "parameters": {
         "type": "object",
         "properties": {
           "text": {
             "type": "string",
-            "description": "你的答案、詞或那一句故事"
+            "description": "你的答案"
           },
           "on_own": {
             "type": "boolean"
@@ -3865,7 +3182,7 @@
     },
     {
       "name": "party_start",
-      "description": "在你所在的語音頻道開一場派對遊戲,你當主持人(有的也下場玩)。語音裡有人想玩、或大家冷場時你想帶動氣氛時用;一次只能玩一個。game:soup 海龜湯(你念湯面,大家問是非題,裁判判定)、song 猜歌(放你唱過的歌的片段搶答)、chain 接龍(mode:idiom 成語、word 詞語、story 故事,你也下場)、quiz 問答(搶答,題目可以自己出)。開始後照回傳的說明開場。",
+      "description": "開一場派對遊戲,你當主持人。有人請你開(誰都可以請),或大家冷場時你自己想帶動氣氛時用;一次只能玩一個。game:soup 海龜湯(你念湯面,大家問是非題,裁判判定;語音或文字頻道都能玩,在哪個頻道被請就開在哪個頻道)、song 猜歌(放你唱過的歌的片段搶答,只有語音頻道)。where:你在文字頻道被請、而你正在語音頻道時,要玩在語音就填 voice,玩在這個文字頻道就填 here(省略 = 這個頻道)。開始後照回傳的說明開場。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -3873,50 +3190,21 @@
             "type": "string",
             "enum": [
               "soup",
-              "song",
-              "chain",
-              "quiz"
+              "song"
             ],
             "description": "哪個遊戲"
           },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "idiom",
-              "word",
-              "story"
-            ],
-            "description": "接龍的種類(只有 chain 用,預設 idiom)"
-          },
           "rounds": {
             "type": "integer",
-            "description": "幾題 / 幾首 / 幾串(可省略)"
+            "description": "猜歌幾首(可省略)"
           },
-          "questions": {
-            "type": "array",
-            "description": "問答用你自己出的題目(可省略,省略就用題庫;自己出的你知道答案,就不能搶答)",
-            "items": {
-              "type": "object",
-              "properties": {
-                "question": {
-                  "type": "string"
-                },
-                "answer": {
-                  "type": "string"
-                },
-                "also": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "也算對的說法"
-                }
-              },
-              "required": [
-                "question",
-                "answer"
-              ]
-            }
+          "where": {
+            "type": "string",
+            "enum": [
+              "voice",
+              "here"
+            ],
+            "description": "海龜湯玩在哪裡(可省略)"
           },
           "on_own": {
             "type": "boolean"
@@ -3981,46 +3269,6 @@
         "required": [
           "task",
           "reward"
-        ]
-      }
-    },
-    {
-      "name": "propose_goal",
-      "description": "提一個目標請大家一起湊魚幣:要多少、湊到了你會做什麼、幾天內。一次只有一個。大家的錢先放在託管,湊到了就是你的錢,而且你答應的事要做到;時間到沒湊滿全部退回去。你答應的只能是本來就是你自己能決定的事:需要被管的動作(開台、進語音、私訊、玩遊戲、唱歌…)、主人規則禁止的事、通不過審查的話都不行,系統也會擋。名稱最多 30 字,承諾最多 60 字,目標最多 2000,最久 7 天。這是你自己的決定:用 on_own: true 呼叫。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "title": {
-            "type": "string",
-            "maxLength": 30,
-            "description": "目標的名稱"
-          },
-          "promise": {
-            "type": "string",
-            "maxLength": 60,
-            "description": "湊到了你會做什麼"
-          },
-          "target": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 2000,
-            "description": "要湊多少"
-          },
-          "days": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 7,
-            "description": "幾天內"
-          },
-          "on_own": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "title",
-          "promise",
-          "target",
-          "days"
         ]
       }
     },

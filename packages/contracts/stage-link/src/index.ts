@@ -10,6 +10,7 @@
 // `type` against the union's tags before `parse` and ignores a type it does not know.
 
 import { z } from "zod";
+import { WorkersKaraokeLyricsV2Schema } from "../../workers/src/karaoke.js";
 
 /** Protocol version a `hello` carries. */
 export const STAGE_LINK_VERSION = 1;
@@ -44,10 +45,18 @@ export const GIFT_LABEL_MAX = 24;
 /** Most gifts of one kind a message counts. */
 export const GIFT_COUNT_MAX = 99;
 
-/** Longest payer name / message / song title a screen card takes (code units). */
+/** Longest payer name / message a screen card takes (code units). */
 export const SCREEN_NAME_MAX = 32;
 export const SCREEN_TEXT_MAX = 200;
-export const SCREEN_SONG_MAX = 128;
+
+/** Longest danmaku id / sender name / text (code units). */
+export const DANMAKU_ID_MAX = 64;
+export const DANMAKU_NAME_MAX = 32;
+export const DANMAKU_TEXT_MAX = 100;
+/** Most danmaku lines on the screen at once, waiting in the queue, and the longest wait (ms). */
+export const DANMAKU_ON_SCREEN_MAX = 50;
+export const DANMAKU_QUEUE_MAX = 200;
+export const DANMAKU_WAIT_MAX_MS = 600_000;
 
 /** Longest highlight reason (code units). */
 export const CLIP_REASON_MAX = 120;
@@ -101,12 +110,6 @@ export const StageLinkSpeakingStateSchema = z
   .meta({ id: "StageLinkSpeakingState" });
 export type SpeakingState = z.output<typeof StageLinkSpeakingStateSchema>;
 
-/** A paid message or a song dedication. */
-export const StageLinkScreenKindSchema = z
-  .enum(["message", "dedication"])
-  .meta({ id: "StageLinkScreenKind" });
-export type ScreenKind = z.output<typeof StageLinkScreenKindSchema>;
-
 /** What a viewer's touch landed on. */
 export const StageLinkTouchPartSchema = z
   .enum(["head", "face", "body", "screen"])
@@ -115,12 +118,24 @@ export type TouchPart = z.output<typeof StageLinkTouchPartSchema>;
 
 /**
  * What she is doing, for the overlay's activity line: `thinking` (a turn runs, nothing said yet),
- * `synthesizing` (her line is at TTS), `song_prepare` (the song worker makes a song), `singing`.
+ * `synthesizing` (her line is at TTS), `tool` (a tool of hers runs), `game` (she plays one),
+ * `song_prepare` (the song worker makes a song), `singing`.
  */
 export const StageLinkActivityKindSchema = z
-  .enum(["thinking", "synthesizing", "song_prepare", "singing"])
+  .enum(["thinking", "synthesizing", "tool", "game", "song_prepare", "singing"])
   .meta({ id: "StageLinkActivityKind" });
 export type ActivityKind = z.output<typeof StageLinkActivityKindSchema>;
+
+/**
+ * How a danmaku line ended on the stage: `shown` (it entered the screen), `no_overlay` (no overlay
+ * page was open), `queue_full` (the overlay's queue was full), `too_late` (it waited longer than
+ * `max_wait_ms`), `cleared` (the layer was cleared before it showed), `lost` (the overlay went away,
+ * or never answered, before it showed). Every outcome but `shown` means it was not seen.
+ */
+export const StageLinkDanmakuOutcomeSchema = z
+  .enum(["shown", "no_overlay", "queue_full", "too_late", "cleared", "lost"])
+  .meta({ id: "StageLinkDanmakuOutcome" });
+export type DanmakuOutcome = z.output<typeof StageLinkDanmakuOutcomeSchema>;
 
 /** A request id: a message with one is answered with the same. */
 const requestId = z.number().int().nonnegative().max(0xffff_ffff).nullish();
@@ -147,6 +162,13 @@ export const StageLinkStageStatusSchema = z
     hotkeys: z.array(z.string()).default([]),
     /** URL of the node's overlay page (an OBS browser source), if it serves one. */
     overlay_url: z.string().nullable().default(null),
+    /** OBS's current scene collection, as the node last read it. */
+    obs_collection: z.string().nullable().default(null),
+    /**
+     * Something about OBS the owner should fix, for the panel and `stream status` (OBS is not on
+     * the scene collection of `[stage.obs] collection`: the node creates nothing in it).
+     */
+    obs_warning: z.string().nullable().default(null),
   })
   .meta({ id: "StageLinkStageStatus" });
 export type StageStatus = z.output<typeof StageLinkStageStatusSchema>;
@@ -180,6 +202,18 @@ export const StageLinkClipSavedMessageSchema = z
   })
   .meta({ id: "StageLinkClipSavedMessage" });
 
+/**
+ * How a danmaku line (`danmaku`, by its `id`) ended on the overlay; sent once per line. A node that
+ * cannot reach Core keeps these and sends them when it is connected again.
+ */
+export const StageLinkDanmakuDoneMessageSchema = z
+  .object({
+    type: z.literal("danmaku_done"),
+    id: z.string().min(1).max(DANMAKU_ID_MAX),
+    outcome: StageLinkDanmakuOutcomeSchema,
+  })
+  .meta({ id: "StageLinkDanmakuDoneMessage" });
+
 export const StageLinkPingMessageSchema = z
   .object({ type: z.literal("ping") })
   .meta({ id: "StageLinkPingMessage" });
@@ -195,6 +229,7 @@ export const StageLinkStageMessageSchema = z
     StageLinkStatusMessageSchema,
     StageLinkErrorMessageSchema,
     StageLinkClipSavedMessageSchema,
+    StageLinkDanmakuDoneMessageSchema,
     StageLinkPingMessageSchema,
     StageLinkPongMessageSchema,
   ])
@@ -287,18 +322,40 @@ export const StageLinkGiftMessageSchema = z
   .meta({ id: "StageLinkGiftMessage" });
 
 /**
- * A paid message or a song dedication (`economy.screen`). Unlike gifts they are not merged: the
- * overlay queues them and shows one at a time. `song` is the title for a dedication, else null.
+ * A paid message (`economy.screen`). Unlike gifts they are not merged: the overlay queues them
+ * and shows one at a time.
  */
 export const StageLinkScreenMessageSchema = z
   .object({
     type: z.literal("screen"),
-    kind: StageLinkScreenKindSchema,
     name: z.string().max(SCREEN_NAME_MAX),
     text: z.string().max(SCREEN_TEXT_MAX),
-    song: z.string().max(SCREEN_SONG_MAX).nullable(),
   })
   .meta({ id: "StageLinkScreenMessage" });
+
+/**
+ * A paid danmaku line (`economy.danmaku`): it crosses the overlay from right to left in a lane.
+ * `name` is the sender's display name, `null` when names are hidden. The limits are the owner's
+ * settings, sent with every line: at most `max_on_screen` lines on the screen, `queue_max` waiting,
+ * and a line that waited `max_wait_ms` is dropped. The node answers each line once with
+ * `danmaku_done` (an older node ignores the message, and Core gives up on it).
+ */
+export const StageLinkDanmakuMessageSchema = z
+  .object({
+    type: z.literal("danmaku"),
+    id: z.string().min(1).max(DANMAKU_ID_MAX),
+    name: z.string().max(DANMAKU_NAME_MAX).nullable(),
+    text: z.string().min(1).max(DANMAKU_TEXT_MAX),
+    max_on_screen: z.number().int().min(1).max(DANMAKU_ON_SCREEN_MAX),
+    queue_max: z.number().int().min(0).max(DANMAKU_QUEUE_MAX),
+    max_wait_ms: z.number().int().min(0).max(DANMAKU_WAIT_MAX_MS),
+  })
+  .meta({ id: "StageLinkDanmakuMessage" });
+
+/** Takes every danmaku line off the overlay; the ones still waiting end as `cleared`. */
+export const StageLinkDanmakuClearMessageSchema = z
+  .object({ type: z.literal("danmaku_clear") })
+  .meta({ id: "StageLinkDanmakuClearMessage" });
 
 /**
  * A viewer touched the stream on the website (`live.touch`): `x`, `y` 0..1 on the picture
@@ -366,6 +423,19 @@ export const StageLinkNoticeMessageSchema = z
  * it was when the message was sent) and `duration_ms`, so its progress runs on the receiver's
  * clock instead.
  */
+/**
+ * What happens beside the main line: a song being prepared while she does something else. Its own
+ * label and song title, one overall `progress` (`null`: waiting, no bar).
+ */
+export const StageLinkActivitySideSchema = z
+  .object({
+    label: z.string().max(ACTIVITY_LABEL_MAX),
+    detail: z.string().max(ACTIVITY_DETAIL_MAX).nullable().default(null),
+    progress: z.number().min(0).max(1).nullable().default(null),
+  })
+  .meta({ id: "StageLinkActivitySide" });
+export type ActivitySide = z.output<typeof StageLinkActivitySideSchema>;
+
 export const StageLinkActivitySchema = z
   .object({
     kind: StageLinkActivityKindSchema.nullable(),
@@ -374,6 +444,8 @@ export const StageLinkActivitySchema = z
     progress: z.number().min(0).max(1).nullable().default(null),
     elapsed_ms: z.number().min(0).max(DAY_MS).nullable().default(null),
     duration_ms: z.number().positive().max(DAY_MS).nullable().default(null),
+    /** Left out (or `null`) when nothing happens beside the main line; an older node never reads it. */
+    secondary: StageLinkActivitySideSchema.nullable().optional(),
   })
   .meta({ id: "StageLinkActivity" });
 export type Activity = z.output<typeof StageLinkActivitySchema>;
@@ -382,6 +454,182 @@ export type Activity = z.output<typeof StageLinkActivitySchema>;
 export const StageLinkActivityMessageSchema = StageLinkActivitySchema.extend({
   type: z.literal("activity"),
 }).meta({ id: "StageLinkActivityMessage" });
+
+// ---- karaoke rooms on the stream (docs/design/karaoke.md 「做了什麼第五步」) ---------------------
+
+/** Longest room code, member name, song title / artist and note the karaoke messages carry. */
+export const KARAOKE_CODE_MAX = 12;
+export const KARAOKE_NAME_MAX = 60;
+export const KARAOKE_TITLE_MAX = 200;
+export const KARAOKE_NOTE_MAX = 200;
+/** Most people a karaoke room lists, and singers on its board. */
+export const KARAOKE_MEMBERS_MAX = 64;
+export const KARAOKE_BOARD_MAX = 16;
+
+/** One person in the room on the stream. Names are untrusted (shown as text). */
+export const StageLinkKaraokeMemberSchema = z
+  .object({
+    name: z.string().max(KARAOKE_NAME_MAX),
+    /** 0..7: their colour (the panel's category colours; 5–7 repeat 0–2 dashed). */
+    color: z.number().int().min(0).max(7),
+    role: z.enum(["singer", "spectator"]),
+    ready: z.boolean(),
+    opener: z.boolean(),
+  })
+  .meta({ id: "StageLinkKaraokeMember" });
+export type KaraokeStageMember = z.output<typeof StageLinkKaraokeMemberSchema>;
+
+/**
+ * One singer on the stream's board: the live ranking while a round is sung (`total` the running
+ * score, `move` since the last board), the final one after it (`winner`, `coins`, `finished`).
+ * `source`: `voice` the official score, `estimate` the browser's (預估); `null` no score yet.
+ */
+export const StageLinkKaraokeLineSchema = z
+  .object({
+    name: z.string().max(KARAOKE_NAME_MAX),
+    color: z.number().int().min(0).max(7),
+    rank: z.number().int().min(1).nullable(),
+    total: z.number().min(0).max(110).nullable(),
+    source: z.enum(["voice", "estimate"]).nullable(),
+    move: z.enum(["up", "down", "same"]),
+    winner: z.boolean(),
+    coins: z.number().int().min(0),
+    finished: z.boolean(),
+    /** Their voice is the one the stream plays now (`karaoke_voice`). */
+    on_air: z.boolean(),
+  })
+  .meta({ id: "StageLinkKaraokeLine" });
+export type KaraokeStageLine = z.output<typeof StageLinkKaraokeLineSchema>;
+
+/** The song of the room on the stream. Title and artist are untrusted (the song's source). */
+export const StageLinkKaraokeSongSchema = z
+  .object({
+    id: z.string().max(SONG_MAX),
+    title: z.string().max(KARAOKE_TITLE_MAX),
+    artist: z.string().max(KARAOKE_TITLE_MAX).nullable(),
+    duration_ms: z.number().positive().max(DAY_MS).nullable(),
+  })
+  .meta({ id: "StageLinkKaraokeSong" });
+export type KaraokeStageSong = z.output<typeof StageLinkKaraokeSongSchema>;
+
+/**
+ * What the stream's scene plays during the round (her own voice channel carries none of it: she is
+ * not the one singing). `backing`: the scene plays the round's backing (`karaoke_lyrics.backing`).
+ * `relay`: the name of the singer whose voice the scene plays now (`karaoke_voice`; one at a time:
+ * the round's one singer who asked for it, or the room's leader), `null` for nobody. `delay_ms`:
+ * how far the stream runs behind the singers (the room's fixed delay; `position_ms` already has
+ * it). The gains (0..1) are the owner's: the backing, the voice, and both while she speaks
+ * (`speaking`), so her hosting lines in the voice channel stay clear.
+ */
+export const StageLinkKaraokeAirSchema = z
+  .object({
+    backing: z.boolean(),
+    relay: z.string().max(KARAOKE_NAME_MAX).nullable(),
+    delay_ms: z.number().int().min(0).max(60_000),
+    backing_gain: z.number().min(0).max(1),
+    voice_gain: z.number().min(0).max(4),
+    duck_gain: z.number().min(0).max(1),
+  })
+  .meta({ id: "StageLinkKaraokeAir" });
+export type KaraokeStageAir = z.output<typeof StageLinkKaraokeAirSchema>;
+
+/**
+ * The karaoke room the stream shows (one at a time: a round being sung first, then the latest
+ * results, then a lobby). `room: null` ends the scene (no room, rooms off); the other fields are
+ * then empty. `position_ms`: during the countdown and the round, where the song is *on the stream*
+ * at the moment the message was sent (negative while it counts down): the singers' start plus the
+ * stream's delay (`stream_delay_ms`), so the voice channel's backing and the overlay agree;
+ * `null` otherwise. Sent on every change and once a second while a round is sung (the board).
+ */
+export const StageLinkKaraokeSceneSchema = z
+  .object({
+    room: z.string().max(KARAOKE_CODE_MAX).nullable(),
+    state: z.enum(["lobby", "countdown", "singing", "results"]).nullable(),
+    /** The round now, 1-based (0 before the first), and how many the room may still start. */
+    round: z.number().int().min(0),
+    rounds_left: z.number().int().min(0),
+    song: StageLinkKaraokeSongSchema.nullable(),
+    /** Semitones the backing is moved by (one key for everyone). */
+    shift: z.number().int().min(-12).max(12),
+    members: z.array(StageLinkKaraokeMemberSchema).max(KARAOKE_MEMBERS_MAX),
+    position_ms: z.number().min(-DAY_MS).max(DAY_MS).nullable(),
+    /** The live board while sung, the final ranking with the results; empty otherwise. */
+    board: z.array(StageLinkKaraokeLineSchema).max(KARAOKE_BOARD_MAX),
+    /** Why the round paid no prize, with the results (`null`: nothing to say). */
+    note: z.string().max(KARAOKE_NOTE_MAX).nullable(),
+    currency: z.string().max(16),
+    air: StageLinkKaraokeAirSchema,
+  })
+  .meta({ id: "StageLinkKaraokeScene" });
+export type KaraokeStageScene = z.output<typeof StageLinkKaraokeSceneSchema>;
+
+export const StageLinkKaraokeMessageSchema = StageLinkKaraokeSceneSchema.extend({
+  type: z.literal("karaoke"),
+}).meta({ id: "StageLinkKaraokeMessage" });
+
+/**
+ * The round's backing as the scene plays it: `path` an absolute file on the streaming PC (Core's
+ * karaoke cache), `format` `pcm` (s16le mono at `rate`, decoded by the song worker) or `m4a` (AAC,
+ * when the worker had no PCM: the page decodes it).
+ */
+export const StageLinkKaraokeBackingSchema = z
+  .object({
+    path: z.string().max(PATH_MAX),
+    format: z.enum(["pcm", "m4a"]),
+    rate: z.number().int().min(8_000).max(192_000),
+  })
+  .meta({ id: "StageLinkKaraokeBacking" });
+export type KaraokeStageBacking = z.output<typeof StageLinkKaraokeBackingSchema>;
+
+/**
+ * The words, picture and backing of a round, once when it starts (and again for a node that
+ * connects mid-round): the lyrics as the song's reference has them (untrusted text), `video` the
+ * absolute path of the round's background video on the streaming PC (Core's karaoke cache; no
+ * sound), `backing` the round's backing in its key; `null` without one. `round` and `song` say
+ * which round of `room` they belong to.
+ */
+export const StageLinkKaraokeLyricsSchema = z
+  .object({
+    room: z.string().max(KARAOKE_CODE_MAX),
+    round: z.number().int().min(1),
+    song: z.string().max(SONG_MAX),
+    lyrics: WorkersKaraokeLyricsV2Schema.nullable(),
+    video: z.string().max(PATH_MAX).nullable(),
+    backing: StageLinkKaraokeBackingSchema.nullable(),
+  })
+  .meta({ id: "StageLinkKaraokeLyrics" });
+export type KaraokeStageLyrics = z.output<typeof StageLinkKaraokeLyricsSchema>;
+
+export const StageLinkKaraokeLyricsMessageSchema = StageLinkKaraokeLyricsSchema.extend({
+  type: z.literal("karaoke_lyrics"),
+}).meta({ id: "StageLinkKaraokeLyricsMessage" });
+
+/** Sample rate of `karaoke_voice` audio (the singers' µ-law stream). */
+export const KARAOKE_VOICE_RATE = 16_000;
+/** Most audio one `karaoke_voice` carries: two seconds of µ-law, base64. */
+export const KARAOKE_VOICE_MAX_CHARS = 44_000;
+
+/**
+ * A piece of the relayed singer's voice for the scene to play: µ-law at `KARAOKE_VOICE_RATE`,
+ * base64, its first sample at song time `at_ms` (already placed on the backing's time by the
+ * singer's device latency). Core has already chosen whose voice it is, crossfaded a change of
+ * singer and buffered every singer to the room's fixed delay, so pieces follow each other without
+ * gaps (silence where nothing arrived in time). Sent about four times a second while a voice is on
+ * the stream; never kept anywhere.
+ */
+export const StageLinkKaraokeVoiceSchema = z
+  .object({
+    room: z.string().max(KARAOKE_CODE_MAX),
+    round: z.number().int().min(1),
+    at_ms: z.number().min(-DAY_MS).max(DAY_MS),
+    audio: z.string().max(KARAOKE_VOICE_MAX_CHARS),
+  })
+  .meta({ id: "StageLinkKaraokeVoice" });
+export type KaraokeStageVoice = z.output<typeof StageLinkKaraokeVoiceSchema>;
+
+export const StageLinkKaraokeVoiceMessageSchema = StageLinkKaraokeVoiceSchema.extend({
+  type: z.literal("karaoke_voice"),
+}).meta({ id: "StageLinkKaraokeVoiceMessage" });
 
 /** Asks for a `status` (with the same `id`). */
 export const StageLinkStatusRequestMessageSchema = z
@@ -402,12 +650,17 @@ export const StageLinkCoreMessageSchema = z
     StageLinkAvatarExpressionMessageSchema,
     StageLinkGiftMessageSchema,
     StageLinkScreenMessageSchema,
+    StageLinkDanmakuMessageSchema,
+    StageLinkDanmakuClearMessageSchema,
     StageLinkTouchMessageSchema,
     StageLinkSongVideoMessageSchema,
     StageLinkBeatMessageSchema,
     StageLinkClipMessageSchema,
     StageLinkNoticeMessageSchema,
     StageLinkActivityMessageSchema,
+    StageLinkKaraokeMessageSchema,
+    StageLinkKaraokeLyricsMessageSchema,
+    StageLinkKaraokeVoiceMessageSchema,
     StageLinkStatusRequestMessageSchema,
     StageLinkPingMessageSchema,
     StageLinkPongMessageSchema,

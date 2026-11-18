@@ -16,10 +16,21 @@
       "@miyoria/source": "./src/render.tsx",
       "types": "./dist/render.d.ts",
       "default": "./dist/render.js"
+    },
+    "./fonts": {
+      "@miyoria/source": "./src/fonts.ts",
+      "types": "./dist/fonts.d.ts",
+      "default": "./dist/fonts.js"
+    },
+    "./pictures": {
+      "@miyoria/source": "./src/pictures/index.ts",
+      "types": "./dist/pictures/index.d.ts",
+      "default": "./dist/pictures/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "fonts"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

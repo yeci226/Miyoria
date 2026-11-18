@@ -9,7 +9,8 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "sample": "tsx scripts/sample.ts"
+    "sample": "tsx scripts/sample.ts",
+    "sheet": "tsx --conditions=@miyoria/source scripts/sheet.ts"
   },
   "dependencies": {
     "playwright-core": "1.64.1"

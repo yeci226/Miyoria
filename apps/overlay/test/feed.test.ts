@@ -32,22 +32,15 @@ describe("gift line", () => {
 });
 
 describe("screen cards", () => {
-  const card = (text: string): Action => ({ type: "screen", kind: "message", name: "Owen", text, song: null });
+  const card = (text: string): Action => ({ type: "screen", name: "Owen", text });
 
-  it("parses messages and dedications, and drops what is not a card", () => {
-    expect(parseMessage('{"type":"screen","kind":"message","name":" Owen ","text":"加油","song":null}')).toEqual({
-      type: "screen", kind: "message", name: "Owen", text: "加油", song: null,
+  it("parses messages, and drops what is not a card", () => {
+    expect(parseMessage('{"type":"screen","name":" Owen ","text":"加油"}')).toEqual({
+      type: "screen", name: "Owen", text: "加油",
     });
-    expect(parseMessage('{"type":"screen","kind":"dedication","name":"A","text":"給 B","song":"春日影"}')).toMatchObject({
-      kind: "dedication", song: "春日影",
-    });
-    // A dedication without a song is a message; a message has no song.
-    expect(parseMessage('{"type":"screen","kind":"dedication","name":"A","text":"x","song":""}')).toMatchObject({ kind: "message", song: null });
-    expect(parseMessage('{"type":"screen","kind":"message","name":"A","text":"x","song":"s"}')).toMatchObject({ song: null });
     for (const bad of [
-      '{"type":"screen","kind":"other","name":"A","text":"x"}',
-      '{"type":"screen","kind":"message","name":"","text":"x"}',
-      '{"type":"screen","kind":"message","name":"A","text":" "}',
+      '{"type":"screen","name":"","text":"x"}',
+      '{"type":"screen","name":"A","text":" "}',
     ]) {
       expect(parseMessage(bad), bad).toBeNull();
     }
@@ -254,6 +247,32 @@ describe("reduce", () => {
     const long = parseMessage(JSON.stringify({ type: "activity", kind: "singing", label: "長".repeat(99), detail: "曲".repeat(999) }));
     expect(long?.type === "activity" && long.activity?.label.length).toBe(40);
     expect(long?.type === "activity" && long.activity?.detail?.length).toBe(160);
+  });
+
+  it("parses the secondary line of a song being prepared; older frames have none", () => {
+    const m = parseMessage(
+      '{"type":"activity","kind":"tool","label":"查資料中","secondary":{"label":"準備歌曲","detail":"夜に駆ける","progress":0.4}}',
+    );
+    expect(m).toEqual({
+      type: "activity",
+      activity: {
+        kind: "tool", label: "查資料中", detail: null, progress: null, elapsedMs: null, durationMs: null,
+        secondary: { label: "準備歌曲", detail: "夜に駆ける", progress: 0.4 },
+      },
+    });
+    // Waiting has no progress; junk is no secondary; a frame without one parses as before.
+    expect(parseMessage('{"type":"activity","kind":"game","label":"玩遊戲中","secondary":{"label":"連不上"}}')).toMatchObject({
+      activity: { secondary: { label: "連不上", detail: null, progress: null } },
+    });
+    expect(parseMessage('{"type":"activity","kind":"game","label":"x","secondary":{"label":" "}}')).not.toHaveProperty("activity.secondary");
+    expect(parseMessage('{"type":"activity","kind":"game","label":"x","secondary":7}')).not.toHaveProperty("activity.secondary");
+    expect(parseMessage('{"type":"activity","kind":"thinking","label":"思考中…"}')).not.toHaveProperty("activity.secondary");
+    // The same frame is no change; a new progress of the secondary line is.
+    const at = (p: number) =>
+      parseMessage(`{"type":"activity","kind":"tool","label":"x","secondary":{"label":"準備歌曲","progress":${p}}}`) as Action;
+    const s = run([at(0.1)]);
+    expect(reduce(s, at(0.1))).toBe(s);
+    expect(reduce(s, at(0.2))).not.toBe(s);
   });
 
   it("keeps the activity; the same one again is no change; a dropped feed clears it", () => {

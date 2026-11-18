@@ -17,6 +17,7 @@ import {
   ExtEventsTopicsParamsSchema,
   ExtKeyParamsSchema,
   ExtLogParamsSchema,
+  ExtStatusResultSchema,
   ExtStorageSetParamsSchema,
   ExtToolsUnregisterParamsSchema,
 } from "@miyoria/contracts/ext";
@@ -29,6 +30,7 @@ import {
   HEALTHY,
   type Health,
   type Module,
+  type ModuleCard,
   type ModuleContext,
   type ModuleManifest,
   TopicFilter,
@@ -43,6 +45,7 @@ import {
   PromptContributorsKey,
   publishTaskEvent,
   TaskExecutorsKey,
+  type Timestamp,
 } from "@miyoria/types";
 import { z } from "zod";
 import { type HostConfig, runtimeCommand } from "./config.js";
@@ -81,6 +84,9 @@ export const HOST_VERSION = "0.1.0";
 
 /** Module id of the host module every extension requires. */
 export const EXTENSIONS_MODULE_ID = "extensions";
+
+/** How long the host waits for an extension's `status` answer (the panel's card deadline). */
+export const STATUS_TIMEOUT_MS = 500;
 
 /** Lines an extension writes to stderr and `log` calls go here (logger `miyoria_ext`). */
 const extLog = getLogger("miyoria_ext");
@@ -146,12 +152,17 @@ export class ExtensionModule implements Module {
   readonly configJsonSchema: JsonValue | null;
   readonly #host: HostConfig;
   #session: Session | null = null;
+  /** It answers the `status` request (its `initialize` contributions said so). */
+  #answersStatus = false;
 
   constructor(spec: ExtensionSpec, host: HostConfig, schema: JsonValue | null = null) {
     const m = spec.manifest;
     const configSchema = schemaFromJson(schema);
     this.manifest = defineManifest(m.moduleId(), m.displayName(), {
       description: m.description ?? `Extension ${m.id} ${m.version}`,
+      // `icon` of its manifest; the panel draws its default without one.
+      ...(m.icon ? { icon: m.icon } : {}),
+      category: "system",
       requires: [EXTENSIONS_MODULE_ID],
       optional: ["agent", "commands"],
       ...(configSchema ? { configSchema } : {}),
@@ -275,6 +286,29 @@ export class ExtensionModule implements Module {
       throw new ExtensionStartError(protocolMismatch(parsed.data.protocol));
     }
     session.apply(parsed.data.contributions);
+    this.#answersStatus = parsed.data.contributions.status;
+  }
+
+  /**
+   * The extension's card, when it said it answers `status`: its facts, next thing and last error
+   * (no actions: an extension's controls are its commands and tools). Nothing otherwise.
+   */
+  async card(): Promise<ModuleCard> {
+    const session = this.#session;
+    if (session === null || !this.#answersStatus) return { facts: [] };
+    const answer = await session.peer.request("status", {}, STATUS_TIMEOUT_MS);
+    const parsed = ExtStatusResultSchema.safeParse(answer);
+    if (!parsed.success) {
+      throw new Error(`invalid status result: ${z.prettifyError(parsed.error)}`);
+    }
+    const { facts, next, last_error } = parsed.data;
+    return {
+      facts: facts.map((f) => ({ ...f })),
+      ...(next ? { next: { label: next.label, at: next.at as Timestamp } } : {}),
+      ...(last_error
+        ? { last_error: { at: last_error.at as Timestamp, message: last_error.message } }
+        : {}),
+    };
   }
 
   async #shutdown(session: Session, graceful: boolean): Promise<void> {

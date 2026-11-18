@@ -151,6 +151,8 @@ interface Running {
 export class SelfModule implements Module {
   static readonly ID = "self";
   readonly manifest = defineManifest(SelfModule.ID, "Self", {
+    icon: "smile",
+    category: "her",
     description: "Her inner state: drives, boredom, her own policy, agenda and feelings",
     optional: ["world"],
     configSchema: SelfConfigSchema,

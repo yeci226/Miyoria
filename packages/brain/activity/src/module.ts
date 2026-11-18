@@ -18,6 +18,8 @@ import { GatePort } from "./port.js";
 export class ActivityModule implements Module {
   static readonly ID = "activity";
   readonly manifest = defineManifest(ActivityModule.ID, "Activity", {
+    icon: "activity",
+    category: "her",
     description: "What she is doing: voice presence, the broadcast and her activity, one owner",
     optional: ["actions", "facts"],
     configSchema: ActivityConfigSchema,

@@ -61,6 +61,9 @@ export {
   ExtInitializeResultSchema,
   type ExtPermissions,
   ExtPermissionsSchema,
+  type ExtStatusResult,
+  type ExtStatusResultIn,
+  ExtStatusResultSchema,
 } from "./lifecycle.js";
 export {
   type ExtParticipant,

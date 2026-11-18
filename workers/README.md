@@ -53,7 +53,7 @@ miyoria logs asr -f           # 看一個服務的 log
 
 - 在 `host.toml` 加 `[services.<名稱>]`;
 - 把服務資料夾的 `pyproject.toml` 和 `uv.lock` 用 `uv sync --frozen` 裝進 `<狀態資料夾>/envs/<名稱>`(狀態資料夾預設 `data/host`),版本全部照 lock 檔,CUDA 版 torch 也在裡面;
-- 下載 `service.toml` 的 `[install.files]`(turn 的兩個小模型:smart-turn 約 9 MB、silero-vad 約 2 MB,放到 `<狀態資料夾>/models/`);
+- 下載 `service.toml` 的 `[[install.files]]`:公開的模型檔,寫明來源、SHA-256、大小和授權;先列出來問一次(`-y` 不問),放到 `<狀態資料夾>/models/`,SHA-256 對了才留下([OPERATIONS.md](../docs/OPERATIONS.md) 的「自動下載的模型檔」)。目前 turn 和 sing 的都寫好了但還在等檢查碼,先照下表自己放;
 - 檢查 `[install] system` 的程式在不在 PATH 上(sing 要 ffmpeg),**不會替你裝**。
 
 `add` 不會裝 NVIDIA 驅動 / CUDA、Docker Desktop、OBS、VTube Studio、Minecraft(要管理員權限或授權條款),也不會替你放下面這些,`add` 的輸出和 `doctor` 都會列出缺哪些:
@@ -61,7 +61,8 @@ miyoria logs asr -f           # 看一個服務的 log
 | 服務 | 要自己放的(從 repository 根目錄算起) | 說明 |
 |---|---|---|
 | tts | `workers/voices/<聲音>/ref.wav` + `ref.txt` | 你的聲音參考音,不進 git(第 4 節);`<聲音>` 預設 `deepseek-chan` |
-| sing | `workers/models/applio/`(她的 RVC 模型)、`workers/models/lead-split/`(`becruily-bs/`)、`workers/models/vocal-split/`、`workers/models/seed-vc/` | 第 9 節;沒有的部分會退回或略過,`doctor` 以警告列出 |
+| turn | `<狀態資料夾>/models/smart-turn/smart-turn-v3.2-cpu.onnx`、`<狀態資料夾>/models/silero-vad/silero_vad.onnx` | 第 10 節;公開的小模型,`service.toml` 填好檢查碼後改成自動下載;沒有也能跑 |
+| sing | `workers/models/applio/`(她的 RVC 模型)、`workers/models/lead-split/`(`becruily-bs/`)、`workers/models/vocal-split/`、`workers/models/seed-vc/` | 第 9 節;沒有的部分會退回或略過,`doctor` 以警告列出。兩個分離模型由 `miyoria update` 自動下載到 `<狀態資料夾>/models/`(舊位置 `workers/models/` 的沿用,見 `modelpaths.py`);人聲分離的 `.yaml`、RVC 模型(私人)和 Seed-VC 原始碼是手動的 |
 
 Hugging Face 上的大模型 `add` 不下載:第一次啟動時服務自己下載,或先 `miyoria models pull <服務>`,放在 `<狀態資料夾>/models/hf`(hostd 把 `HF_HUB_CACHE` 指到那裡)。Qwen3-ASR 約 2 GB、Qwen3-TTS 約 4–5 GB(tts 還會捕捉 CUDA graph,要等幾分鐘)、sing 的第一首歌約 2 GB。
 
@@ -581,7 +582,7 @@ curl -s -X POST http://127.0.0.1:8005/cache/prune                     # 現在�
 
 **安裝**
 
-`miyoria add sing` 建環境(`workers/sing/pyproject.toml`,torch 和 torchaudio 2.11.0 的 CUDA 12.8 版,`ffmpeg` 要在 PATH 上),再列出要自己放的東西:`workers/models/` 底下的 `applio/`(她的 RVC 模型)、`lead-split/`(`becruily-bs/`)、`vocal-split/`(`MelBandRoformer.ckpt` + `.yaml`)、`seed-vc/`(Seed-VC 原始碼)。後三個沒有的話會退回或略過(沒有 lead-split 就不切主唱、沒有 vocal-split 就退回 Demucs);`applio/` 只在 `SING_VOICE=seedvc` 時可以略過。第一首歌會先下載約 2 GB 的模型。
+`miyoria add sing` 建環境(`workers/sing/pyproject.toml`,torch 和 torchaudio 2.11.0 的 CUDA 12.8 版,`ffmpeg` 要在 PATH 上),再列出要自己放的東西(兩個分離模型在 `service.toml` 寫好了 `[[install.files]]`,自動下載到 `<狀態資料夾>/models/`,舊位置 `workers/models/` 的沿用;人聲分離的 `.yaml` 仍然手動):`workers/models/` 底下的 `applio/`(她的 RVC 模型)、`lead-split/`(`becruily-bs/`)、`vocal-split/`(`MelBandRoformer.ckpt` + `.yaml`)、`seed-vc/`(Seed-VC 原始碼)。後三個沒有的話會退回或略過(沒有 lead-split 就不切主唱、沒有 vocal-split 就退回 Demucs);`applio/` 只在 `SING_VOICE=seedvc` 時可以略過。第一首歌會先下載約 2 GB 的模型。
 
 自己用 uv 跑(Git Bash):
 
@@ -691,7 +692,7 @@ Silero 是另一個獨立開關(`vad_engine = "silero"`):每 32 ms 一幀送到 
 
 **安裝**
 
-`miyoria add turn` 建環境,並把兩個模型下載到狀態資料夾(預設 `data/host/models/`):`smart-turn/smart-turn-v3.2-cpu.onnx`(BSD-2-Clause,約 9 MB,來自 huggingface.co/pipecat-ai/smart-turn-v3)和 `silero-vad/silero_vad.onnx`(MIT,約 2 MB,來自 raw.githubusercontent.com/snakers4/silero-vad)。檔案已經存在就不覆蓋,可以續傳。hostd 啟動 worker 時用 `TURN_SMART_MODEL` 和 `TURN_SILERO_MODEL` 指到那兩個檔,不用自己設。
+`miyoria add turn` 建環境。兩個模型放在狀態資料夾(預設 `data/host/models/`):`smart-turn/smart-turn-v3.2-cpu.onnx`(BSD-2-Clause,約 9 MB,來自 huggingface.co/pipecat-ai/smart-turn-v3)和 `silero-vad/silero_vad.onnx`(MIT,約 2 MB,來自 raw.githubusercontent.com/snakers4/silero-vad)。它們在 `workers/turn/service.toml` 已經寫成 `[[install.files]]`,但還在等 SHA-256 和固定的 commit(之前的版本抓的是會變的 `main` / `master`、沒有核對),所以先註解掉,`add` 和 `doctor` 把它們列成手動項目;填好之後 `add` 會問一次再下載並核對。在這之前用下面的指令自己下載到 `data/host/models/` 底下同樣的路徑。hostd 啟動 worker 時用 `TURN_SMART_MODEL` 和 `TURN_SILERO_MODEL` 指到那兩個檔,不用自己設。
 
 沒有這兩個檔 worker 也會啟動,Core 退回「安靜多久就算講完」;`/health` 的 `smart_turn` 或 `silero` 會是 `false`,`errors` 寫原因。
 

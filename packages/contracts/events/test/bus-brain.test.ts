@@ -19,6 +19,7 @@ describe("tiers and default scopes", () => {
     ["agent.turn.focus", null, "short"],
     ["agent.prompt", "owner", "short"],
     ["agent.tool", null, "short"],
+    ["agent.tool.running", null, "ambient"],
     ["agent.emotion", null, "short"],
     ["agent.message.excluded", "owner", "keep"],
     ["agent.notice", null, "short"],

@@ -45,10 +45,41 @@ export const SongCueSchema = z
 export type SongCueData = z.output<typeof SongCueSchema>;
 
 /**
+ * Every stage the song worker reports (`workers/sing/server.py`), in no order: `queued` (waits for
+ * its turn), `resolve`, `download`, `exclusive` / `gpu_wait` (hands the card over, waits for room on
+ * it), `separate`, `lead`, `convert`, `convert_backing`, `mix`, `beats`, `lyrics`, `video`, and for a
+ * karaoke song `reference`, `encode`, `lyrics_asr`, `lyrics_align`; and `unreachable`, which the
+ * `sing` module itself reports when the worker stopped answering. The overlay says each in words
+ * (`packages/stage/src/link/activity.ts`); a test fails when this list, the worker and those words
+ * drift apart. `SongPrepare.stage` stays a plain string: a newer worker may report one not listed.
+ */
+export const SONG_PREPARE_STAGES = [
+  "queued",
+  "resolve",
+  "download",
+  "exclusive",
+  "gpu_wait",
+  "separate",
+  "lead",
+  "convert",
+  "convert_backing",
+  "mix",
+  "beats",
+  "lyrics",
+  "video",
+  "reference",
+  "encode",
+  "lyrics_asr",
+  "lyrics_align",
+  "unreachable",
+] as const;
+
+/**
  * The song the worker is preparing now, whenever it changes: `sing.prepare`. `no: null`: nothing
- * is being prepared. `stage` is the worker's (`queued`, `resolve`, `download`, `exclusive`,
- * `separate`, `convert`, `mix`, `lyrics`, `video`), `progress` that of the whole job (0..1),
- * `exclusive` the job's GPU window (`waiting`, `offloading`, `active`, `reloading`, `done`).
+ * is being prepared. `stage` is the worker's (`SONG_PREPARE_STAGES`), `progress` that of the whole
+ * job (0..1, never backwards while the song stays the same), `exclusive` the job's GPU window
+ * (`waiting`, `offloading`, `active`, `reloading`, `done`), `by` who asked for it (untrusted; left
+ * out when nobody did).
  */
 export const SongPrepareSchema = z
   .object({
@@ -59,6 +90,7 @@ export const SongPrepareSchema = z
     stage: z.string(),
     progress: z.number(),
     exclusive: z.string().nullable(),
+    by: z.string().optional(),
   })
   .meta({ id: "EventsSongPrepare" });
 export type SongPrepareData = z.output<typeof SongPrepareSchema>;

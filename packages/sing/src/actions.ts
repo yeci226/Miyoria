@@ -27,10 +27,11 @@ const RequestArgs = z.object({
   by: z.string().trim().min(1).max(64).nullish(),
   /** She prepares it for herself (練歌): no one is waiting, so it is not sung on its own. */
   practice: z.boolean().nullish(),
-  /** Commands only: use a ticket when the person is at the limit. */
-  ticket: z.boolean().nullish(),
-  /** Commands only: a paid dedication (up to 40 characters). */
-  dedication: z.string().trim().max(200).nullish(),
+  /**
+   * The person's own request only (a command, the member page): use a song priority ticket.
+   * Not in her tool: coins move on a person's own request, never on her call.
+   */
+  priority: z.boolean().nullish(),
 });
 // Song numbers start at 1; a model that fills the optional field with 0 means "the first ready".
 const PlayArgs = z.object({
@@ -102,6 +103,12 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
       const p = ctx.principal;
       // Only she practises: a person's request or a command is always for someone.
       const practice = p.kind === "self" && (args.practice === true || p.requester === null);
+      // A ticket only on the person's own request: their command, or the member page (a request
+      // of theirs with no turn of hers behind it). Never when she calls the tool for them.
+      const own = p.kind === "command" || (p.kind === "user" && ctx.request.turn === null);
+      // A song already on the list is not requested again, so no ticket is taken for it.
+      const listed = singer.list.findOpen(args.query, args.key ?? 0, args.backing ?? "keep");
+      const priority = args.priority === true && own && !practice && listed === null;
       const entry = await singer.request(
         {
           query: args.query,
@@ -112,21 +119,26 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
           context: p.context,
           forced: !practice && forced(p),
           practice,
-          // Money moves only on the person's own command, never on her tool call.
-          ...(p.kind === "command"
-            ? { ticket: args.ticket === true, dedication: args.dedication ?? null }
-            : {}),
+          ...(priority ? { priority: true } : {}),
         },
         ctx.signal,
       );
       const label = songLabel(entry);
+      const ticket = priority
+        ? "用了一張點歌優先券,排在沒用券的歌前面。"
+        : args.priority === true && listed !== null
+          ? "這首已經在歌單上了,沒有用點歌優先券。"
+          : "";
       const text =
         entry.state === "ready"
           ? `${label} 已經準備好了(#${entry.no}),${entry.forced ? "她有空就會唱" : "可以用 sing_start 開唱"}。`
           : entry.state === "playing"
             ? `${label} 已經準備好了(#${entry.no}),她馬上就唱。`
             : `開始準備 ${label}(#${entry.no},大約一到兩分鐘)。${entry.forced ? "好了她就會唱。" : practice ? "好了會告訴你,不會自己開唱。" : "好了會告訴你。"}`;
-      return { text, data: { song: entry.no, state: entry.state } };
+      return {
+        text: `${text}${ticket}`,
+        data: { song: entry.no, state: entry.state, priority },
+      };
     },
   });
 
