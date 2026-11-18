@@ -55,9 +55,13 @@ const MAX_FEEL_TAG = 64;
  * The react tool imitated as a block (2026-11-17: `<react><emoji>🍚</emoji></react>` went out as
  * `<emoji>🍚</emoji>` and `</react>`): from the opening tag to its closing one is a tool written
  * as text, never words. The parser waits this many UTF-16 units for the closing tag.
+ *
+ * Any tool as a block is the same (2026-11-18: `<web_read">`, a `<parameter name="url">` with the
+ * link and `</web_read>` went out as text): its name is snake_case, and the opening tag may carry
+ * a stray quote before its `>`.
  */
 const MAX_TOOL_BLOCK_LEN = 200;
-const TOOL_BLOCK_OPEN = /^<(react|emoji)>/;
+const TOOL_BLOCK_OPEN = /^<(react|emoji|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)["']?>/;
 export const DEFAULT_PAUSE_MS = 300;
 export const MAX_PAUSE_MS = 10_000;
 
@@ -226,7 +230,8 @@ export class ExpressionParser {
         const close = lower.indexOf(closeTag, from);
         if (close !== -1 && close - from <= MAX_TOOL_BLOCK_LEN) {
           flush();
-          out.push({ type: "tool", name: "react" });
+          const name = block[1] === "react" || block[1] === "emoji" ? "react" : block[1];
+          out.push({ type: "tool", name: name as string });
           pos = close + closeTag.length;
           continue;
         }
@@ -456,7 +461,9 @@ function parseTag(raw: string): Segment | null {
   // `<react emoji="👍"/>`: the react tool imitated as a tag (2026-11-12). Hidden from the text and
   // logged as a tool written as text, so she is asked once to call it for real.
   if (REACT_TAG.test(tag)) return { type: "tool", name: "react" };
-  if (TOOL_TAG.test(tag)) return { type: "tool", name: tag };
+  if (TOOL_PART_TAG.test(tag)) return { type: "markup" };
+  const bare = tag.replace(/["']$/, "");
+  if (TOOL_TAG.test(bare)) return { type: "tool", name: bare };
   const call = TOOL_CALL_TAG.exec(tag);
   if (call !== null) return { type: "tool", name: call[1] as string };
   return null;
@@ -484,6 +491,12 @@ const STRAY_TAG = /^(?:\/(?:react|emoji|emo)|emoji)$/;
 const REACT_TAG = /^react(?:\s[^<>]*)?$/;
 /** Tool names are snake_case; an ordinary word in brackets stays text. */
 const TOOL_TAG = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
+/**
+ * What is left of a tool written as a block when its closing tag is too far or missing: the
+ * closing tag of a tool, and the tags around one argument (`<parameter name="url">`,
+ * `</parameter>`). Not a tool of their own.
+ */
+const TOOL_PART_TAG = /^(?:\/(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)+|parameter)|parameter(?:\s[^<>]*)?)$/;
 /**
  * A tool written as a tag with its arguments as attributes, any value in the quotes
  * (2026-11-11: `<react emoji="👍"/>` went out as text), or as a bare self-closing tag

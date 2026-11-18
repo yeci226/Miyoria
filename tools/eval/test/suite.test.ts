@@ -110,7 +110,7 @@ describe("what the code under test does today", () => {
     expect(own(after).filter((g) => g.allowed)).toHaveLength(0);
   });
 
-  it("the parser drops a bare <sing_start> but lets a quoted or headless tool call through", async () => {
+  it("the parser drops a bare <sing_start> and a tool block whose opening tag has a stray quote", async () => {
     const bare = await SUBJECTS.parser.run(byId("tool-text-sing-start-bare-tag"), {
       attempt: 0,
       live: false,
@@ -120,7 +120,9 @@ describe("what the code under test does today", () => {
       attempt: 0,
       live: false,
     });
-    expect(ofType(quoted, "said").some((s) => s.text.includes("<sing_request"))).toBe(true);
+    expect(ofType(quoted, "said").some((s) => /<\/?(?:sing_request|query|by)/.test(s.text))).toBe(
+      false,
+    );
   });
 
   it("streams in different chunks on every attempt and the verdict does not depend on it", async () => {

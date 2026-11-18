@@ -391,6 +391,46 @@ describe("an emotion tag used as a thinking block", () => {
     expect(e.tools).toEqual(["react"]);
   });
 
+  // 2026-11-18 in the channel: a web_read call written as a block, its opening tag with a stray
+  // quote, went out as `<web_read">`, the link, `</parameter>` and `</web_read>`.
+  const WEB_READ_BLOCK =
+    '<web_read">\n<parameter name="url">https://www.youtube.com/watch?v=EWo2Iob9j3g</parameter>\n</web_read>';
+
+  it("takes a tool block out of the text, arguments and all, and logs the tool", () => {
+    for (const [input, text, tool] of [
+      [`我看看那是什麼歌。\n\n${WEB_READ_BLOCK}`, "我看看那是什麼歌。\n\n", "web_read"],
+      [
+        '<sing_request><parameter name="query">雨愛</parameter></sing_request>好',
+        "好",
+        "sing_request",
+      ],
+    ] as const) {
+      const e = Expression.parse(input);
+      expect(e.text, input).toBe(text);
+      expect(e.tools, input).toEqual([tool]);
+    }
+  });
+
+  it("holds a tool block that arrives in pieces", () => {
+    const e = new Expression();
+    const cut = [0, 4, 13, 40, 90, WEB_READ_BLOCK.length];
+    const pieces = cut.slice(1).map((end, i) => WEB_READ_BLOCK.slice(cut[i], end));
+    for (const s of parseChunks(["嗯", ...pieces, "好"])) e.apply(s);
+    expect(e.text).toBe("嗯好");
+    expect(e.tools).toEqual(["web_read"]);
+  });
+
+  it("takes what is left of a tool block out of the text", () => {
+    const open = Expression.parse('<web_read">');
+    expect(open.text).toBe("");
+    expect(open.tools).toEqual(["web_read"]);
+    expect(Expression.parse("好</web_read>").text).toBe("好");
+    expect(Expression.parse("好</parameter>").text).toBe("好");
+    const parameter = Expression.parse('<parameter name="url">好');
+    expect(parameter.text).toBe("好");
+    expect(parameter.tools).toEqual([]);
+  });
+
   it("drops what is left of her tags when they come apart", () => {
     expect(Expression.parse("好啦</react>").text).toBe("好啦");
     expect(Expression.parse("好啦</emoji>").text).toBe("好啦");
