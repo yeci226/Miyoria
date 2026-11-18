@@ -611,6 +611,7 @@ barge_in = "selective"     # 有人插話時:selective(只有這回合要回的�
 # clip_dir = "data/voice-clips" # 留下同意收音者的片段,用來比較 ASR、校準 Smart Turn。成員的聲音會落地,預設關閉
 # tts_prefetch = 2             # 她說話時先合成後面幾句(0 = 關閉)
 # tts_prefetch_ttl_ms = 30000  # 預先合成的句子沒人用,過這麼久就丟掉
+# sentence_pause_ms = 0        # 同一次回話的兩句之間停多久(毫秒,最多 3000);0 = 不停,上一句一播完下一句就接著
 # speech_hold_max_ms = 90000   # 唱歌 / 顯示卡借出時她的話最多等這麼久,再久就丟掉
 # 說話用另一種語言(例如日文聲線比較好聽):每句先用 LLM(fast)翻譯再送 TTS,字幕和聊天紀錄維持原文
 # tts_translate = "Japanese"

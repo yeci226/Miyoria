@@ -105,6 +105,8 @@ export class Speaker implements VoiceSink {
   readonly #playing = new Map<string, number>();
   /** Every playback of hers going on, for the emergency stop. */
   readonly #live = new Set<Playback>();
+  /** The last line that played to its end per guild, for the pause before the turn's next one. */
+  readonly #lineEnded = new Map<string, { turn: TurnId; at: number }>();
   /** Lines announced as upcoming per guild (their text) and not started yet. */
   readonly #announced = new Map<string, Set<string>>();
   /** Lines prepared ahead per guild, in order. */
@@ -657,6 +659,28 @@ export class Speaker implements VoiceSink {
     }
   }
 
+  /**
+   * Waits out what is left of `sentence_pause_ms` since the line before this one in the same turn
+   * played to its end. `false`: the wait was cancelled.
+   */
+  async #breathe(
+    guild: string,
+    turn: TurnId | null,
+    signal: AbortSignal | undefined,
+  ): Promise<boolean> {
+    const pause = this.#d.config.sentence_pause_ms;
+    const last = this.#lineEnded.get(guild);
+    if (pause === 0 || turn === null || last === undefined || last.turn !== turn) return true;
+    const left = pause - (this.#d.ctx.clock.now() - last.at);
+    if (left <= 0) return true;
+    try {
+      await sleep(left, signal);
+    } catch {
+      return false;
+    }
+    return !signal?.aborted;
+  }
+
   async #speak(
     context: ContextKey,
     guild: string,
@@ -668,6 +692,11 @@ export class Speaker implements VoiceSink {
     measure: E2eMeasure | null,
   ): Promise<SpeakOutcome> {
     const { barge, echo } = this.#d;
+    // The breath after the turn's line before this one; this line's audio is prepared meanwhile.
+    if (!(await this.#breathe(guild, turn, signal))) {
+      measure?.fail("cancelled");
+      return "interrupted";
+    }
     // Somebody stopped this turn's speech: the rest of its lines are not said.
     if (barge.isStopped(guild, turn)) {
       measure?.fail("barge_in");
@@ -743,6 +772,9 @@ export class Speaker implements VoiceSink {
       heard_ms: playback.heardMs(),
       total_ms: line.audio.totalMs,
     });
+    if (state === "finished" && turn !== null) {
+      this.#lineEnded.set(guild, { turn, at: this.#d.ctx.clock.now() });
+    } else this.#lineEnded.delete(guild);
     // A no-op when the node reported the audio first.
     if (state === "interrupted") {
       measure?.fail(barge.isStopped(guild, turn) ? "barge_in" : "interrupted");

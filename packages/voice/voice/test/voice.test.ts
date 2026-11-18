@@ -1001,6 +1001,39 @@ describe("TTS prefetch", () => {
     expect(e.tts.requests).toHaveLength(2);
   });
 
+  // The owner's sentence pause (2026-11-03, then silence the TTS worker put between the sentences
+  // of one request). Every line is a request of its own now, so the next line started the moment
+  // the one before ended (2026-11-18: 「還在說時就接著下一句」).
+  const gapBetweenLines = async (e: Env, nextTurn: string): Promise<number> => {
+    const sink = e.h.services.require(VoiceSinkKey);
+    const first = sink.speak(voiceCtx, "第一句", "happy", "turn-1");
+    const p1 = await e.node.recvType("play_start");
+    e.node.sendJson({ type: "playback", play: p1.play as number, state: "finished" });
+    expect(await first).toBe("completed");
+    const ended = Date.now();
+    const second = sink.speak(voiceCtx, "第二句", "happy", nextTurn);
+    const p2 = await e.node.recvType("play_start");
+    const gap = Date.now() - ended;
+    e.node.sendJson({ type: "playback", play: p2.play as number, state: "finished" });
+    expect(await second).toBe("completed");
+    return gap;
+  };
+
+  it("leaves sentence_pause_ms between two lines of a turn", async () => {
+    const e = await boot({ sentence_pause_ms: 400 });
+    expect(await gapBetweenLines(e, "turn-1")).toBeGreaterThanOrEqual(380);
+  });
+
+  it("does not make another turn's first line wait for the pause", async () => {
+    const e = await boot({ sentence_pause_ms: 400 });
+    expect(await gapBetweenLines(e, "turn-2")).toBeLessThan(300);
+  });
+
+  it("starts the next line at once when no pause is set", async () => {
+    const e = await boot();
+    expect(await gapBetweenLines(e, "turn-1")).toBeLessThan(300);
+  });
+
   it("announces each line's subtitle before it plays: the first at once, the next before the first ends", async () => {
     // A lead longer than the lines: everything is announced as soon as it can be.
     const e = await boot({ subtitle_lead_ms: 5_000 });

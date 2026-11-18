@@ -139,6 +139,12 @@ export const VoiceConfigSchema = z.object({
    * line before them ends. 0: subtitles start with the audio. Default 600.
    */
   subtitle_lead_ms: z.number().int().nonnegative().max(5_000).default(600),
+  /**
+   * The breath between two lines of one reply: the next line starts this long after the one
+   * before it ended. Every line is synthesized and played on its own, so without it they follow
+   * each other with no gap at all. 0: no pause. Default 0.
+   */
+  sentence_pause_ms: z.number().int().nonnegative().max(3_000).default(0),
   /** Language hint sent to TTS. Default `Chinese`. */
   tts_language: z.string().default("Chinese"),
   /**
