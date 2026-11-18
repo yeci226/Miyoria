@@ -869,12 +869,19 @@ export class ActuatorRegistry implements ActuatorExecutor {
     }
 
     // 3. Consent.
+    if (capability.consent === "watch" && target === null) {
+      return deny("consent", "no one to ask consent from");
+    }
     if (target !== null && !askedForThemselves) {
       const choices = await this.privacy.get(target);
       if (capability.consent === "dm" && !choices.dm) {
         return deny("consent", "the person opted out of DMs from her");
       }
-      if (isAutonomous(p) && !choices.approach) {
+      if (capability.consent === "watch" && !choices.watch) {
+        return deny("consent", "the person opted out of being watched");
+      }
+      // Watching is decided by `watch` alone; `approach` is about her starting things.
+      if (capability.consent !== "watch" && isAutonomous(p) && !choices.approach) {
         return deny("consent", "the person does not want to be approached");
       }
     }
