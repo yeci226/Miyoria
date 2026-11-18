@@ -2,15 +2,18 @@
 // router's fallback when a provider refuses images. No network: providers are scripted.
 
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   type ChatProvider,
   type ChatRequest,
   type ChatStream,
+  completeJson,
   contentText,
   hasImages,
   LlmConfigSchema,
   LlmRouter,
   MockProvider,
+  NoImageModelError,
   OpenAiConfig,
   ProviderConfigSchema,
   ProviderHttpError,
@@ -49,6 +52,22 @@ class PickyProvider implements ChatProvider {
     }
     return (async function* (): ChatStream {
       yield { type: "text_delta", text: "ok" };
+      yield { type: "done", finish_reason: "stop", usage: null };
+    })();
+  }
+}
+
+/** Refuses JSON mode, and answers anything else. */
+class NoJsonModeProvider implements ChatProvider {
+  readonly requests: ChatRequest[] = [];
+
+  constructor(readonly name: string) {}
+
+  async stream(request: ChatRequest): Promise<ChatStream> {
+    this.requests.push(structuredClone(request));
+    if (request.json_mode) throw new ProviderHttpError("HTTP 400: response_format", 400);
+    return (async function* (): ChatStream {
+      yield { type: "text_delta", text: '{"ok": true}' };
       yield { type: "done", finish_reason: "stop", usage: null };
     })();
   }
@@ -184,5 +203,122 @@ describe("multimodal content", () => {
     expect(
       LlmConfigSchema.parse({ image_input: { ollama: false, "opencode:x": true } }).image_input,
     ).toEqual({ ollama: false, "opencode:x": true });
+  });
+});
+
+describe("requires_images", () => {
+  const needed = (): ChatRequest => ({ ...withImage(), requires_images: true });
+  const textOnly = new Map([["a", false]]);
+
+  it("skips_a_model_known_not_to_take_images", async () => {
+    const blind = new MockProvider("a").reply("我猜的");
+    const next = new MockProvider("b").reply("看到了");
+    const r = router(
+      [
+        ["a", blind],
+        ["b", next],
+      ],
+      textOnly,
+    );
+    expect((await r.complete("chat", needed())).text).toBe("看到了");
+    expect(blind.requests()).toHaveLength(0);
+    expect(hasImages(next.requests()[0]?.messages ?? [])).toBe(true);
+  });
+
+  it("does_not_downgrade_when_a_model_refuses_them", async () => {
+    const picky = new PickyProvider("a", 400);
+    const next = new MockProvider("b").reply("看到了");
+    const r = router([
+      ["a", picky],
+      ["b", next],
+    ]);
+    expect((await r.complete("chat", needed())).text).toBe("看到了");
+    expect(picky.requests.map((q) => hasImages(q.messages))).toEqual([true]);
+    expect(hasImages(next.requests()[0]?.messages ?? [])).toBe(true);
+    // Not remembered as text-only: the refusal was not acted on.
+    expect(r.modelTakesImages(parseModelRef("a:m"))).toBe(true);
+  });
+
+  it("throws_a_distinct_error_when_no_model_is_left", async () => {
+    const blind = new MockProvider("a");
+    const picky = new PickyProvider("b", 400);
+    const r = router(
+      [
+        ["a", blind],
+        ["b", picky],
+      ],
+      textOnly,
+    );
+    await expect(r.complete("chat", needed())).rejects.toBeInstanceOf(NoImageModelError);
+    expect(blind.requests()).toHaveLength(0);
+    expect(picky.requests).toHaveLength(1);
+  });
+
+  it("an_error_that_asked_no_model_is_not_retried", async () => {
+    const calls: ChatRequest[] = [];
+    const completer = {
+      async complete(_purpose: string, request: ChatRequest): Promise<never> {
+        calls.push(request);
+        throw new NoImageModelError("chat", null);
+      },
+    };
+    await expect(
+      completeJson(completer, "chat", { ...needed(), json_mode: true }, z.object({})),
+    ).rejects.toBeInstanceOf(NoImageModelError);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("throws_without_asking_when_every_model_is_known_blind", async () => {
+    const blind = new MockProvider("a");
+    const r = router([["a", blind]], textOnly);
+    await expect(r.complete("chat", needed())).rejects.toMatchObject({
+      name: "NoImageModelError",
+      status: null,
+    });
+    expect(blind.requests()).toHaveLength(0);
+  });
+
+  it("a_failure_that_says_nothing_about_images_stays_what_it_is", async () => {
+    const r = router(
+      [
+        ["a", new MockProvider("a")],
+        ["b", new PickyProvider("b", 503)],
+      ],
+      textOnly,
+    );
+    await expect(r.complete("chat", needed())).rejects.toMatchObject({ status: 503 });
+  });
+
+  it("gives_json_mode_its_retry_first", async () => {
+    const noJson = new NoJsonModeProvider("a");
+    const reply = await completeJson(
+      router([["a", noJson]]),
+      "chat",
+      { ...needed(), json_mode: true },
+      z.object({ ok: z.boolean() }),
+    );
+    expect(reply.value.ok).toBe(true);
+    expect(noJson.requests.map((q) => [q.json_mode, hasImages(q.messages)])).toEqual([
+      [true, true],
+      [false, true],
+    ]);
+  });
+
+  it("a_refusal_costs_one_json_mode_retry_at_most", async () => {
+    const picky = new PickyProvider("b", 400);
+    await expect(
+      completeJson(
+        router([["b", picky]]),
+        "chat",
+        { ...needed(), json_mode: true },
+        z.object({ ok: z.boolean() }),
+      ),
+    ).rejects.toBeInstanceOf(NoImageModelError);
+    // A 400 may be either complaint, so json mode gets its retry; then it ends.
+    expect(picky.requests).toHaveLength(2);
+  });
+
+  it("the_flag_never_reaches_the_wire", async () => {
+    expect(await wireBody({ ...needed(), model: "m" })).not.toHaveProperty("requires_images");
   });
 });

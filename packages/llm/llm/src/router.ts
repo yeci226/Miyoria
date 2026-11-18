@@ -30,6 +30,7 @@ import {
   LlmError,
   type ModelRef,
   modelRefString,
+  NoImageModelError,
   ProviderHttpError,
   type StreamEvent,
   type ToolCall,
@@ -73,7 +74,7 @@ export interface LlmRouterOptions {
 /** HTTP statuses with which a provider may refuse image parts it does not support. */
 const IMAGE_REJECTION_STATUSES: ReadonlySet<number> = new Set([400, 413, 415, 422]);
 
-function rejectsImages(error: unknown): boolean {
+function rejectsImages(error: unknown): error is ProviderHttpError {
   return error instanceof ProviderHttpError && IMAGE_REJECTION_STATUSES.has(error.status);
 }
 
@@ -286,6 +287,9 @@ export class LlmRouter {
    * Rejects with `BudgetExhaustedError` when the budget is used up and `on_exhausted = "stop"`
    * (unless the purpose is exempt). While degraded or exhausted the `[llm.budget.fallback]`
    * chain replaces the normal one.
+   *
+   * With `request.requires_images` images are never stripped: models known not to take them are
+   * skipped, and `NoImageModelError` is thrown when none of the chain does.
    */
   async stream(purpose: string, request: ChatRequest, signal?: AbortSignal): Promise<RoutedStream> {
     const requestedAt = this.#clock.now();
@@ -328,6 +332,10 @@ export class LlmRouter {
         new LlmError(`no model configured for purpose \`${purpose}\` (and no \`chat\` fallback)`),
       );
     }
+    const required = request.requires_images === true;
+    /** Models of the chain that cannot take this request's images. */
+    let blind = 0;
+    let refusedWith: number | null = null;
     let lastError: unknown;
     for (const model of chain) {
       const key = modelRefString(model);
@@ -338,6 +346,11 @@ export class LlmRouter {
         log.warn({ model: key }, "unknown provider in model chain");
         lastError = new LlmError(`unknown provider \`${model.provider}\``);
         record.fallbacks.push({ model: key, error: errorMessage(lastError), kind: "error" });
+        continue;
+      }
+      if (required && !this.modelTakesImages(model)) {
+        blind++;
+        record.fallbacks.push({ model: key, error: "does not take images", kind: "error" });
         continue;
       }
       let iterator: AsyncIterator<StreamEvent>;
@@ -359,9 +372,9 @@ export class LlmRouter {
           );
         } catch (error) {
           // A provider that cannot take image parts: once more as text, and remember it.
-          if (signal?.aborted || !images || !hasImages(routed.messages) || !rejectsImages(error)) {
-            throw error;
-          }
+          const downgrade =
+            !required && images && hasImages(routed.messages) && rejectsImages(error);
+          if (signal?.aborted || !downgrade) throw error;
           log.warn(
             { model: key, err: errorMessage(error) },
             "model refused image input, retrying as text",
@@ -386,6 +399,10 @@ export class LlmRouter {
         });
         record.fallbacks.push({ model: key, error: errorMessage(error), kind: errorKind(error) });
         lastError = error;
+        if (required && rejectsImages(error)) {
+          blind++;
+          refusedWith = error.status;
+        }
         continue;
       }
       // The answering model is not a fallback.
@@ -407,6 +424,9 @@ export class LlmRouter {
     }
     const failed = record.fallbacks.pop();
     if (failed) record.model = failed.model;
+    if (required && blind === chain.length) {
+      return fail(new NoImageModelError(purpose, refusedWith));
+    }
     return fail(lastError ?? new LlmError("all models failed"));
   }
 

@@ -128,6 +128,7 @@ export {
   type ModelRef,
   ModelRefSchema,
   modelRefString,
+  NoImageModelError,
   ProviderHttpError,
   ProviderTimeoutError,
   parseModelRef,

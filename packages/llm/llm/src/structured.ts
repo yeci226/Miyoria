@@ -17,6 +17,7 @@ import {
   assistantMessage,
   type ChatRequest,
   type ChatResponse,
+  NoImageModelError,
   ProviderHttpError,
   userMessage,
 } from "./types.js";
@@ -138,10 +139,15 @@ async function call(
     return await router.complete(purpose, request, signal);
   } catch (error) {
     // The hint is optional: a provider without JSON mode gets the same request without it.
-    if (request.json_mode && error instanceof ProviderHttpError) {
-      if (JSON_MODE_REJECTED.has(error.status)) {
-        return router.complete(purpose, { ...request, json_mode: false }, signal);
-      }
+    // With `requires_images` the router reports a refusal as `NoImageModelError`, which keeps
+    // the status; a call that asked no model (`status` null) has nothing to retry.
+    if (
+      request.json_mode &&
+      (error instanceof ProviderHttpError || error instanceof NoImageModelError) &&
+      error.status !== null &&
+      JSON_MODE_REJECTED.has(error.status)
+    ) {
+      return router.complete(purpose, { ...request, json_mode: false }, signal);
     }
     throw error;
   }

@@ -132,6 +132,11 @@ export interface ChatRequest {
    */
   thinking?: boolean | null;
   /**
+   * The request is about its images: the router never strips them, skips models known not to
+   * take them, and throws `NoImageModelError` when no model is left.
+   */
+  requires_images?: boolean;
+  /**
    * How deeply a reasoning model thinks (`[llm.reasoning]`, docs/design/v2-architecture.md
    * §3.10). The router fills it (and `thinking` from it); set it to force a level. Providers
    * with an effort parameter send it, the others only switch thinking on / off and cap the
@@ -266,6 +271,21 @@ export class ProviderHttpError extends LlmError {
     readonly status: number,
   ) {
     super(message);
+  }
+}
+
+/**
+ * A request with `requires_images` found no model that takes them. `status`: the last HTTP status
+ * a model refused it with; `null` when every model was known not to take images, so none was asked.
+ */
+export class NoImageModelError extends LlmError {
+  override name = "NoImageModelError";
+
+  constructor(
+    purpose: string,
+    readonly status: number | null,
+  ) {
+    super(`no model for purpose \`${purpose}\` takes images`);
   }
 }
 
