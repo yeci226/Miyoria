@@ -900,6 +900,7 @@ export class VoiceHost implements VoiceRunner {
       // An early start that was dropped never was: no prompt of it.
       this.#d.saved.end(turn, !run.dropped);
       this.#d.prompt.ended(turn);
+      void this.#outlet.echo(turn);
       this.#forget(state);
       agent.mainline.holdsFloor(turn, false);
       floor?.turnEnded(turn);

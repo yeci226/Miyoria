@@ -25,6 +25,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { PROFILES, serialiseMessages, serialiseTools } from "../../self/src/index.js";
 import { silentWaits } from "../src/index.js";
+import { joinSaid } from "../src/voice-outlet.js";
 import { notInVoice } from "../src/voice-texts.js";
 import { books } from "./books.js";
 import {
@@ -806,5 +807,39 @@ describe("links and code are written, not read aloud", () => {
     expect(chat(rig)).toEqual([]);
     const note = rig.entries(VC).find((e) => e.kind === "note");
     expect(note?.content).toContain("連結和程式碼念不出來");
+  });
+});
+
+// The owner's `text_echo` (2026-11-03): her spoken reply is also written in the voice channel's
+// chat, the text as she wrote it (Chinese while `tts_translate` has her speak Japanese). It was
+// lost when voice moved to this runner (2026-11-18: 「中文的不見了」).
+describe("text_echo: what she said is also written in the voice channel's chat", () => {
+  const chat = (rig: Rig) => rig.sink.sent().filter(([channel]) => channel === "vc");
+
+  it("writes a spoken reply once, whole, when the run is over", async () => {
+    const rig = await voiceRig({ text_echo: true });
+    rig.model.push(says("好喔。我去看看。"));
+    hear(rig, "owen", "小鯨魚幫我看一下");
+    await until(() => outcomes(rig).length === 1, 3_000, "the outcome");
+    await until(() => chat(rig).length > 0, 3_000, "the echo");
+    expect(speeches(rig).map(([t]) => t)).toEqual(["好喔。", "我去看看。"]);
+    expect(chat(rig)).toEqual([["vc", "好喔。我去看看。"]]);
+    // Said once in the conversation: the written copy is not a second line of hers.
+    expect(rig.entries(VC).filter((e) => e.content === "好喔。我去看看。")).toEqual([]);
+  });
+
+  it("joins the sentences, with a space only between two that would run into each other", () => {
+    expect(joinSaid(["好喔。", "OK.", "Sure thing.", " 走吧 ", ""])).toBe(
+      "好喔。OK. Sure thing.走吧",
+    );
+  });
+
+  it("writes nothing unless it is switched on", async () => {
+    const rig = await voiceRig();
+    rig.model.push(says("好喔。我去看看。"));
+    hear(rig, "owen", "小鯨魚幫我看一下");
+    await until(() => outcomes(rig).length === 1, 3_000, "the outcome");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chat(rig)).toEqual([]);
   });
 });

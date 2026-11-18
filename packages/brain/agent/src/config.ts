@@ -133,6 +133,12 @@ export const VoiceConfigSchema = z.object({
    */
   text_aside: z.boolean().default(true),
   /**
+   * What she said in a spoken reply is also written in the voice channel's text chat, once the
+   * reply is over: the text as she wrote it (Chinese while `tts_translate` has her speak
+   * another language).
+   */
+  text_echo: z.boolean().default(false),
+  /**
    * While she is in a voice channel, what she has to say on her own in that server (task
    * results, game lines, what she says after doing something) is said there instead of being
    * posted to a text channel. Replies to people stay where they were asked.
