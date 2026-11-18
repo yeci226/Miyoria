@@ -4,6 +4,7 @@ import { MemorySettingsStore, type SettingsStore } from "@miyoria/store";
 import { type AccountRef, EMOTION_NAMES, EMOTION_OUTPUTS, type JsonObject } from "@miyoria/types";
 import { parse as parseToml } from "smol-toml";
 import { describe, expect, it } from "vitest";
+import type { AsrHint, SpeechService } from "../../speech/src/index.js";
 import {
   BargeIn,
   Consent,
@@ -14,9 +15,11 @@ import {
   echoesHint,
   encodeAudio,
   energyDb,
+  Hearing,
   isHallucination,
   NodeMessageSchema,
   Segmenter,
+  Semaphore,
   type Stoppable,
   stripEmoji,
   stripTags,
@@ -461,6 +464,88 @@ describe("config", () => {
     const d = VoiceConfigSchema.parse({ consent: "opt-in", barge_in: "ignore" });
     expect(d.consent).toBe("opt-in");
     expect(d.barge_in).toBe("ignore");
+  });
+});
+
+// ------------------------------------------------------------------ hearing
+
+describe("semaphore", () => {
+  it("try_acquire_returns_null_when_all_permits_are_taken", () => {
+    const sem = new Semaphore(1);
+    const release = sem.tryAcquire();
+    expect(release).not.toBeNull();
+    expect(sem.tryAcquire()).toBeNull();
+    release?.();
+    const again = sem.tryAcquire();
+    expect(again).not.toBeNull();
+    again?.();
+  });
+});
+
+describe("hearing", () => {
+  function setup(transcribe: () => Promise<string>, slots = new Semaphore(1)) {
+    const calls: { hints: AsrHint[]; count: number } = { hints: [], count: 0 };
+    const speech = {
+      transcribe: async (_audio: unknown, hint: AsrHint) => {
+        calls.count++;
+        calls.hints.push(hint);
+        const text = await transcribe();
+        return ["fake", { text, language: null, emotion: null, audio_events: [] }];
+      },
+    } as unknown as SpeechService;
+    const hearing = new Hearing({
+      speech,
+      consent: new Consent("opt-out", new MemorySettingsStore()),
+      asrSlots: slots,
+      config: { to_traditional: true, hallucinations: ["thanks for watching"] },
+      log: { debug: () => {}, warn: () => {} } as never,
+    });
+    return { hearing, calls };
+  }
+  const samples = new Int16Array(16_000);
+  const signal = new AbortController().signal;
+
+  it("busy_asr_drops_stream_speech", async () => {
+    const slots = new Semaphore(1);
+    const { hearing, calls } = setup(async () => "hello", slots);
+    const held = slots.tryAcquire();
+    expect(await hearing.transcribe(samples, signal)).toBeNull();
+    expect(calls.count).toBe(0);
+    held?.();
+    expect(await hearing.transcribe(samples, signal)).toBe("hello");
+    expect(slots.tryAcquire()).not.toBeNull(); // the permit was released
+  });
+
+  it("never_takes_a_slot_while_people_speaking_hold_them_all", async () => {
+    const slots = new Semaphore(2);
+    const { hearing, calls } = setup(async () => "hello", slots);
+    const a = await slots.acquire();
+    const b = await slots.acquire();
+    expect(await hearing.transcribe(samples, signal)).toBeNull();
+    expect(calls.count).toBe(0);
+    a();
+    expect(await hearing.transcribe(samples, signal)).toBe("hello");
+    b();
+  });
+
+  it("transcript_is_cleaned", async () => {
+    const a = setup(async () => "Thanks for watching");
+    expect(await a.hearing.transcribe(samples, signal)).toBeNull();
+    const b = setup(async () => "这个软件");
+    expect(await b.hearing.transcribe(samples, signal)).toBe("這個軟體");
+    expect(b.calls.hints[0]).toEqual({ language: null, prompt: null });
+  });
+
+  it("asr_failure_returns_null", async () => {
+    const slots = new Semaphore(1);
+    const { hearing } = setup(() => Promise.reject(new Error("asr down")), slots);
+    expect(await hearing.transcribe(samples, signal)).toBeNull();
+    expect(slots.tryAcquire()).not.toBeNull();
+  });
+
+  it("allowed_follows_consent", async () => {
+    const { hearing } = setup(async () => "x");
+    expect(await hearing.allowed(acc("1"))).toBe(true);
   });
 });
 
