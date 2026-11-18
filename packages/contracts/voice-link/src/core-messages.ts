@@ -131,6 +131,28 @@ export const VoiceLinkGoLiveStopSchema = z
   .object({ type: z.literal("golive_stop"), guild: id() })
   .meta({ id: "VoiceLinkGoLiveStop" });
 
+/**
+ * Watch the Go Live stream of `user_id` in `guild`, while staying in the voice channel (the
+ * `watch` capability). One stream at a time: another `watch_start` replaces the one going on. The
+ * node answers with `watch` states and sends the stream's sound as `WATCH_AUDIO` frames.
+ */
+export const VoiceLinkWatchStartSchema = z
+  .object({ type: z.literal("watch_start"), guild: id(), user_id: id() })
+  .meta({ id: "VoiceLinkWatchStart" });
+
+/** Stop watching in `guild`. */
+export const VoiceLinkWatchStopSchema = z
+  .object({ type: z.literal("watch_stop"), guild: id() })
+  .meta({ id: "VoiceLinkWatchStop" });
+
+/**
+ * Ask for the latest picture of the stream being watched. The node answers with a `SNAPSHOT`
+ * frame carrying `id`, or with `watch_snapshot_failed`.
+ */
+export const VoiceLinkWatchSnapshotSchema = z
+  .object({ type: z.literal("watch_snapshot"), id: u32() })
+  .meta({ id: "VoiceLinkWatchSnapshot" });
+
 /** A text frame from Core. */
 export const VoiceLinkCoreMessageSchema = z
   .discriminatedUnion("type", [
@@ -145,6 +167,9 @@ export const VoiceLinkCoreMessageSchema = z
     VoiceLinkPlayResumeSchema,
     VoiceLinkGoLiveStartSchema,
     VoiceLinkGoLiveStopSchema,
+    VoiceLinkWatchStartSchema,
+    VoiceLinkWatchStopSchema,
+    VoiceLinkWatchSnapshotSchema,
     VoiceLinkPingSchema,
     VoiceLinkPongSchema,
   ])

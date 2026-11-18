@@ -38,6 +38,15 @@
           "$ref": "#/$defs/VoiceLinkGoLiveStop"
         },
         {
+          "$ref": "#/$defs/VoiceLinkWatchStart"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkWatchStop"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkWatchSnapshot"
+        },
+        {
           "$ref": "#/$defs/VoiceLinkPing"
         },
         {
@@ -404,6 +413,12 @@
         },
         {
           "$ref": "#/$defs/VoiceLinkGoLive"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkWatch"
+        },
+        {
+          "$ref": "#/$defs/VoiceLinkWatchSnapshotFailed"
         },
         {
           "$ref": "#/$defs/VoiceLinkNodeError"
@@ -795,6 +810,135 @@
         "guild",
         "channel",
         "participants"
+      ]
+    },
+    "VoiceLinkWatch": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "watch"
+        },
+        "guild": {
+          "type": "string"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/VoiceLinkWatchState"
+        },
+        "error": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "guild",
+        "user_id",
+        "state"
+      ]
+    },
+    "VoiceLinkWatchSnapshot": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "watch_snapshot"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ]
+    },
+    "VoiceLinkWatchSnapshotFailed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "watch_snapshot_failed"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "error"
+      ]
+    },
+    "VoiceLinkWatchStart": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "watch_start"
+        },
+        "guild": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "type",
+        "guild",
+        "user_id"
+      ]
+    },
+    "VoiceLinkWatchState": {
+      "type": "string",
+      "enum": [
+        "starting",
+        "live",
+        "stopped",
+        "failed"
+      ]
+    },
+    "VoiceLinkWatchStop": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "watch_stop"
+        },
+        "guild": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "type",
+        "guild"
       ]
     },
     "VoiceLinkWelcome": {

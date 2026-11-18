@@ -22,6 +22,9 @@ export {
   VoiceLinkPlayResumeSchema,
   VoiceLinkPlayStartSchema,
   VoiceLinkPlayStopSchema,
+  VoiceLinkWatchSnapshotSchema,
+  VoiceLinkWatchStartSchema,
+  VoiceLinkWatchStopSchema,
   VoiceLinkWelcomeSchema,
 } from "./core-messages.js";
 export {
@@ -46,6 +49,10 @@ export {
   VoiceLinkStreamCloseSchema,
   VoiceLinkStreamOpenSchema,
   VoiceLinkVoiceStateSchema,
+  VoiceLinkWatchSchema,
+  VoiceLinkWatchSnapshotFailedSchema,
+  type VoiceLinkWatchState,
+  VoiceLinkWatchStateSchema,
 } from "./node-messages.js";
 export {
   readFrameHeader,

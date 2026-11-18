@@ -51,6 +51,8 @@ const nodeExamples: VoiceLinkNodeMessageIn[] = [
   { type: "stream_close", stream: 5 },
   { type: "playback", play: 7, state: "failed", error: "x" },
   { type: "golive", guild: "1", state: "stopped", error: null, reason: "source ended" },
+  { type: "watch", guild: "1", user_id: "3", state: "failed", error: "no stream", reason: null },
+  { type: "watch_snapshot_failed", id: 9, error: "no frame yet" },
   { type: "error", message: "m" },
   { type: "ping" },
   { type: "pong" },
@@ -81,6 +83,9 @@ const coreExamples: VoiceLinkCoreMessageIn[] = [
     listen: true,
   },
   { type: "golive_stop", guild: "1" },
+  { type: "watch_start", guild: "1", user_id: "3" },
+  { type: "watch_stop", guild: "1" },
+  { type: "watch_snapshot", id: 9 },
   { type: "ping" },
   { type: "pong" },
 ];
@@ -250,8 +255,19 @@ describe("constants and frames", () => {
       REPLACED: 4409,
       GOING_AWAY: 1001,
     });
-    expect(VOICE_LINK_FRAME).toStrictEqual({ CAPTURE: 1, PLAYBACK: 2, LEVELS: 3 });
-    expect(VOICE_LINK_CAPABILITIES).toEqual(["play_duck", "play_pause"]);
+    expect(VOICE_LINK_FRAME).toStrictEqual({
+      CAPTURE: 1,
+      PLAYBACK: 2,
+      LEVELS: 3,
+      SNAPSHOT: 4,
+      WATCH_AUDIO: 5,
+    });
+    expect(VOICE_LINK_CAPABILITIES).toEqual(["play_duck", "play_pause", "watch"]);
+  });
+
+  it("has the frames of a watched stream: a snapshot by its request's id, and the stream's audio", () => {
+    expect(VOICE_LINK_FRAME.SNAPSHOT).toBe(0x04);
+    expect(VOICE_LINK_FRAME.WATCH_AUDIO).toBe(0x05);
   });
 
   it("writes and reads the frame header, little endian, at the view's offset", () => {

@@ -30,7 +30,10 @@ export const PROTOCOL_VERSION = VOICE_LINK_VERSION;
  * Optional protocol features this node implements, announced in `hello.capabilities` so Core
  * only sends what the node understands.
  */
-export const NODE_CAPABILITIES: readonly string[] = VOICE_LINK_CAPABILITIES;
+export const NODE_CAPABILITIES: readonly string[] = VOICE_LINK_CAPABILITIES.filter(
+  // Watching a stream is not built into the node yet: it does not announce it.
+  (capability) => capability !== "watch",
+);
 export const CAPTURE_SAMPLE_RATE = 16_000;
 
 export const FRAME_CAPTURE = VOICE_LINK_FRAME.CAPTURE;
@@ -91,6 +94,8 @@ type CoreMessageSchema = (typeof VoiceLinkCoreMessageSchema.options)[number];
 const HANDLED = new Map<string, CoreMessageSchema>(
   VoiceLinkCoreMessageSchema.options
     .filter((schema) => schema.shape.type.value !== "pong")
+    // Not handled yet (see `NODE_CAPABILITIES`): unknown, ignorable types until they are.
+    .filter((schema) => !schema.shape.type.value.startsWith("watch_"))
     .map((schema) => [schema.shape.type.value, schema]),
 );
 

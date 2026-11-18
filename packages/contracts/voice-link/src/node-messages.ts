@@ -130,6 +130,34 @@ export const VoiceLinkGoLiveSchema = z
   })
   .meta({ id: "VoiceLinkGoLive" });
 
+/**
+ * Watch state: `starting` (connecting to the stream), `live` (pictures are arriving), `stopped`
+ * (asked to, the stream ended, left voice), `failed` (see `error`).
+ */
+export const VoiceLinkWatchStateSchema = z
+  .enum(["starting", "live", "stopped", "failed"])
+  .meta({ id: "VoiceLinkWatchState" });
+export type VoiceLinkWatchState = z.output<typeof VoiceLinkWatchStateSchema>;
+
+/** The state of watching `user_id`'s stream in `guild`. */
+export const VoiceLinkWatchSchema = z
+  .object({
+    type: z.literal("watch"),
+    guild: z.string(),
+    user_id: z.string(),
+    state: VoiceLinkWatchStateSchema,
+    /** Why it failed (`failed`), for people. */
+    error: optionalString(),
+    /** Why it ended (`stopped`), e.g. `stream ended`. */
+    reason: optionalString(),
+  })
+  .meta({ id: "VoiceLinkWatch" });
+
+/** The `watch_snapshot` with this `id` got no picture. */
+export const VoiceLinkWatchSnapshotFailedSchema = z
+  .object({ type: z.literal("watch_snapshot_failed"), id: u32(), error: z.string() })
+  .meta({ id: "VoiceLinkWatchSnapshotFailed" });
+
 /** A non-fatal error, e.g. a `join` that failed. Core fails the oldest waiting `join` with it. */
 export const VoiceLinkNodeErrorSchema = z
   .object({ type: z.literal("error"), message: z.string() })
@@ -160,6 +188,8 @@ export const VoiceLinkNodeMessageSchema = z
     VoiceLinkStreamCloseSchema,
     VoiceLinkPlaybackSchema,
     VoiceLinkGoLiveSchema,
+    VoiceLinkWatchSchema,
+    VoiceLinkWatchSnapshotFailedSchema,
     VoiceLinkNodeErrorSchema,
     VoiceLinkPingSchema,
     VoiceLinkPongSchema,

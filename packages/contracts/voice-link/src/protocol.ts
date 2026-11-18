@@ -24,11 +24,18 @@ export const VOICE_LINK_CLOSE = {
  * Core → node (`id` is a `play_start` play, at its `sample_rate`). `LEVELS` is the track the
  * lip-sync levels follow for a play started with `levels`, sent before the `PLAYBACK` frame of
  * the same length it goes with.
+ *
+ * A watched stream (the `watch` capability) has two more, node → Core. `SNAPSHOT`:
+ * `[tag][id: u32 LE][JPEG]`, the picture a `watch_snapshot` with that `id` asked for.
+ * `WATCH_AUDIO`: `[tag][id: u32 LE][PCM s16le mono 16 kHz]`, the stream's sound; `id` is 0, one
+ * stream is watched at a time.
  */
 export const VOICE_LINK_FRAME = {
   CAPTURE: 0x01,
   PLAYBACK: 0x02,
   LEVELS: 0x03,
+  SNAPSHOT: 0x04,
+  WATCH_AUDIO: 0x05,
 } as const;
 
 /** Bytes before the PCM of a binary frame: the tag and the id. */
@@ -54,9 +61,11 @@ export const VOICE_LINK_LIMITS = {
 /**
  * Optional features a node announces in `hello.capabilities`. Core sends a feature's messages only
  * to a node that announced it; names it does not know are ignored on both sides.
- * `play_duck`: `play_duck`. `play_pause`: `play_pause` and `play_resume`.
+ * `play_duck`: `play_duck`. `play_pause`: `play_pause` and `play_resume`. `watch`: `watch_start`,
+ * `watch_stop` and `watch_snapshot`, answered with `watch`, `watch_snapshot_failed` and the
+ * `SNAPSHOT` and `WATCH_AUDIO` frames.
  */
-export const VOICE_LINK_CAPABILITIES = ["play_duck", "play_pause"] as const;
+export const VOICE_LINK_CAPABILITIES = ["play_duck", "play_pause", "watch"] as const;
 
 /**
  * Writes the header of a binary frame into its first `VOICE_LINK_FRAME_HEADER_BYTES` bytes.
