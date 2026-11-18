@@ -75,7 +75,9 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
     limits: { per_day: 40, per_person_per_day: 8, cooldown_ms: 0 },
     tool: {
       name: "sing_request",
-      meta: { effect: "act", speed: "long", group: "sing" },
+      // Always offered (`core`), not found with find_tools: asked to sing a link, a model that
+      // does not search first reads the link as a web page (2026-11-18).
+      meta: { effect: "act", speed: "long", group: "sing", core: true },
       description:
         "準備一首歌給你唱(在背景下載、分離人聲、轉成你的聲音,通常要一到兩分鐘;已經唱過的歌馬上好)。" +
         "有人點歌、你想唱的時候用;準備的時候照常聊天,好了會告訴你,再用 sing_start 開唱。" +
@@ -150,7 +152,7 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
     permission: perms.play,
     tool: {
       name: "sing_start",
-      meta: { effect: "act", speed: "long", group: "sing" },
+      meta: { effect: "act", speed: "long", group: "sing", core: true },
       description:
         "唱一首已經準備好的歌(在你所在的語音頻道;你這句話說完才開始,唱的時候你不能說話)。" +
         "song 是歌單上的編號,省略 = 最早準備好的那首。開唱前用一句話開場。",
@@ -179,7 +181,7 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
     permission: perms.skip,
     tool: {
       name: "sing_stop",
-      meta: { effect: "act", speed: "instant", group: "sing" },
+      meta: { effect: "act", speed: "instant", group: "sing", core: true },
       description:
         "停止唱歌。預設停掉正在唱的這首;all = true 時歌單上還沒唱的也一起取消。" +
         "想讓這首唱完、只把後面的清掉(例如要收尾),用 all = true 加 current = false。",

@@ -186,6 +186,9 @@ describe("the registry behind them", () => {
       "remind_me",
       "say",
       "schedule",
+      "sing_request",
+      "sing_start",
+      "sing_stop",
       "skill",
       "web_image",
       "web_read",
@@ -226,9 +229,8 @@ describe("the registry behind them", () => {
     const tools = core.services.require(ToolRegistryKey);
     const found = (query: string) => searchTools(tools.listings(), query).map((t) => t.name);
     expect(found("魚幣").length).toBe(8);
-    expect(found("唱歌")).toEqual(
-      expect.arrayContaining(["sing_request", "sing_start", "sing_stop"]),
-    );
+    // The sing tools are always offered, so a search has none of them to find.
+    expect(found("唱歌").filter((name) => name.startsWith("sing_"))).toEqual([]);
     expect(found("派對遊戲")[0]).toMatch(/^party_/);
     expect(found("開台")).toContain("stream_start");
     expect(found("voice")).toEqual(expect.arrayContaining(["voice_join", "voice_leave"]));
