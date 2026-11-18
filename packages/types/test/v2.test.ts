@@ -162,7 +162,7 @@ describe("arbiter", () => {
   it("only plan and agenda are her own initiative", () => {
     expect(isSelfInitiated("plan")).toBe(true);
     expect(isSelfInitiated("agenda")).toBe(true);
-    for (const s of ["song", "game", "followup", "notice", "message"] as const) {
+    for (const s of ["song", "game", "watch", "followup", "notice", "message"] as const) {
       expect(isSelfInitiated(s)).toBe(false);
     }
   });

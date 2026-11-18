@@ -19,7 +19,7 @@ describe("source classification", () => {
   it("only plan and agenda are her own initiative", () => {
     expect(isSelfInitiated("plan")).toBe(true);
     expect(isSelfInitiated("agenda")).toBe(true);
-    for (const s of ["song", "game", "followup", "notice", "world", "message"] as const) {
+    for (const s of ["song", "game", "watch", "followup", "notice", "world", "message"] as const) {
       expect(isSelfInitiated(s)).toBe(false);
     }
   });
@@ -39,6 +39,53 @@ describe("source classification", () => {
     expect(limits.unanswered_streak).toBe(0);
     expect(r.host.opened).toHaveLength(5);
     expect(r.host.opened[0]?.args.reason).toBe("song_start");
+  });
+});
+
+describe("a watched stream's line", () => {
+  it("has the priority of a game's", () => {
+    const r = rig();
+    const watch = impulse(r.clock, { source: "watch", context: HERE });
+    const game = impulse(r.clock, { source: "game", context: HERE });
+    expect(watch.priority).toBe(game.priority);
+    expect(watch.priority).toBe("request");
+  });
+
+  it("is held by the same floors as a game's", async () => {
+    const r = rig();
+    const submit = (source: "watch" | "game", more = {}) =>
+      r.arbiter.submit(impulse(r.clock, { source, context: HERE, ...more }));
+    r.env.paused = true;
+    expect(await submit("watch")).toMatchObject({ verdict: "rejected", reason: "paused" });
+    r.env.paused = false;
+    r.env.blocked.add("bad");
+    expect((await submit("watch", { account: acct("bad") })).reason).toBe("consent");
+    r.env.blocked.clear();
+    r.host.set(THERE, { mode: "mention-only" });
+    expect(
+      (await r.arbiter.submit(impulse(r.clock, { source: "watch", context: THERE }))).reason,
+    ).toBe("ceiling");
+    r.host.set(voiceCtx("v"), { present: false });
+    expect(
+      (await r.arbiter.submit(impulse(r.clock, { source: "watch", context: voiceCtx("v") })))
+        .reason,
+    ).toBe("denied");
+    expect((await submit("watch")).verdict).toBe("accepted");
+    expect(r.host.opened.map((i) => i.source)).toContain("watch");
+  });
+
+  it("is not counted, backed off or held to quiet hours", async () => {
+    // 02:00 local: quiet hours.
+    const r = rig({}, new ManualClock(Date.UTC(2026, 10, 2, 18, 0, 0)));
+    for (let i = 0; i < 5; i++) {
+      const d = await r.arbiter.submit(impulse(r.clock, { source: "watch", context: HERE }));
+      expect(d.verdict).toBe("accepted");
+      r.clock.advance(MIN);
+    }
+    const limits = r.arbiter.ledger(HERE).limits;
+    expect(limits.initiatives_today).toBe(0);
+    expect(limits.unanswered_streak).toBe(0);
+    expect(r.host.opened).toHaveLength(5);
   });
 });
 

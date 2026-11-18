@@ -69,6 +69,7 @@ export function defaultImpulsePriority(source: ImpulseSource): Priority {
     case "followup":
     case "song":
     case "game":
+    case "watch":
       return "request";
     case "plan":
     case "agenda":
@@ -127,6 +128,7 @@ export function claimOf(impulse: Impulse): FloorClaimKind {
     case "followup":
       return impulseReason(impulse) === "followup" ? "wish" : "result";
     case "game":
+    case "watch":
       return (impulse.attention ?? null) === null ? "urgent" : "notable";
     case "world":
       return "notable";

@@ -71,7 +71,8 @@ export class ImpulseDesk implements ImpulseHost {
     const target = impulse.target.context;
     if (target === null) return refused("denied", "沒有地方可以說");
     const source = impulse.source;
-    const hers = source === "game" || source === "song" || source === "notice";
+    const hers =
+      source === "game" || source === "watch" || source === "song" || source === "notice";
     const context = hers ? agent.ownLinesContext(target) : target;
     if (context.kind === "voice" && !agent.inVoice(context)) {
       return refused("denied", "不在那個語音頻道");
@@ -84,9 +85,11 @@ export class ImpulseDesk implements ImpulseHost {
       const what =
         source === "game"
           ? ADMITTED_NOTES.game(hint)
-          : source === "song"
-            ? ADMITTED_NOTES.song(hint)
-            : ADMITTED_NOTES.other(hint === "" ? impulse.why : hint);
+          : source === "watch"
+            ? ADMITTED_NOTES.watch(hint)
+            : source === "song"
+              ? ADMITTED_NOTES.song(hint)
+              : ADMITTED_NOTES.other(hint === "" ? impulse.why : hint);
       return what.trim() === "" ? null : { kind: "world", what, claim };
     };
     const turn = newId();

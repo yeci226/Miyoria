@@ -22,7 +22,7 @@ import type { Timestamp } from "./time.js";
 
 /**
  * Where an impulse comes from. Only `plan` and `agenda` are her own initiative (they count
- * toward "主動開話題" and the unanswered streak); songs, game commentary, followups and notices
+ * toward "主動開話題" and the unanswered streak); songs, game and stream commentary, followups and notices
  * never do.
  */
 export const IMPULSE_SOURCES = [
@@ -38,6 +38,8 @@ export const IMPULSE_SOURCES = [
   "notice",
   /** Game commentary (the game director). */
   "game",
+  /** Something on the stream she is watching in voice (the watch module). */
+  "watch",
   /** A song announcement or song request (sing). */
   "song",
   /** A greeting or reaction to a world change (someone came online / joined voice). */

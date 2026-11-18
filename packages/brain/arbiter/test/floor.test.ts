@@ -147,6 +147,9 @@ describe("claim order", () => {
     const narration = { key: "game:x", repeat_after_ms: 1 };
     expect(claimOf(impulse({ source: "game", attention: narration }))).toBe("notable");
     expect(claimOf(impulse({ source: "world" }))).toBe("notable");
+    // A stream she watches reads like her game: urgent, or notable once it is narration.
+    expect(claimOf(impulse({ source: "watch" }))).toBe("urgent");
+    expect(claimOf(impulse({ source: "watch", attention: narration }))).toBe("notable");
     expect(claimOf(impulse({ claim: "urgent", source: "world" }))).toBe("urgent");
   });
 

@@ -25,6 +25,7 @@ export const ImpulseSourceSchema = z
     "followup",
     "notice",
     "game",
+    "watch",
     "song",
     "world",
     "command",

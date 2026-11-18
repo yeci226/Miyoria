@@ -155,6 +155,20 @@ describe("what the Arbiter admits", () => {
     expect(speeches(rig)[0]).toEqual(["哇啊!", turn]);
   });
 
+  it("a watched stream's line is a wake that speaks of the stream, not of a game", async () => {
+    const rig = await voiceRig({ arbiter: {} });
+    rig.model.push({ events: says("哈哈,好扯!"), delay: 100 });
+    const opened = await desk(rig).open(
+      impulse({ source: "watch", context: VC, hint: "朋友剛剛在直播裡翻車了" }),
+    );
+    expect(opened.status).toBe("started");
+    await until(() => rig.model.requests.length === 1, 3_000, "the run");
+    const text = textOf(rig.model.requests[0]);
+    expect(text).toContain("你正在看的直播:朋友剛剛在直播裡翻車了");
+    expect(text).not.toContain("你正在玩的遊戲");
+    await until(() => speeches(rig).length === 1, 3_000, "her line");
+  });
+
   it("a notice is a result run with what came of it, told once", async () => {
     const rig = await Rig.create();
     rig.sup.bus.publish("actions", Events.AgentNotice, {

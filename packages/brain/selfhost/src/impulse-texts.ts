@@ -6,6 +6,8 @@
 export const ADMITTED_NOTES = {
   /** A game she plays: the narration of the log or the director's line. */
   game: (hint: string) => `你正在玩的遊戲:${hint.trim()}`,
+  /** A friend's stream she is watching in voice: what a look at it showed. */
+  watch: (hint: string) => `你正在看的直播:${hint.trim()}`,
   /** A song of hers: about to start, ready, done or failed (the singer says what is wanted). */
   song: (hint: string) => `唱歌的事:${hint.trim()}`,
   /** Anything else a module asked her to react to. */
