@@ -4,6 +4,8 @@ import {
   encodeCaptureFrame,
   encodeNodeMessage,
   encodePlaybackFrame,
+  encodeSnapshotFrame,
+  encodeWatchAudioFrame,
   FRAME_CAPTURE,
   FRAME_PLAYBACK,
   MAX_FADE_MS,
@@ -177,5 +179,13 @@ describe("encodeNodeMessage", () => {
       node: "voice-node",
       self_account: { platform: "discord", id: "123" },
     });
+  });
+});
+
+describe("watch frames", () => {
+  it("encodes_snapshot_and_watch_audio_frames", () => {
+    expect([...encodeSnapshotFrame(7, Buffer.from([1, 2]))]).toEqual([0x04, 7, 0, 0, 0, 1, 2]);
+    expect([...encodeWatchAudioFrame(Buffer.from([1, 2]))]).toEqual([0x05, 0, 0, 0, 0, 1, 2]);
+    expect(() => encodeSnapshotFrame(-1, Buffer.alloc(0))).toThrow(RangeError);
   });
 });

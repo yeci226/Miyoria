@@ -195,6 +195,9 @@ importers:
       '@lng2004/discord.js-selfbot-v13':
         specifier: 3.7.2
         version: 3.7.2(opusscript@0.1.1)
+      '@lng2004/node-datachannel':
+        specifier: 0.33.2-20260825
+        version: 0.33.2-20260825
       '@miyoria/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

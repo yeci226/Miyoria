@@ -47,7 +47,7 @@ describe("CoreLink", () => {
       token: "secret",
       node: "voice-node",
       self_account: { platform: "discord", id: "42" },
-      capabilities: ["play_duck", "play_pause"],
+      capabilities: ["play_duck", "play_pause", "watch"],
     });
     await new Promise((r) => setTimeout(r, 80));
     expect(pongs).toContain('{"type":"pong"}');

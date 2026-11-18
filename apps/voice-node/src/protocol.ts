@@ -6,6 +6,8 @@
 //   0x02 [play:   u32 LE] [PCM s16le mono ...]          Core -> node (playback)
 //   0x03 [play:   u32 LE] [PCM s16le mono ...]          Core -> node (levels track of a play
 //                                                       started with `levels`: what lip sync follows)
+//   0x04 [id: u32 LE] [JPEG ...]                         node -> Core (watch: one snapshot)
+//   0x05 [id = 0: u32 LE] [PCM s16le mono 16 kHz ...]    node -> Core (watch: the stream's audio)
 
 import {
   readFrameHeader,
@@ -22,6 +24,7 @@ import {
   type VoiceLinkGoLiveState,
   type VoiceLinkNodeMessageIn,
   type VoiceLinkParticipant,
+  type VoiceLinkWatchState,
   writeFrameHeader,
 } from "@miyoria/contracts/voice-link";
 
@@ -30,15 +33,14 @@ export const PROTOCOL_VERSION = VOICE_LINK_VERSION;
  * Optional protocol features this node implements, announced in `hello.capabilities` so Core
  * only sends what the node understands.
  */
-export const NODE_CAPABILITIES: readonly string[] = VOICE_LINK_CAPABILITIES.filter(
-  // Watching a stream is not built into the node yet: it does not announce it.
-  (capability) => capability !== "watch",
-);
+export const NODE_CAPABILITIES: readonly string[] = VOICE_LINK_CAPABILITIES;
 export const CAPTURE_SAMPLE_RATE = 16_000;
 
 export const FRAME_CAPTURE = VOICE_LINK_FRAME.CAPTURE;
 export const FRAME_PLAYBACK = VOICE_LINK_FRAME.PLAYBACK;
 export const FRAME_LEVELS = VOICE_LINK_FRAME.LEVELS;
+export const FRAME_SNAPSHOT = VOICE_LINK_FRAME.SNAPSHOT;
+export const FRAME_WATCH_AUDIO = VOICE_LINK_FRAME.WATCH_AUDIO;
 
 /**
  * Close codes on which the node gives up instead of reconnecting. Core also closes with
@@ -67,6 +69,8 @@ export type GoLiveStartMessage = Extract<CoreMessage, { type: "golive_start" }>;
 
 export type GoLiveWireState = VoiceLinkGoLiveState;
 
+export type WatchWireState = VoiceLinkWatchState;
+
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string; ignorable: boolean };
 
 /** `fade_ms` above this is taken as this. */
@@ -94,8 +98,6 @@ type CoreMessageSchema = (typeof VoiceLinkCoreMessageSchema.options)[number];
 const HANDLED = new Map<string, CoreMessageSchema>(
   VoiceLinkCoreMessageSchema.options
     .filter((schema) => schema.shape.type.value !== "pong")
-    // Not handled yet (see `NODE_CAPABILITIES`): unknown, ignorable types until they are.
-    .filter((schema) => !schema.shape.type.value.startsWith("watch_"))
     .map((schema) => [schema.shape.type.value, schema]),
 );
 
@@ -106,6 +108,7 @@ const FIELD_RULES: Record<string, string> = {
   channel: "a string",
   user_id: "a string",
   play: "a u32",
+  id: "a u32",
   sample_rate: `an integer in ${VOICE_LINK_LIMITS.PLAY_SAMPLE_RATE_MIN}..${VOICE_LINK_LIMITS.PLAY_SAMPLE_RATE_MAX}`,
   fade_ms: "a non-negative number",
   gain: "a number in 0..1",
@@ -210,6 +213,17 @@ function encodeFrame(tag: number, id: number, pcm: Uint8Array): Buffer {
 export function encodeCaptureFrame(stream: number, pcm: Uint8Array): Buffer {
   if (!isU32(stream)) throw new RangeError(`stream id out of u32 range: ${stream}`);
   return encodeFrame(FRAME_CAPTURE, stream, pcm);
+}
+
+/** Builds a `0x04` snapshot frame: `[0x04][id][JPEG]`, `id` that of the `watch_snapshot` it answers. */
+export function encodeSnapshotFrame(id: number, jpeg: Uint8Array): Buffer {
+  if (!isU32(id)) throw new RangeError(`snapshot id out of u32 range: ${id}`);
+  return encodeFrame(FRAME_SNAPSHOT, id, jpeg);
+}
+
+/** Builds a `0x05` watch audio frame: `[0x05][id = 0][PCM s16le mono 16 kHz]`. One stream is watched at a time. */
+export function encodeWatchAudioFrame(pcm: Uint8Array): Buffer {
+  return encodeFrame(FRAME_WATCH_AUDIO, 0, pcm);
 }
 
 /** Builds a `0x02` playback frame (what Core sends). Used by tests and tooling. */
