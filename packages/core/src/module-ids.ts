@@ -32,6 +32,7 @@ export const MODULE_IDS: readonly string[] = [
   "game",
   "game.chat",
   "sing",
+  "watch",
   "mcp",
   "stage.link",
   "economy",
@@ -77,9 +78,9 @@ export const REQUIRED_MODULES: readonly string[] = Object.keys(REQUIRED_MODULE_R
 /**
  * Modules that are off unless their section says `enabled = true` (a missing section or a
  * missing `enabled` key means disabled): high-risk ones, and ones that need a server of their own
- * (`imagegen` needs ComfyUI).
+ * (`imagegen` needs ComfyUI), and `watch`, which sends pictures of a friend's stream to a vision model.
  */
-export const OPT_IN_MODULES: readonly string[] = ["sandbox", "imagegen"];
+export const OPT_IN_MODULES: readonly string[] = ["sandbox", "imagegen", "watch"];
 
 /** Whether the config file enables module `id` (`OPT_IN_MODULES` need `enabled = true`). */
 export function moduleEnabled(config: Config, id: string): boolean {

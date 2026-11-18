@@ -4,7 +4,7 @@
 // Boot order (after `facts`, which every other module outlives, and `moderation`,
 // which is there before anything can say a word): llm, cluster, speech, voice.link, voice, scheduler, agent, commands,
 // auth, actions, directive, activity, heart, world, self, memory, arbiter, mind, knowledge, conversation,
-// reflect, queue, game, game.chat, sing, mcp,
+// reflect, queue, game, game.chat, sing, watch (opt-in), mcp,
 // stage.link, economy, cards, market, web, sandbox (opt-in), imagegen (opt-in), party, eval, Discord bot, Admin API, terminal chat, then the
 // extension host and one `ext.<id>` per extension. `facts` also writes the raw record (chat lines,
 // her decisions, how each turn ended) from the bus.
@@ -69,6 +69,7 @@ import { openStore as openStoreBackend, type Store } from "@miyoria/store";
 import { isJsonObject } from "@miyoria/types";
 import { SpeechConfigSchema, SpeechModule } from "@miyoria/voice/speech";
 import { VoiceLinkModule, VoiceModule } from "@miyoria/voice/voice";
+import { WatchModule } from "@miyoria/watch";
 import { ImageGenModule } from "@miyoria/workspace/imagegen";
 import { SandboxModule } from "@miyoria/workspace/sandbox";
 import { SkillsModule } from "@miyoria/workspace/skills";
@@ -210,6 +211,10 @@ async function coreModules({
     new GameChatModule(),
     // Who listens goes to the song worker and, through the cluster, to the hosts' GPU arbiters.
     new SingModule(null, { baseDir, endpoints, context: clusterContext }),
+    new WatchModule({
+      persona: (services) =>
+        services.get(PersonaHandleKey)?.corePrompt() ?? profile.personaPrompt(),
+    }),
     McpModule.fromAppConfig(config),
     new StageLinkModule(),
     new EconomyModule(profileId),

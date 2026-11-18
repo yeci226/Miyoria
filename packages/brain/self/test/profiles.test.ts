@@ -50,6 +50,10 @@ describe("profiles", () => {
     expect(PREFIX_PROFILE.voice).toBe("text");
     expect([...VOICE_TOOLS]).toContain("find_tools");
     expect([...VOICE_TOOLS]).toContain("sing_start");
+    // She decides on her own to watch a friend's stream, in voice, so the three tools are allowed.
+    expect([...VOICE_TOOLS]).toEqual(
+      expect.arrayContaining(["watch_start", "watch_stop", "watch_look"]),
+    );
     expect([...VOICE_TOOLS]).not.toContain("react");
     for (const name of ["subagent", "reflect"] as const) {
       expect(PROFILES[name].offers(entry("say", "say"))).toBe(false);

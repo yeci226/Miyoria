@@ -381,6 +381,15 @@ describe("settings", () => {
     }
     expect(moduleEnabled(Config.fromToml(""), "agent")).toBe(true);
   });
+
+  it("watch_is_opt_in", () => {
+    expect(MODULE_IDS.indexOf("watch")).toBe(MODULE_IDS.indexOf("sing") + 1);
+    expect(moduleEnabled(Config.fromToml(""), "watch")).toBe(false);
+    expect(moduleEnabled(Config.fromToml("[modules.watch]\nsnapshot_secs = 10"), "watch")).toBe(
+      false,
+    );
+    expect(moduleEnabled(Config.fromToml("[modules.watch]\nenabled = true"), "watch")).toBe(true);
+  });
 });
 
 // ---- terminal chat ---------------------------------------------------------------------------

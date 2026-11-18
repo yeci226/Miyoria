@@ -46,6 +46,8 @@ enabled = false
 enabled = true
 [modules.imagegen]
 enabled = true
+[modules.watch]
+enabled = true
 `;
 
 /** What the runner reads of a tool besides calling it. */
@@ -134,6 +136,7 @@ describe("the tools of a run", () => {
       game: "game_start",
       party: "party_start",
       sing: "sing_start",
+      watch: "watch_start",
       voice: "voice_join",
       stage: "stage_scene",
       web: "web_search",
@@ -190,6 +193,9 @@ describe("the registry behind them", () => {
       "sing_start",
       "sing_stop",
       "skill",
+      "watch_look",
+      "watch_start",
+      "watch_stop",
       "web_image",
       "web_read",
       "web_search",
@@ -222,6 +228,7 @@ describe("the registry behind them", () => {
       "sing_start",
       "stream_start",
       "voice_join",
+      "watch_start",
     ]);
   });
 

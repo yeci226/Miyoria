@@ -19,6 +19,8 @@ api_key = "${LLM_API_KEY:-}"
 chat = ["deepseek:deepseek-chat"]
 # 高風險動作的自我審核;不設就用 chat 的模型(啟動後第一次審核會記一行警告)
 review = ["deepseek:deepseek-chat"]
+# 看直播時看畫面用的模型,要收圖片(見下面的 [llm.image_input]);不設就用 chat 的模型
+# watch = ["provider:model"]
 
 # 推理等級(off | low | medium | high),依用途,沒列的用途用預設值(沒有預設的 = 不思考)。
 # 不急的判斷開、要即時的關。舊的 [llm.thinking] 開關已經不讀了(啟動時會警告)。
@@ -360,6 +362,23 @@ dirs = ["extensions"]
 # video_dir = "data/songs"   # worker 的 SING_DATA_DIR(直播機上的路徑),不在裡面的影片不會送
 # prepare_notice = true      # worker 做歌要整張顯示卡時(SING_OFFLOAD_URLS),她先說「我去準備一下歌喔」再讓它開始
 # prepare_notice_gap_secs = 180   # 連點好幾首時這段時間內不再說第二次
+
+# 看直播(opt-in,預設關閉)。她在語音頻道時,自己決定要不要看頻道裡誰的 Go Live、什麼時候換人或不看,
+# 也可以請她看(她可以不看);定時看一張畫面、聽直播的聲音、記幾則筆記,有值得講的才開口。
+# 本人可用 /me privacy watch:off 拒絕被看;被看時語音頻道的文字區會有一張通知。
+# 要有語音節點(支援看直播)、能收圖片的模型(用途 watch,沒設就用 chat),聽直播的聲音另外要有語音辨識。
+# [modules.watch]
+# enabled = false
+# snapshot_secs = 30           # 兩次看畫面的間隔(從上一次看完算起)
+# speak_min_secs = 60          # 她自己開口講直播的事,兩句至少隔幾秒
+# quiet_secs = 10              # 有人剛講過話(語音頻道裡別人)這麼久內她不插嘴
+# notes_keep = 10              # 留幾則畫面筆記(看完這場就丟,不存檔)
+# transcript_secs = 180        # 留幾秒直播裡說的話
+# min_watch_secs = 180         # 她自己決定的話,一場至少看這麼久才換人;別人請她換不受限
+# starts_per_hour = 6          # 一小時最多開始看幾場(不分是誰請的)
+# max_watch_mins = 120         # 一場最多看幾分鐘
+# max_snapshot_failures = 5    # 連續幾次拿不到畫面就不看了
+# notice_hours = 24            # 同一個人被看,通知至少隔幾小時再發
 
 # 魚幣(docs/design/economy.md):陪她就賺得到(簽到、說話、語音、點的歌唱完、她自己送),
 # 只能花在餵她和小禮物上。不能用真錢買、不能轉給別人,也幾乎買不到好感:每份付錢的禮物只讓好感動一點點。

@@ -108,6 +108,9 @@ export const VOICE_TOOLS: ReadonlySet<string> = new Set([
   "party_ask",
   "stream_start",
   "stream_stop",
+  "watch_start",
+  "watch_stop",
+  "watch_look",
 ]);
 
 /**

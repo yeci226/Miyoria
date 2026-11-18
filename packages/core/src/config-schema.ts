@@ -93,6 +93,7 @@ import {
   VoiceLinkModule,
   VoiceModule,
 } from "@miyoria/voice/voice";
+import { WatchConfigSchema, WatchModule } from "@miyoria/watch";
 import { ImageGenConfigSchema, ImageGenModule } from "@miyoria/workspace/imagegen";
 import { SandboxConfigSchema, SandboxModule } from "@miyoria/workspace/sandbox";
 import { SkillsConfigSchema, SkillsModule } from "@miyoria/workspace/skills";
@@ -139,6 +140,7 @@ export const MODULE_CONFIG_SCHEMAS: ReadonlyMap<string, ConfigSchema | null> = n
   [GameModule.ID, GameConfigSchema],
   [GameChatModule.ID, GameChatConfigSchema],
   [SingModule.ID, SingConfigSchema],
+  [WatchModule.ID, WatchConfigSchema],
   [McpModule.ID, null],
   [StageLinkModule.ID, StageLinkConfigSchema],
   [EconomyModule.ID, EconomyConfigSchema],
