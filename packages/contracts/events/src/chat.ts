@@ -37,6 +37,11 @@ export const VoicePlaybackSchema = z
     turn: TurnIdSchema.nullable(),
     state: PlaybackStateSchema,
     text: z.string(),
+    /**
+     * What was sent to TTS when it is not `text`: its translation (`tts_translate`). On `started`
+     * only; missing when she said the text as it is written.
+     */
+    said: z.string().optional(),
     /** Emotion the sentence is spoken with (`null`: none). */
     emotion: z.string().nullable().optional(),
     /** How much of it was audible, in ms (`interrupted`, `finished`). */

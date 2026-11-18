@@ -744,7 +744,10 @@ export class Speaker implements VoiceSink {
     this.#settle(guild, text);
     const blocked = screened ?? line.blocked ?? (this.#filtered(text) ? text : null);
     const facts = blocked === null ? {} : { blocked };
-    this.#playbackEvent(context, turn, "started", text, emotion, facts);
+    this.#playbackEvent(context, turn, "started", text, emotion, {
+      ...facts,
+      ...(line.said !== text ? { said: line.said } : {}),
+    });
     echo.started(guild, [text, line.said]);
     this.#playing.set(guild, (this.#playing.get(guild) ?? 0) + 1);
     this.#live.add(playback);

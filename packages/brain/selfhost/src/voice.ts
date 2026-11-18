@@ -371,6 +371,7 @@ export class VoiceHost implements VoiceRunner {
       case "started": {
         speech.started += 1;
         place.lastSelfAt = now;
+        if (playback.said !== undefined) this.#outlet.spoke(turn, text, playback.said);
         if (text === "") break;
         const [seq] = transcript.append(
           place.session,
@@ -406,7 +407,16 @@ export class VoiceHost implements VoiceRunner {
         break;
     }
     place.lane.push({ type: "playback", turn, state });
+    this.#echoWhenSaid(turn);
     if (speech.ended >= speech.queued && !this.#turns.has(turn)) this.#speech.delete(turn);
+  }
+
+  /** `text_echo`: once the run of `turn` is over and nothing of it is left to play. */
+  #echoWhenSaid(turn: string): void {
+    if (this.#turns.has(turn)) return;
+    const speech = this.#speech.get(turn);
+    if (speech !== undefined && speech.ended < speech.queued) return;
+    void this.#outlet.echo(turn);
   }
 
   yieldTo(context: ContextKey, level: InterruptLevel): void {
@@ -900,8 +910,8 @@ export class VoiceHost implements VoiceRunner {
       // An early start that was dropped never was: no prompt of it.
       this.#d.saved.end(turn, !run.dropped);
       this.#d.prompt.ended(turn);
-      void this.#outlet.echo(turn);
       this.#forget(state);
+      this.#echoWhenSaid(turn);
       agent.mainline.holdsFloor(turn, false);
       floor?.turnEnded(turn);
       agent.ctx.services.get(VoiceTurnsKey)?.settle(turn);
