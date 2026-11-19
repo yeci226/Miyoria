@@ -66,7 +66,7 @@ import { jsonRequest } from "./extract.js";
 import { factsRpc } from "./facts.js";
 import { fortuneRpc } from "./fortune-routes.js";
 import { selfRpc, worldRpc } from "./inner.js";
-import { karaokeAdminRpc, karaokeRoomsRpc, karaokeRpc } from "./karaoke-routes.js";
+import { karaokeAdminRpc, karaokeRefusals, karaokeRoomsRpc, karaokeRpc } from "./karaoke-routes.js";
 import { digestRpc, knowledgeRpc, reflectionRpc } from "./learning.js";
 import { lifeRpc } from "./life.js";
 import { livePatRpc } from "./live.js";
@@ -387,12 +387,25 @@ export function tableRoutes(state: ApiState, table: AnyRouter, options: RpcOptio
     const input = def.inputSchema;
     const body = input instanceof z.ZodObject && "body" in input.shape;
     const stream = eventRouteSchemas(def.outputSchema) !== undefined;
+    // Karaoke's own warn log of a refused result (the rate limit and the input check included).
+    const refused = karaokeRefusals(path);
     routes.push({
       method: (def.route.method ?? "POST") as Method,
       path: honoPath(def.route.path ?? ""),
       public: meta.audience === "public",
       member: meta.audience === "member",
       handler: async (c) => {
+        if (refused !== null) {
+          try {
+            if (meta.permission !== null)
+              requirePermission(state, c, meta.permission, meta.refusal);
+            if (meta.limited) limitMember(state, c);
+            return await serve(handler, state, c, body);
+          } catch (error) {
+            refused(c, error);
+            throw error;
+          }
+        }
         if (meta.permission !== null) requirePermission(state, c, meta.permission, meta.refusal);
         if (meta.limited) limitMember(state, c);
         if (!stream) return serve(handler, state, c, body);

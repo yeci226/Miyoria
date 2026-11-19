@@ -31,10 +31,9 @@ function phrase(input: NoteInput, at: number | null): string | null {
 
 // ---- rooms (step 4) ---------------------------------------------------------------------------
 
-/** A room opened: she is its host and may greet people. */
-export function roomOpenedNote(opener: string, code: string, title: string | null): string {
-  const song = title === null ? "" : `,第一首是「${safeName(title, 40)}」`;
-  return `${safeName(opener)} 在會員頁開了一間唱 K 房間(房號 ${code})${song}。你是主持人:可以招呼大家用房號加入,一間最多八個人一起唱同一首。分數是系統算的。`;
+/** A room opened (no song yet: people queue songs inside): she is its host and may greet people. */
+export function roomOpenedNote(opener: string, code: string): string {
+  return `${safeName(opener)} 在會員頁開了一間唱 K 房間(房號 ${code}),還沒有點歌:大家進房間之後自己點。你是主持人:可以招呼大家用房號加入,一間最多八個人一起唱同一首。分數是系統算的。`;
 }
 
 /** A round starts in a few seconds. */

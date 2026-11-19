@@ -7,10 +7,13 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  encodeRelayFrame,
   HOST_ERROR_CODE,
+  HOST_NOTIFICATION,
   HOST_RELAY_FRAME,
   HOST_RELAY_LIMITS,
   HOST_RELAY_PROTOCOL_ERROR,
+  HostRelayLengthError,
   type HostReport,
   type HostServiceEvent,
   type HostServiceStatus,
@@ -533,6 +536,49 @@ describe("relay over the control link", () => {
     const s = await setup({ relay: { timeoutMs: 300 } });
     await expect(s.request("/hang")).rejects.toThrow(/did not answer within 300 ms/);
     await waitUntil(() => s.svc.cut.includes("/hang"), "the service sees the close");
+  });
+
+  it("fails a body that a host ends short of its content-length", async () => {
+    // A host from before 2026-11-19 ends a body like a whole one whatever its length: Core checks.
+    harness = await Harness.start();
+    const cluster = harness.cluster();
+    const { id, key } = approvedHost(cluster, "old-pc", ["sing"]);
+    let host: FakeHost | null = null;
+    const answer = (stream: number, send: number) => {
+      setTimeout(() => {
+        const frame = (f: Parameters<typeof encodeRelayFrame>[0]) =>
+          host?.ws.send(encodeRelayFrame(f));
+        frame({ kind: HOST_RELAY_FRAME.RESPONSE_CHUNK, stream, data: new Uint8Array(send) });
+        frame({ kind: HOST_RELAY_FRAME.RESPONSE_END, stream });
+      }, 20);
+      return { status: 200, headers: { "content-length": "1000" } };
+    };
+    host = await FakeHost.connect(harness.url(), { host: id, key, name: "old-pc" }, (_m, p) => {
+      const { stream, path } = p as { stream: number; path: string };
+      return answer(stream, path === "/whole" ? 1000 : 600);
+    });
+    host.peer.notify(
+      HOST_NOTIFICATION.Report,
+      report([service({ name: "sing", provides: ["sing"], token: "t" })], "old-pc"),
+    );
+    await waitUntil(() => cluster.registry.pick("sing") !== null, "the report");
+    const endpoint: Endpoint = {
+      capability: "sing",
+      host: "old-pc",
+      service: "sing",
+      url: "link://old-pc/sing",
+      via: "link",
+      headers: {},
+      healthy: true,
+      version: null,
+    };
+    const whole = await cluster.registry.request(endpoint, "/whole");
+    expect((await readAll(whole)).byteLength).toBe(1000);
+    const short = await cluster.registry.request(endpoint, "/short");
+    const error = await readAll(short).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HostRelayLengthError);
+    expect((error as HostRelayLengthError).received).toBe(600);
+    await host.close();
   });
 
   it("closes a link that sends a malformed binary frame", async () => {

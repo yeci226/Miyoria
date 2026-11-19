@@ -563,6 +563,18 @@ def voice_pitch(f0, mono, sr: int, seconds: float, clean: bool = True) -> dict[s
 # ── reference.json ───────────────────────────────────────────────────────────
 
 
+def song_artist(source_artist: str | None, lyrics_meta: dict[str, Any] | None,
+                lyrics: dict[str, Any] | None) -> str | None:
+    """The song's artist: the found lyrics' (lrclib's ``artistName``, in the lookup's meta) when those
+    lyrics are the ones used, else what the source says (yt-dlp's ``artist`` / ``creator``, an artist
+    split from the title, an artist's own channel: ``engine._source_of``), else ``None``."""
+    if lyrics is not None and lyrics.get("source") == "found" and lyrics_meta is not None:
+        found = str(lyrics_meta.get("artist") or "").strip()
+        if found:
+            return found[:200]
+    return (source_artist.strip()[:200] or None) if source_artist else None
+
+
 def reference(kid: str, title: str, artist: str | None, duration_s: float, midi: list[float | None], hz: int,
               notes: list[dict[str, Any]], lyrics: dict[str, Any] | None, quality: dict[str, Any],
               notes_method: str, made: dict[str, Any] | None = None) -> dict[str, Any]:

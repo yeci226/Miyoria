@@ -5,6 +5,7 @@
 
 import { rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { OverlayMessageSchema } from "@miyoria/contracts/overlay";
 import { EventBus, ServiceRegistry, Supervisor } from "@miyoria/runtime/kernel";
 import {
   type AnyEventDefinition,
@@ -79,6 +80,8 @@ function scene(extra: Partial<KaraokeStageScene> = {}): KaraokeStageScene {
         coins: 0,
         finished: false,
         on_air: true,
+        parts: null,
+        pitch: { from: 550, track: Buffer.from([0, 100, 101, 102]).toString("base64") },
       },
     ],
     note: null,
@@ -91,6 +94,13 @@ function scene(extra: Partial<KaraokeStageScene> = {}): KaraokeStageScene {
       voice_gain: 1,
       duck_gain: 0.35,
     },
+    queue: [
+      { title: "群青", artist: "YOASOBI", by: "小明", state: "ready" },
+      { title: "怪物", artist: null, by: "Mia", state: "preparing" },
+    ],
+    join_url: "https://example.test/karaoke/room/K7PQ2M",
+    qr_while_singing: false,
+    settling: null,
     ...extra,
   };
 }
@@ -103,6 +113,10 @@ function lyrics(extra: Partial<KaraokeStageLyrics> = {}): KaraokeStageLyrics {
     lyrics: null,
     video: abs("karaoke", "yt-abc", "video.mp4"),
     backing: { path: abs("karaoke", "yt-abc", "play_karaoke.pcm"), format: "pcm", rate: 48_000 },
+    notes: [
+      { start: 11.5, end: 12.1, midi: 64 },
+      { start: 12.2, end: 12.9, midi: 66.5 },
+    ],
     ...extra,
   };
 }
@@ -122,12 +136,16 @@ const END: KaraokeStageScene = {
   rounds_left: 0,
   song: null,
   shift: 0,
+  queue: [],
+  join_url: null,
+  qr_while_singing: false,
   members: [],
   position_ms: null,
   board: [],
   note: null,
   currency: "",
   air: { backing: false, relay: null, delay_ms: 0, backing_gain: 0, voice_gain: 0, duck_gain: 0 },
+  settling: null,
 };
 
 describe("karaoke on the stage link", () => {
@@ -194,6 +212,54 @@ describe("karaoke on the overlay hub", () => {
     now += 2_000;
     const later = hub.initial().map((t) => JSON.parse(t));
     expect(later).toContainEqual({ type: "karaoke", ...scene(), position_ms: 14_000 });
+  });
+
+  it("keeps the queue, the join link, the settling, the pitch and the notes for a later page", () => {
+    let now = 0;
+    const hub = new OverlayHub(() => now);
+    const settling = scene({
+      state: "singing",
+      settling: { waiting: ["Mia"] },
+      qr_while_singing: true,
+      board: [
+        {
+          ...(scene().board[0] as KaraokeStageScene["board"][number]),
+          parts: { pitch: 40.5, stability: 12, rhythm: null, expression: 8 },
+        },
+      ],
+    });
+    hub.karaoke(settling);
+    hub.karaokeLyrics(lyrics());
+    now += 1_000;
+    const [shown, words] = hub.initial().map((t) => JSON.parse(t));
+    expect(shown).toStrictEqual({ type: "karaoke", ...settling, position_ms: 13_000 });
+    expect(words.notes).toStrictEqual(lyrics().notes);
+    // The page's own parse of the feed takes them as they are.
+    expect(OverlayMessageSchema.parse(shown)).toStrictEqual(shown);
+  });
+
+  it("ends the scene with a frame that has every field, and reads an older Core's without them", () => {
+    const hub = new OverlayHub(() => 0);
+    const sent: string[] = [];
+    hub.listen((t) => sent.push(t));
+    hub.karaoke(scene());
+    hub.clearKaraoke();
+    const ended = JSON.parse(sent.at(-1) as string);
+    expect(ended).toStrictEqual({ type: "karaoke", ...END });
+    expect(OverlayMessageSchema.parse(ended)).toStrictEqual(ended);
+
+    const {
+      queue: _q,
+      join_url: _j,
+      qr_while_singing: _w,
+      settling: _s,
+      ...old
+    } = scene({ board: [] });
+    const parsed = parseCoreMessage({ type: "karaoke", ...old });
+    expect(parsed).toMatchObject({ queue: [], join_url: null, qr_while_singing: false });
+    expect(parsed).toMatchObject({ settling: null });
+    const { notes: _n, ...oldWords } = lyrics();
+    expect(parseCoreMessage({ type: "karaoke_lyrics", ...oldWords })).toMatchObject({ notes: [] });
   });
 
   it("passes the voice to the pages there now, and keeps none of it", () => {

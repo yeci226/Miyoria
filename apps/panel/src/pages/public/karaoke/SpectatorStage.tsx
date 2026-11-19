@@ -5,6 +5,7 @@
 // backing is muted by default (her stream in Discord carries the sound); 「聽伴奏」 plays it here on
 // the same clock. The song's files come from the room: a spectator of a running round gets signed
 // links of their own to watch with (`me.session` while `me.singing` is false), never submitted.
+// Once the song is over and Core waits for the last results, a plate says 結算中 and for whom.
 
 import { ArrowLeft, LogOut, Maximize, Minimize, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -17,6 +18,7 @@ import {
 } from "@miyoria/contracts/workers/karaoke";
 import { describeError, joinUrl } from "@/api/http";
 import { useConnection } from "@/app/connection";
+import { Dot } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { KaraokeEngine } from "./audio";
@@ -27,7 +29,15 @@ import { HeardBadge, Lyrics, ReadingToggle } from "./Lyrics";
 import { loadReading, type ReadingMode, saveReading } from "./lyric-text";
 import { clock, score1 } from "./result-text";
 import { contextTimeFor, secondsLeft, songTimeByCore } from "./room-clock";
-import { type BoardEvent, type BoardLines, MOVE_MARK, MOVE_WORD, memberColor, SOURCE_WORDS } from "./room-text";
+import {
+  type BoardEvent,
+  type BoardLines,
+  MOVE_MARK,
+  MOVE_WORD,
+  memberColor,
+  SOURCE_WORDS,
+  settlingView,
+} from "./room-text";
 import { EDGE, LAYOUT, PLATE, SAFE, STAGE_BOX } from "./Singing";
 import { StageBackground } from "./StageBackground";
 import { referenceCurve } from "./take";
@@ -304,6 +314,8 @@ export function SpectatorStage({
   const progress = duration > 0 ? Math.min(1, Math.max(0, now) / duration) : 0;
   const lyrics = loaded?.reference.lyrics ?? null;
   const waiting = secondsLeft(now);
+  // The song is over and Core waits for the last results.
+  const settle = room.settling === null ? null : settlingView(room.settling);
   const boardLines = board?.lines ?? [];
   const canFull = typeof document !== "undefined" && document.fullscreenEnabled === true;
   const toggleFull = () => {
@@ -344,9 +356,29 @@ export function SpectatorStage({
       {waiting > 0 && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
           <p className="grid justify-items-center gap-1" role="timer" aria-live="off">
-            <span className="font-mono text-[clamp(40px,12cqmin,96px)] font-semibold tabular-nums">{waiting}</span>
+            <span
+              key={waiting}
+              className="animate-in fade-in-0 zoom-in-90 font-mono text-[clamp(40px,12cqmin,96px)] font-semibold tabular-nums duration-300 ease-out motion-reduce:animate-none"
+            >
+              {waiting}
+            </span>
             <span className="text-[13px] text-muted-foreground">秒後開始</span>
           </p>
+        </div>
+      )}
+      {settle !== null && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center p-4 pb-[22cqh]">
+          <div
+            className={cn(PLATE, "grid max-w-md justify-items-center gap-1 px-5 py-3 text-center [text-shadow:none]")}
+            role="status"
+            data-settling
+          >
+            <p className="flex items-center gap-2 text-[15px] font-semibold">
+              <Dot tone="brand" pulse={!reduced} />
+              {settle.title}
+            </p>
+            <p className="text-[13px] text-muted-foreground">{settle.detail}</p>
+          </div>
         </div>
       )}
 

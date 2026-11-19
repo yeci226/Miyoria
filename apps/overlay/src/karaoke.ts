@@ -2,12 +2,22 @@
 // for a scene, and the words on it. Pure (no DOM); src/karaoke-view.ts draws it.
 //
 // - No room (or `show=` without `karaoke`): nothing; the overlay is as it always was.
-// - `lobby`: one compact corner plate (the room code to join with, the song, who is in).
-// - `countdown`, `singing`, `results`: the full scene (the song, the lyrics over the round's video,
-//   the live board, then the final ranking), and the page's own pieces make room for it.
+// - `lobby`: one corner plate (the room code and the join link's QR code, the next songs, who is in).
+// - `countdown`, `singing`: the full scene (the song, the pitch lanes and the lyrics over the
+//   round's video, the live board), and the page's own pieces make room for it.
+// - settling (`singing` with `settling`): 「結算中…」 and whom it waits for, the board still there.
+// - `results`: the final ranking over the whole screen, the parts of every score, the QR code small.
 
 import type { WorkersKaraokeLyricsV2 } from "@miyoria/contracts/workers";
-import type { KaraokeLine, KaraokeLyrics, KaraokeMember, KaraokeScene } from "./feed.js";
+import type {
+  KaraokeLine,
+  KaraokeLyrics,
+  KaraokeMember,
+  KaraokeParts,
+  KaraokeQueueEntry,
+  KaraokeScene,
+  KaraokeSettling,
+} from "./feed.js";
 
 export type KaraokeMode = "none" | "lobby" | "stage";
 
@@ -75,10 +85,10 @@ export function memberTag(m: KaraokeMember): string {
 }
 
 /** The lobby's one line about what it waits for. */
-export function lobbyStatus(scene: Pick<KaraokeScene, "members" | "song">): string {
+export function lobbyStatus(scene: Pick<KaraokeScene, "members" | "song" | "queue">): string {
   const singers = scene.members.filter((m) => m.role === "singer");
   if (singers.length === 0) return "等人加入";
-  if (scene.song === null) return "等開房的人選歌";
+  if (scene.song === null) return scene.queue.some((e) => e.state === "preparing") ? "等歌準備好" : "等大家點歌";
   const ready = singers.filter((m) => m.ready).length;
   if (ready === singers.length) return "都準備好了,等開房的人按開始";
   return `等大家準備好(${ready}/${singers.length})`;
@@ -162,4 +172,185 @@ export function boardRanks(rows: readonly Pick<BoardRow, "key" | "rank">[]): Map
 export function resultTail(row: Pick<BoardRow, "coins" | "finished">, currency: string): string {
   if (row.coins > 0) return coinsText(row.coins, currency);
   return row.finished ? "" : "沒唱完";
+}
+
+// ---- the results ------------------------------------------------------------------------------
+
+/** The four parts of a score, in the order the results show them, with the most each gives. */
+export const PARTS = [
+  { key: "pitch", label: "音程", max: 60 },
+  { key: "stability", label: "安定", max: 15 },
+  { key: "rhythm", label: "節奏", max: 15 },
+  { key: "expression", label: "表現", max: 10 },
+] as const;
+
+/** One part of a results row: its number (one decimal, 「—」 when not given) and how full its bar is. */
+export interface PartCell {
+  label: string;
+  max: number;
+  text: string;
+  share: number;
+}
+
+/** A row's four parts as the results show them; `null` without a result (nothing to show). */
+export function partCells(parts: KaraokeParts | null): PartCell[] | null {
+  if (parts === null) return null;
+  return PARTS.map(({ key, label, max }) => {
+    const v = parts[key];
+    return {
+      label,
+      max,
+      text: v === null ? "—" : v.toFixed(1),
+      share: v === null ? 0 : Math.min(Math.max(v / max, 0), 1),
+    };
+  });
+}
+
+/** One row of the results: the board's row, its parts and what it says at its end. */
+export interface ResultRow extends BoardRow {
+  parts: PartCell[] | null;
+  tail: string;
+}
+
+/** The final ranking in rank order, each row with its parts and its coins or 「沒唱完」. */
+export function resultRows(lines: readonly KaraokeLine[], currency: string): ResultRow[] {
+  const parts = new Map(lines.map((l) => [lineKey(l), l.parts]));
+  return boardRows(lines, new Map()).map((row) => ({
+    ...row,
+    parts: partCells(parts.get(row.key) ?? null),
+    tail: resultTail(row, currency),
+  }));
+}
+
+/** How tall the results rows are: roomy for a few singers, compact for a crowd. */
+export function resultsDensity(rows: number): "roomy" | "normal" | "compact" {
+  return rows <= 4 ? "roomy" : rows <= 8 ? "normal" : "compact";
+}
+
+/** The results' heading: which round. */
+export function resultsTitle(round: number): string {
+  return round > 0 ? `第 ${round} 首結果` : "結果";
+}
+
+// ---- the phases and what shows in each ---------------------------------------------------------
+
+/**
+ * Where the room is, as the stream shows it: `settling` is the end of a sung round while its
+ * results are worked out (Core still says `singing`).
+ */
+export type KaraokePhase = "lobby" | "countdown" | "singing" | "settling" | "results";
+
+export function karaokePhase(scene: Pick<KaraokeScene, "state" | "settling">): KaraokePhase {
+  if (scene.state === "singing" && scene.settling !== null) return "settling";
+  return scene.state;
+}
+
+/** Where the join QR code shows: big in the lobby plate, small in a corner of the screen, or not at all. */
+export type QrPlace = "lobby" | "corner" | null;
+
+/**
+ * The QR code of the room's join link: in the lobby next to the code; small in a corner with the
+ * results; while the round counts down, is sung and settles only when `qrWhileSinging`. Without a
+ * link there is none (the code stays as text).
+ */
+export function qrPlace(scene: Pick<KaraokeScene, "state" | "settling" | "joinUrl" | "qrWhileSinging">): QrPlace {
+  if (scene.joinUrl === null) return null;
+  const phase = karaokePhase(scene);
+  if (phase === "lobby") return "lobby";
+  if (phase === "results") return "corner";
+  return scene.qrWhileSinging ? "corner" : null;
+}
+
+/** The pieces of the scene that show (`mode` from `karaokeMode`). */
+export interface KaraokeBlocks {
+  lobby: boolean;
+  /** The song's plate, top left. */
+  title: boolean;
+  /** The lanes and the lyrics: while the round counts down and is sung. */
+  lanes: boolean;
+  lyrics: boolean;
+  /** The live ranking, right. */
+  board: boolean;
+  /** 「結算中…」 in the middle of the screen. */
+  settling: boolean;
+  /** The final ranking over the whole screen. */
+  results: boolean;
+  qr: QrPlace;
+}
+
+/** What of the scene shows, phase by phase (`on`: this page shows the karaoke section). */
+export function karaokeBlocks(scene: KaraokeScene | null, on: boolean): KaraokeBlocks {
+  const none: KaraokeBlocks = {
+    lobby: false,
+    title: false,
+    lanes: false,
+    lyrics: false,
+    board: false,
+    settling: false,
+    results: false,
+    qr: null,
+  };
+  if (karaokeMode(scene, on) === "none" || scene === null) return none;
+  const phase = karaokePhase(scene);
+  const live = phase === "countdown" || phase === "singing";
+  return {
+    lobby: phase === "lobby",
+    title: live || phase === "settling",
+    lanes: live,
+    lyrics: live,
+    board: live || phase === "settling",
+    settling: phase === "settling",
+    results: phase === "results",
+    qr: qrPlace(scene),
+  };
+}
+
+/** Names listed before 「等 N 人」. */
+const SETTLING_NAMES = 4;
+
+/** What 「結算中…」 says under it: whose result it still waits for, or that it is about done. */
+export function settlingText(settling: KaraokeSettling): string {
+  const names = settling.waiting;
+  if (names.length === 0) return "馬上就好";
+  if (names.length > SETTLING_NAMES) return `還在等 ${names.slice(0, SETTLING_NAMES).join("、")} 等 ${names.length} 人的分數`;
+  return `還在等 ${names.join("、")} 的分數`;
+}
+
+// ---- the lobby's queue and the join code --------------------------------------------------------
+
+/** One song in the lobby's 「下一首」 list. */
+export interface QueueRow {
+  title: string;
+  artist: string | null;
+  /** Who added it (`null`: not known, the chosen song). */
+  by: string | null;
+  /** A mark beside it: 「準備中」, 「失敗」, or none. */
+  mark: string | null;
+  state: KaraokeQueueEntry["state"];
+}
+
+/** The lobby's 「下一首」: the chosen song first, then the queue after it; empty when nobody has asked for one. */
+export function queueRows(scene: Pick<KaraokeScene, "song" | "queue">): QueueRow[] {
+  const rows: QueueRow[] = [];
+  if (scene.song !== null) {
+    rows.push({ title: scene.song.title, artist: scene.song.artist, by: null, mark: null, state: "ready" });
+  }
+  for (const e of scene.queue) {
+    rows.push({
+      title: e.title,
+      artist: e.artist,
+      by: e.by === "" ? null : e.by,
+      mark: e.state === "preparing" ? "準備中" : e.state === "failed" ? "失敗" : null,
+      state: e.state,
+    });
+  }
+  return rows;
+}
+
+/**
+ * The side of a QR code of `modules` (quiet zone included) in px: whole pixels per module, the
+ * nearest to `target` px (so every module is the same size on the stream).
+ */
+export function qrPixels(modules: number, target: number): number {
+  return Math.max(1, Math.round(target / modules)) * modules;
 }

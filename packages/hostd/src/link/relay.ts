@@ -18,6 +18,7 @@ import {
   HOST_RELAY_LIMITS,
   type HostRelayFrame,
   HostRelayFrameError,
+  HostRelayLengthError,
   type HostRelayRequest,
   HostRelayRequestSchema,
   type HostRelayResponse,
@@ -25,6 +26,7 @@ import {
   RelayInbound,
   RelaySendWindow,
   type RelaySink,
+  relayContentLength,
   relayHeaders,
 } from "@miyoria/contracts/host";
 import { RpcError } from "@miyoria/sdk";
@@ -34,8 +36,13 @@ import { type HostApi, HostRpcError } from "../api.js";
 const MAX_HOST_STREAMS = HOST_RELAY_LIMITS.MAX_STREAMS * 4;
 
 export interface HostRelayLogger {
+  info(fields: object, message: string): void;
+  warn(fields: object, message: string): void;
   debug(fields: object, message: string): void;
 }
+
+/** A relayed response at least this long is logged with its size, time and rate. */
+const LOGGED_BYTES = 1_000_000;
 
 export interface HostRelayOptions {
   api: HostApi;
@@ -61,6 +68,24 @@ interface HostStream {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The message with its causes: `fetch` reports a broken body as just `terminated`, and why (the
+ * service closed the connection, a reset, a timeout) is in `cause`.
+ */
+function messageWithCause(error: unknown): string {
+  let out = messageOf(error);
+  let cause = error instanceof Error ? error.cause : undefined;
+  for (let depth = 0; cause !== undefined && cause !== null && depth < 3; depth++) {
+    const code =
+      typeof cause === "object" && "code" in cause && typeof cause.code === "string"
+        ? ` [${cause.code}]`
+        : "";
+    out += ` (${messageOf(cause)}${code})`;
+    cause = cause instanceof Error ? cause.cause : undefined;
+  }
+  return out;
 }
 
 /** `base` + `path` with one slash between them, or `null` when it would leave `base`'s origin. */
@@ -245,8 +270,13 @@ export class HostRelay {
         status: response.status,
         headers: relayHeaders(response.headers, dropped),
       };
+      // A decoded body's length is not the header's; HEAD has no body.
+      const length =
+        req.method === "HEAD" || response.headers.has("content-encoding")
+          ? undefined
+          : relayContentLength(head.headers);
       // The head goes out first; the body frames follow it.
-      setImmediate(() => this.#respond(stream, response.body));
+      setImmediate(() => this.#respond(stream, response.body, { req, length }));
       return head;
     } catch (error) {
       const aborted = stream.stop.signal.aborted;
@@ -294,8 +324,15 @@ export class HostRelay {
     return whole;
   }
 
-  /** Streams the response body to Core, then ends the stream. */
-  #respond(stream: HostStream, body: ReadableStream<Uint8Array> | null): void {
+  /**
+   * Streams the response body to Core, then ends the stream. A body that breaks off or ends short
+   * of its `content-length` is aborted, never ended: Core would take it for the whole.
+   */
+  #respond(
+    stream: HostStream,
+    body: ReadableStream<Uint8Array> | null,
+    about: { req: HostRelayRequest; length: number | undefined },
+  ): void {
     if (stream.done) {
       body?.cancel().catch(() => {});
       return;
@@ -307,6 +344,7 @@ export class HostRelay {
             if (!this.#send({ kind: HOST_RELAY_FRAME.RESPONSE_END, stream: stream.id })) {
               throw new Error("the control link closed");
             }
+            return 0;
           })
         : pumpRelayBody({
             source: body,
@@ -315,17 +353,56 @@ export class HostRelay {
             kind: HOST_RELAY_FRAME.RESPONSE_CHUNK,
             window: stream.window,
             signal: stream.stop.signal,
+            ...(about.length === undefined ? {} : { length: about.length }),
           });
+    const t0 = performance.now();
+    const what = {
+      stream: stream.id,
+      service: about.req.service,
+      path: about.req.path.replace(/\?.*$/su, ""),
+    };
     sent.then(
-      () => {
+      (bytes) => {
         // The request body (if `fetch` still holds it) is not needed any more either.
         stream.done = true;
         if (this.#streams.get(stream.id) === stream) this.#streams.delete(stream.id);
         stream.inbound?.fail(new Error("the response is complete"));
+        if (bytes >= LOGGED_BYTES) {
+          const seconds = (performance.now() - t0) / 1000;
+          this.#o.logger?.info(
+            {
+              ...what,
+              bytes,
+              seconds: Math.round(seconds * 100) / 100,
+              mb_per_s: Math.round((bytes / 1e6 / Math.max(seconds, 0.001)) * 100) / 100,
+            },
+            "relayed a response",
+          );
+        }
       },
       (error: unknown) => {
         if (stream.done) return;
-        this.#finish(stream, `the service's response broke: ${messageOf(error)}`);
+        const why = messageWithCause(error);
+        if (error instanceof HostRelayLengthError) {
+          this.#o.logger?.warn(
+            { ...what, bytes: error.received, length: error.expected },
+            error.received < error.expected
+              ? "a relayed response ended short of its content-length"
+              : "a relayed response ran past its content-length",
+          );
+        } else {
+          this.#o.logger?.warn(
+            {
+              ...what,
+              bytes: stream.window.sent,
+              ...(about.length === undefined ? {} : { length: about.length }),
+              seconds: Math.round((performance.now() - t0) / 10) / 100,
+              err: why,
+            },
+            "a relayed response broke",
+          );
+        }
+        this.#finish(stream, `the service's response broke: ${why}`);
       },
     );
   }

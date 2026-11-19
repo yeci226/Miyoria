@@ -371,6 +371,7 @@ async function rig(publicConfig: Record<string, JsonValue> = {}, panelDir = ""):
   const counters = { songs: 0, activity: 0 };
   s.provide("sing", SingerKey, {
     playing: () => songs.find((e) => e.state === "playing") ?? null,
+    singing: () => songs.find((e) => e.state === "playing") ?? null,
     list: {
       all: () => {
         counters.songs += 1;
@@ -712,6 +713,7 @@ describe("the route table", () => {
         .map(line)
         .sort(),
     ).toEqual([
+      "DELETE /api/member/karaoke/rooms/:code/queue/:entry",
       "GET /api/member/bounties",
       "GET /api/member/card",
       "GET /api/member/card/:serial",
@@ -753,9 +755,10 @@ describe("the route table", () => {
       "POST /api/member/karaoke/rooms/:code/join",
       "POST /api/member/karaoke/rooms/:code/leave",
       "POST /api/member/karaoke/rooms/:code/pitch",
+      "POST /api/member/karaoke/rooms/:code/queue",
+      "POST /api/member/karaoke/rooms/:code/queue/:entry/move",
       "POST /api/member/karaoke/rooms/:code/ready",
       "POST /api/member/karaoke/rooms/:code/relay",
-      "POST /api/member/karaoke/rooms/:code/song",
       "POST /api/member/karaoke/rooms/:code/start",
       "POST /api/member/karaoke/sessions/:id/result",
       "POST /api/member/karaoke/sessions/:id/voice",
@@ -777,7 +780,8 @@ describe("the route table", () => {
     // No member route takes a parameter that could name a person: a card's serial names a card,
     // and one that is not theirs is not found; a series names one of their own titles; a karaoke
     // song is nobody's, and a karaoke session (and its files) that is not theirs is not found; a
-    // room's code names a room, which anyone with the code may join or watch.
+    // room's code names a room, which anyone with the code may join or watch; a queue entry is one
+    // of that room's, which only its adder, the opener or a panel admin may take out or move.
     const named = all.filter(
       (r) =>
         r.member &&
@@ -785,7 +789,7 @@ describe("the route table", () => {
           .replace(":serial", "")
           .replace(":series", "")
           .replace(/^\/api\/member\/karaoke\/(songs|sessions)\/:id/, "")
-          .replace(/^\/api\/member\/karaoke\/rooms\/:code/, "")
+          .replace(/^\/api\/member\/karaoke\/rooms\/:code(\/queue\/:entry)?/, "")
           .replace(/^\/api\/member\/karaoke\/files\/:session\/:name$/, "")
           .replace(/^\/api\/member\/karaoke\/edit\/:song\/backing$/, "")
           .includes(":"),
@@ -947,11 +951,17 @@ describe("the public view", () => {
   });
 
   it("walks through what she may be doing", async () => {
-    const side = (over: Partial<ActivitySnapshot>, playing = false) => {
+    const side = (over: Partial<ActivitySnapshot>, playing = false, voiceOut = playing) => {
       const snapshot = { presence: { type: "none" }, broadcast: { type: "off" }, ...over };
       const services = new Map<unknown, unknown>([
         [ActivityManagerKey, { snapshot: () => ({ activity: { type: "idle" }, ...snapshot }) }],
-        [SingerKey, { playing: () => (playing ? song(1) : null) }],
+        [
+          SingerKey,
+          {
+            playing: () => (playing ? song(1) : null),
+            singing: () => (voiceOut ? song(1) : null),
+          },
+        ],
       ]);
       return services;
     };
@@ -984,6 +994,8 @@ describe("the public view", () => {
     } as const;
     expect(stateOf(side(game))).toBe("playing");
     expect(stateOf(side(game, true))).toBe("singing");
+    // A song started but her voice not out yet (her opening line): not singing.
+    expect(stateOf(side(game, true, false))).toBe("playing");
   });
 
   it("leaves out a title moderation does not pass, and a strange game id", async () => {

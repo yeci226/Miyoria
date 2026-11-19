@@ -48,8 +48,9 @@ export type SongCueData = z.output<typeof SongCueSchema>;
  * Every stage the song worker reports (`workers/sing/server.py`), in no order: `queued` (waits for
  * its turn), `resolve`, `download`, `exclusive` / `gpu_wait` (hands the card over, waits for room on
  * it), `separate`, `lead`, `convert`, `convert_backing`, `mix`, `beats`, `lyrics`, `video`, and for a
- * karaoke song `reference`, `encode`, `lyrics_asr`, `lyrics_align`; and `unreachable`, which the
- * `sing` module itself reports when the worker stopped answering. The overlay says each in words
+ * karaoke song `reference`, `encode`, `lyrics_asr`, `lyrics_align`; and the two the `sing` module
+ * itself reports: `fetch` (the worker made the song, its audio is on its way to Core) and
+ * `unreachable` (the worker stopped answering). The overlay says each in words
  * (`packages/stage/src/link/activity.ts`); a test fails when this list, the worker and those words
  * drift apart. `SongPrepare.stage` stays a plain string: a newer worker may report one not listed.
  */
@@ -71,6 +72,7 @@ export const SONG_PREPARE_STAGES = [
   "encode",
   "lyrics_asr",
   "lyrics_align",
+  "fetch",
   "unreachable",
 ] as const;
 

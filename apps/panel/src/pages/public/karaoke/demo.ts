@@ -23,10 +23,16 @@
 // the made-up room KTV888 in that scene (the address becomes `/karaoke/room/KTV888`); plain
 // `?karaoke-demo` starts at the list, where 一起唱 opens a room of your own. The room's event stream
 // is faked (`setRoomEventsFactory`): the singer's scene counts down five seconds and cycles their
-// trend (上升中 → 保持 → 下降中, 正式 and 預估); the spectator's has four made-up singers whose
-// ranking moves every second and whose pitch lines follow the tune, each a little off in its own
-// way; the results have a winner, a 預估 line, a check and a note. The stream and pitch posts are
+// trend (上升中 → 保持 → 下降中, 正式 and 預估) with their own running total; the spectator's has
+// four made-up singers whose ranking moves every second and whose pitch lines follow the tune, each a
+// little off in its own way. After the song the room is 結算中 for a few seconds (waiting for two
+// singers, then one, then no one) before the results, which have a winner, a 預估 line, a check and
+// a note. The stream and pitch posts are
 // answered `live` and 204; a room singer's result needs no recording upload (the stream held).
+// A room opens without a song; its queue (kept in memory) starts with a ready song, one being
+// prepared (its progress moves until it is ready) and one that failed. Adding (from the list, or a
+// link or words, which becomes a song being prepared; words with `limit` are refused as the day's
+// limit), removing and moving work; a round plays the first ready entry and drops the failed ones.
 
 import type {
   KaraokeBoardLine,
@@ -36,6 +42,7 @@ import type {
   KaraokeResult,
   KaraokeRoomEvent,
   KaraokeRoomMember,
+  KaraokeRoomQueueEntry,
   KaraokeRoomResult,
   KaraokeRooms,
   KaraokeRoomView,
@@ -367,11 +374,25 @@ const COUNTDOWN_MS = 5_000;
 const TERMS = { currency: "魚幣", price: 20, prize: 15, finish: 3, rounds: 4, max_singers: 8 };
 const ME = "m-me";
 
+/** One entry of the room's queue: its song as the list shows it, who added it. */
+interface DemoEntry {
+  id: string;
+  song: KaraokeSongView;
+  shift: number;
+  by: string;
+  byName: string;
+}
+
+const QUEUE_LIMITS = { per_person: 2, max: 10 };
+let entries = 0;
+
 interface DemoRoom {
   state: KaraokeRoomView["state"];
   closed_reason: string | null;
+  /** The running round's song and key (from the queue's first ready entry at the start). */
   song: KaraokeSongView | null;
   shift: number;
+  queue: DemoEntry[];
   members: KaraokeRoomMember[];
   /** `null`: not in it (they may join). */
   me: string | null;
@@ -381,6 +402,8 @@ interface DemoRoom {
   session: KaraokeSession | null;
   /** The opener's 「播出第一名的歌聲」. */
   lead: boolean;
+  /** 結算中: the song is over, these singers' results are waited for. */
+  settling: KaraokeRoomView["settling"];
 }
 
 const roomSessions = new Set<string>();
@@ -411,15 +434,29 @@ function roomAir(r: DemoRoom, me: KaraokeRoomMember | null, running: boolean): K
   };
 }
 
+/** The queue's first ready entry: the next round's song. */
+const nextOf = (r: DemoRoom) => r.queue.find((e) => e.song.state === "ready") ?? null;
+
 function roomView(r: DemoRoom): KaraokeRoomView {
   const me = r.members.find((m) => m.id === r.me) ?? null;
   const running = r.state === "countdown" || r.state === "singing";
+  const next = nextOf(r);
+  const queue: KaraokeRoomQueueEntry[] = r.queue.map((e) => ({
+    id: e.id,
+    song: e.song,
+    shift: e.shift,
+    by: { member: r.members.some((m) => m.id === e.by) ? e.by : null, name: e.byName },
+    mine: e.by === r.me,
+  }));
   return {
     code: ROOM,
     state: r.state,
     closed_reason: r.closed_reason,
-    song: r.song,
-    shift: r.shift,
+    song: running ? r.song : (next?.song ?? null),
+    shift: running ? r.shift : (next?.shift ?? 0),
+    queue,
+    next: next?.id ?? null,
+    queue_limits: QUEUE_LIMITS,
     members: r.members,
     me:
       me === null
@@ -438,6 +475,7 @@ function roomView(r: DemoRoom): KaraokeRoomView {
     result: r.result,
     terms: TERMS,
     air: roomAir(r, me, running),
+    settling: running ? r.settling : null,
   };
 }
 
@@ -553,8 +591,16 @@ function startRound(r: DemoRoom, opts: { startIn: number; scene: "singer" | "spe
   clearRoomTimers();
   r.round++;
   r.result = null;
+  r.settling = null;
   r.state = "countdown";
   r.start_at_ms = coreNow() + opts.startIn;
+  // The queue's first ready entry leaves the queue as the round starts; failed ones go with it.
+  const next = nextOf(r);
+  if (next) {
+    r.song = next.song;
+    r.shift = next.shift;
+  }
+  r.queue = r.queue.filter((e) => e !== next && e.song.state !== "failed");
   r.session = newSession(r.song?.id ?? "demo-song", r.shift);
   roomSessions.add(r.session.session);
   later(Math.max(0, opts.startIn), () => {
@@ -571,9 +617,12 @@ function startRound(r: DemoRoom, opts: { startIn: number; scene: "singer" | "spe
     ] as const;
     let n = 0;
     every(3_000, () => {
-      if (r.state !== "singing") return;
+      if (r.state !== "singing" || r.settling !== null) return;
       const c = cycle[n++ % cycle.length] as (typeof cycle)[number];
-      emit({ type: "trend", round: r.round, trend: c.trend, source: c.source });
+      // Their own running total only: the first trend has none yet.
+      const t = r.start_at_ms === null ? 0 : (coreNow() - r.start_at_ms) / 1000;
+      const total = n === 1 ? null : Math.round((72 + 6 * Math.sin(t / 5)) * 10) / 10;
+      emit({ type: "trend", round: r.round, trend: c.trend, source: c.source, total });
     });
   } else {
     const ranks = new Map<string, number>();
@@ -582,23 +631,63 @@ function startRound(r: DemoRoom, opts: { startIn: number; scene: "singer" | "spe
       emit({ type: "board", round: r.round, at_ms: coreNow(), lines: boardNow(r, ranks) });
     });
   }
-  // The song ends for everyone: the ranking.
-  later(opts.startIn + (DURATION + 4) * 1000, () => {
+  // The song ends for everyone: 結算中 (two results waited for, then one, then none), the ranking.
+  const over = opts.startIn + (DURATION + 0.5) * 1000;
+  const settle = (waiting: string[]) => {
+    r.settling = { waiting, until_ms: (r.start_at_ms ?? coreNow()) + (DURATION + 110) * 1000 };
+    changed();
+  };
+  later(over, () => settle(["海苔", "Akari"]));
+  later(over + 2_000, () => settle(["Akari"]));
+  later(over + 4_000, () => settle([]));
+  later(over + 5_500, () => {
     clearRoomTimers();
     r.state = "results";
     r.start_at_ms = null;
+    r.settling = null;
     r.result = demoResult(r);
     changed();
   });
   changed();
 }
 
+function entry(s: KaraokeSongView, by: KaraokeRoomMember | { id: string; name: string }, shift = 0): DemoEntry {
+  return { id: `q${++entries}`, song: s, shift, by: by.id, byName: by.name };
+}
+
+/** A song asked for by a link or words: prepared in memory, a step every 1.5 s, then ready. */
+function preparingEntry(r: DemoRoom, e: DemoEntry): DemoEntry {
+  const id = window.setInterval(() => {
+    if (demoRoom !== r || !r.queue.includes(e)) return window.clearInterval(id);
+    const progress = Math.min(1, e.song.progress + 0.08);
+    const stage = STAGES[Math.min(STAGES.length - 1, Math.floor(progress * STAGES.length))] as string;
+    e.song =
+      progress >= 1
+        ? { ...e.song, state: "ready", stage: null, progress: 1, duration_s: 241, lyrics: true, lyrics_source: "found" }
+        : { ...e.song, stage, progress };
+    if (progress >= 1) window.clearInterval(id);
+    changed();
+  }, 1_500);
+  return e;
+}
+
+/** The lobby's queue: a ready song (someone else's), one being prepared (theirs), one that failed. */
+function demoQueue(r: DemoRoom): DemoEntry[] {
+  const a = others[0] as KaraokeRoomMember;
+  const c = others[2] as KaraokeRoomMember;
+  const me = { id: ME, name: "小魚乾" };
+  const prep = song({ id: "d6", title: "春日影", artist: "示範樂團", state: "preparing", stage: "separate", progress: 0.42, duration_s: null });
+  const failed = song({ id: "demo-fail", title: "一首很長的歌", artist: null, state: "failed", error: "這首超過 8 分鐘,沒有準備", duration_s: null });
+  return [entry(song({ video: true }), a), preparingEntry(r, entry(prep, me, -2)), entry(failed, c)];
+}
+
 function lobbyRoom(opener: boolean): DemoRoom {
   return {
     state: "lobby",
     closed_reason: null,
-    song: song({ video: true }),
+    song: null,
     shift: 0,
+    queue: [],
     members: [{ id: ME, name: "小魚乾", role: "singer", ready: false, opener, color: 0, hear: false, skip: false }, ...others.map((m) => ({ ...m, opener: false }))],
     lead: true,
     me: ME,
@@ -606,6 +695,7 @@ function lobbyRoom(opener: boolean): DemoRoom {
     start_at_ms: null,
     result: null,
     session: null,
+    settling: null,
   };
 }
 
@@ -613,6 +703,7 @@ function lobbyRoom(opener: boolean): DemoRoom {
 function roomScene(scene: string): void {
   const r = lobbyRoom(true);
   demoRoom = r;
+  r.queue = demoQueue(r);
   if (scene === "singer") startRound(r, { startIn: COUNTDOWN_MS, scene: "singer" });
   if (scene === "solo") {
     // Alone, with their voice on the stream.
@@ -632,6 +723,7 @@ function roomScene(scene: string): void {
     r.round = 1;
     r.state = "results";
     r.result = demoResult(r);
+    r.queue.push(entry(song({ id: "d2", title: "夜空中最亮的星", artist: "逃跑計劃", duration_s: 252, video: true }), others[2] as KaraokeRoomMember, 1));
   }
 }
 
@@ -639,12 +731,57 @@ function rooms(): KaraokeRooms {
   return { available: true, reason: null, terms: TERMS, balance: 128, mine: demoRoom?.me && demoRoom.state !== "closed" ? ROOM : null };
 }
 
+/** The room's queue: add (a song on the list, or a link or words), remove, move. */
+function queueAnswer(r: DemoRoom, method: string, id: string | null, move: boolean, body: unknown): Response {
+  const me = r.members.find((x) => x.id === ME);
+  if (!me) return json({ error: "你不在這個房間裡" }, 409);
+  const opener = me.opener || asAdmin;
+  if (id === null && method === "POST") {
+    if (r.state !== "lobby" && r.state !== "results") return json({ error: "現在不能這樣做" }, 409);
+    const b = body as { song?: string; text?: string; shift?: number };
+    const live = r.queue.filter((e) => e.song.state !== "failed");
+    if (live.filter((e) => e.by === ME).length >= QUEUE_LIMITS.per_person) {
+      return json({ error: `你已經點了 ${QUEUE_LIMITS.per_person} 首在等,唱完再點` }, 409);
+    }
+    if (live.length >= QUEUE_LIMITS.max) return json({ error: "點歌的清單滿了,等唱完幾首再點" }, 409);
+    if ((b.song === undefined) === (b.text === undefined)) return json({ error: "選一首歌,或貼連結、打歌名(只要一樣)" }, 400);
+    if (b.text !== undefined) {
+      if (b.text.includes("limit")) return json({ error: "今天已經準備了 10 首,明天再來" }, 409);
+      const title = /^https?:/i.test(b.text) ? "" : b.text.slice(0, 40);
+      const s = song({ id: `ask-${entries + 1}`, title, artist: null, state: "preparing", stage: "queued", progress: 0, duration_s: null });
+      r.queue.push(preparingEntry(r, entry(s, me, b.shift ?? 0)));
+      return json(changed());
+    }
+    const found = overview().songs.find((x) => x.id === b.song);
+    if (!found) return json({ error: "沒有這首歌" }, 404);
+    if (found.state === "failed") return json({ error: "這首準備失敗了,換一首或重新點" }, 409);
+    r.queue.push(entry(found, me, b.shift ?? 0));
+    return json(changed());
+  }
+  const at = r.queue.findIndex((e) => e.id === id);
+  const e = r.queue[at];
+  if (!e) return json({ error: "點歌的清單裡沒有這一首" }, 404);
+  if (move && method === "POST") {
+    if (!opener) return json({ error: "只有開房的人可以這樣做" }, 403);
+    const to = Math.max(0, Math.min(r.queue.length - 1, (body as { to: number }).to));
+    r.queue.splice(at, 1);
+    r.queue.splice(to, 0, e);
+    return json(changed());
+  }
+  if (!move && method === "DELETE") {
+    if (e.by !== ME && !opener) return json({ error: "只有點這首的人和開房的人可以拿掉" }, 403);
+    r.queue.splice(at, 1);
+    return json(changed());
+  }
+  return json({ error: "no such endpoint" }, 404);
+}
+
 function roomAnswer(method: string, path: string, body: unknown): Response | null {
   if (path === "/api/member/karaoke/rooms") {
     if (method !== "POST") return json(rooms());
-    const b = body as { song: string; shift?: number };
     clearRoomTimers();
-    demoRoom = { ...lobbyRoom(true), song: overview().songs.find((x) => x.id === b.song) ?? song({}), shift: b.shift ?? 0 };
+    // Opens with no song: the queue starts empty.
+    demoRoom = lobbyRoom(true);
     demoRoom.members = demoRoom.members.slice(0, 1);
     later(1_500, () => {
       if (!demoRoom) return;
@@ -653,11 +790,12 @@ function roomAnswer(method: string, path: string, body: unknown): Response | nul
     });
     return json(changed());
   }
-  const m = /^\/api\/member\/karaoke\/rooms\/([^/]+)(?:\/([a-z]+))?$/.exec(path);
+  const m = /^\/api\/member\/karaoke\/rooms\/([^/]+)(?:\/([a-z]+))?(?:\/([0-9a-z]+)(?:\/(move))?)?$/.exec(path);
   if (!m) return null;
   if (m[1] !== ROOM || !demoRoom) return json({ error: "沒有這個房間" }, 404);
   const r = demoRoom;
   const what = m[2];
+  if (what === "queue") return queueAnswer(r, method, m[3] ?? null, m[4] === "move", body);
   if (!what) return json(roomView(r));
   if (what === "clock") return json({ t0: (body as { t0: number }).t0, server_ms: coreNow() });
   if (what === "audio") return json({ stream: "live", relay: false });
@@ -692,14 +830,9 @@ function roomAnswer(method: string, path: string, body: unknown): Response | nul
     me.ready = (body as { ready: boolean }).ready;
     return json(changed());
   }
-  if (what === "song") {
-    const b = body as { song: string; shift?: number };
-    r.song = overview().songs.find((x) => x.id === b.song) ?? r.song;
-    r.shift = b.shift ?? 0;
-    r.state = "lobby";
-    return json(changed());
-  }
   if (what === "start") {
+    if (!nextOf(r)) return json({ error: "清單裡還沒有準備好的歌,先點一首" }, 409);
+    if (!r.members.some((x) => x.role === "singer" && x.ready)) return json({ error: "還沒有人準備好唱" }, 409);
     startRound(r, { startIn: COUNTDOWN_MS, scene: me?.role === "singer" ? "singer" : "spectator" });
     return json(roomView(r));
   }

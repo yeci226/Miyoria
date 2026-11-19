@@ -434,12 +434,31 @@ def test_parse_lrc():
         ("YOASOBI - 夜に駆ける (Official Music Video)", None, ("YOASOBI", "夜に駆ける")),
         ("【MV】Song Name", "Artist - Topic", ("Artist", "Song Name")),
         ("Some Song | Live at Home", None, (None, "Some Song")),
+        # Only an artist's own channel stands for the artist; anyone else's channel is nobody.
+        ("夜に駆ける 歌ってみた", "owen0924", (None, "夜に駆ける")),
+        ("Some Song", "YOASOBI Official", ("YOASOBI", "Some Song")),
+        ("Some Song", "TaylorSwiftVEVO", ("TaylorSwift", "Some Song")),
+        ("Some Song", "ヨルシカ 公式", ("ヨルシカ", "Some Song")),
     ],
 )
 def test_guess_artist_title(raw, uploader, expected):
     from lyrics import guess_artist_title
 
     assert guess_artist_title(raw, uploader) == expected
+
+
+def test_a_sources_artist_is_never_the_uploaders_own_channel():
+    import engine
+
+    def artist(**info):
+        return engine.RealBackend._source_of(None, {"id": "x", "extractor_key": "Youtube", **info}, "youtube").artist
+
+    # The requester's channel (a cover they uploaded): no artist, not "owen0924".
+    assert artist(title="櫻ノ詩", uploader="owen0924") is None
+    # yt-dlp's music metadata first, then the title's split, then an artist's channel.
+    assert artist(title="櫻ノ詩", uploader="owen0924", artist="Lia, 麻枝准") == "Lia"
+    assert artist(title="Lia - 櫻ノ詩", uploader="owen0924") == "Lia"
+    assert artist(title="櫻ノ詩", uploader="Lia - Topic") == "Lia"
 
 
 # ── lyrics search: queries, matching, checks, the language model (network mocked) ────────────────────

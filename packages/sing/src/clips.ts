@@ -18,7 +18,8 @@ import type {
   SongClips,
   VoicePlayer,
 } from "@miyoria/types";
-import type { SingWorker, SongMeta } from "./client.js";
+import type { SongAudio } from "./audio.js";
+import type { SingWorker, SongMeta, SongTrack } from "./client.js";
 import type { SingConfig } from "./config.js";
 import { paced, sleep } from "./player.js";
 import type { SongEntry } from "./setlist.js";
@@ -47,6 +48,8 @@ export interface ClipDeps {
   clipping: (guild: string, delta: 1 | -1) => void;
   /** A song of her own is being sung (or about to be). */
   singing: () => boolean;
+  /** The songs' audio on Core: a song there is played from there, others come from the worker. */
+  audio?: SongAudio;
 }
 
 /** How a song is told apart from its other versions (another key, another backing). */
@@ -172,9 +175,14 @@ export class SingClips implements SongClips {
     const rate = song.play.sample_rate;
     let marked = false;
     try {
+      const onCore = d.audio?.ready(song) === true ? d.audio : null;
+      const load = (track: SongTrack) =>
+        onCore === null
+          ? d.worker.audio(song.id, track, stop)
+          : onCore.load(song, track, stop).catch(() => d.worker.audio(song.id, track, stop));
       const [mix, vocals] = await Promise.all([
-        d.worker.audio(song.id, "play_mix.pcm", stop),
-        d.cfg.lip_sync_vocals ? d.worker.audio(song.id, "play_vocals.pcm", stop) : null,
+        load("play_mix.pcm"),
+        d.cfg.lip_sync_vocals ? load("play_vocals.pcm") : null,
       ]);
       if (stop.aborted) return "stopped";
       // The clip waits for the line she is saying; a song clip over her words is the one thing

@@ -25,6 +25,7 @@ import {
   referenceOf,
   synthSong,
 } from "@miyoria/play/karaoke/testing";
+import { configureLogging } from "@miyoria/runtime/kernel";
 import { openTestDb, type TestDb } from "@miyoria/store/testing";
 import type { AccountRef, PersonId } from "@miyoria/types";
 import type { AnyRouter } from "@orpc/server";
@@ -313,10 +314,16 @@ describe("karaoke rooms through the routes", () => {
       const got = singer.events();
       expect(got.some((e) => e.type === "trend")).toBe(true);
       expect(got.some((e) => e.type === "board")).toBe(false);
-      // Nothing after the round started names another person or carries a score.
+      // Nothing after the round started names another person or carries a rank; the only
+      // number is their own running total in their trend.
       const during = got.filter((e) => e.type !== "room");
       const text = JSON.stringify(during);
-      expect(text).not.toMatch(/Bobby|Alice|Carol|"total"|"rank"/);
+      expect(text).not.toMatch(/Bobby|Alice|Carol|"rank"|"lines"/);
+      for (const e of during) {
+        expect(e.type).toBe("trend");
+        expect(Object.keys(e.data).sort()).toEqual(["round", "source", "total", "trend", "type"]);
+      }
+      expect(during.at(-1)?.data.total).toEqual(expect.any(Number));
     }
     const watched = carol.events();
     const boards = watched.filter((e) => e.type === "board");
@@ -331,6 +338,113 @@ describe("karaoke rooms through the routes", () => {
       headers: { "content-type": "application/octet-stream" },
     });
     expect(big.status).toBe(413);
+  });
+
+  it("logs a refused result at warn, without its track", async () => {
+    const r = await makeRig();
+    rig = r;
+    const songId = r.service.overview(ALICE).songs[0]?.id as string;
+    const started = await call<{ session: string }>(
+      r,
+      ALICE,
+      `/api/member/karaoke/songs/${songId}/sessions`,
+      post({}),
+    );
+    const lines: string[] = [];
+    configureLogging({ level: "warn", destination: { write: (l: string) => void lines.push(l) } });
+    const track = toBase64(encodeTrack(humanSinger(song, { seed: 4, hz: 50 }).midi));
+    try {
+      // Someone else's session: 404. A body that is not the contract's: 422 (the input check).
+      const other = await call(
+        r,
+        BOB,
+        `/api/member/karaoke/sessions/${started.body.session}/result`,
+        post({ track, latency_ms: 0, calibrated: true, client_total: null, browser: "t" }),
+      );
+      expect(other.status).toBe(404);
+      const bad = await call(
+        r,
+        CAROL,
+        `/api/member/karaoke/sessions/${started.body.session}/result`,
+        post({ track, latency_ms: 99_999 }),
+      );
+      expect(bad.status).toBe(422);
+      // A room's microphone of someone not singing: 404 for the room.
+      r.as.account = ALICE;
+      const audio = await r.hono.request("/api/member/karaoke/rooms/ABCDEF/audio?at=0&song_ms=0", {
+        method: "POST",
+        body: new Uint8Array(100),
+        headers: { "content-type": "application/octet-stream" },
+      });
+      expect(audio.status).toBe(404);
+    } finally {
+      configureLogging({ level: "silent" });
+    }
+    const refused = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(refused).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: 40,
+          route: "karaoke.submit",
+          status: 404,
+          session: started.body.session,
+          account: "discord:2",
+        }),
+        expect.objectContaining({ route: "karaoke.submit", status: 422 }),
+        expect.objectContaining({ route: "karaokeRooms.audio", status: 404, room: "ABCDEF" }),
+      ]),
+    );
+    expect(lines.join(" ")).not.toContain(track.slice(0, 40));
+  });
+
+  it("opens without a song, and queues, removes and moves songs through the routes", async () => {
+    const r = await makeRig();
+    rig = r;
+    const songId = r.service.overview(ALICE).songs[0]?.id as string;
+    const opened = await call<KaraokeRoomView>(r, ALICE, "/api/member/karaoke/rooms", post({}));
+    expect(opened.status).toBe(200);
+    expect(opened.body).toMatchObject({ song: null, queue: [], next: null, settling: null });
+    const code = opened.body.code;
+    const base = `/api/member/karaoke/rooms/${code}`;
+    await call(r, BOB, `${base}/join`, post({ as: "spectator" }));
+    // Anyone in the room queues; exactly one of song and text.
+    const added = await call<KaraokeRoomView>(r, BOB, `${base}/queue`, post({ song: songId }));
+    expect(added.status).toBe(200);
+    expect(added.body.queue[0]).toMatchObject({ mine: true, by: { name: "Bobby" } });
+    expect((await call(r, BOB, `${base}/queue`, post({}))).status).toBe(400);
+    expect((await call(r, BOB, `${base}/queue`, post({ song: songId, text: "x" }))).status).toBe(
+      400,
+    );
+    expect((await call(r, CAROL, `${base}/queue`, post({ song: songId }))).status).toBe(409);
+    const mine = await call<KaraokeRoomView>(
+      r,
+      ALICE,
+      `${base}/queue`,
+      post({ song: songId, shift: 0 }),
+    );
+    const [bobs, alices] = mine.body.queue.map((e) => e.id) as [string, string];
+    expect(mine.body.next).toBe(bobs);
+    // Only the opener (or an admin) moves; the adder, the opener or an admin removes.
+    expect((await call(r, BOB, `${base}/queue/${alices}/move`, post({ to: 0 }))).status).toBe(403);
+    const moved = await call<KaraokeRoomView>(
+      r,
+      ALICE,
+      `${base}/queue/${alices}/move`,
+      post({ to: 0 }),
+    );
+    expect(moved.body.queue.map((e) => e.id)).toEqual([alices, bobs]);
+    expect(
+      (await call(r, CAROL, `${base}/queue/${bobs}/move`, post({ to: 0 }), "admin")).status,
+    ).toBe(200);
+    expect((await call(r, BOB, `${base}/queue/${alices}`, { method: "DELETE" })).status).toBe(403);
+    const removed = await call<KaraokeRoomView>(r, BOB, `${base}/queue/${bobs}`, {
+      method: "DELETE",
+    });
+    expect(removed.status).toBe(200);
+    expect(removed.body.queue.map((e) => e.id)).toEqual([alices]);
+    expect((await call(r, BOB, `${base}/queue/nope`, { method: "DELETE" })).status).toBe(404);
+    // The old route to pick the song is gone.
+    expect((await r.hono.request(`${base}/song`, post({ song: songId }))).status).toBe(404);
   });
 
   it("lets a panel admin use karaoke while it is closed to members", async () => {

@@ -360,6 +360,9 @@ dirs = ["extensions"]
 # vote_skip_min = 1          # 至少幾票;點歌的人自己投一票就跳過
 # video = true               # 唱的時候在直播畫面放原曲影片(靜音);Stage 用 [stage.obs] song_video_source 播
 # video_dir = "data/songs"   # worker 的 SING_DATA_DIR(直播機上的路徑),不在裡面的影片不會送
+# audio_dir = "data/song-audio"  # 做好的歌的音檔先傳到 Core 這裡,傳完才算準備好,唱的時候從這裡讀(worker 在這台時直接讀 video_dir,不另存)
+# audio_cache_mb = 2048      # audio_dir 最多佔多少 MB(一分鐘的歌約 6 MB,有嘴型用的人聲是 12 MB);超過就刪最久沒唱的,歌單上的不刪
+# fetch_stall_secs = 30      # 從 worker 拿檔案(音檔、影片、卡拉 OK 檔)時,這麼久一個位元組都沒來才放棄;慢但有在動就一直等
 # prepare_notice = true      # worker 做歌要整張顯示卡時(SING_OFFLOAD_URLS),她先說「我去準備一下歌喔」再讓它開始
 # prepare_notice_gap_secs = 180   # 連點好幾首時這段時間內不再說第二次
 
@@ -548,6 +551,7 @@ dirs = ["extensions"]
 # enabled = true
 # utc_offset_minutes = 480    # 「今天」從哪個時區算(每人每天的上限)
 # open = true                 # false = 會員不能點歌、唱、開房間;唱完的結果照常;面板管理員關著時也能用,可以先試
+# site_url = ""               # 會員頁的網址(例如 "https://miyoria.example.com");/me play karaoke、開房通知的連結和直播上的 QR 碼用它,沒填就只說在會員頁
 # max_song_secs = 480         # 一首最長幾秒,超過的準備失敗
 # daily_songs = 10            # 每人每天能準備幾首新歌;已經準備好的歌不算(0 = 只能唱準備好的)
 # tolerance_cents = 50        # 離原唱幾 cents 內算唱對,兩倍遠就不算
@@ -569,12 +573,17 @@ dirs = ["extensions"]
 # room_rounds = 4             # 一間房最多唱幾首(開房費只收一次)
 # room_singers = 8            # 一間房最多幾個人唱(旁觀不算)
 # room_max = 2                # 同時最多幾間房
+# room_queue_per_person = 2   # 房間的點歌佇列裡一個人同時最多幾首在等(準備中的也算)
+# room_queue_max = 12         # 一間房的佇列最多幾首(準備失敗的不算)
 # room_idle_mins = 10         # 房間閒置多久(沒有開始唱)就關掉
 # room_countdown_secs = 6     # 按開始後倒數幾秒,大家的伴奏同時開始
 # room_stream = true          # 唱的時候把麥克風即時送到唱歌 worker 算正式分數(不存);false = 唱的時候只有預估,唱完送錄音
+# room_announce = true        # 開房時在講評頻道貼一則系統通知(房號和「加入」的連結,不標記任何人),關房時改成已結束
 # 直播(第五步):她的直播(Go Live,OBS 的唱 K 場景)播伴奏和最多一個人的歌聲;她自己的語音頻道不播。
 # overlay 的瀏覽器來源要「讓 OBS 控制音訊」(stage obs-setup 會設好),聲音才進得了直播
 # stream_scene = true         # 直播畫面顯示唱 K 房間:等人時角落一塊,唱的時候歌詞、背景影片、即時排名、結果
+# stream_qr = true            # 直播上在房號旁邊顯示加入房間的 QR 碼(要填 site_url;看得到直播的人都能掃,誰能進照房間的規則)
+# stream_qr_while_singing = false  # 唱的時候也在角落留一個小的 QR 碼
 # stream_backing = true       # 直播的唱 K 場景播伴奏
 # stream_delay_ms = 2000      # 直播比唱的人晚多少(一間房固定一個);播出的歌聲太晚到的那一段是靜音,不會越拖越晚
 # relay_solo = true           # 一個人唱時可以播出他的歌聲(他自己勾「讓大家聽到我」,每一首預設不勾;聲音不存)

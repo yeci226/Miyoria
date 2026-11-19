@@ -1,12 +1,13 @@
 // A room before a round, and between rounds (docs/design/karaoke.md 「做了什麼第四步」): its code and
-// link, who is in it (their colour, singing or watching, ready or not), the song and key (the
-// opener picks them), what it pays, and each person's own controls: sing or watch, ready (with the
-// device's latency), leave; the opener's start and close. The results of a round are here too.
+// link, who is in it (their colour, singing or watching, ready or not), the song the next round
+// plays and the queue everyone adds to (`RoomQueue`), what it pays, and each person's own controls:
+// sing or watch, ready (with the device's latency), leave; the opener's start and close. The results
+// of a round are here too, with what is next and the queue (the opener starts again from there).
 
 import { useMutation } from "@tanstack/react-query";
-import { Check, Copy, Crown, DoorClosed, ListMusic, LogOut, Mic, Play, Timer, Trophy, Users } from "lucide-react";
+import { Check, Copy, Crown, DoorClosed, LogOut, Mic, Play, Timer, Trophy, Users } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import type { KaraokeOverview, KaraokeRoomPlace, KaraokeRoomView, KaraokeSongView } from "@miyoria/contracts/api";
+import type { KaraokeOverview, KaraokeRoomPlace, KaraokeRoomView } from "@miyoria/contracts/api";
 import { describeError } from "@/api/http";
 import { useApi } from "@/app/connection";
 import { ConfirmDialog } from "@/components/confirm";
@@ -16,16 +17,15 @@ import { Dot } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
-import { Fact, Refusal } from "./bits";
+import { ENTER, Fact, Refusal } from "./bits";
 import { keyLabel } from "./lyric-text";
 import { roomPage } from "./path";
 import { CHECK_LINES, PART_NAMES, score1 } from "./result-text";
-import { coins, roleWord, SOURCE_WORDS, STATE_WORDS } from "./room-text";
-import { KeyStepper, SongPicker } from "./RoomsEntry";
+import { coins, roleWord, SOURCE_WORDS, STATE_WORDS, startBlocked } from "./room-text";
 import { AirCard, CutVoice } from "./RoomAir";
+import { RoomQueue } from "./RoomQueue";
 import { Swatch } from "./SpectatorStage";
 
 type Me = NonNullable<KaraokeRoomView["me"]>;
@@ -38,58 +38,6 @@ export interface RoomActions {
   onReady: (ready: boolean) => Promise<void>;
   onCalibrate: () => void;
   onLeave: () => void;
-}
-
-/** The opener's choice of song and key. */
-function SongDialog({
-  room,
-  overview,
-  onClose,
-  onRoom,
-}: {
-  room: KaraokeRoomView;
-  overview: KaraokeOverview;
-  onClose: () => void;
-  onRoom: (room: KaraokeRoomView) => void;
-}) {
-  const api = useApi();
-  const [song, setSong] = useState<KaraokeSongView | null>(
-    () => overview.songs.find((s) => s.id === room.song?.id && s.state === "ready") ?? null,
-  );
-  const [shift, setShift] = useState(room.shift);
-  const pick = useMutation({
-    mutationFn: () => api.rpc.karaokeRooms.song({ params: { code: room.code }, body: { song: (song as KaraokeSongView).id, shift } }),
-    onSuccess: (r) => {
-      onRoom(r);
-      onClose();
-    },
-  });
-  return (
-    <Dialog open onOpenChange={(o) => !o && !pick.isPending && onClose()}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>選歌</DialogTitle>
-          <DialogDescription className="sr-only">這一輪大家一起唱的歌和調</DialogDescription>
-        </DialogHeader>
-        <div className="grid min-w-0 gap-4">
-          <SongPicker songs={overview.songs} value={song?.id ?? null} onChange={setSong} />
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[13px] text-muted-foreground">調(大家一起)</span>
-            <KeyStepper shift={shift} onChange={setShift} />
-          </div>
-          {pick.isError && <Refusal>{describeError(pick.error)}</Refusal>}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={pick.isPending}>
-            取消
-          </Button>
-          <Button onClick={() => pick.mutate()} busy={pick.isPending} disabled={song === null}>
-            用這首
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 /** Code, link, copy. */
@@ -229,22 +177,19 @@ function MyPart({
   );
 }
 
-/** The opener's part: the song, start, close. Everyone else sees who decides. */
+/** The opener's part: start (from the lobby or after a round), close. Everyone else sees who decides. */
 function OpenerPart({
   room,
   me,
-  overview,
   actions,
   children,
 }: {
   room: KaraokeRoomView;
   me: Me;
-  overview: KaraokeOverview;
   actions: RoomActions;
   children?: ReactNode;
 }) {
   const api = useApi();
-  const [picking, setPicking] = useState(false);
   const [closing, setClosing] = useState(false);
   const start = useMutation({
     mutationFn: () => api.rpc.karaokeRooms.start({ params: { code: room.code } }),
@@ -258,39 +203,35 @@ function OpenerPart({
     },
   });
   const singers = room.members.filter((m) => m.role === "singer");
+  const someReady = singers.some((m) => m.ready);
   const allReady = singers.length > 0 && singers.every((m) => m.ready);
-  const inLobby = room.state === "lobby";
+  const blocked = startBlocked(room);
   return (
     <div className="grid gap-3">
       {children}
       {me.opener ? (
         <div className="flex flex-wrap items-center gap-2">
-          {inLobby && (
-            <Button onClick={() => start.mutate()} busy={start.isPending} disabled={room.song === null || singers.length === 0 || room.rounds_left <= 0}>
+          {room.rounds_left > 0 && (
+            <Button onClick={() => start.mutate()} busy={start.isPending} disabled={blocked !== null}>
               <Play aria-hidden />
-              開始
+              {room.state === "results" ? "開始下一首" : "開始"}
             </Button>
           )}
-          <Button variant="outline" onClick={() => setPicking(true)} disabled={room.rounds_left <= 0}>
-            <ListMusic aria-hidden />
-            {room.state === "results" ? "選下一首" : room.song ? "換歌" : "選歌"}
-          </Button>
           <Button variant="ghost" onClick={() => setClosing(true)}>
             <DoorClosed aria-hidden />
             關房
           </Button>
         </div>
       ) : (
-        <p className="text-[13px] text-muted-foreground">
-          {room.state === "results" ? "等房主選下一首" : "等房主開始"}
-        </p>
+        room.rounds_left > 0 && <p className="text-[13px] text-muted-foreground">等房主開始</p>
       )}
-      {me.opener && inLobby && singers.length > 0 && !allReady && (
-        <p className="text-xs text-muted-foreground">還有人沒準備好</p>
+      {/* Without a next song the line above says why; the rest is said here. */}
+      {me.opener && blocked !== null && room.next !== null && room.rounds_left > 0 && (
+        <p className="text-xs text-muted-foreground">{blocked}</p>
       )}
+      {me.opener && blocked === null && someReady && !allReady && <p className="text-xs text-muted-foreground">還有人沒準備好,開始時只有準備好的人唱</p>}
       {room.rounds_left <= 0 && <p className="text-xs text-muted-foreground">這間房的輪數用完了</p>}
       {start.isError && <Refusal>{describeError(start.error)}</Refusal>}
-      {picking && <SongDialog room={room} overview={overview} onClose={() => setPicking(false)} onRoom={actions.onRoom} />}
       <ConfirmDialog
         open={closing}
         title="關掉這間房"
@@ -317,14 +258,23 @@ function Terms({ room }: { room: KaraokeRoomView }) {
   );
 }
 
-/** The song picked for the next round. */
+/** The song the next round plays (the queue's first ready one), in its key. */
 function SongLine({ room }: { room: KaraokeRoomView }) {
-  if (!room.song) return <p className="text-sm text-muted-foreground">還沒選歌</p>;
+  const song = room.next === null ? null : room.song;
   return (
-    <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-      <span className="min-w-0 truncate text-[15px] font-semibold">{room.song.title}</span>
-      {room.song.artist && <span className="truncate text-[13px] text-muted-foreground">{room.song.artist}</span>}
-      <span className="font-mono text-xs text-muted-foreground">{keyLabel(room.shift)}</span>
+    <div className="grid min-w-0 gap-1" role="group" aria-label="下一首">
+      <span className="text-xs text-muted-foreground">下一首</span>
+      {song === null ? (
+        <p className="text-sm text-muted-foreground">
+          {room.queue.length === 0 ? "還沒有人點歌" : "清單裡的歌還在準備"}
+        </p>
+      ) : (
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="min-w-0 truncate text-[15px] font-semibold">{song.title}</span>
+          {song.artist && <span className="truncate text-[13px] text-muted-foreground">{song.artist}</span>}
+          <span className="font-mono text-xs text-muted-foreground">{keyLabel(room.shift)}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -353,6 +303,7 @@ export function RoomLobby({
 }) {
   return (
     <Page
+      className={ENTER}
       rail={
         <>
           <MyPart room={room} me={me} latency={latency} actions={actions} />
@@ -379,11 +330,12 @@ export function RoomLobby({
         </CardHeader>
         <div className="grid gap-4">
           <RoomCode code={room.code} />
-          <OpenerPart room={room} me={me} overview={overview} actions={actions}>
+          <OpenerPart room={room} me={me} actions={actions}>
             <SongLine room={room} />
           </OpenerPart>
         </div>
       </Card>
+      <RoomQueue room={room} overview={overview} onRoom={actions.onRoom} />
       <Members room={room} canCut={me.opener || overview.admin} onRoom={actions.onRoom} />
       <Ranking room={room} />
     </Page>
@@ -482,6 +434,7 @@ export function RoomResults({
 }) {
   return (
     <Page
+      className={ENTER}
       rail={
         me ? (
           <>
@@ -509,13 +462,14 @@ export function RoomResults({
           </CardAction>
         </CardHeader>
         {me && (
-          <OpenerPart room={room} me={me} overview={overview} actions={actions}>
-            {room.state === "lobby" && <SongLine room={room} />}
+          <OpenerPart room={room} me={me} actions={actions}>
+            {room.rounds_left > 0 && <SongLine room={room} />}
           </OpenerPart>
         )}
       </Card>
       {mine}
       <Ranking room={room} />
+      {me && <RoomQueue room={room} overview={overview} onRoom={actions.onRoom} />}
     </Page>
   );
 }

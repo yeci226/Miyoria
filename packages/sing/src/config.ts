@@ -43,8 +43,24 @@ export const SingConfigSchema = z
      * again, and a song whose worker is still unreachable after this long is made on the next one.
      */
     fallback_retry_secs: z.number().positive().default(30),
-    /** HTTP timeout of one worker call (fetching a song's audio gets 10x). */
+    /** HTTP timeout of one worker call (files are bounded by `fetch_stall_secs` instead). */
     timeout_secs: z.number().positive().default(10),
+    /**
+     * A file from the worker (a song's audio or video, a karaoke song's files) is given up when no
+     * byte of it came for this long, however long the whole file takes on a slow link.
+     */
+    fetch_stall_secs: z.number().positive().default(30),
+    /**
+     * Where Core keeps the songs' audio once the worker made them (relative to the directory of
+     * `miyoria.toml`): a song is ready once its audio is here, and is sung from here. A worker on
+     * this machine (`video_dir`) is read in place instead.
+     */
+    audio_dir: z.string().default("data/song-audio"),
+    /**
+     * The budget of `audio_dir` in MB (a minute of song is about 6 MB, 12 with the vocals): the
+     * songs sung longest ago go first, never one still in the set list.
+     */
+    audio_cache_mb: z.number().positive().default(2048),
     /** How often preparing songs are checked. */
     poll_ms: z.number().int().positive().default(1500),
     /** Songs preparing or ready at once, and per requester. */

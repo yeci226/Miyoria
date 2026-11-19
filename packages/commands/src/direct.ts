@@ -22,6 +22,11 @@ export interface ReplySink {
    * a thread, a voice channel's text chat): the receipt cards of her actions.
    */
   sendCard?(context: ContextKey, reply: CommandReply, signal?: AbortSignal): Promise<MessageRef>;
+  /**
+   * Replaces a card sent with `sendCard` (its first message) with `reply`, never pinging anyone:
+   * a notice that changes once posted, like a karaoke room's that ends.
+   */
+  editCard?(message: MessageRef, reply: CommandReply, signal?: AbortSignal): Promise<void>;
 }
 
 export const ReplySinkKey = serviceKey<ReplySink>("ReplySink");

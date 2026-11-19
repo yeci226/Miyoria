@@ -57,8 +57,9 @@ import { noiseFloor } from "./latency";
 import { HeardBadge, Lyrics, ReadingToggle } from "./Lyrics";
 import { keyLabel, loadKey, loadReading, type ReadingMode, saveKey, saveReading } from "./lyric-text";
 import type { RecorderState, VoiceRecorder, VoiceTake } from "./recorder";
-import { clock } from "./result-text";
+import { clock, score1 } from "./result-text";
 import { secondsLeft } from "./room-clock";
+import { SOURCE_WORDS, type StageScore } from "./room-text";
 import { StageBackground } from "./StageBackground";
 import { browserName, micError } from "./support";
 import { finishTake, phrasesOf, referenceCurve, Take } from "./take";
@@ -96,6 +97,14 @@ interface Loaded {
 const TICK_MS = 100;
 /** How long the end of a room's stream is waited for before the result goes, in ms. */
 const RUN_FINISH_WAIT_MS = 3_000;
+/**
+ * The song's end is looked for this often by a timer, besides every frame: a page that draws no
+ * frames (a tab in the background, a window covered by another, a phone's screen off) still plays
+ * the backing, and its timers still run (once a second at worst), so the take is still sent.
+ */
+export const END_CHECK_MS = 250;
+/** The end is this long after the backing's last moment, in seconds. */
+const END_PAST_S = 0.3;
 
 /** What a room adds to the stage: the round's session, the shared start, and one plate. */
 export interface StageRoom {
@@ -110,6 +119,11 @@ export interface StageRoom {
   begin: (o: { engine: KaraokeEngine; songTime: (contextTime: number) => number }) => StageRun;
   /** The plate under the number: the singer's trend. */
   plate?: ReactNode;
+  /**
+   * The singer's own running total from Core (正式 from the stream, 預估 from the browser's pitch),
+   * shown instead of the browser's own number once there is one.
+   */
+  score?: StageScore | null;
 }
 
 /** What a room runs beside the song. */
@@ -276,6 +290,8 @@ export function Singing({
         take.current = new Take(referenceCurve(reference), {
           tolerance_cents: session.tolerance_cents,
           latency_ms: latency.latency_ms,
+          calibrated: latency.calibrated,
+          phrases: phrasesOf(reference),
         });
         const range = midiRange(reference.pitch.midi, reference.notes);
         if (!alive.current || token !== loadToken.current) return;
@@ -293,7 +309,7 @@ export function Singing({
       }
     })();
     return () => void (alive.current = false);
-  }, [api, config.baseUrl, engine, song.id, latency.latency_ms, knownFloor, shift, roomSession]);
+  }, [api, config.baseUrl, engine, song.id, latency.latency_ms, latency.calibrated, knownFloor, shift, roomSession]);
 
   /** Another key, before the start: a new session with the backing in it. */
   const moveKey = (by: number) => {
@@ -341,38 +357,62 @@ export function Singing({
     recWait.current = window.setTimeout(() => r.start(), Math.max(0, (at - engine().now()) * 1000));
   };
 
+  // Once per take: the frame, the timer and 唱完了 may all ask in the same moment, before the
+  // phase they set has been rendered.
+  const finishing = useRef(false);
   const finish = useCallback(async () => {
     const t = take.current;
-    if (!loaded || !t || phaseRef.current.kind === "finishing") return;
+    if (!loaded || !t || finishing.current || phaseRef.current.kind !== "playing") return;
+    finishing.current = true;
     const audio = engine();
     clockRef.current.pause(audio.now());
     audio.stop();
     window.clearTimeout(recWait.current);
+    phaseRef.current = { kind: "finishing" };
     setPhase({ kind: "finishing" });
-    // A room's stream ends with its last chunk (waited on a little, so Core knows before the result).
-    const run = runRef.current;
-    runRef.current = null;
-    const ended = run
-      ? Promise.race([run.finish().catch(() => undefined), new Promise((r) => window.setTimeout(r, RUN_FINISH_WAIT_MS))])
-      : Promise.resolve();
-    const [voice] = await Promise.all([loaded.recorder ? loaded.recorder.stop() : Promise.resolve(null), ended]);
-    const done = await finishTake(t, {
-      calibrated: latency.calibrated,
-      phrases: phrasesOf(loaded.reference),
-      tolerance_cents: loaded.session.tolerance_cents,
-      browser: browserName(navigator.userAgent),
-    });
-    const { id, title, artist } = loaded.session.song;
-    const lines = (loaded.reference.lyrics?.lines ?? []).map((l) => l.text);
-    onFinished({
-      session: loaded.session.session,
-      song: { id, title, artist },
-      lines,
-      body: { ...done.body, recording: voice !== null },
-      provisional: done.provisional,
-      voice,
-    });
+    try {
+      // A room's stream ends with its last chunk (waited on a little, so Core knows before the result).
+      const run = runRef.current;
+      runRef.current = null;
+      const ended = run
+        ? Promise.race([run.finish().catch(() => undefined), new Promise((r) => window.setTimeout(r, RUN_FINISH_WAIT_MS))])
+        : Promise.resolve();
+      const stopped = loaded.recorder ? loaded.recorder.stop().catch(() => null) : Promise.resolve(null);
+      const [voice] = await Promise.all([stopped, ended]);
+      const done = await finishTake(t, {
+        calibrated: latency.calibrated,
+        phrases: phrasesOf(loaded.reference),
+        tolerance_cents: loaded.session.tolerance_cents,
+        browser: browserName(navigator.userAgent),
+      });
+      const { id, title, artist } = loaded.session.song;
+      const lines = (loaded.reference.lyrics?.lines ?? []).map((l) => l.text);
+      onFinished({
+        session: loaded.session.session,
+        song: { id, title, artist },
+        lines,
+        body: { ...done.body, recording: voice !== null },
+        provisional: done.provisional,
+        voice,
+      });
+    } catch (e) {
+      // Never silently stuck on 「唱完了」: say what went wrong.
+      if (alive.current) setPhase({ kind: "error", message: `這次唱的沒有送出:${describeError(e)}` });
+    }
   }, [engine, loaded, latency.calibrated, onFinished]);
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
+
+  // The song's end by a timer as well as by the frames (`END_CHECK_MS`).
+  const isPlaying = phase.kind === "playing";
+  useEffect(() => {
+    if (!isPlaying || !loaded) return;
+    const audio = engine();
+    const timer = window.setInterval(() => {
+      if (clockRef.current.songTime(audio.heard()) >= loaded.duration + END_PAST_S) void finishRef.current();
+    }, END_CHECK_MS);
+    return () => window.clearInterval(timer);
+  }, [isPlaying, loaded, engine]);
 
   const start = () => {
     if (phase.kind !== "ready" || roomRef.current) return;
@@ -564,16 +604,16 @@ export function Singing({
       }
       if (ms - last >= TICK_MS) {
         last = ms;
-        setTick({ now, score: take.current?.live.score ?? 0, rec: loaded.recorder?.state ?? "idle" });
+        setTick({ now, score: take.current?.running.score ?? 0, rec: loaded.recorder?.state ?? "idle" });
       }
-      if (phaseRef.current.kind === "playing" && now >= loaded.duration + 0.3) void finish();
+      if (phaseRef.current.kind === "playing" && now >= loaded.duration + END_PAST_S) void finishRef.current();
     };
     raf = requestAnimationFrame(frame);
     return () => {
       cancelAnimationFrame(raf);
       ro?.disconnect();
     };
-  }, [engine, loaded, finish]);
+  }, [engine, loaded]);
 
   /** What the video follows: the song's time as heard, and whether it plays. */
   const songNow = useCallback(
@@ -600,6 +640,11 @@ export function Singing({
   };
   const inRoom = room !== undefined;
   const waiting = inRoom && playing ? secondsLeft(tick.now) : 0;
+  // The corner number: Core's own total for this singer when a room gives one, else the browser's.
+  const core = room?.score ?? null;
+  const sung = phase.kind === "playing" || phase.kind === "finishing";
+  const scoreLabel = core ? SOURCE_WORDS[core.source] : SOURCE_WORDS.estimate;
+  const scoreText = core && sung ? score1(core.total) : sung ? String(tick.score) : "—";
 
   return (
     <section
@@ -647,7 +692,12 @@ export function Singing({
       {waiting > 0 && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center pb-[22cqh]" data-countdown>
           <p className="grid justify-items-center gap-1" role="timer" aria-live="off">
-            <span className="font-mono text-[clamp(40px,12cqmin,96px)] font-semibold tabular-nums">{waiting}</span>
+            <span
+              key={waiting}
+              className="animate-in fade-in-0 zoom-in-90 font-mono text-[clamp(40px,12cqmin,96px)] font-semibold tabular-nums duration-300 ease-out motion-reduce:animate-none"
+            >
+              {waiting}
+            </span>
             <span className="text-[13px] text-muted-foreground">秒後一起開始</span>
           </p>
         </div>
@@ -716,10 +766,10 @@ export function Singing({
             </span>
           )}
           <dl className="flex items-center gap-4">
-            <div className="flex items-baseline gap-2">
-              <dt className="text-xs text-muted-foreground">預估</dt>
+            <div className="flex items-baseline gap-2" data-score-source={core?.source ?? "browser"}>
+              <dt className="text-xs text-muted-foreground">{scoreLabel}</dt>
               <dd className="min-w-[2ch] font-mono text-lg font-semibold tabular-nums" aria-live="off">
-                {phase.kind === "playing" || phase.kind === "finishing" ? tick.score : "—"}
+                {scoreText}
               </dd>
             </div>
             <div className="flex items-baseline">

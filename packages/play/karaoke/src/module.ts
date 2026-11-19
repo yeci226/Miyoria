@@ -7,9 +7,11 @@
 // She hears of each finished song as a note she may react to (an observation, like the cards'
 // and the market's notes), in the comment channel when one is set; her next turn there is kept as
 // her comment on that result. Singing counts as `played_together` for the heart. No model is
-// called here, and no coins move.
+// called here, and no coins move. On Discord it registers `/me play karaoke` (`commands.ts`) and
+// posts a room's notice in the comment channel through the platform's `ReplySink`.
 
 import { resolve } from "node:path";
+import { CommandMount, ReplySinkKey } from "@miyoria/commands";
 import {
   defineManifest,
   errorMessage,
@@ -34,8 +36,9 @@ import {
   VoicePlayerKey,
 } from "@miyoria/types";
 import { karaokeCard } from "./card.js";
-import { commentContext, KaraokeConfigSchema } from "./config.js";
-import { RoomDesk } from "./rooms.js";
+import { registerCommands, roomNotice, unregisterCommands } from "./commands.js";
+import { commentContext, type KaraokeConfig, KaraokeConfigSchema } from "./config.js";
+import { type RoomChannel, RoomDesk, type RoomNotice } from "./rooms.js";
 import { type KaraokeNote, KaraokeService } from "./service.js";
 import { karaokeTables } from "./store.js";
 
@@ -71,12 +74,13 @@ export class KaraokeModule implements Module {
     category: "play",
     description:
       "Karaoke on the member page: songs prepared by the song worker, sung in the browser, scored by Core, and her comment",
-    optional: ["sing", "heart", "api"],
+    optional: ["sing", "heart", "api", "commands"],
     configSchema: KaraokeConfigSchema,
   });
   readonly #options: KaraokeModuleOptions;
   #running: KaraokeService | null = null;
   #rooms: RoomDesk | null = null;
+  #mount: CommandMount | null = null;
 
   constructor(options: KaraokeModuleOptions = {}) {
     this.#options = options;
@@ -163,12 +167,30 @@ export class KaraokeModule implements Module {
         lyrics: (lyrics) => ctx.publish(Events.KaraokeStageLyrics, lyrics),
         voice: (voice) => ctx.publish(Events.KaraokeStageVoice, voice),
       },
+      // The room notices in the comment channel, through the platform's sink.
+      announce: {
+        post: (channel, notice) => postNotice(ctx, config, channel, notice),
+        edit: (channel, message, notice) => editNotice(ctx, config, channel, message, notice),
+      },
     });
     service.attachRooms(rooms);
     // Rooms the last run left open are closed, and what they owe is paid, before any is served.
     await rooms.recover();
     ctx.provide(KaraokeRoomsKey, rooms);
     this.#rooms = rooms;
+    // `/me play karaoke`: where karaoke is, the rooms open now, the caller's coins.
+    this.#mount = new CommandMount(
+      "karaoke",
+      (registry) =>
+        registerCommands(
+          registry,
+          () => this.#rooms,
+          () => config,
+          () => this.#running,
+        ),
+      unregisterCommands,
+    );
+    this.#mount.attach(ctx);
     const voice = ctx.subscribe([Events.VoiceJoined.type, Events.VoiceLeft.type]);
     ctx.spawn("voice", async () => {
       for await (const env of voice) {
@@ -235,7 +257,35 @@ export class KaraokeModule implements Module {
     this.#running?.attachRooms(null);
     this.#running = null;
     this.#rooms = null;
+    this.#mount?.detach();
+    this.#mount = null;
   }
+}
+
+/** A room's notice in the comment channel: its message id, `null` when there is no Discord. */
+async function postNotice(
+  ctx: ModuleContext,
+  config: KaraokeConfig,
+  channel: RoomChannel,
+  notice: RoomNotice,
+): Promise<string | null> {
+  const sink = ctx.services.get(ReplySinkKey);
+  if (!sink?.sendCard || sink.platform !== channel.platform) return null;
+  const sent = await sink.sendCard(channel, roomNotice(config, notice));
+  return sent.id;
+}
+
+/** The notice of a room that closed: 「已結束」. */
+async function editNotice(
+  ctx: ModuleContext,
+  config: KaraokeConfig,
+  channel: RoomChannel,
+  message: string,
+  notice: RoomNotice,
+): Promise<void> {
+  const sink = ctx.services.get(ReplySinkKey);
+  if (!sink?.editCard || sink.platform !== channel.platform) return;
+  await sink.editCard({ context: channel, id: message }, roomNotice(config, notice));
 }
 
 /** A finished song she hears of: may speak in the comment channel, else only knows. */

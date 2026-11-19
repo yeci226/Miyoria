@@ -60,6 +60,21 @@ async function service(): Promise<string> {
       res.end(big);
       return;
     }
+    if (req.url?.startsWith("/sized")) {
+      res.writeHead(200, { "content-length": String(big.byteLength) });
+      res.end(big);
+      return;
+    }
+    if (req.url === "/short-reset" || req.url === "/short-close") {
+      // Says 1000 bytes, sends 600, then the connection goes: torn down, or closed cleanly with
+      // `connection: close` (which `fetch` takes for a complete body).
+      const close = req.url === "/short-close";
+      res.writeHead(200, { "content-length": "1000", ...(close ? { connection: "close" } : {}) });
+      res.write(Buffer.alloc(600, 1), () => {
+        setTimeout(() => (close ? res.socket?.end() : res.socket?.destroy()), 20);
+      });
+      return;
+    }
     if (req.url === "/gzip") {
       const body = gzipSync(Buffer.from("hello hello hello"));
       res.writeHead(200, {
@@ -113,6 +128,9 @@ function api(targets: Record<string, string>, reported: string[] = []): HostApi 
 function relay(targets: Record<string, string>, reported: string[] = []) {
   const frames: HostRelayFrame[] = [];
   const errors: string[] = [];
+  const logs: { level: string; message: string; fields: Record<string, unknown> }[] = [];
+  const log = (level: string) => (fields: object, message: string) =>
+    logs.push({ level, message, fields: fields as Record<string, unknown> });
   const r = new HostRelay({
     api: api(targets, reported),
     sink: {
@@ -123,6 +141,7 @@ function relay(targets: Record<string, string>, reported: string[] = []) {
       bufferedAmount: 0,
     },
     onProtocolError: (reason) => errors.push(reason),
+    logger: { info: log("info"), warn: log("warn"), debug: log("debug") },
   });
   const sent = (stream: number) =>
     frames
@@ -131,7 +150,9 @@ function relay(targets: Record<string, string>, reported: string[] = []) {
   const ended = (stream: number) =>
     frames.some((f) => f.stream === stream && f.kind === F.RESPONSE_END);
   const core = (f: HostRelayFrame) => r.frame(encodeRelayFrame(f));
-  return { r, frames, errors, sent, ended, core };
+  const aborted = (stream: number) =>
+    frames.find((f) => f.stream === stream && f.kind === F.ABORT) as { reason: string } | undefined;
+  return { r, frames, errors, logs, sent, ended, aborted, core };
 }
 
 const live = () => new AbortController().signal;
@@ -171,6 +192,50 @@ describe("HostRelay", () => {
     expect(t.sent(1)).toBe(big.byteLength);
     expect(t.r.open).toBe(0);
     expect(t.errors).toEqual([]);
+  });
+
+  it("logs a big response's size, time and rate once it is through", async () => {
+    const url = await service();
+    const t = relay({ sing: url });
+    const head = await t.r.handle(
+      { stream: 4, service: "sing", method: "GET", path: "/sized?x=1" },
+      live(),
+    );
+    expect(head.headers["content-length"]).toBe(String(big.byteLength));
+    while (!t.ended(4)) {
+      t.core({ kind: F.CREDIT, stream: 4, bytes: HOST_RELAY_LIMITS.CREDIT_STEP_BYTES });
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    const line = t.logs.find((l) => l.message === "relayed a response");
+    expect(line?.level).toBe("info");
+    expect(line?.fields).toMatchObject({ stream: 4, service: "sing", path: "/sized" });
+    expect(line?.fields.bytes).toBe(big.byteLength);
+    expect(typeof line?.fields.seconds).toBe("number");
+    expect(typeof line?.fields.mb_per_s).toBe("number");
+    // Small answers are not logged.
+    await t.r.handle({ stream: 5, service: "sing", method: "GET", path: "/a" }, live());
+    await until(() => t.ended(5), "the small end");
+    expect(t.logs.filter((l) => l.message === "relayed a response")).toHaveLength(1);
+  });
+
+  it("aborts a body the service broke off short of its length, never ends it", async () => {
+    const url = await service();
+    for (const [stream, path] of [
+      [1, "/short-reset"],
+      [2, "/short-close"],
+    ] as const) {
+      const t = relay({ sing: url });
+      const head = await t.r.handle({ stream, service: "sing", method: "GET", path }, live());
+      expect(head.headers["content-length"]).toBe("1000");
+      await until(() => t.aborted(stream) !== undefined || t.ended(stream), `${path} settles`);
+      expect(t.ended(stream)).toBe(false);
+      expect(t.sent(stream)).toBe(600);
+      expect(t.aborted(stream)?.reason).toMatch(/the service's response broke/);
+      const warn = t.logs.find((l) => l.level === "warn");
+      expect(warn?.fields).toMatchObject({ stream, service: "sing", path, bytes: 600 });
+      expect(warn?.fields.length ?? warn?.fields.err).toBeDefined();
+      expect(t.r.open).toBe(0);
+    }
   });
 
   it("takes a request body whole when its length is known, streamed when not", async () => {

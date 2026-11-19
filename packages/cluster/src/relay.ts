@@ -24,6 +24,7 @@ import {
   RelayInbound,
   RelaySendWindow,
   type RelaySink,
+  relayContentLength,
   relayHeaders,
 } from "@miyoria/contracts/host";
 import { errorMessage } from "@miyoria/runtime/kernel";
@@ -191,6 +192,7 @@ export class RelayChannel {
           kind: HOST_RELAY_FRAME.REQUEST_CHUNK,
           window: stream.window,
           signal: stream.stop.signal,
+          ...(length === undefined ? {} : { length }),
         }).catch((error: unknown) => {
           if (!stream.stop.signal.aborted) {
             this.#end(stream, error, `the request body failed: ${errorMessage(error)}`);
@@ -219,6 +221,10 @@ export class RelayChannel {
       stream.inbound.readable.pipeTo(new WritableStream()).catch(() => {});
       return new Response(null, { status, headers });
     }
+    // A body that stops short of its length fails its reader rather than ending: a host before
+    // 2026-11-19 ends a body its service broke off early (a closed connection) like a whole one.
+    const expected = relayContentLength(headers);
+    if (expected !== undefined && req.method !== "HEAD") stream.inbound.expect(expected);
     return new Response(stream.inbound.readable, { status, headers });
   }
 

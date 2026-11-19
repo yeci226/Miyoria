@@ -95,7 +95,9 @@ def bracket_parts(raw: str) -> tuple[str, list[str]]:
 def guess_artist_title(raw_title: str, uploader: str | None = None) -> tuple[str | None, str]:
     """``(artist, title)`` from a video title like ``Artist - Song (Official Video)``.
 
-    Falls back to the uploader (without `` - Topic`` / ``VEVO``) as the artist.
+    Falls back to the uploader as the artist only when the channel is clearly an artist's
+    (``artist_channel``): anyone else's channel name (who uploaded or asked for a cover, a fan's
+    upload) is not the song's artist, so the artist is then ``None``.
     """
     t = clean_title(raw_title)
     for sep in _SEPARATORS[:6]:
@@ -104,10 +106,20 @@ def guess_artist_title(raw_title: str, uploader: str | None = None) -> tuple[str
             left, right = left.strip(), _NOISE.sub("", right).strip()
             if left and right:
                 return left, right
-    artist = None
-    if uploader:
-        artist = re.sub(r"\s*-\s*Topic$|VEVO$", "", uploader).strip() or None
-    return artist, _NOISE.sub("", t).strip() or t
+    return artist_channel(uploader), _NOISE.sub("", t).strip() or t
+
+
+# A channel that is an artist's own: YouTube's `` - Topic`` channels, ``…VEVO``, ``… Official``.
+_ARTIST_CHANNEL = re.compile(
+    r"\s-\s*Topic$|VEVO$|\bofficial\b|公式|オフィシャル|官方", flags=re.IGNORECASE)
+
+
+def artist_channel(uploader: str | None) -> str | None:
+    """The artist of a channel that is clearly an artist's (``X - Topic``, ``XVEVO``, ``X Official``),
+    as ``channel_artist`` names it; ``None`` for any other channel."""
+    if not uploader or not _ARTIST_CHANNEL.search(uploader.strip()):
+        return None
+    return channel_artist(uploader.strip())
 
 
 def channel_artist(uploader: str | None) -> str | None:

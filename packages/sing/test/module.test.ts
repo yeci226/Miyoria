@@ -53,6 +53,7 @@ import {
   BACKING_LABELS,
   backingOf,
   type GpuContext,
+  MemorySongAudio,
   REFUND_RETRY_MS,
   SETLIST_KEY,
   SingerKey,
@@ -354,6 +355,8 @@ class Harness {
   readonly sent: GpuContext[] = [];
   /** The module under test (its card). */
   module: SingModule | null = null;
+  /** The songs' audio on "Core". */
+  audio: MemorySongAudio | null = null;
 
   private constructor(withMind: boolean, store: MemorySettingsStore | null) {
     const s = this.sup.services;
@@ -388,6 +391,8 @@ class Harness {
     if (restart?.worker) h.worker = restart.worker;
     h.module = new SingModule(() => h.worker, {
       endpoints: oneWorker(),
+      // The audio in memory: a real file read does not finish while the clock is a fake one.
+      audio: (worker, tracks) => (h.audio = new MemorySongAudio(worker, tracks)),
       context: (services, context) => {
         expect(services).toBe(h.sup.services);
         h.sent.push(context);
@@ -668,7 +673,7 @@ describe("sing module", () => {
     expect(["playing", "done"]).toContain(h.singer.list.get(1)?.state);
   });
 
-  it("asks again for a ready song the worker's cache cleaned out, and sings it once it is made", async () => {
+  it("sings a ready song from Core even after the worker's cache cleaned it out", async () => {
     h = await Harness.create();
     await h.command("queue song request", { song: "Song A" });
     h.worker.finish("j1", "Song A", 1);
@@ -677,7 +682,22 @@ describe("sing module", () => {
     h.worker.cleaned.add("s-j1");
     await h.join();
     await settle(6000 + 400);
-    // Not sung, not failed: the same request went to the worker again.
+    expect(h.voice.plays).toHaveLength(1);
+    expect(h.worker.submitted).toHaveLength(1);
+  });
+
+  it("a song whose audio left Core fetches it again, and asks the worker again when it has none", async () => {
+    h = await Harness.create();
+    await h.command("queue song request", { song: "Song A" });
+    h.worker.finish("j1", "Song A", 1);
+    await settle(200);
+    expect(h.singer.list.get(1)?.state).toBe("ready");
+    // The audio went from Core, and the worker's cache cleaned the song out too.
+    h.audio?.forget("s-j1");
+    h.worker.cleaned.add("s-j1");
+    await h.join();
+    await settle(6000 + 400);
+    // Not sung, not failed: back to being prepared, and the same request went to the worker again.
     expect(h.voice.plays).toHaveLength(0);
     expect(h.worker.submitted).toHaveLength(2);
     expect(h.worker.submitted[1]).toEqual(h.worker.submitted[0]);
@@ -685,9 +705,70 @@ describe("sing module", () => {
     expect(entry?.state).toBe("preparing");
     expect(entry?.job).toBe("j2");
     expect(h.singer.playing()).toBeNull();
+    expect(h.cues()).toEqual([]);
     h.worker.finish("j2", "Song A", 1);
     await settle(200 + 6000 + 400);
     expect(h.voice.plays).toHaveLength(1);
+  });
+
+  it("a ready song is not ready until its audio is on Core, and is never shown singing before", async () => {
+    h = await Harness.create();
+    await h.join();
+    let release: () => void = () => {};
+    const audio = h.worker.audio.bind(h.worker);
+    // The transfer to Core takes a while.
+    h.worker.audio = async (song, track) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return audio(song, track);
+    };
+    await h.command("queue song request", { song: "Song A" });
+    h.worker.finish("j1", "Song A", 30);
+    await settle(200);
+    const entry = h.singer.list.get(1);
+    expect(entry).toMatchObject({ state: "preparing", stage: "fetch" });
+    expect(prepares(h).at(-1)).toMatchObject({ no: 1, stage: "fetch" });
+    await settle(6000 + 400);
+    expect(h.voice.plays).toHaveLength(0);
+    expect(h.singer.playing()).toBeNull();
+    expect(h.singer.singing()).toBeNull();
+    expect(h.cues()).toEqual([]);
+    // Polls do not touch it meanwhile (the worker's job is done).
+    expect(entry?.stage).toBe("fetch");
+    release();
+    await settle(10);
+    release();
+    await settle(10);
+    // Ready, and as a commanded song started at once: her opening line comes first.
+    expect(h.singer.list.get(1)?.state).toBe("playing");
+    expect(prepares(h).at(-1)).toMatchObject({ no: null });
+    expect(h.singer.singing()).toBeNull();
+    expect(await h.module?.card()).toMatchObject({
+      facts: expect.arrayContaining([{ label: "準備開唱", value: "Song A" }]),
+    });
+    await settle(6000 + 400);
+    expect(h.voice.plays).toHaveLength(1);
+    expect(h.singer.singing()?.no).toBe(1);
+    expect(await h.module?.card()).toMatchObject({
+      facts: expect.arrayContaining([{ label: "正在唱", value: "Song A" }]),
+    });
+  });
+
+  it("a song whose audio cannot be brought onto Core fails after its tries, and says why", async () => {
+    h = await Harness.create({ fallback_retry_secs: 1 });
+    h.worker.audio = async () => {
+      throw new SingWorkerError("stopped arriving", { unreachable: true, maybeReceived: true });
+    };
+    await h.command("queue song request", { song: "Song A" });
+    h.worker.finish("j1", "Song A", 1);
+    await settle(200);
+    expect(h.singer.list.get(1)?.state).toBe("preparing");
+    await settle(5_000);
+    const entry = h.singer.list.get(1);
+    expect(entry?.state).toBe("failed");
+    expect(entry?.error).toContain("音檔傳不過來");
+    expect(entry?.error).toContain("stopped arriving");
   });
 
   it("tells the worker who is listening and which songs are needed now", async () => {
@@ -827,6 +908,8 @@ describe("sing module", () => {
     expect(h.singer.playing()?.no).toBe(1);
     await h.stop();
     h = await Harness.create({}, true, { store, worker: h.worker });
+    // Ready again once its audio is checked on Core (fetched again here: a new memory).
+    await settle(50);
     expect(h.singer.list.get(1)).toMatchObject({ state: "ready", forced: false });
     expect(h.singer.playing()).toBeNull();
   });
@@ -1045,7 +1128,8 @@ describe("sing module", () => {
       h = await Harness.create();
       await h.join();
       h.worker.cacheHit = true;
-      expect(await h.command("queue song request", { song: "Cached" })).toContain("她馬上就唱");
+      // Made already: only its audio has to come to Core.
+      expect(await h.command("queue song request", { song: "Cached" })).toContain("正在把歌傳過來");
       await settle(1000);
       await decided(h, "accepted", "t");
       await playback(h, "t", "started");

@@ -462,9 +462,17 @@ export const KARAOKE_CODE_MAX = 12;
 export const KARAOKE_NAME_MAX = 60;
 export const KARAOKE_TITLE_MAX = 200;
 export const KARAOKE_NOTE_MAX = 200;
+/** Most of a singer's recent pitch one board line carries (base64 of 50 Hz frames). */
+export const KARAOKE_PITCH_MAX_CHARS = 2_000;
+/** Most reference notes a round's words carry for the scene's pitch lanes. */
+export const KARAOKE_NOTES_MAX = 8_000;
 /** Most people a karaoke room lists, and singers on its board. */
 export const KARAOKE_MEMBERS_MAX = 64;
 export const KARAOKE_BOARD_MAX = 16;
+/** Most queue entries the stream shows (the next few). */
+export const KARAOKE_QUEUE_MAX = 5;
+/** Longest join link the stream's QR code carries. */
+export const KARAOKE_JOIN_URL_MAX = 200;
 
 /** One person in the room on the stream. Names are untrusted (shown as text). */
 export const StageLinkKaraokeMemberSchema = z
@@ -497,6 +505,24 @@ export const StageLinkKaraokeLineSchema = z
     finished: z.boolean(),
     /** Their voice is the one the stream plays now (`karaoke_voice`). */
     on_air: z.boolean(),
+    /** With the results: the four parts of their official score (`null` without a result). */
+    parts: z
+      .object({
+        pitch: z.number().nullable(),
+        stability: z.number().nullable(),
+        rhythm: z.number().nullable(),
+        expression: z.number().nullable(),
+      })
+      .nullable()
+      .default(null),
+    /**
+     * Their pitch lately, for the scene's pitch lanes (§7.1): frames from `from` at 50 Hz in song
+     * time, one byte a frame (`encodeTrack`), base64; `null` without any (and after the round).
+     */
+    pitch: z
+      .object({ from: z.number().int().min(0), track: z.string().max(KARAOKE_PITCH_MAX_CHARS) })
+      .nullable()
+      .default(null),
   })
   .meta({ id: "StageLinkKaraokeLine" });
 export type KaraokeStageLine = z.output<typeof StageLinkKaraokeLineSchema>;
@@ -511,6 +537,20 @@ export const StageLinkKaraokeSongSchema = z
   })
   .meta({ id: "StageLinkKaraokeSong" });
 export type KaraokeStageSong = z.output<typeof StageLinkKaraokeSongSchema>;
+
+/**
+ * One song waiting in the room's queue, on the stream: the next few, in order. `by` is the name of
+ * who added it (untrusted, shown as text); `state` its preparation (`failed` ones are skipped).
+ */
+export const StageLinkKaraokeQueueEntrySchema = z
+  .object({
+    title: z.string().max(KARAOKE_TITLE_MAX),
+    artist: z.string().max(KARAOKE_TITLE_MAX).nullable(),
+    by: z.string().max(KARAOKE_NAME_MAX),
+    state: z.enum(["ready", "preparing", "failed"]),
+  })
+  .meta({ id: "StageLinkKaraokeQueueEntry" });
+export type KaraokeStageQueueEntry = z.output<typeof StageLinkKaraokeQueueEntrySchema>;
 
 /**
  * What the stream's scene plays during the round (her own voice channel carries none of it: she is
@@ -548,9 +588,23 @@ export const StageLinkKaraokeSceneSchema = z
     /** The round now, 1-based (0 before the first), and how many the room may still start. */
     round: z.number().int().min(0),
     rounds_left: z.number().int().min(0),
+    /** The round's song while one is on; in the lobby and after a round, the next one to sing. */
     song: StageLinkKaraokeSongSchema.nullable(),
     /** Semitones the backing is moved by (one key for everyone). */
     shift: z.number().int().min(-12).max(12),
+    /**
+     * The songs waiting after `song` (the next few; `song` itself is not repeated here). Left out
+     * by a Core from before the queue: none.
+     */
+    queue: z.array(StageLinkKaraokeQueueEntrySchema).max(KARAOKE_QUEUE_MAX).default([]),
+    /**
+     * The room's join link (`<member site>/karaoke/room/<code>`) for the scene's QR code, sent only
+     * when the member site's address is set and `stream_qr` is on; `null`: no QR, the code stays.
+     * Anyone who sees the stream may open it; the room's own rules decide who gets in.
+     */
+    join_url: z.string().max(KARAOKE_JOIN_URL_MAX).nullable().default(null),
+    /** The QR code stays (small) while a round is sung too (`stream_qr_while_singing`). */
+    qr_while_singing: z.boolean().default(false),
     members: z.array(StageLinkKaraokeMemberSchema).max(KARAOKE_MEMBERS_MAX),
     position_ms: z.number().min(-DAY_MS).max(DAY_MS).nullable(),
     /** The live board while sung, the final ranking with the results; empty otherwise. */
@@ -559,6 +613,14 @@ export const StageLinkKaraokeSceneSchema = z
     note: z.string().max(KARAOKE_NOTE_MAX).nullable(),
     currency: z.string().max(16),
     air: StageLinkKaraokeAirSchema,
+    /**
+     * The song is over and the round is being settled (結算中): the names of the singers whose
+     * result is still waited for (maybe none: it is about to settle). `null` otherwise.
+     */
+    settling: z
+      .object({ waiting: z.array(z.string().max(KARAOKE_NAME_MAX)).max(KARAOKE_BOARD_MAX) })
+      .nullable()
+      .default(null),
   })
   .meta({ id: "StageLinkKaraokeScene" });
 export type KaraokeStageScene = z.output<typeof StageLinkKaraokeSceneSchema>;
@@ -596,6 +658,14 @@ export const StageLinkKaraokeLyricsSchema = z
     lyrics: WorkersKaraokeLyricsV2Schema.nullable(),
     video: z.string().max(PATH_MAX).nullable(),
     backing: StageLinkKaraokeBackingSchema.nullable(),
+    /**
+     * The reference notes of the round, in its key (song time in seconds, MIDI), for the scene's
+     * pitch lanes. Left out by an older Core: none.
+     */
+    notes: z
+      .array(z.object({ start: z.number().min(0), end: z.number().min(0), midi: z.number() }))
+      .max(KARAOKE_NOTES_MAX)
+      .default([]),
   })
   .meta({ id: "StageLinkKaraokeLyrics" });
 export type KaraokeStageLyrics = z.output<typeof StageLinkKaraokeLyricsSchema>;

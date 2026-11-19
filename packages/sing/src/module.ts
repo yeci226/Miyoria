@@ -27,7 +27,8 @@ import {
   VoicePlayerKey,
 } from "@miyoria/types";
 import { singCapabilities } from "./actions.js";
-import { type GpuContext, HttpSingWorker, type SingWorker } from "./client.js";
+import { DiskSongAudio, type SongAudio } from "./audio.js";
+import { type GpuContext, HttpSingWorker, type SingWorker, type SongTrack } from "./client.js";
 import { SingClips } from "./clips.js";
 import { registerCommands } from "./commands.js";
 import { SingConfigSchema } from "./config.js";
@@ -59,6 +60,16 @@ export type SingWorkerFactory = (
   timeoutMs: number,
   source: EndpointSource,
 ) => SingWorker;
+
+/**
+ * Where the songs' audio is kept on Core (tests keep it in memory). `keep`: the song ids still in
+ * the set list.
+ */
+export type SongAudioFactory = (
+  worker: SingWorker,
+  tracks: readonly SongTrack[],
+  keep: () => ReadonlySet<string>,
+) => SongAudio;
 
 /**
  * Where else who listens and which songs are needed now go, each time the song worker is told
@@ -112,22 +123,29 @@ export class SingModule implements Module {
   readonly #baseDir: string;
   readonly #endpoints: EndpointsOption | null;
   readonly #context: GpuContextSink | null;
+  readonly #audio: SongAudioFactory | null;
   #running: Running | null = null;
 
   /**
-   * `worker`: replaces the HTTP client (tests). `baseDir`: what a relative `video_dir` is
-   * relative to (the directory of `miyoria.toml`; default the working directory). `endpoints`:
-   * Core's endpoint registry, where the song workers are. `context`: where else the audience
-   * context goes (`GpuContextSink`).
+   * `worker`: replaces the HTTP client (tests). `baseDir`: what a relative `video_dir` or
+   * `audio_dir` is relative to (the directory of `miyoria.toml`; default the working directory).
+   * `endpoints`: Core's endpoint registry, where the song workers are. `context`: where else the
+   * audience context goes (`GpuContextSink`). `audio`: replaces the songs' audio on disk (tests).
    */
   constructor(
     worker: SingWorkerFactory | null = null,
-    options: { baseDir?: string; endpoints?: EndpointsOption; context?: GpuContextSink } = {},
+    options: {
+      baseDir?: string;
+      endpoints?: EndpointsOption;
+      context?: GpuContextSink;
+      audio?: SongAudioFactory;
+    } = {},
   ) {
     this.#worker = worker;
     this.#baseDir = options.baseDir ?? process.cwd();
     this.#endpoints = options.endpoints ?? null;
     this.#context = options.context ?? null;
+    this.#audio = options.audio ?? null;
   }
 
   async start(ctx: ModuleContext): Promise<void> {
@@ -159,7 +177,9 @@ export class SingModule implements Module {
           if (client === undefined || client.key !== key) {
             const made =
               this.#worker?.(endpoint, timeoutMs, source) ??
-              new HttpSingWorker(endpoint, timeoutMs, source);
+              new HttpSingWorker(endpoint, timeoutMs, source, {
+                stallMs: cfg.fetch_stall_secs * 1000,
+              });
             client = { key, endpoint, worker: made };
             clients.set(id, client);
           } else client.endpoint = endpoint;
@@ -170,15 +190,35 @@ export class SingModule implements Module {
     follow();
     const unwatch = source?.watch("sing", follow) ?? null;
     if (source === null) ctx.log.warn("no endpoint registry: there is no song worker");
-    const videoDir = cfg.video ? resolve(this.#baseDir, cfg.video_dir) : null;
+    const workerDir = resolve(this.#baseDir, cfg.video_dir);
+    const videoDir = cfg.video ? workerDir : null;
     const sink = this.#context;
+    const tracks: SongTrack[] = cfg.lip_sync_vocals
+      ? ["play_mix.pcm", "play_vocals.pcm"]
+      : ["play_mix.pcm"];
+    let listed: Singer | null = null;
+    // The songs still in the set list stay on Core whatever the budget.
+    const keep = (): ReadonlySet<string> =>
+      new Set(listed?.list.open().flatMap((e) => (e.song === null ? [] : [e.song.id])) ?? []);
+    const audio =
+      this.#audio?.(worker, tracks, keep) ??
+      new DiskSongAudio({
+        dir: resolve(this.#baseDir, cfg.audio_dir),
+        maxBytes: cfg.audio_cache_mb * 1024 * 1024,
+        worker,
+        tracks,
+        localDir: workerDir,
+        keep,
+      });
     const singer = new Singer(
       cfg,
       ctx,
       worker,
       videoDir,
       sink === null ? null : (context) => sink(ctx.services, context),
+      audio,
     );
+    listed = singer;
     const actuators = actuatorsFor(ctx);
     const capabilities = singCapabilities(singer, cfg.permissions).map((c) =>
       actuators.register(c),
@@ -218,6 +258,7 @@ export class SingModule implements Module {
         waitQuiet: (guild, expectMs, signal) => singer.waitQuiet(guild, null, expectMs, signal),
         clipping: (guild, delta) => singer.clipping(guild, delta),
         singing: () => singer.playing() !== null,
+        audio,
       });
       ctx.provide(SongClipsKey, clips);
       ctx.spawn("clips", (signal) => (clips as SingClips).run(signal));
@@ -280,8 +321,9 @@ export class SingModule implements Module {
       { label: "準備中", value: singer.list.preparing().length, unit: "首" },
     ];
     if (playing !== null) {
+      // 正在唱 only once her voice is out; before that she is saying her opening line.
       facts.push({
-        label: "正在唱",
+        label: singer.singing() === playing ? "正在唱" : "準備開唱",
         value: safeName(playing.song?.title?.trim() || playing.query, 40),
       });
     }

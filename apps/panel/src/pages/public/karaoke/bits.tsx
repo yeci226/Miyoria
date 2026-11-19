@@ -23,6 +23,13 @@ export function useReducedMotion(): boolean {
   );
 }
 
+/**
+ * How a room's screen comes in when the room moves on (the lobby, 結算中, the results): a short fade
+ * and rise; under reduced motion it is just there. The whole-window stages cut in (an animated stage
+ * box left its glass plates see-through in Chromium); their countdown number pops in.
+ */
+export const ENTER = "animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out motion-reduce:animate-none";
+
 /** Label over value, spaced, no cell walls. */
 export function Fact({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (

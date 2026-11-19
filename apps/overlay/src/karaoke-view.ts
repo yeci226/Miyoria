@@ -10,6 +10,10 @@
 // set again by every `karaoke` frame, and on the audio clock while the sound runs. The video
 // follows that clock with the member page's sync logic and never holds anything up: an error
 // or a stall drops it for the glass. Under reduced motion there is no video and the wipe steps.
+//
+// Between the phases (lobby, countdown, singing, settling, results) every piece enters and leaves
+// with the overlay's one motion (`present`: a fade and a small move); the pitch lanes are their own
+// canvases (src/lanes-view.ts), the join QR code an SVG made here from src/qr.ts.
 // Names and titles are untrusted: they only ever go in as text.
 
 import type { WorkersKaraokeLineV2, WorkersKaraokeLyricsV2 } from "@miyoria/contracts/workers";
@@ -40,18 +44,30 @@ import {
   countdownLeft,
   heard,
   type KaraokeMode,
+  karaokeBlocks,
   karaokeMode,
+  karaokePhase,
   lobbyMembers,
   lobbyStatus,
   lyricsFor,
   memberSwatch,
   memberTag,
-  resultTail,
+  PARTS,
+  qrPixels,
+  qrPlace,
+  queueRows,
+  resultRows,
+  resultsDensity,
+  resultsTitle,
   roundsLeftText,
+  settlingText,
   songProgress,
 } from "./karaoke.js";
 import { KaraokePlayer } from "./karaoke-player.js";
-import { present, reflow } from "./motion.js";
+import { laneSingers } from "./lanes.js";
+import { LanesView } from "./lanes-view.js";
+import { present, reflow, remPx } from "./motion.js";
+import { qrMatrix, qrSvgPath } from "./qr.js";
 import { SongClock } from "./song-clock.js";
 
 /** Lobby members listed before 「還有 N 人」. */
@@ -128,6 +144,11 @@ class LyricsView {
     this.#nextAt = undefined;
     this.#left = undefined;
     this.el.classList.toggle("has-ruby", shown !== "off");
+  }
+
+  /** Readings show above the words (the lines take more room). */
+  get ruby(): boolean {
+    return this.#mode !== "off";
   }
 
   /** At song time `t` (seconds). */
@@ -284,12 +305,56 @@ class VideoBack {
   }
 }
 
+// ---- the join QR code --------------------------------------------------------------------------
+
+/** The QR code's side at 1080p: big in the lobby (about 200 px), small in a corner (about 120 px), in rem. */
+const QR_LOBBY_REM = 12.5;
+const QR_CORNER_REM = 7.5;
+const SVG = "http://www.w3.org/2000/svg";
+
+/**
+ * The QR code of `url` as an SVG: dark square modules on a light plate with the four-module quiet
+ * zone, whole pixels per module, edges kept crisp. `null` when the link does not fit a code.
+ */
+function qrSvg(url: string, targetPx: number): SVGSVGElement | null {
+  const matrix = qrMatrix(url);
+  if (matrix === null) return null;
+  const { size, d } = qrSvgPath(matrix);
+  const px = qrPixels(size, targetPx);
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("class", "k-qr__code");
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  svg.setAttribute("width", String(px));
+  svg.setAttribute("height", String(px));
+  svg.setAttribute("shape-rendering", "crispEdges");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "加入房間的 QR code");
+  const plate = document.createElementNS(SVG, "rect");
+  plate.setAttribute("width", String(size));
+  plate.setAttribute("height", String(size));
+  plate.setAttribute("fill", "#fff");
+  const dark = document.createElementNS(SVG, "path");
+  dark.setAttribute("d", d);
+  dark.setAttribute("fill", "#000");
+  svg.append(plate, dark);
+  return svg;
+}
+
 // ---- the layer ---------------------------------------------------------------------------------
+
+/** The song a round sang, for its results (the scene's `song` is the next one by then). */
+interface Sung {
+  room: string;
+  round: number;
+  title: string;
+  artist: string | null;
+}
 
 export class KaraokeLayer {
   readonly #back: HTMLElement;
   readonly #lobby: HTMLElement;
   readonly #stage: HTMLElement;
+  readonly #title: HTMLElement;
   readonly #titleMeta: HTMLElement;
   readonly #titleSong: HTMLElement;
   readonly #titleBy: HTMLElement;
@@ -299,11 +364,15 @@ export class KaraokeLayer {
   readonly #count: HTMLElement;
   readonly #countN: HTMLElement;
   readonly #lyricsView: LyricsView;
+  readonly #lanes: LanesView;
   readonly #board: HTMLElement;
   readonly #boardList: HTMLOListElement;
   readonly #boardEmpty: HTMLElement;
   readonly #air: HTMLElement;
+  readonly #settling: HTMLElement;
+  readonly #settlingDetail: HTMLElement;
   readonly #results: HTMLElement;
+  readonly #corner: HTMLElement;
   readonly #video: VideoBack;
   readonly #clock = new SongClock();
   readonly #player: KaraokePlayer;
@@ -313,9 +382,11 @@ export class KaraokeLayer {
   #scene: KaraokeScene | null = null;
   #lyrics: KaraokeLyrics | null = null;
   #mode: KaraokeMode = "none";
+  #sung: Sung | null = null;
   #lobbyKey = "";
   #titleKey = "";
   #resultsKey = "";
+  #cornerKey = "";
   #shownLeft: number | null = null;
   #shownTime = "";
   #shownFill = -1;
@@ -347,14 +418,17 @@ export class KaraokeLayer {
     this.#lobby.setAttribute("role", "status");
 
     this.#stage = block("div", "k-stage", front);
-    const title = el("header", "k-title k-plate", this.#stage);
-    this.#titleMeta = el("div", "k-title__meta", title);
-    this.#titleSong = el("div", "k-title__song", title);
-    this.#titleBy = el("div", "k-title__by", title);
-    this.#titleFoot = el("div", "k-title__foot", title);
+    this.#title = block("header", "k-title k-plate", this.#stage);
+    this.#titleMeta = el("div", "k-title__meta", this.#title);
+    this.#titleSong = el("div", "k-title__song", this.#title);
+    this.#titleBy = el("div", "k-title__by", this.#title);
+    this.#titleFoot = el("div", "k-title__foot", this.#title);
     const bar = el("div", "k-title__bar", this.#titleFoot);
     this.#titleFill = el("span", "k-title__fill", bar);
     this.#titleTime = el("span", "k-title__time", this.#titleFoot);
+
+    // The pitch lanes, under the countdown and the words.
+    this.#lanes = new LanesView(this.#stage);
 
     this.#count = block("div", "k-count", this.#stage);
     this.#count.setAttribute("role", "timer");
@@ -362,6 +436,8 @@ export class KaraokeLayer {
     el("span", "k-count__label", this.#count, "秒後開始");
 
     this.#lyricsView = new LyricsView(this.#stage);
+    this.#lyricsView.el.classList.add("is-out");
+    this.#lyricsView.el.hidden = true;
 
     this.#board = block("aside", "k-board k-plate", this.#stage);
     const head = el("div", "k-board__head", this.#board);
@@ -370,7 +446,14 @@ export class KaraokeLayer {
     this.#boardEmpty = el("p", "k-board__empty", this.#board, "開始唱之後會出現");
     this.#air = el("p", "k-air", this.#board);
 
+    this.#settling = block("div", "k-settling k-plate", this.#stage);
+    this.#settling.setAttribute("role", "status");
+    el("div", "k-settling__title", this.#settling, "結算中…");
+    this.#settlingDetail = el("div", "k-settling__detail", this.#settling);
+    el("div", "k-settling__bar", this.#settling).setAttribute("aria-hidden", "true");
+
     this.#results = block("section", "k-results k-plate", this.#stage);
+    this.#corner = block("div", "k-qr k-qr--corner k-plate", this.#stage);
 
     this.#hint = block("div", "k-hint k-plate", front);
     this.#hint.textContent = "按一下開聲音";
@@ -405,6 +488,12 @@ export class KaraokeLayer {
     if (!sameRound) {
       this.#ranks = new Map();
       this.#resultsKey = "";
+      this.#lanes.clear();
+    }
+    if (scene?.state === "singing") this.#lanes.take(scene.board);
+    // Remember what the round sings: by its results the scene names the next song.
+    if (scene !== null && scene.song !== null && (scene.state === "countdown" || scene.state === "singing")) {
+      this.#sung = { room: scene.room, round: scene.round, title: scene.song.title, artist: scene.song.artist };
     }
     this.#setMode(karaokeMode(scene, true));
     this.#render();
@@ -423,9 +512,13 @@ export class KaraokeLayer {
     const ms = this.#songMs(now);
     const scene = this.#scene;
     const reduced = prefersReduced();
-    // The words run while the round counts down and is sung; the results hold still.
-    if (scene.state !== "results") this.#lyricsView.frame((ms ?? Number.NEGATIVE_INFINITY) / 1000, reduced);
-    const left = scene.state === "countdown" ? countdownLeft(ms) : null;
+    const phase = karaokePhase(scene);
+    // The words and the lanes run while the round counts down and is sung.
+    if (phase === "countdown" || phase === "singing") {
+      this.#lyricsView.frame((ms ?? Number.NEGATIVE_INFINITY) / 1000, reduced);
+      if (ms !== null) this.#lanes.frame(ms / 1000, reduced);
+    }
+    const left = phase === "countdown" ? countdownLeft(ms) : null;
     if (left !== this.#shownLeft) {
       this.#shownLeft = left;
       if (left !== null) this.#countN.textContent = String(left);
@@ -446,13 +539,15 @@ export class KaraokeLayer {
 
   #setMode(mode: KaraokeMode): void {
     const root = document.documentElement;
-    const state = this.#scene?.state;
-    if (mode === "none") {
+    const scene = this.#scene;
+    if (mode === "none" || scene === null) {
       delete root.dataset.karaoke;
       delete root.dataset.karaokeState;
+      delete root.dataset.karaokePhase;
     } else {
       root.dataset.karaoke = mode;
-      if (state) root.dataset.karaokeState = state;
+      root.dataset.karaokeState = scene.state;
+      root.dataset.karaokePhase = karaokePhase(scene);
     }
     if (mode === this.#mode) return;
     this.#mode = mode;
@@ -474,45 +569,105 @@ export class KaraokeLayer {
       this.#renderLobby(scene);
       return;
     }
+    const show = karaokeBlocks(scene, true);
     const words = lyricsFor(scene, this.#lyrics);
     const live = scene.state === "countdown" || scene.state === "singing";
-    // The round's sound plays while it counts down and is sung; the results are quiet.
+    // The round's sound plays while it counts down and is sung (and settles); the results are quiet.
     this.#player.air(scene.air);
     this.#player.play(live ? `${scene.room}-${scene.round}` : null);
     if (live) this.#player.backing(words?.backing ?? null);
     this.#lyricsView.set(words?.lyrics ?? null, this.ruby);
-    present(this.#lyricsView.el, live);
+    present(this.#lyricsView.el, show.lyrics);
+    // A lane per singer while the round counts down and is sung.
+    const singers = show.lanes ? laneSingers(scene.members, scene.board) : [];
+    if (show.lanes) this.#lanes.set(singers, words?.notes ?? [], this.#lyricsView.ruby);
+    present(this.#lanes.el, singers.length > 0);
     this.#video.set(live ? (words?.video ?? null) : null, () => {
       const ms = this.#songMs(performance.now());
       const s = this.#scene;
       return { time: (ms ?? 0) / 1000, playing: s?.state === "singing" && ms !== null };
     });
-    this.#renderTitle(scene, words?.lyrics ?? null);
+    present(this.#title, show.title);
+    if (show.title) this.#renderTitle(scene, words?.lyrics ?? null);
     // How far the song is, only while it is on.
-    this.#titleFoot.hidden = !live;
-    present(this.#board, live);
-    if (live) this.#renderBoard(scene);
-    present(this.#results, scene.state === "results");
-    if (scene.state === "results") this.#renderResults(scene);
+    this.#titleFoot.hidden = !show.lyrics;
+    present(this.#board, show.board);
+    if (show.board) this.#renderBoard(scene);
+    present(this.#settling, show.settling);
+    if (scene.settling !== null) this.#settlingDetail.textContent = settlingText(scene.settling);
+    present(this.#results, show.results);
+    if (show.results) this.#renderResults(scene, show.qr === "corner");
+    this.#renderCorner(scene, show.qr === "corner");
+  }
+
+  /** The small QR code in the screen's top right corner, with the room code beside its caption. */
+  #renderCorner(scene: KaraokeScene, on: boolean): void {
+    const url = on ? scene.joinUrl : null;
+    const key = JSON.stringify([url, scene.room, remPx()]);
+    if (key !== this.#cornerKey) {
+      this.#cornerKey = key;
+      const code = url === null ? null : qrSvg(url, QR_CORNER_REM * remPx());
+      if (code !== null) {
+        this.#corner.replaceChildren(code);
+        const caption = el("div", "k-qr__caption", this.#corner, "掃描加入");
+        el("span", "k-qr__room", caption, scene.room);
+      }
+      present(this.#corner, code !== null);
+    }
   }
 
   #renderLobby(scene: KaraokeScene): void {
-    const key = JSON.stringify([scene.room, scene.song?.title, scene.song?.artist, scene.members, scene.roundsLeft]);
+    const place = qrPlace(scene);
+    const key = JSON.stringify([
+      scene.room,
+      scene.song?.title,
+      scene.song?.artist,
+      scene.shift,
+      scene.queue,
+      scene.members,
+      scene.roundsLeft,
+      place === "lobby" ? scene.joinUrl : null,
+      remPx(),
+    ]);
     if (key === this.#lobbyKey) return;
     this.#lobbyKey = key;
     const box = this.#lobby;
     box.replaceChildren();
     const head = el("div", "k-lobby__head", box);
     el("span", "k-lobby__label", head, "唱 K 房間");
-    el("span", "k-lobby__join", head, "在會員頁輸入房號加入");
-    el("div", "k-lobby__code", box, scene.room);
-    const song = el("div", "k-lobby__song", box);
-    if (scene.song === null) el("span", "k-lobby__dim", song, "開房的人選歌中");
-    else {
-      el("span", "k-lobby__title", song, scene.song.title);
-      if (scene.song.artist) el("span", "k-lobby__artist", song, scene.song.artist);
-      if (scene.shift !== 0) el("span", "k-lobby__key", song, `調 ${keyLabel(scene.shift)}`);
+    el("span", "k-lobby__dim", head, roundsLeftText(scene.roundsLeft));
+
+    // The code to join with, and the QR code of the link beside it.
+    const join = el("div", "k-lobby__join", box);
+    const code = el("div", "k-lobby__code-box", join);
+    el("div", "k-lobby__code", code, scene.room);
+    el("div", "k-lobby__how", code, "在會員頁輸入房號加入");
+    const qr = place === "lobby" && scene.joinUrl !== null ? qrSvg(scene.joinUrl, QR_LOBBY_REM * remPx()) : null;
+    box.classList.toggle("has-qr", qr !== null);
+    if (qr !== null) {
+      const fig = el("figure", "k-qr k-qr--lobby", join);
+      fig.append(qr);
+      el("figcaption", "k-qr__caption", fig, "掃描加入");
     }
+
+    // 「下一首」: the chosen song, then the queue after it.
+    const next = el("div", "k-lobby__next", box);
+    el("div", "k-lobby__section", next, "下一首");
+    const rows = queueRows(scene);
+    if (rows.length === 0) el("p", "k-lobby__none", next, "還沒有人點歌");
+    else {
+      const ol = el("ol", "k-queue", next);
+      rows.forEach((row, i) => {
+        const li = el("li", `k-queue__row is-${row.state}${i === 0 && scene.song !== null ? " is-next" : ""}`, ol);
+        const what = el("span", "k-queue__what", li);
+        el("span", "k-queue__title", what, row.title);
+        if (row.artist) el("span", "k-queue__artist", what, row.artist);
+        if (i === 0 && scene.song !== null && scene.shift !== 0) el("span", "k-queue__key", what, `調 ${keyLabel(scene.shift)}`);
+        if (row.mark !== null) el("span", `k-queue__mark is-${row.state}`, li, row.mark);
+        if (row.by !== null) el("span", "k-queue__by", li, row.by);
+      });
+    }
+
     const people = lobbyMembers(scene.members);
     if (people.length > 0) {
       const ul = el("ul", "k-lobby__people", box);
@@ -530,7 +685,6 @@ export class KaraokeLayer {
     }
     const foot = el("div", "k-lobby__foot", box);
     el("span", "", foot, lobbyStatus(scene));
-    el("span", "k-lobby__dim", foot, roundsLeftText(scene.roundsLeft));
   }
 
   #renderTitle(scene: KaraokeScene, lyrics: WorkersKaraokeLyricsV2 | null): void {
@@ -601,32 +755,73 @@ export class KaraokeLayer {
     for (const li of flash) li.classList.add("is-flash");
   }
 
-  #renderResults(scene: KaraokeScene): void {
-    const key = JSON.stringify([scene.room, scene.round, scene.board, scene.note, scene.roundsLeft, scene.currency]);
+  /**
+   * The final ranking over the whole screen: the round and its song, a row per singer (place,
+   * colour, name, the four parts with their bars, the total, the coins or 「沒唱完」), the winner
+   * lit, then why no prize was paid, the next song and how many the room may still sing.
+   */
+  #renderResults(scene: KaraokeScene, corner: boolean): void {
+    const sung = this.#sung !== null && this.#sung.room === scene.room && this.#sung.round === scene.round ? this.#sung : null;
+    const key = JSON.stringify([scene.room, scene.round, scene.board, scene.note, scene.roundsLeft, scene.currency, scene.song?.title, sung, corner]);
     if (key === this.#resultsKey) return;
     this.#resultsKey = key;
     const box = this.#results;
     box.replaceChildren();
-    const head = el("div", "k-results__head", box);
-    el("h2", "k-results__title", head, scene.round > 0 ? `第 ${scene.round} 首結果` : "結果");
-    if (scene.song) el("span", "k-results__song", head, scene.song.title);
-    const rows = boardRows(scene.board, new Map());
+    box.classList.toggle("has-corner", corner);
+    const head = el("header", "k-results__head", box);
+    el("div", "k-results__kicker", head, `${resultsTitle(scene.round)} · 房間 ${scene.room}`);
+    if (sung !== null) {
+      el("h2", "k-results__song", head, sung.title);
+      if (sung.artist) el("div", "k-results__artist", head, sung.artist);
+    } else {
+      el("h2", "k-results__song", head, resultsTitle(scene.round));
+    }
+
+    const rows = resultRows(scene.board, scene.currency);
     if (rows.length === 0) el("p", "k-results__empty", box, "這一首沒有人唱完");
     else {
-      const ol = el("ol", "k-results__list", box);
-      for (const row of rows) {
-        const li = el("li", `k-result${row.winner ? " is-winner" : ""}${row.finished ? "" : " is-unfinished"}`, ol);
-        el("span", "k-result__rank", li, row.rank === null ? "—" : String(row.rank));
-        swatch(row.color, li);
-        el("span", "k-result__name", li, row.name);
-        if (row.winner) el("span", "k-tag k-tag--win", li, "第一名");
-        if (row.estimate) el("span", "k-tag", li, "預估");
-        el("span", "k-result__score", li, row.score);
-        el("span", `k-result__tail${row.coins > 0 ? " is-coins" : ""}`, li, resultTail(row, scene.currency));
+      const table = el("div", `k-results__table is-${resultsDensity(rows.length)}`, box);
+      const cols = el("div", "k-results__cols", table);
+      cols.setAttribute("aria-hidden", "true");
+      el("span", "", cols);
+      el("span", "", cols, "名字");
+      for (const p of PARTS) {
+        const c = el("span", "k-results__col", cols, p.label);
+        el("small", "", c, `/${p.max}`);
       }
+      el("span", "k-results__col", cols, "總分");
+      el("span", "k-results__col", cols, scene.currency || "獎勵");
+      const ol = el("ol", "k-results__list", table);
+      rows.forEach((row, i) => {
+        const li = el("li", `k-result${row.winner ? " is-winner" : ""}${row.finished ? "" : " is-unfinished"}`, ol);
+        li.style.setProperty("--i", String(i));
+        el("span", "k-result__rank", li, row.rank === null ? "—" : String(row.rank));
+        const who = el("span", "k-result__who", li);
+        swatch(row.color, who);
+        el("span", "k-result__name", who, row.name);
+        if (row.winner) el("span", "k-tag k-tag--win", who, "第一名");
+        if (row.estimate) el("span", "k-tag", who, "預估");
+        for (const part of row.parts ?? PARTS.map(() => null)) {
+          const cell = el("span", "k-part", li);
+          el("span", "k-part__n", cell, part === null ? "" : part.text);
+          if (part !== null) {
+            const bar = el("span", "k-part__bar", cell);
+            bar.setAttribute("aria-hidden", "true");
+            el("i", "", bar).style.transform = `scaleX(${part.share})`;
+          }
+        }
+        el("span", "k-result__score", li, row.score);
+        el("span", `k-result__tail${row.coins > 0 ? " is-coins" : ""}`, li, row.tail);
+      });
     }
-    if (scene.note) el("p", "k-results__note", box, scene.note);
-    el("p", "k-results__left", box, roundsLeftText(scene.roundsLeft));
+    const foot = el("footer", "k-results__foot", box);
+    if (scene.note) el("p", "k-results__note", foot, scene.note);
+    const after = el("p", "k-results__after", foot);
+    if (scene.song !== null) {
+      el("span", "k-results__next-label", after, "下一首");
+      el("span", "k-results__next", after, scene.song.title);
+    }
+    el("span", "k-results__left", after, roundsLeftText(scene.roundsLeft));
   }
 }
 

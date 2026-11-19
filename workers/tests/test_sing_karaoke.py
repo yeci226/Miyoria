@@ -727,3 +727,15 @@ def test_what_ffmpeg_cannot_read_is_an_error(tmp_path):
     with pytest.raises(JobError):
         karaoke.make_video(bad, tmp_path / "video.mp4", 3.0)
     assert not (tmp_path / "video.mp4").exists()
+
+
+def test_the_songs_artist_is_the_found_lyrics_one_when_those_are_used():
+    found = {"source": "found", "lines": []}
+    heard = {"source": "heard", "lines": []}
+    meta = {"provider": "lrclib", "artist": "Lia", "track": "櫻ノ詩"}
+    assert karaoke.song_artist("owen0924 Official", meta, found) == "Lia"
+    # The lyrics were not used (heard instead, or none): what the source says, else none.
+    assert karaoke.song_artist("Key Sounds Label", meta, heard) == "Key Sounds Label"
+    assert karaoke.song_artist(None, meta, None) is None
+    assert karaoke.song_artist(None, {"provider": "lrclib", "artist": ""}, found) is None
+    assert karaoke.song_artist("  ", None, None) is None

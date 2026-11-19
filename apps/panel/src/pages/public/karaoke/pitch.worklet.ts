@@ -5,7 +5,7 @@
 //
 // The microphone's audio stays here and in the page: only the posted numbers leave this file.
 
-import { type Detection, mcleodDetector, rms, voicedMidi } from "./pitch";
+import { type Detection, mcleodDetector, rms, voicedNext } from "./pitch";
 
 /** The part of the AudioWorkletGlobalScope used here (TypeScript ships no types for it). */
 interface WorkletScope {
@@ -29,6 +29,8 @@ class PitchProcessor extends scope.AudioWorkletProcessor {
   #filled = 0;
   #sinceHop = 0;
   #floor = 0.002;
+  /** The last window's note (`null`: it was not voiced), for the hysteresis of `voicedNext`. */
+  #before: number | null = null;
 
   constructor() {
     super();
@@ -61,9 +63,11 @@ class PitchProcessor extends scope.AudioWorkletProcessor {
     const level = rms(this.#frame, size - this.#hop, size);
     const windowRms = rms(this.#frame);
     const estimate = this.#detector.detect(this.#frame, sr);
+    const midi = voicedNext(estimate, windowRms, this.#floor, this.#before);
+    this.#before = midi;
     const detection: Detection = {
       t: (end - size / 2) / sr,
-      midi: voicedMidi(estimate, windowRms, this.#floor),
+      midi,
       clarity: estimate.clarity,
       rms: windowRms,
       level,

@@ -42,6 +42,7 @@ import {
   HostResolveSchema,
   HostServiceEventSchema,
   type HostWelcome,
+  RelaySocketSink,
 } from "@miyoria/contracts/host";
 import { errorMessage, type Logger } from "@miyoria/runtime/kernel";
 import { RpcError, RpcPeer, WebSocketTransport } from "@miyoria/sdk";
@@ -415,20 +416,7 @@ export class ClusterLink {
     const relay = new RelayChannel({
       host: host.name,
       peer,
-      sink: {
-        send: (frame) => {
-          if (ws.readyState !== WebSocket.OPEN) return false;
-          try {
-            ws.send(frame);
-          } catch {
-            return false;
-          }
-          return true;
-        },
-        get bufferedAmount() {
-          return ws.bufferedAmount;
-        },
-      },
+      sink: new RelaySocketSink(ws),
       onProtocolError: (reason) => {
         o.log.warn({ host: host.name, reason }, "a host broke the relay protocol");
         if (conn !== null) this.#shutdown(conn, HOST_RELAY_PROTOCOL_ERROR, "relay protocol error");

@@ -1067,5 +1067,19 @@ describe("the economy hub on /me i", () => {
     expect(calls.find((c) => c.path === "me bet")).toMatchObject({
       args: { prediction: "p1", option: "2", amount: 10 },
     });
+    // 唱 K belongs to the karaoke module: no button without it.
+    expect(labels).not.toContain("唱 K");
+  });
+
+  it("the_play_page_reaches_karaoke_when_its_module_registered_it", async () => {
+    const ctx = withEconomy();
+    ctx.add({ path: "me karaoke", args: [], permission: "", ephemeral: true });
+    const { registry, calls } = ctx;
+    const nav = selectOf(await open(registry, "me", MEMBER));
+    const page = updated(
+      await registry.dispatchComponent(click(nav?.id ?? "", MEMBER, { values: ["play"] })),
+    );
+    await registry.dispatchComponent(click(button(page, "唱 K").id, MEMBER));
+    expect(calls.some((c) => c.path === "me karaoke")).toBe(true);
   });
 });

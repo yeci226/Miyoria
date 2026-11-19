@@ -1,7 +1,8 @@
 // Karaoke rooms (docs/design/karaoke.md 「做了什麼第四步」): up to eight people sing the same song at
 // the same time, each in their own browser, while she hosts from her voice channel. A room is
-// opened (paid) and joined on the member page by its code; a round starts for everyone at one
-// moment of Core's clock. During a round each singer's microphone is streamed to Core and scored
+// opened (paid) without a song and joined on the member page by its code; everyone in it queues
+// songs (「第四步之後的修改:先開房再點歌」), and each round plays the queue's first ready song,
+// starting for everyone at one moment of Core's clock. During a round each singer's microphone is streamed to Core and scored
 // live (the official score); a singer is told only whether they are rising, dropping or holding,
 // never anyone's rank or score, while spectators follow the whole board. Everyone sees the final
 // ranking. Without the `karaoke` module these are a `503` that names it.
@@ -19,8 +20,9 @@ import { route } from "./route.js";
 export const KARAOKE_ROOM_CODE = /^[2-9A-HJKMNP-Z]{6}$/;
 
 /**
- * `lobby` (people join, the opener picks the song), `countdown` (a round starts at `start_at`),
- * `singing`, `results` (the round's ranking; the opener picks the next song or closes), `closed`.
+ * `lobby` (people join and queue songs), `countdown` (a round starts at `start_at`), `singing`,
+ * `results` (the round's ranking; people queue more, the opener starts the next or closes),
+ * `closed`.
  */
 export const KaraokeRoomStateSchema = z
   .enum(["lobby", "countdown", "singing", "results", "closed"])
@@ -34,7 +36,7 @@ export const KaraokeRoomMemberSchema = z
     name: z.string(),
     role: z.enum(["singer", "spectator"]),
     ready: z.boolean(),
-    /** Opened the room (picks songs, starts, closes). */
+    /** Opened the room (orders the queue, starts, closes). */
     opener: z.boolean(),
     /** 0..7: their colour on the board and their pitch line. */
     color: z.number().int().min(0).max(7),
@@ -142,6 +144,25 @@ export const KaraokeRoomResultSchema = z
   .meta({ id: "ApiKaraokeRoomResult" });
 export type KaraokeRoomResult = z.output<typeof KaraokeRoomResultSchema>;
 
+/**
+ * One song waiting in a room's queue. `song` is the song as the list shows it, with its
+ * preparation (`state`, `stage`, `progress`, `error`): a song still being prepared waits in its
+ * place and is played once it is ready; one whose preparation failed is skipped. It never carries
+ * anyone's score. `by`: who added it (`member` their id in the room, `null` once they left).
+ */
+export const KaraokeRoomQueueEntrySchema = z
+  .object({
+    id: z.string(),
+    song: KaraokeSongViewSchema,
+    /** Semitones its backing is moved by (the one who added it chose). */
+    shift: z.number().int(),
+    by: z.object({ member: z.string().nullable(), name: z.string() }),
+    /** This person added it (they may remove it). */
+    mine: z.boolean(),
+  })
+  .meta({ id: "ApiKaraokeRoomQueueEntry" });
+export type KaraokeRoomQueueEntry = z.output<typeof KaraokeRoomQueueEntrySchema>;
+
 /** A room as one person sees it. */
 export const KaraokeRoomViewSchema = z
   .object({
@@ -149,9 +170,16 @@ export const KaraokeRoomViewSchema = z
     state: KaraokeRoomStateSchema,
     /** Why it closed, a sentence; `null` while open. */
     closed_reason: z.string().nullable(),
+    /** The round's song while one is on, else the song the next round would play (`null`: none). */
     song: KaraokeSongViewSchema.nullable(),
-    /** Semitones the backing is moved by, for everyone (one backing). */
+    /** Semitones `song`'s backing is moved by, for everyone (one backing). */
     shift: z.number().int(),
+    /** The songs waiting, in order. */
+    queue: z.array(KaraokeRoomQueueEntrySchema),
+    /** The entry the next round plays (the first ready one), `null` when none is ready. */
+    next: z.string().nullable(),
+    /** Entries one person may have waiting, and how many the queue holds. */
+    queue_limits: z.object({ per_person: z.number().int(), max: z.number().int() }),
     members: z.array(KaraokeRoomMemberSchema),
     /** This person: `null` when they are not in the room (they may join). */
     me: z
@@ -178,6 +206,12 @@ export const KaraokeRoomViewSchema = z
     terms: KaraokeRoomTermsSchema,
     /** What her voice channel carries (step 5). */
     air: KaraokeRoomAirSchema,
+    /**
+     * The song is over and the round is being settled (結算中): the names of the singers whose
+     * result Core still waits for (maybe none: it is about to settle), and the latest moment it
+     * waits until (ms since the epoch). `null` otherwise. Never a score or a rank.
+     */
+    settling: z.object({ waiting: z.array(z.string()), until_ms: z.number() }).nullable(),
   })
   .meta({ id: "ApiKaraokeRoomView" });
 export type KaraokeRoomView = z.output<typeof KaraokeRoomViewSchema>;
@@ -198,14 +232,37 @@ export const KaraokeRoomsSchema = z
   .meta({ id: "ApiKaraokeRooms" });
 export type KaraokeRooms = z.output<typeof KaraokeRoomsSchema>;
 
-/** Body of `POST /api/member/karaoke/rooms` (opens and pays) and `.../rooms/{code}/song`. */
-export const KaraokeRoomSongSchema = z
+/**
+ * Body of `POST /api/member/karaoke/rooms` (opens and pays): a room opens with no song. `song`
+ * (and its `shift`) is what clients before the queue sent: it is then queued as the first entry.
+ */
+export const KaraokeRoomOpenSchema = z
   .strictObject({
-    song: z.string().min(1).max(64),
+    song: z.string().min(1).max(64).optional(),
     shift: z.number().int().min(-6).max(6).default(0),
   })
-  .meta({ id: "ApiKaraokeRoomSong" });
-export type KaraokeRoomSong = z.input<typeof KaraokeRoomSongSchema>;
+  .meta({ id: "ApiKaraokeRoomOpen" });
+export type KaraokeRoomOpen = z.input<typeof KaraokeRoomOpenSchema>;
+
+/**
+ * Body of `POST .../rooms/{code}/queue`: one of `song` (a song on the list) or `text` (a link or a
+ * search, prepared through the song request with its daily limit when it is new), in `shift`.
+ * Exactly one of the two: Core refuses a body with both or neither (400).
+ */
+export const KaraokeRoomQueueAddSchema = z
+  .strictObject({
+    song: z.string().min(1).max(64).optional(),
+    text: z.string().trim().min(1).max(500).optional(),
+    shift: z.number().int().min(-6).max(6).default(0),
+  })
+  .meta({ id: "ApiKaraokeRoomQueueAdd" });
+export type KaraokeRoomQueueAdd = z.input<typeof KaraokeRoomQueueAddSchema>;
+
+/** Body of `POST .../rooms/{code}/queue/{entry}/move`: its new place, 0 the first. */
+export const KaraokeRoomQueueMoveSchema = z
+  .strictObject({ to: z.number().int().min(0).max(99) })
+  .meta({ id: "ApiKaraokeRoomQueueMove" });
+export type KaraokeRoomQueueMove = z.input<typeof KaraokeRoomQueueMoveSchema>;
 
 /** Body of `POST .../rooms/{code}/join`: sing (while seats are free and no round runs) or watch. */
 export const KaraokeRoomJoinSchema = z
@@ -269,8 +326,8 @@ export type KaraokeBoardLine = z.output<typeof KaraokeBoardLineSchema>;
  * - `room`: the room as this person sees it (on connect, and whenever it changes).
  * - `board`: the live ranking, every second while a round is sung; only to people who are not
  *   singing that round (the server never sends it to a singer's stream).
- * - `trend`: to a singer only, about themselves: `rising`, `dropping` or `holding`, and whether
- *   their live score comes from the stream (`voice`) or their browser (`estimate`).
+ * - `trend`: to a singer only, about themselves: `rising`, `dropping` or `holding`, their own
+ *   running total and whether it comes from the stream (`voice`) or their browser (`estimate`).
  */
 export const KaraokeRoomEventSchema = z
   .discriminatedUnion("type", [
@@ -286,6 +343,12 @@ export const KaraokeRoomEventSchema = z
       round: z.number().int(),
       trend: z.enum(["rising", "dropping", "holding"]),
       source: z.enum(["voice", "estimate"]),
+      /**
+       * Their own running total (one decimal), from `source`: the official live score while their
+       * stream is scored, else their browser's estimate. `null` before there is one. Their own
+       * number only: never a rank, never anyone else's.
+       */
+      total: z.number().nullable(),
     }),
   ])
   .meta({ id: "ApiKaraokeRoomEvent" });
@@ -319,6 +382,7 @@ export type KaraokePitch = z.input<typeof KaraokePitchSchema>;
 
 const member = () => route.meta({ audience: "member", permission: null, limited: true });
 const code = z.object({ code: z.string().regex(KARAOKE_ROOM_CODE) });
+const entry = code.extend({ entry: z.string().regex(/^[0-9a-z]{1,32}$/) });
 
 /** The member's side of rooms: a session (by cookie), limited per account. */
 export const karaokeRooms = {
@@ -326,10 +390,10 @@ export const karaokeRooms = {
   overview: member()
     .route({ method: "GET", path: "/api/member/karaoke/rooms" })
     .output(KaraokeRoomsSchema),
-  /** Opens a room with a ready song and pays for it (402 too few coins, 409 not now). */
+  /** Opens a room (no song yet) and pays for it (402 too few coins, 409 not now). */
   open: member()
     .route({ method: "POST", path: "/api/member/karaoke/rooms" })
-    .input(z.object({ body: KaraokeRoomSongSchema }))
+    .input(z.object({ body: KaraokeRoomOpenSchema }))
     .output(KaraokeRoomViewSchema),
   room: member()
     .route({ method: "GET", path: "/api/member/karaoke/rooms/{code}" })
@@ -347,17 +411,27 @@ export const karaokeRooms = {
     .route({ method: "POST", path: "/api/member/karaoke/rooms/{code}/ready" })
     .input(z.object({ params: code, body: KaraokeRoomReadySchema }))
     .output(KaraokeRoomViewSchema),
-  /** The opener picks the round's song and key (in the lobby, or after a round). */
-  song: member()
-    .route({ method: "POST", path: "/api/member/karaoke/rooms/{code}/song" })
-    .input(z.object({ params: code, body: KaraokeRoomSongSchema }))
+  /** Anyone in the room queues a song (in the lobby, or after a round). */
+  queueAdd: member()
+    .route({ method: "POST", path: "/api/member/karaoke/rooms/{code}/queue" })
+    .input(z.object({ params: code, body: KaraokeRoomQueueAddSchema }))
+    .output(KaraokeRoomViewSchema),
+  /** Takes an entry out: the one who added it, the opener or a panel admin. */
+  queueRemove: member()
+    .route({ method: "DELETE", path: "/api/member/karaoke/rooms/{code}/queue/{entry}" })
+    .input(z.object({ params: entry }))
+    .output(KaraokeRoomViewSchema),
+  /** Moves an entry to another place: the opener or a panel admin. */
+  queueMove: member()
+    .route({ method: "POST", path: "/api/member/karaoke/rooms/{code}/queue/{entry}/move" })
+    .input(z.object({ params: entry, body: KaraokeRoomQueueMoveSchema }))
     .output(KaraokeRoomViewSchema),
   /** A singer's 「讓大家聽到我」 / 「不要播我的聲音」, the opener's 「播出第一名的歌聲」, or cutting someone. */
   relay: member()
     .route({ method: "POST", path: "/api/member/karaoke/rooms/{code}/relay" })
     .input(z.object({ params: code, body: KaraokeRoomRelaySchema }))
     .output(KaraokeRoomViewSchema),
-  /** The opener starts the round: a countdown to one moment for everyone. */
+  /** The opener starts the round with the queue's first ready song: a countdown for everyone. */
   start: member()
     .route({ method: "POST", path: "/api/member/karaoke/rooms/{code}/start" })
     .input(z.object({ params: code }))

@@ -26,6 +26,7 @@ import {
   HostServiceLogsSchema,
   type HostWelcome,
   HostWelcomeSchema,
+  RelaySocketSink,
 } from "@miyoria/contracts/host";
 import { RpcError, RpcPeer, WebSocketTransport } from "@miyoria/sdk";
 import WebSocket, { type RawData } from "ws";
@@ -302,20 +303,7 @@ export class CoreLink {
     // Requests Core relays to a service of this machine; their bodies are the binary frames.
     const relay = new HostRelay({
       api,
-      sink: {
-        send: (frame) => {
-          if (socket.readyState !== WebSocket.OPEN) return false;
-          try {
-            socket.send(frame);
-          } catch {
-            return false;
-          }
-          return true;
-        },
-        get bufferedAmount() {
-          return socket.bufferedAmount;
-        },
-      },
+      sink: new RelaySocketSink(socket),
       onProtocolError: (reason) => {
         this.#log.warn({ reason }, "Core broke the relay protocol; closing the link");
         socket.close(HOST_RELAY_PROTOCOL_ERROR, "relay protocol error");

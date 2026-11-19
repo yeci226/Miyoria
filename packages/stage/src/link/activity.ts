@@ -71,15 +71,17 @@ export const STAGE_LABELS: Readonly<Record<string, string>> = {
   encode: "製作伴奏",
   lyrics_asr: "對歌詞",
   lyrics_align: "對歌詞",
+  fetch: "拿歌中",
   [UNREACHABLE_STAGE]: UNREACHABLE_LABEL,
 };
 /** A stage nobody gave a label to (a newer worker). */
 const PREPARE_LABEL = "準備歌曲";
-/** Waiting, handing over or lost: no bar, a shimmer. */
+/** Waiting, handing over, lost or on its way to Core (made already): no bar, a shimmer. */
 const NO_BAR_STAGES: ReadonlySet<string> = new Set([
   "queued",
   "exclusive",
   "gpu_wait",
+  "fetch",
   UNREACHABLE_STAGE,
   "",
 ]);

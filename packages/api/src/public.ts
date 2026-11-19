@@ -475,7 +475,8 @@ export function publicStatus(state: ApiState): PublicStatus {
   const inVoice = snapshot?.presence.type === "in";
   let now: PublicState = "idle";
   if (!snapshot && !singer) now = "offline";
-  else if (singer?.playing()) now = "singing";
+  // Singing once her voice is out, not while she says her opening line.
+  else if (singer?.singing()) now = "singing";
   else if (playing) now = "playing";
   else if (live) now = "live";
   else if (inVoice) now = "in_voice";

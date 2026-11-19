@@ -810,9 +810,9 @@ describe("links and code are written, not read aloud", () => {
   });
 });
 
-// The owner's `text_echo` (2026-11-03): her spoken reply is also written in the voice channel's
-// chat, the text as she wrote it (Chinese while `tts_translate` has her speak Japanese). It was
-// lost when voice moved to this runner (2026-11-18: 「中文的不見了」).
+// `[modules.agent.voice] text_echo`: her spoken reply is also written in the voice channel's
+// chat, as she wrote it or as it was said (`text_echo_text`), for people who read along while
+// `tts_translate` has her speak another language.
 describe("text_echo: what she said is also written in the voice channel's chat", () => {
   const chat = (rig: Rig) => rig.sink.sent().filter(([channel]) => channel === "vc");
   /** Her reply of two sentences, queued; nothing of it has played yet. */

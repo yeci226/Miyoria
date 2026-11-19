@@ -556,9 +556,16 @@ from `fetch`. Implemented in `packages/cluster/src/relay.ts` (Core), `packages/h
 
 - **Flow control.** A window of 1 MiB per stream and direction: the sender is never more than the
   window ahead of what the receiver's consumer has read. The receiver sends credit after every
-  256 KiB read. A sender also waits while the socket itself has more than 1 MiB queued. Measured
-  on a 30 MB download with a slow reader: about 0.6 s, never more than 1 MiB buffered; a reader
-  that stops reading stalls only its own stream.
+  256 KiB read. A sender of a body also waits while the socket itself has more than 128 KiB
+  queued (1 MiB until 2026-11-19), and wakes as frames are written out, not on a timer; JSON-RPC,
+  credit and aborts are written at once, so at most that much body is queued in the process ahead
+  of them (the kernel's send buffer and the network's queue still are). Measured on a 30 MB
+  download with a slow reader: about 0.6 s, never more than 1 MiB buffered; a reader that stops
+  reading stalls only its own stream. These numbers are each sender's own: nothing is negotiated.
+- **Length.** A body whose head has a `content-length` must be exactly that long. The host aborts
+  a response its service broke off or ended short (never ends it) and logs it; Core fails a body
+  that ends at another length, whichever host sent it. The host logs every relayed response of a
+  megabyte or more with its bytes, seconds and MB/s.
 - **Ending.** Before the head, cancelling is `$/cancelRequest`; after it, an abort frame in either
   direction. A dropped link fails every open stream on Core's side and aborts every running
   `fetch` on the host's side, and the caller's own failover applies.

@@ -22,11 +22,13 @@
 //   {"type":"danmaku","id":"…","name":"Owen"|null,"text":"…","max_on_screen":n,"queue_max":n,"max_wait_ms":n}
 //                                               a paid line that crosses the screen (src/danmaku.ts); the page answers it
 //   {"type":"danmaku_clear"}                    every danmaku line off the screen, the waiting ones dropped
-//   {"type":"karaoke","room":"K7PQ2M"|null,"state":"lobby"|"countdown"|"singing"|"results",…}
-//                                               the karaoke room on the stream (src/karaoke-view.ts); room null ends it
+//   {"type":"karaoke","room":"K7PQ2M"|null,"state":"lobby"|"countdown"|"singing"|"results",…,
+//    "queue":[…],"join_url":"https://…"|null,"qr_while_singing":bool,"settling":{"waiting":[…]}|null}
+//                                               the karaoke room on the stream (src/karaoke-view.ts); room null ends it;
+//                                               board lines carry "parts" (results) and "pitch" (the lanes)
 //   {"type":"karaoke_lyrics","room","round","song","lyrics":{…}|null,"video":"karaoke/video?r=…"|null,
-//    "backing":{"path":"karaoke/backing?r=…","format":"pcm"|"m4a","rate":n}|null}
-//                                               the words, background video and backing of a round
+//    "backing":{"path":"karaoke/backing?r=…","format":"pcm"|"m4a","rate":n}|null,"notes":[{start,end,midi}]}
+//                                               the words, background video, backing and reference notes of a round
 //   {"type":"karaoke_voice","room","round","at_ms":n,"audio":"<base64 µ-law 16 kHz>"}
 //                                               a piece of the relayed singer's voice, played and forgotten
 
@@ -131,6 +133,47 @@ export interface KaraokeLine {
   finished: boolean;
   /** Their voice is the one the stream plays now (`karaoke_voice`). */
   onAir: boolean;
+  /** With the results: the four parts of their official score (`null` without a result). */
+  parts: KaraokeParts | null;
+  /** Their pitch lately, for the pitch lanes (`null` without any, and after the round). */
+  pitch: KaraokePitch | null;
+}
+
+/** The four parts of a score (out of 60, 15, 15 and 10); `null`: not given. */
+export interface KaraokeParts {
+  pitch: number | null;
+  stability: number | null;
+  rhythm: number | null;
+  expression: number | null;
+}
+
+/**
+ * A singer's pitch lately: frame `i` of `midi` at song time `(from + i) / 50` seconds, a MIDI note
+ * with a quarter-semitone step, `null` where nothing is voiced.
+ */
+export interface KaraokePitch {
+  from: number;
+  midi: (number | null)[];
+}
+
+/** One song waiting in the room's queue: who added it, and whether it is ready to sing. */
+export interface KaraokeQueueEntry {
+  title: string;
+  artist: string | null;
+  by: string;
+  state: "ready" | "preparing" | "failed";
+}
+
+/** The song is over and the round is being settled: whose result is still waited for. */
+export interface KaraokeSettling {
+  waiting: string[];
+}
+
+/** A reference note of the round, in its key: song seconds and a MIDI note (with a fraction). */
+export interface KaraokeNote {
+  start: number;
+  end: number;
+  midi: number;
 }
 
 export interface KaraokeSong {
@@ -158,6 +201,14 @@ export interface KaraokeScene {
   note: string | null;
   currency: string;
   air: KaraokeAir;
+  /** The next few songs after `song` (an older Core sends none). */
+  queue: KaraokeQueueEntry[];
+  /** The room's join link for the scene's QR code (an http(s) URL), or `null`: no QR. */
+  joinUrl: string | null;
+  /** The QR code stays, small, while a round is sung too. */
+  qrWhileSinging: boolean;
+  /** The song is over and the round is being settled, or `null`. */
+  settling: KaraokeSettling | null;
 }
 
 /**
@@ -192,6 +243,8 @@ export interface KaraokeLyrics {
   lyrics: WorkersKaraokeLyricsV2 | null;
   video: string | null;
   backing: KaraokeBacking | null;
+  /** The round's reference notes for the pitch lanes, in time order (an older Core sends none). */
+  notes: KaraokeNote[];
 }
 
 /** A piece of the relayed singer's voice: µ-law at 16 kHz, base64, its first sample at `atMs`. */
@@ -442,6 +495,16 @@ const KARAOKE_NAME_MAX = 60;
 const KARAOKE_TITLE_MAX = 200;
 const KARAOKE_MEMBERS_MAX = 64;
 const KARAOKE_BOARD_MAX = 16;
+const KARAOKE_QUEUE_MAX = 5;
+const KARAOKE_JOIN_URL_MAX = 200;
+const KARAOKE_NOTES_MAX = 8_000;
+/** Most base64 of a board line's recent pitch (as the contract), and the last frame it may start at (a day). */
+const KARAOKE_PITCH_MAX_CHARS = 2_000;
+const KARAOKE_PITCH_FROM_MAX = 50 * 86_400;
+/** Pitch frames: 0 is not voiced, else MIDI 24 plus a quarter semitone a step (`encodeTrack`). */
+const TRACK_MIDI_BASE = 24;
+const TRACK_STEPS = 4;
+const QUEUE_STATES: readonly KaraokeQueueEntry["state"][] = ["ready", "preparing", "failed"];
 const LYRIC_LINES_MAX = 2000;
 const LYRIC_PIECES_MAX = 400;
 const LYRIC_TEXT_MAX = 500;
@@ -491,7 +554,75 @@ function parseBoardLine(raw: unknown): KaraokeLine | null {
     coins: whole(raw.coins, 0, 1_000_000, 0),
     finished: raw.finished === true,
     onAir: raw.on_air === true,
+    parts: parseParts(raw.parts),
+    pitch: parsePitch(raw.pitch),
   };
+}
+
+/** The four parts of a result; a part that is not a number in 0..100 is not given. */
+function parseParts(raw: unknown): KaraokeParts | null {
+  if (!isRecord(raw)) return null;
+  return {
+    pitch: within(raw.pitch, 0, 100),
+    stability: within(raw.stability, 0, 100),
+    rhythm: within(raw.rhythm, 0, 100),
+    expression: within(raw.expression, 0, 100),
+  };
+}
+
+/** A board line's recent pitch: base64 of one byte a frame from frame `from`; else none. */
+export function parsePitch(raw: unknown): KaraokePitch | null {
+  if (!isRecord(raw)) return null;
+  const from = whole(raw.from, 0, KARAOKE_PITCH_FROM_MAX, -1);
+  const track = str(raw.track);
+  if (from < 0 || track === null || track.length === 0 || track.length > KARAOKE_PITCH_MAX_CHARS) return null;
+  if (track.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(track)) return null;
+  let bytes: string;
+  try {
+    bytes = atob(track);
+  } catch {
+    return null;
+  }
+  const midi: (number | null)[] = new Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes.charCodeAt(i);
+    midi[i] = b === 0 ? null : TRACK_MIDI_BASE + (b - 1) / TRACK_STEPS;
+  }
+  return { from, midi };
+}
+
+function parseQueueEntry(raw: unknown): KaraokeQueueEntry | null {
+  if (!isRecord(raw)) return null;
+  const title = cut(raw.title, KARAOKE_TITLE_MAX);
+  const state = QUEUE_STATES.find((s) => s === raw.state);
+  if (!title || state === undefined) return null;
+  return { title, artist: cut(raw.artist, KARAOKE_TITLE_MAX), by: cut(raw.by, KARAOKE_NAME_MAX) ?? "", state };
+}
+
+/** The join link for the QR code: an absolute http(s) URL within the contract's length; else none. */
+export function joinUrl(v: unknown): string | null {
+  const s = nonEmpty(v);
+  if (!s || s.length > KARAOKE_JOIN_URL_MAX) return null;
+  try {
+    const u = new URL(s);
+    return u.protocol === "http:" || u.protocol === "https:" ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseSettling(raw: unknown): KaraokeSettling | null {
+  if (!isRecord(raw)) return null;
+  return { waiting: list(raw.waiting, KARAOKE_BOARD_MAX, (v) => cut(v, KARAOKE_NAME_MAX)) };
+}
+
+function parseNote(raw: unknown): KaraokeNote | null {
+  if (!isRecord(raw)) return null;
+  const start = within(raw.start, 0, MAX_DAY_MS / 1000);
+  const end = within(raw.end, 0, MAX_DAY_MS / 1000);
+  const midi = within(raw.midi, 0, 127);
+  if (start === null || end === null || midi === null || end < start) return null;
+  return { start, end, midi };
 }
 
 function parseSong(raw: unknown): KaraokeSong | null {
@@ -550,6 +681,10 @@ function parseKaraoke(raw: Raw): Parsed["karaoke"] | null {
         voiceGain: within(air.voice_gain, 0, 4) ?? 0,
         duckGain: within(air.duck_gain, 0, 1) ?? 0,
       },
+      queue: list(raw.queue, KARAOKE_QUEUE_MAX, parseQueueEntry),
+      joinUrl: joinUrl(raw.join_url),
+      qrWhileSinging: raw.qr_while_singing === true,
+      settling: parseSettling(raw.settling),
     },
   };
 }
@@ -638,6 +773,8 @@ function parseKaraokeLyrics(raw: Raw): Parsed["karaoke_lyrics"] | null {
       lyrics: parseLyricsBody(raw.lyrics),
       video: videoUrl(raw.video),
       backing: parseBacking(raw.backing),
+      // The lanes find the notes in view by time.
+      notes: list(raw.notes, KARAOKE_NOTES_MAX, parseNote).sort((a, b) => a.start - b.start),
     },
   };
 }

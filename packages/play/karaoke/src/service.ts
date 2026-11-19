@@ -340,6 +340,15 @@ export class KaraokeService {
     return this.#view(song, person, person === null ? undefined : this.#d.store.bestsOf(person));
   }
 
+  /**
+   * A song as anyone sees it, with its preparation and nobody's own best (a room's queue shows it
+   * to everyone in the room); `null` when there is no such song.
+   */
+  songView(id: string): KaraokeSongView | null {
+    const song = this.#d.store.song(id);
+    return song === null ? null : this.#view(song, null);
+  }
+
   /** A link or a search: the song already known, or a new preparation. */
   async request(account: AccountRef, text: string, admin = false): Promise<KaraokeRequestResult> {
     const { person } = this.#person(account);
@@ -859,9 +868,18 @@ export class KaraokeService {
     ) {
       throw new KaraokeError(404, "沒有這一次的紀錄");
     }
+    // A room's round may have made the result from the live stream before the browser's came (a
+    // hidden tab submits late): that result is the answer, not a refusal.
+    const made = this.#roomResult(session);
+    if (made !== null) return made;
     if (session.status !== "open") throw new KaraokeError(409, "這一次已經交過了");
     const now = this.#d.now();
-    if (now > Date.parse(session.expires_at)) throw new KaraokeError(409, "這一次已經過期了");
+    if (now > Date.parse(session.expires_at)) {
+      throw new KaraokeError(
+        409,
+        session.room_id === null ? "這一次已經過期了" : "這一首已經結算了,這一次沒有算到",
+      );
+    }
     const song = store.song(session.song_id);
     if (song === null) throw new KaraokeError(404, "沒有這首歌");
     const bytes = fromBase64(body.track);
@@ -949,7 +967,11 @@ export class KaraokeService {
         source: "estimate",
       },
     );
-    if (!stored) throw new KaraokeError(409, "這一次已經交過了");
+    if (!stored) {
+      const other = this.#roomResult(session);
+      if (other !== null) return other;
+      throw new KaraokeError(409, "這一次已經交過了");
+    }
     if (inRoom) {
       // The stream's final pitch may have come before the result did.
       const final = this.#rooms?.finalOf(session.id) ?? null;
@@ -967,6 +989,14 @@ export class KaraokeService {
       );
     }
     return this.#resultView(store.result(session.id) as ResultRow, song);
+  }
+
+  /** The result a room's session already has (submitting it again answers with it), else `null`. */
+  #roomResult(session: SessionRow): KaraokeResult | null {
+    if (session.room_id === null) return null;
+    const row = this.#d.store.result(session.id);
+    const song = row === null ? null : this.#d.store.song(row.song_id);
+    return row === null || song === null ? null : this.#resultView(row, song);
   }
 
   /** She hears of a result (the estimate, or the official one), once. */

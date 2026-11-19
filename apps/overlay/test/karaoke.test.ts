@@ -7,14 +7,24 @@ import {
   clockText,
   coinsText,
   countdownLeft,
+  karaokeBlocks,
   karaokeMode,
+  karaokePhase,
   lobbyMembers,
   lobbyStatus,
   lyricsFor,
   memberSwatch,
+  partCells,
+  qrPixels,
+  qrPlace,
+  queueRows,
+  resultRows,
+  resultsDensity,
+  resultsTitle,
   resultTail,
   roundsLeftText,
   scoreText,
+  settlingText,
   songProgress,
 } from "../src/karaoke.js";
 import {
@@ -33,7 +43,7 @@ import {
   START_LEAD_S,
   VOICE_AHEAD_S,
 } from "../src/karaoke-audio.js";
-import { demoBacking, demoLyrics, demoVoice } from "../src/karaoke-demo.js";
+import { demoBacking, demoLyrics, demoNotes, demoPitch, demoVoice } from "../src/karaoke-demo.js";
 import { CLOCK_EASE_MS, CLOCK_JUMP_MS, SongClock } from "../src/song-clock.js";
 
 /** A `karaoke` frame as the Stage sends it. */
@@ -86,13 +96,97 @@ describe("karaoke frames", () => {
         ],
         positionMs: 12_500,
         board: [
-          { name: "Mia", color: 0, rank: 1, total: 81.44, source: "voice", move: "up", winner: false, coins: 0, finished: false, onAir: true },
+          {
+            name: "Mia",
+            color: 0,
+            rank: 1,
+            total: 81.44,
+            source: "voice",
+            move: "up",
+            winner: false,
+            coins: 0,
+            finished: false,
+            onAir: true,
+            parts: null,
+            pitch: null,
+          },
         ],
         note: null,
         currency: "魚幣",
         air: { backing: true, relay: "Mia", delayMs: 2000, backingGain: 0.8, voiceGain: 1.5, duckGain: 0.35 },
+        // An older Core's frame has none of these: the defaults.
+        queue: [],
+        joinUrl: null,
+        qrWhileSinging: false,
+        settling: null,
       },
     });
+  });
+
+  it("reads the queue, the join link, the settling, a line's parts and its recent pitch", () => {
+    // Frames 600.. : not voiced, MIDI 64, MIDI 64.25, MIDI 87.5 (bytes 0, 161, 162, 255).
+    const track = Buffer.from([0, 161, 162, 255]).toString("base64");
+    const m = parse(
+      wire({
+        queue: [
+          { title: "群青", artist: "YOASOBI", by: "小明", state: "ready" },
+          { title: "怪物", artist: null, by: "Mia", state: "preparing" },
+          { title: "壞掉的", artist: "", by: "", state: "failed" },
+          { title: "  ", by: "x", state: "ready" },
+          { title: "odd", by: "x", state: "lost" },
+          "not one",
+        ],
+        join_url: "https://example.com/karaoke/room/K7PQ2M",
+        qr_while_singing: true,
+        settling: { waiting: ["Mia", "", 3, " 阿翔 "] },
+        board: [
+          {
+            name: "Mia",
+            color: 0,
+            rank: 1,
+            total: 81.4,
+            source: "voice",
+            move: "same",
+            parts: { pitch: 50.25, stability: 12, rhythm: null, expression: "lots" },
+            pitch: { from: 600, track },
+          },
+        ],
+      }),
+    );
+    if (m?.type !== "karaoke" || m.scene === null) throw new Error("not parsed");
+    expect(m.scene.queue).toEqual([
+      { title: "群青", artist: "YOASOBI", by: "小明", state: "ready" },
+      { title: "怪物", artist: null, by: "Mia", state: "preparing" },
+      { title: "壞掉的", artist: null, by: "", state: "failed" },
+    ]);
+    expect(m.scene.joinUrl).toBe("https://example.com/karaoke/room/K7PQ2M");
+    expect(m.scene.qrWhileSinging).toBe(true);
+    expect(m.scene.settling).toEqual({ waiting: ["Mia", "阿翔"] });
+    expect(m.scene.board[0]?.parts).toEqual({ pitch: 50.25, stability: 12, rhythm: null, expression: null });
+    expect(m.scene.board[0]?.pitch).toEqual({ from: 600, midi: [null, 64, 64.25, 87.5] });
+  });
+
+  it("takes only a short http(s) join link, at most five queue entries, and drops pitch it cannot read", () => {
+    const scene = (extra: Record<string, unknown>) => {
+      const m = parse(wire(extra));
+      if (m?.type !== "karaoke" || m.scene === null) throw new Error("not parsed");
+      return m.scene;
+    };
+    for (const url of ["javascript:alert(1)", "karaoke/room/K7PQ2M", `https://example.com/${"x".repeat(200)}`, 7, ""]) {
+      expect(scene({ join_url: url }).joinUrl, String(url)).toBeNull();
+    }
+    const many = Array.from({ length: 9 }, (_, i) => ({ title: `歌 ${i}`, artist: null, by: "Mia", state: "ready" }));
+    expect(scene({ queue: many }).queue).toHaveLength(5);
+    expect(scene({ settling: "soon", qr_while_singing: "yes" })).toMatchObject({ settling: null, qrWhileSinging: false });
+    const line = (pitch: unknown) => scene({ board: [{ name: "Mia", color: 0, pitch }] }).board[0]?.pitch;
+    expect(line(null)).toBeNull();
+    expect(line({ from: -1, track: "AAAA" })).toBeNull();
+    expect(line({ from: 1.5, track: "AAAA" })).toBeNull();
+    expect(line({ from: 0, track: "not base64!" })).toBeNull();
+    expect(line({ from: 0, track: "AAA" })).toBeNull();
+    expect(line({ from: 0, track: "A".repeat(2_004) })).toBeNull();
+    expect(line({ from: 0, track: "" })).toBeNull();
+    expect(line({ from: 0, track: "AAAA" })).toEqual({ from: 0, midi: [null, null, null] });
   });
 
   it("room null ends the scene; a frame without a room code or state is skipped", () => {
@@ -167,6 +261,35 @@ describe("karaoke frames", () => {
     // A line whose pieces are not all pieces shows as its text, never wiped.
     expect(lines[2]).toMatchObject({ pieces: null, aligned: false, text: "piece broken" });
     expect(m.lyrics.lyrics?.source).toBe("heard");
+  });
+
+  it("reads the round's reference notes in time order, dropping odd ones", () => {
+    const m = parse({
+      type: "karaoke_lyrics",
+      room: "K7PQ2M",
+      round: 2,
+      song: "s",
+      lyrics: null,
+      video: null,
+      backing: null,
+      notes: [
+        { start: 3, end: 3.5, midi: 64.5 },
+        { start: 1, end: 2, midi: 60 },
+        { start: 2, end: 1, midi: 60 },
+        { start: -1, end: 1, midi: 60 },
+        { start: 4, end: 5, midi: 300 },
+        { start: 4, end: 5 },
+        "C4",
+      ],
+    });
+    if (m?.type !== "karaoke_lyrics") throw new Error("not parsed");
+    expect(m.lyrics.notes).toEqual([
+      { start: 1, end: 2, midi: 60 },
+      { start: 3, end: 3.5, midi: 64.5 },
+    ]);
+    // An older Core sends none.
+    const old = parse({ type: "karaoke_lyrics", room: "K7PQ2M", round: 2, song: "s", lyrics: null, video: null });
+    expect(old?.type === "karaoke_lyrics" && old.lyrics.notes).toEqual([]);
   });
 
   it("skips words without their round, and takes no video it cannot load", () => {
@@ -257,10 +380,13 @@ describe("what of the room shows", () => {
   it("says what the lobby waits for, singers first", () => {
     const m = (name: string, role: "singer" | "spectator", ready = false) => ({ name, color: 0, role, ready, opener: false });
     const song = scene().song;
-    expect(lobbyStatus({ members: [m("阿翔", "spectator")], song })).toBe("等人加入");
-    expect(lobbyStatus({ members: [m("Mia", "singer")], song: null })).toBe("等開房的人選歌");
-    expect(lobbyStatus({ members: [m("Mia", "singer", true), m("Kai", "singer")], song })).toBe("等大家準備好(1/2)");
-    expect(lobbyStatus({ members: [m("Mia", "singer", true), m("阿翔", "spectator")], song })).toBe("都準備好了,等開房的人按開始");
+    const queue: KaraokeScene["queue"] = [];
+    expect(lobbyStatus({ members: [m("阿翔", "spectator")], song, queue })).toBe("等人加入");
+    expect(lobbyStatus({ members: [m("Mia", "singer")], song: null, queue })).toBe("等大家點歌");
+    const preparing = [{ title: "群青", artist: null, by: "Mia", state: "preparing" as const }];
+    expect(lobbyStatus({ members: [m("Mia", "singer")], song: null, queue: preparing })).toBe("等歌準備好");
+    expect(lobbyStatus({ members: [m("Mia", "singer", true), m("Kai", "singer")], song, queue })).toBe("等大家準備好(1/2)");
+    expect(lobbyStatus({ members: [m("Mia", "singer", true), m("阿翔", "spectator")], song, queue })).toBe("都準備好了,等開房的人按開始");
     expect(lobbyMembers([m("阿翔", "spectator"), m("Mia", "singer"), m("Kai", "singer")]).map((x) => x.name)).toEqual([
       "Mia",
       "Kai",
@@ -278,7 +404,7 @@ describe("what of the room shows", () => {
   });
 
   it("uses a round's words only for that round", () => {
-    const words = { room: "K7PQ2M", round: 2, song: "yt-abc", lyrics: null, video: null, backing: null };
+    const words = { room: "K7PQ2M", round: 2, song: "yt-abc", lyrics: null, video: null, backing: null, notes: [] };
     expect(lyricsFor(scene(), words)).toBe(words);
     expect(lyricsFor(scene({ round: 3 }), words)).toBeNull();
     expect(lyricsFor(scene({ room: "ABCDEF" }), words)).toBeNull();
@@ -300,6 +426,142 @@ describe("what of the room shows", () => {
   });
 });
 
+describe("the phases of a round on the stream", () => {
+  const URL = "https://example.com/karaoke/room/K7PQ2M";
+
+  it("reads settling as its own phase between the song and the results", () => {
+    expect(karaokePhase(scene({ state: "lobby" }))).toBe("lobby");
+    expect(karaokePhase(scene({ state: "countdown" }))).toBe("countdown");
+    expect(karaokePhase(scene({ state: "singing" }))).toBe("singing");
+    expect(karaokePhase(scene({ state: "singing", settling: { waiting: [] } }))).toBe("settling");
+    expect(karaokePhase(scene({ state: "results" }))).toBe("results");
+  });
+
+  it("shows each phase's pieces and nothing else", () => {
+    const shown = (s: KaraokeScene) =>
+      Object.entries(karaokeBlocks(s, true))
+        .filter(([k, v]) => k !== "qr" && v === true)
+        .map(([k]) => k);
+    expect(shown(scene({ state: "lobby" }))).toEqual(["lobby"]);
+    expect(shown(scene({ state: "countdown" }))).toEqual(["title", "lanes", "lyrics", "board"]);
+    expect(shown(scene({ state: "singing" }))).toEqual(["title", "lanes", "lyrics", "board"]);
+    expect(shown(scene({ state: "singing", settling: { waiting: ["Mia"] } }))).toEqual(["title", "board", "settling"]);
+    expect(shown(scene({ state: "results" }))).toEqual(["results"]);
+    expect(shown(scene({ state: "results" }))).not.toContain("board");
+    expect(karaokeBlocks(null, true)).toMatchObject({ lobby: false, results: false, qr: null });
+    expect(karaokeBlocks(scene({ state: "results", joinUrl: URL }), false)).toMatchObject({ results: false, qr: null });
+  });
+
+  it("puts the QR code by the code in the lobby, in a corner with the results, and away while sung unless asked", () => {
+    const at = (extra: Partial<KaraokeScene>) => qrPlace(scene({ joinUrl: URL, ...extra }));
+    expect(at({ state: "lobby" })).toBe("lobby");
+    expect(at({ state: "results" })).toBe("corner");
+    expect(at({ state: "countdown" })).toBeNull();
+    expect(at({ state: "singing" })).toBeNull();
+    expect(at({ state: "singing", settling: { waiting: [] } })).toBeNull();
+    expect(at({ state: "countdown", qrWhileSinging: true })).toBe("corner");
+    expect(at({ state: "singing", qrWhileSinging: true })).toBe("corner");
+    // No link, no code: the room code stays as text.
+    for (const state of ["lobby", "countdown", "singing", "results"] as const) {
+      expect(qrPlace(scene({ state, joinUrl: null, qrWhileSinging: true }))).toBeNull();
+    }
+    expect(karaokeBlocks(scene({ state: "lobby", joinUrl: URL }), true).qr).toBe("lobby");
+  });
+
+  it("whole pixels a module, near the size asked for (180 to 230 px in the lobby at 1080p)", () => {
+    // Version 4 (33 modules) plus the quiet zone: 41.
+    expect(qrPixels(41, 200)).toBe(205);
+    for (const modules of [29, 33, 37, 41, 45, 49, 53, 57, 61, 65, 69]) {
+      const px = qrPixels(modules, 200);
+      expect(px % modules).toBe(0);
+      expect(px).toBeGreaterThanOrEqual(180);
+      expect(px).toBeLessThanOrEqual(230);
+    }
+    expect(qrPixels(41, 120)).toBe(123);
+    expect(qrPixels(41, 10)).toBe(41);
+  });
+
+  it("says whom settling waits for, or that it is about done", () => {
+    expect(settlingText({ waiting: [] })).toBe("馬上就好");
+    expect(settlingText({ waiting: ["Mia"] })).toBe("還在等 Mia 的分數");
+    expect(settlingText({ waiting: ["Mia", "Kai"] })).toBe("還在等 Mia、Kai 的分數");
+    expect(settlingText({ waiting: ["a", "b", "c", "d", "e", "f"] })).toBe("還在等 a、b、c、d 等 6 人的分數");
+  });
+});
+
+describe("the lobby's queue", () => {
+  it("lists the chosen song, then the queue with who added it and a mark for preparing or failed", () => {
+    const rows = queueRows(
+      scene({
+        song: { id: "a", title: "夜に駆ける", artist: "YOASOBI", durationMs: null },
+        queue: [
+          { title: "群青", artist: null, by: "小明", state: "ready" },
+          { title: "怪物", artist: "YOASOBI", by: "Kai", state: "preparing" },
+          { title: "壞掉的", artist: null, by: "", state: "failed" },
+        ],
+      }),
+    );
+    expect(rows.map((r) => [r.title, r.by, r.mark, r.state])).toEqual([
+      ["夜に駆ける", null, null, "ready"],
+      ["群青", "小明", null, "ready"],
+      ["怪物", "Kai", "準備中", "preparing"],
+      ["壞掉的", null, "失敗", "failed"],
+    ]);
+    expect(queueRows(scene({ song: null, queue: [] }))).toEqual([]);
+    expect(queueRows(scene({ song: null, queue: [{ title: "群青", artist: null, by: "Mia", state: "preparing" }] }))).toHaveLength(1);
+  });
+});
+
+describe("the results", () => {
+  const line = (name: string, color: number, rank: number | null, total: number | null, extra = {}) => ({
+    name,
+    color,
+    rank,
+    total,
+    source: "voice" as const,
+    move: "same" as const,
+    winner: false,
+    coins: 0,
+    finished: true,
+    onAir: false,
+    parts: null,
+    pitch: null,
+    ...extra,
+  });
+
+  it("writes each part out of its most, with a bar of how much was won", () => {
+    expect(partCells(null)).toBeNull();
+    const cells = partCells({ pitch: 45, stability: 15, rhythm: null, expression: 12 });
+    expect(cells?.map((c) => [c.label, c.max, c.text, c.share])).toEqual([
+      ["音程", 60, "45.0", 0.75],
+      ["安定", 15, "15.0", 1],
+      ["節奏", 15, "—", 0],
+      ["表現", 10, "12.0", 1],
+    ]);
+  });
+
+  it("ranks the rows with their parts, the winner, the coins and who did not finish", () => {
+    const rows = resultRows(
+      [
+        line("Kai", 2, 2, 77.5, { coins: 3, parts: { pitch: 46, stability: 12, rhythm: 11, expression: 8.5 } }),
+        line("Mia", 0, 1, 88.04, { winner: true, coins: 18, parts: { pitch: 54, stability: 14, rhythm: 12, expression: 8 } }),
+        line("貓", 5, null, null, { finished: false }),
+      ],
+      "魚幣",
+    );
+    expect(rows.map((r) => [r.rank, r.name, r.score, r.winner, r.tail])).toEqual([
+      [1, "Mia", "88.0", true, "+18 魚幣"],
+      [2, "Kai", "77.5", false, "+3 魚幣"],
+      [null, "貓", "—", false, "沒唱完"],
+    ]);
+    expect(rows[0]?.parts?.[0]?.text).toBe("54.0");
+    expect(rows[2]?.parts).toBeNull();
+    expect(resultsTitle(3)).toBe("第 3 首結果");
+    expect(resultsTitle(0)).toBe("結果");
+    expect([1, 4, 5, 8, 9, 16].map(resultsDensity)).toEqual(["roomy", "roomy", "normal", "normal", "compact", "compact"]);
+  });
+});
+
 describe("the board", () => {
   const line = (name: string, color: number, rank: number | null, total: number | null, extra = {}) => ({
     name,
@@ -312,6 +574,8 @@ describe("the board", () => {
     coins: 0,
     finished: false,
     onAir: false,
+    parts: null,
+    pitch: null,
     ...extra,
   });
 
@@ -376,6 +640,27 @@ describe("the demo's words", () => {
     expect(pieces[0]?.start).toBe(1);
     expect((pieces[0]?.end ?? 0) < (pieces[1]?.start ?? 0)).toBe(true);
     expect(pieces[0]?.reading).toBe("ほし");
+  });
+});
+
+describe("the demo's lanes", () => {
+  it("has a reference note per sung piece, and singers on, under and off them", () => {
+    const words = demoLyrics({
+      id: "s",
+      title: "t",
+      artist: "a",
+      language: "ja",
+      seconds: 10,
+      doubtful: null,
+      lines: [[1, [["星", "ほし", "hoshi"], ["の", null, "no"]]]],
+    });
+    const notes = demoNotes(words);
+    expect(notes.map((n) => n.midi)).toEqual([69, 71]);
+    expect(notes[0]?.start).toBe(1);
+    const t = 1.5;
+    expect(Math.abs((demoPitch(notes, "Mia", t) ?? 0) - 69)).toBeLessThan(0.2);
+    expect(Math.round(((demoPitch(notes, "小明", t) ?? 0) - 69) / 12)).toBe(-1);
+    expect(demoPitch(notes, "Mia", 8)).toBeNull();
   });
 });
 

@@ -1279,35 +1279,143 @@ body {
   line-height: 1.1;
 }
 
-.k-lobby__song {
+/* The code to join with, and the QR code of the link beside it. */
+.k-lobby__join {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.2rem;
+}
+
+.k-lobby__code-box {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.k-lobby__how {
+  color: var(--ink-faint);
+  font-size: 0.95rem;
+}
+
+.k-lobby.has-qr {
+  width: 36rem;
+}
+
+.k-lobby.has-qr .k-lobby__code {
+  font-size: 3.4rem;
+}
+
+.k-qr--lobby .k-qr__caption {
+  font-size: 1.05rem;
+}
+
+.k-lobby__dim {
+  flex: none;
+  color: var(--ink-faint);
+}
+
+/* 「下一首」: the chosen song, then the queue after it, each with who added it. */
+.k-lobby__next {
+  display: grid;
+  gap: 0.35rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--rule);
+}
+
+.k-lobby__section {
+  color: var(--ink-faint);
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+}
+
+.k-lobby__none {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 1.1rem;
+}
+
+.k-queue {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.k-queue__row {
   display: flex;
   align-items: baseline;
-  gap: 0.55rem;
+  gap: 0.6rem;
   min-width: 0;
-  font-size: 1.2rem;
+  color: var(--ink-dim);
+  font-size: 1.05rem;
   white-space: nowrap;
 }
 
-.k-lobby__title,
-.k-lobby__artist {
+.k-queue__row.is-next {
+  color: var(--ink);
+  font-size: 1.25rem;
+}
+
+.k-queue__what {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.k-queue__title,
+.k-queue__artist {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.k-lobby__title {
+.k-queue__title {
+  flex: 0 1 auto;
   font-weight: 600;
 }
 
-.k-lobby__artist {
+.k-queue__artist,
+.k-queue__key {
   flex: 0 1 auto;
-  color: var(--ink-dim);
+  color: var(--ink-faint);
+  font-size: 0.9em;
 }
 
-.k-lobby__key,
-.k-lobby__dim {
+.k-queue__key {
   flex: none;
+}
+
+.k-queue__by {
+  flex: none;
+  max-width: 9rem;
+  overflow: hidden;
   color: var(--ink-faint);
+  font-size: 0.9em;
+  text-overflow: ellipsis;
+}
+
+.k-queue__mark {
+  flex: none;
+  padding: 0 0.45rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  font-size: 0.8em;
+}
+
+.k-queue__mark.is-failed {
+  border-color: color-mix(in oklab, var(--live) 50%, transparent);
+  color: var(--live);
+}
+
+.k-queue__row.is-failed .k-queue__title {
+  color: var(--ink-faint);
+  text-decoration: line-through rgb(255 255 255 / 0.35);
 }
 
 .k-lobby__people {
@@ -1375,6 +1483,18 @@ body {
   min-width: 24rem;
   max-width: 52rem;
   padding: 0.85rem 1.2rem 0.95rem;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.k-title.is-out {
+  opacity: 0;
+  transform: translateY(calc(var(--shift) * -1));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
 }
 
 .k-title__meta {
@@ -1471,6 +1591,108 @@ body {
 .k-count__label {
   color: var(--ink-dim);
   font-size: 1.4rem;
+}
+
+/*
+ * The pitch lanes (§7.1, src/lanes-view.ts): a column across the screen between the song's plate
+ * and the lyrics (1080p: 68,240 to 1420,784; shorter when readings take room over the words), a
+ * lane per singer, centred; the name and running score at the left, the lane's glass at the right.
+ */
+.k-lanes {
+  position: absolute;
+  left: calc(var(--k-screen-x) + var(--k-inset));
+  top: calc(var(--k-screen-y) + 12.5rem);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  width: calc(var(--k-screen-w) - var(--k-inset) * 2);
+  height: 34rem;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.k-lanes.has-ruby {
+  height: 29rem;
+}
+
+.k-lanes.is-out {
+  opacity: 0;
+  transform: translateY(var(--shift));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+.k-lane {
+  display: grid;
+  flex: none;
+  grid-template-columns: 10.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.k-lane__who {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.6rem;
+  background: rgb(12 12 14 / 0.62);
+}
+
+.k-lane__name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.k-lane__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.k-lane__score {
+  padding-left: 1.2rem;
+  color: var(--ink-dim);
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.k-lanes.is-compact .k-lane__who {
+  padding: 0.2rem 0.6rem;
+}
+
+.k-lanes.is-compact .k-lane__name {
+  font-size: 1.05rem;
+}
+
+.k-lanes.is-compact .k-lane__score {
+  font-size: 0.9rem;
+}
+
+.k-lane__track {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 0.6rem;
+  background: rgb(12 12 14 / 0.55);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+
+.k-lane__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 /*
@@ -1762,16 +1984,17 @@ body {
   white-space: nowrap;
 }
 
-/* After the round: the final ranking in the middle of the screen, the winner marked. */
-.k-results {
+/* The song is over and the round is being settled: 「結算中…」 in the middle of the screen. */
+.k-settling {
   position: absolute;
   left: calc(var(--k-screen-x) + var(--k-screen-w) / 2);
   top: calc(var(--k-screen-y) + var(--k-screen-h) * 0.46);
   display: grid;
-  gap: 0.9rem;
-  width: 46rem;
-  max-width: calc(var(--k-screen-w) - 4rem);
-  padding: 1.4rem 1.6rem 1.3rem;
+  justify-items: center;
+  gap: 0.7rem;
+  min-width: 28rem;
+  max-width: calc(var(--k-screen-w) - 8rem);
+  padding: 1.6rem 2.2rem 1.5rem;
   opacity: 1;
   transform: translate(-50%, -50%);
   transition:
@@ -1779,88 +2002,275 @@ body {
     transform var(--t-enter) var(--ease-out);
 }
 
-.k-results.is-out {
+.k-settling.is-out {
   opacity: 0;
   transform: translate(-50%, calc(-50% + var(--shift)));
   transition-duration: var(--t-exit);
   transition-timing-function: var(--ease-exit);
 }
 
-.k-results__head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.9rem;
-  min-width: 0;
+.k-settling__title {
+  font-size: 2.6rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.k-settling__detail {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ink-dim);
+  font-size: 1.3rem;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.k-results__title {
-  flex: none;
-  margin: 0;
-  font-size: 1.6rem;
-  font-weight: 650;
+/* No real progress: a slow shimmer, the activity capsule's. */
+.k-settling__bar {
+  position: relative;
+  width: 14rem;
+  height: 0.25rem;
+  margin-top: 0.3rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: oklch(1 0 0 / 0.1);
+}
+
+.k-settling__bar::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 34%;
+  background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.5), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 1.9s var(--ease-in-out) infinite;
+}
+
+/*
+ * After the round: the final ranking over the whole screen, readable from across the room on a
+ * 1080p stream. The round and its song at the top; a row per singer with place, colour, name, the
+ * four parts (a number and a thin bar each), the total and the coins; the winner lit in the primary
+ * colour; why no prize was paid, the next song and the rounds left at the bottom.
+ */
+.k-results {
+  position: absolute;
+  left: calc(var(--k-screen-x) + var(--k-inset));
+  top: calc(var(--k-screen-y) + var(--k-inset));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 1.4rem;
+  box-sizing: border-box;
+  width: calc(var(--k-screen-w) - var(--k-inset) * 2);
+  height: calc(var(--k-screen-h) - var(--k-inset) * 2);
+  padding: 2rem 2.5rem 1.8rem;
+  background: rgb(18 18 21 / 0.9);
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.k-results.is-out {
+  opacity: 0;
+  transform: translateY(var(--shift));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+.k-results__head {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  min-height: 7.5rem;
+  align-content: start;
+}
+
+/* The small QR code sits in the top right corner: the heading keeps clear of it. */
+.k-results.has-corner .k-results__head {
+  padding-right: 10rem;
+}
+
+.k-results__kicker {
+  color: var(--ink-faint);
+  font-size: 1.15rem;
+  letter-spacing: 0.06em;
 }
 
 .k-results__song {
   min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 2.6rem;
+  font-weight: 650;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.k-results__artist {
   overflow: hidden;
   color: var(--ink-dim);
-  font-size: 1.2rem;
+  font-size: 1.3rem;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.k-results__table {
+  --k-cols: 3rem minmax(0, 1fr) repeat(4, 7.5rem) 7rem 8.5rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+  gap: 0.5rem;
+  min-height: 0;
+}
+
+.k-results__cols,
+.k-result {
+  display: grid;
+  grid-template-columns: var(--k-cols);
+  align-items: center;
+  column-gap: 1rem;
+  padding: 0 1rem;
+}
+
+.k-results__cols {
+  color: var(--ink-faint);
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+}
+
+.k-results__cols small {
+  margin-left: 0.2rem;
+  font-size: 0.8rem;
+}
+
+.k-results__col {
+  text-align: right;
 }
 
 .k-results__list {
   display: grid;
-  gap: 0.25rem;
+  align-content: start;
+  gap: 0.35rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .k-result {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  min-width: 0;
-  padding: 0.55rem 0.75rem;
-  border-radius: 0.7rem;
-  font-size: 1.45rem;
+  min-height: 4.4rem;
+  border-radius: 0.8rem;
+  background: oklch(1 0 0 / 0.04);
+  font-size: 1.6rem;
+  animation: k-rise var(--t-enter) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+.is-roomy .k-result {
+  min-height: 6.5rem;
+  font-size: 2.1rem;
+}
+
+.is-roomy .k-results__list {
+  gap: 0.6rem;
+}
+
+.is-compact .k-result {
+  min-height: 2.6rem;
+  font-size: 1.2rem;
+}
+
+@keyframes k-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--shift));
+  }
 }
 
 .k-result.is-winner {
-  background: color-mix(in oklab, var(--k-primary) 14%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--k-primary) 42%, transparent);
+  background: color-mix(in oklab, var(--k-primary) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--k-primary) 48%, transparent);
 }
 
 .k-result__rank {
-  flex: none;
-  width: 1.6rem;
   color: var(--ink-faint);
-  font-size: 1.15rem;
+  font-size: 0.8em;
   font-variant-numeric: tabular-nums;
+  font-weight: 650;
   text-align: right;
 }
 
+.k-result.is-winner .k-result__rank {
+  color: var(--k-primary);
+}
+
+.k-result__who {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.k-result__who .k-swatch {
+  width: 0.55em;
+  height: 0.55em;
+}
+
 .k-result__name {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.k-result__score {
-  flex: none;
-  font-size: 1.6rem;
+/* A part of the score: its number over a thin bar of how much of it was won. */
+.k-part {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: end;
+}
+
+.k-part__n {
+  color: var(--ink-dim);
+  font-size: 0.7em;
   font-variant-numeric: tabular-nums;
-  font-weight: 650;
+}
+
+.k-part__bar {
+  width: 100%;
+  height: 0.25rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: oklch(1 0 0 / 0.1);
+}
+
+.k-part__bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: oklch(1 0 0 / 0.62);
+  transform-origin: left center;
+}
+
+.k-result.is-winner .k-part__bar i {
+  background: var(--k-primary);
+}
+
+.is-compact .k-part__bar {
+  display: none;
+}
+
+.k-result__score {
+  font-size: 1.15em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  text-align: right;
 }
 
 .k-result__tail {
-  flex: none;
-  min-width: 7.5rem;
   color: var(--ink-faint);
-  font-size: 1.15rem;
+  font-size: 0.72em;
   text-align: right;
   white-space: nowrap;
 }
@@ -1878,20 +2288,111 @@ body {
   color: var(--ink-dim);
 }
 
-.k-results__empty,
-.k-results__note,
-.k-results__left {
+.k-results__empty {
   margin: 0;
-  font-size: 1.05rem;
+  color: var(--ink-dim);
+  font-size: 1.4rem;
 }
 
-.k-results__empty,
+.k-results__foot {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+}
+
+.k-results__note,
+.k-results__after {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
 .k-results__note {
   color: var(--ink-dim);
 }
 
-.k-results__left {
+.k-results__after {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  min-width: 0;
   color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.k-results__next {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.k-results__left {
+  flex: none;
+  margin-left: auto;
+}
+
+/*
+ * The room's join link as a QR code: dark square modules on a light plate (the quiet zone), drawn
+ * with whole pixels per module and crisp edges, so a phone reads it off the stream. Big beside the
+ * code in the lobby; small in the screen's top right corner with the results (and while a round is
+ * sung, when the owner wants it).
+ */
+.k-qr {
+  display: grid;
+  justify-items: center;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.k-qr__code {
+  display: block;
+  border-radius: 0.3rem;
+  shape-rendering: crispEdges;
+}
+
+.k-qr__caption {
+  color: var(--ink-dim);
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+}
+
+.k-qr__room {
+  color: var(--ink);
+  font-family: var(--k-mono);
+  font-size: 1.05rem;
+  letter-spacing: 0.14em;
+}
+
+.k-qr--corner {
+  position: absolute;
+  top: calc(var(--k-screen-y) + var(--k-inset));
+  right: calc(100% - var(--k-screen-x) - var(--k-screen-w) + var(--k-inset));
+  gap: 0.3rem;
+  padding: 0.6rem 0.6rem 0.5rem;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.k-qr--corner .k-qr__caption {
+  display: flex;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.k-qr--corner .k-qr__room {
+  font-size: 0.9rem;
+}
+
+.k-qr--corner.is-out {
+  opacity: 0;
+  transform: translateY(calc(var(--shift) * -1));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
 }
 
 /* ── karaoke: the page's own pieces make room while a round is on ───── */
@@ -1934,7 +2435,9 @@ body {
   }
 
   .k-row.is-flash,
-  .k-row.is-flash .k-row__move {
+  .k-row.is-flash .k-row__move,
+  .k-result,
+  .k-settling__bar::after {
     animation: none;
   }
 }

@@ -230,7 +230,7 @@ curl.exe http://100.x.y.z:8005/health
 [modules.sing]
 url = "http://100.x.y.z:8005"               # 你的 Tailscale 位址
 fallback_urls = ["http://127.0.0.1:8005"]   # 連不上你的時候,改用 Owen 自己電腦上的 worker
-timeout_secs = 20                           # 跨網路建議放寬(抓歌的音訊自動乘 10 倍)
+timeout_secs = 20                           # 跨網路建議放寬(拿檔案不看總時間,看 fetch_stall_secs)
 ```
 
 這兩個位址進入登記處成為「靜態」項目,連不上時換台的規則和第 6 節一樣。也可以用 `[modules.cluster.static.<名字>]` 寫 `provides = ["sing"]` 和 `url`。位址寫法要一致(`localhost` 和 `127.0.0.1` 不算同一個)。然後重啟 Core,在 Owen 的電腦測 `curl.exe http://100.x.y.z:8005/health`。

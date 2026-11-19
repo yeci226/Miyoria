@@ -29,11 +29,18 @@ export function median(values: readonly number[]): number | null {
   return s.length % 2 === 1 ? (s[mid] as number) : ((s[mid - 1] as number) + (s[mid] as number)) / 2;
 }
 
-/** The room's level: the 90th percentile of a stretch of silence, never quite zero. */
+/**
+ * The room's level: the lower quartile of the levels heard, never quite zero. A room's noise hardly
+ * moves from one 10 ms reading to the next, so any percentile of a silence is about the same; the
+ * stretch measured is not always silent, though (the singing screen listens while the song loads,
+ * when a room's singer may be talking to her), and the 90th percentile of a stretch with a few
+ * words in it was the voice itself: twice that is the voiced gate, so the singing that followed at
+ * the same level was dropped as the room. The quartile holds while three readings in four are quiet.
+ */
 export function noiseFloor(levels: readonly number[]): number {
   if (levels.length === 0) return 0.002;
   const s = [...levels].sort((a, b) => a - b);
-  const at = Math.min(s.length - 1, Math.floor(0.9 * (s.length - 1)));
+  const at = Math.min(s.length - 1, Math.floor(0.25 * (s.length - 1)));
   return Math.max(0.0005, s[at] as number);
 }
 

@@ -2960,7 +2960,7 @@
           }
         }
       },
-      "song": {
+      "queueAdd": {
         "~orpc": {
           "errorMap": {},
           "meta": {
@@ -2971,7 +2971,37 @@
           "route": {
             "inputStructure": "detailed",
             "method": "POST",
-            "path": "/api/member/karaoke/rooms/{code}/song"
+            "path": "/api/member/karaoke/rooms/{code}/queue"
+          }
+        }
+      },
+      "queueRemove": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "DELETE",
+            "path": "/api/member/karaoke/rooms/{code}/queue/{entry}"
+          }
+        }
+      },
+      "queueMove": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms/{code}/queue/{entry}/move"
           }
         }
       },

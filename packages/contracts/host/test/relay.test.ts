@@ -1,20 +1,23 @@
 // The relay's wire and the machinery both ends share: the frame codec, the credit accounting, the
 // receiving end of a body and the pump that sends one.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   decodeRelayFrame,
   encodeRelayFrame,
   HOST_RELAY_DROPPED_REQUEST_HEADERS,
   HOST_RELAY_FRAME,
   HOST_RELAY_LIMITS,
+  HostRelayClosedError,
   HostRelayFrameError,
+  HostRelayLengthError,
   HostRelayRequestSchema,
   HostRelayResponseSchema,
   pumpRelayBody,
   RelayInbound,
   RelayReceiveWindow,
   RelaySendWindow,
+  RelaySocketSink,
   relayHeaders,
 } from "../src/index.js";
 
@@ -203,6 +206,27 @@ describe("RelayInbound", () => {
     expect(inbound.failed).toBe(true);
   });
 
+  it("fails a body that ends at another length than it said, instead of ending it", async () => {
+    const read = async (length: number, chunks: Uint8Array[]) => {
+      const inbound = new RelayInbound({ credit: () => {}, cancel: () => {} });
+      for (const c of chunks) inbound.push(c);
+      inbound.end();
+      inbound.expect(length);
+      const reader = inbound.readable.getReader();
+      let got = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return got;
+        got += value.byteLength;
+      }
+    };
+    expect(await read(3, [bytesOf(1, 2), bytesOf(3)])).toBe(3);
+    await expect(read(4, [bytesOf(1, 2), bytesOf(3)])).rejects.toThrow(
+      "the body ended after 3 of its 4 bytes",
+    );
+    await expect(read(2, [bytesOf(1, 2), bytesOf(3)])).rejects.toBeInstanceOf(HostRelayLengthError);
+  });
+
   it("settles on the end or on enough buffered bytes", async () => {
     const a = new RelayInbound({ credit: () => {}, cancel: () => {} });
     const ended = a.settled(10);
@@ -295,5 +319,156 @@ describe("pumpRelayBody", () => {
     out.bufferedAmount = 0;
     await done;
     expect(out.frames.length).toBe(2);
+  });
+
+  it("returns the bytes sent, and never ends a body short of or past its length", async () => {
+    const body = new Uint8Array(L.CHUNK_BYTES + 5).fill(3);
+    const pump = (length: number) => {
+      const out = sink();
+      const done = pumpRelayBody({
+        source: new Blob([body]).stream(),
+        sink: out,
+        stream: 1,
+        kind: F.RESPONSE_CHUNK,
+        window: new RelaySendWindow(),
+        signal: new AbortController().signal,
+        length,
+      });
+      return { out, done };
+    };
+    const whole = pump(body.byteLength);
+    expect(await whole.done).toBe(body.byteLength);
+    expect(whole.out.frames.map((f) => decodeRelayFrame(f).kind)).toEqual([3, 3, 4]);
+
+    const short = pump(body.byteLength + 1);
+    const error = await short.done.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HostRelayLengthError);
+    expect((error as HostRelayLengthError).received).toBe(body.byteLength);
+    // Every byte went out, the end frame did not: the caller aborts the stream.
+    expect(short.out.frames.map((f) => decodeRelayFrame(f).kind)).toEqual([3, 3]);
+
+    const long = pump(body.byteLength - 1);
+    await expect(long.done).rejects.toBeInstanceOf(HostRelayLengthError);
+    expect(long.out.frames.every((f) => decodeRelayFrame(f).kind === F.RESPONSE_CHUNK)).toBe(true);
+  });
+});
+
+/**
+ * A socket as `ws` is to `RelaySocketSink`: a sent frame stays queued (counted in
+ * `bufferedAmount`) until the test writes it out, which runs its callback.
+ */
+class FakeSocket {
+  readyState = 1;
+  readonly queue: { frame: Uint8Array; done: (error?: Error) => void }[] = [];
+  readonly written: Uint8Array[] = [];
+
+  get bufferedAmount(): number {
+    return this.queue.reduce((n, q) => n + q.frame.byteLength, 0);
+  }
+
+  send(frame: Uint8Array, done: (error?: Error) => void): void {
+    this.queue.push({ frame, done });
+  }
+
+  /** Writes queued frames out until at most `left` bytes are queued. */
+  writeOut(left = 0): void {
+    while (this.queue.length > 0 && this.bufferedAmount > left) {
+      const q = this.queue.shift() as (typeof this.queue)[number];
+      this.written.push(q.frame);
+      q.done();
+    }
+  }
+}
+
+describe("RelaySocketSink", () => {
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  }
+
+  it("wakes a waiting pump as frames are written out, with no timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeSocket();
+      const sink = new RelaySocketSink(socket);
+      const body = new Uint8Array(L.SOCKET_HIGH_WATER_BYTES * 4).map((_, i) => i % 253);
+      let finished = false;
+      const done = pumpRelayBody({
+        source: new Blob([body]).stream(),
+        sink,
+        stream: 5,
+        kind: F.RESPONSE_CHUNK,
+        window: new RelaySendWindow(body.byteLength),
+        signal: new AbortController().signal,
+      }).then((n) => {
+        finished = true;
+        return n;
+      });
+      // Time never moves: the pump goes on only because writes finish.
+      for (let i = 0; i < 1000 && !finished; i++) {
+        await settle();
+        expect(socket.bufferedAmount).toBeLessThanOrEqual(
+          L.SOCKET_HIGH_WATER_BYTES + L.CHUNK_BYTES + L.HEADER_BYTES,
+        );
+        socket.writeOut(L.SOCKET_HIGH_WATER_BYTES / 2);
+      }
+      expect(await done).toBe(body.byteLength);
+      socket.writeOut();
+      const frames = socket.written.map((f) => decodeRelayFrame(f));
+      expect(frames.at(-1)?.kind).toBe(F.RESPONSE_END);
+      const joined = Buffer.concat(
+        frames.flatMap((f) => (f.kind === F.RESPONSE_CHUNK ? [f.data] : [])),
+      );
+      expect(joined.equals(Buffer.from(body))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a control frame overtake every body byte not yet queued", async () => {
+    const socket = new FakeSocket();
+    const sink = new RelaySocketSink(socket);
+    const body = new Uint8Array(4 * 1024 * 1024);
+    const stop = new AbortController();
+    const done = pumpRelayBody({
+      source: new Blob([body]).stream(),
+      sink,
+      stream: 9,
+      kind: F.RESPONSE_CHUNK,
+      window: new RelaySendWindow(body.byteLength),
+      signal: stop.signal,
+    });
+    await settle();
+    await settle();
+    // The pump stopped at the high water: a megabyte body is not ahead of what comes next.
+    const ahead = socket.bufferedAmount;
+    expect(ahead).toBeGreaterThan(0);
+    expect(ahead).toBeLessThanOrEqual(L.SOCKET_HIGH_WATER_BYTES + L.CHUNK_BYTES + L.HEADER_BYTES);
+    expect(sink.send(encodeRelayFrame({ kind: F.CREDIT, stream: 9, bytes: 1 }))).toBe(true);
+    const kinds = socket.queue.map((q) => decodeRelayFrame(q.frame).kind);
+    expect(kinds.at(-1)).toBe(F.CREDIT);
+    expect(kinds.filter((k) => k === F.RESPONSE_CHUNK).length).toBeLessThanOrEqual(
+      Math.ceil(L.SOCKET_HIGH_WATER_BYTES / L.CHUNK_BYTES) + 1,
+    );
+    stop.abort(new Error("enough"));
+    socket.writeOut();
+    await expect(done).rejects.toThrow("enough");
+  });
+
+  it("refuses frames once the socket is not open, and a waiting pump then stops", async () => {
+    const socket = new FakeSocket();
+    const sink = new RelaySocketSink(socket);
+    const done = pumpRelayBody({
+      source: new Blob([new Uint8Array(L.SOCKET_HIGH_WATER_BYTES * 2)]).stream(),
+      sink,
+      stream: 2,
+      kind: F.RESPONSE_CHUNK,
+      window: new RelaySendWindow(),
+      signal: new AbortController().signal,
+    });
+    await settle();
+    socket.readyState = 3;
+    // The backstop looks again without a write finishing.
+    await expect(done).rejects.toBeInstanceOf(HostRelayClosedError);
+    expect(sink.send(bytesOf(1, 1, 0, 0, 0))).toBe(false);
   });
 });

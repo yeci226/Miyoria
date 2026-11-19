@@ -48,8 +48,13 @@ export const HOST_RELAY_LIMITS = {
   WINDOW_BYTES: 1024 * 1024,
   /** Credit is sent once the consumer has taken this many bytes since the last credit. */
   CREDIT_STEP_BYTES: 256 * 1024,
-  /** A sender waits while its socket has more than this many bytes queued. */
-  SOCKET_HIGH_WATER_BYTES: 1024 * 1024,
+  /**
+   * A sender of a body waits while its socket has more than this many bytes queued. Everything
+   * else on the link (JSON-RPC, credit, aborts) is written at once, so this bounds the body bytes
+   * queued ahead of a control message in the process; it is local to the sender, not negotiated.
+   * (It was 1 MiB until 2026-11-19: over a home upload that is many seconds ahead of `host.info`.)
+   */
+  SOCKET_HIGH_WATER_BYTES: 128 * 1024,
   /** Largest payload of an abort frame. */
   ABORT_REASON_BYTES: 256,
   /** Streams Core keeps open per host; one more fails at once. */
@@ -370,6 +375,79 @@ export interface RelaySink {
   send(frame: Uint8Array): boolean;
   /** Bytes the socket has queued and not yet written. */
   readonly bufferedAmount: number;
+  /**
+   * Resolves once at most `bytes` are queued; rejects with the reason when `signal` aborts. A sink
+   * without it is polled.
+   */
+  below?(bytes: number, signal: AbortSignal): Promise<void>;
+}
+
+/** The part of a `ws` WebSocket `RelaySocketSink` uses. */
+export interface RelayWebSocketLike {
+  /** `1` is open. */
+  readonly readyState: number;
+  readonly bufferedAmount: number;
+  /** `callback` runs once the frame is written to the socket, or failed. */
+  send(data: Uint8Array, callback: (error?: Error) => void): void;
+}
+
+/** While a sender waits for the queue, it looks again this often even without a write finishing. */
+const BELOW_BACKSTOP_MS = 50;
+
+/**
+ * The control link's socket as a `RelaySink`: a sender waiting for the queue to shrink wakes as
+ * each frame is written out, not on a timer (a 2 ms poll is a 16 ms one on Windows).
+ */
+export class RelaySocketSink implements RelaySink {
+  readonly #socket: RelayWebSocketLike;
+  readonly #waiters = new Set<() => void>();
+  readonly #written = () => {
+    for (const wake of [...this.#waiters]) wake();
+  };
+
+  constructor(socket: RelayWebSocketLike) {
+    this.#socket = socket;
+  }
+
+  get bufferedAmount(): number {
+    return this.#socket.bufferedAmount;
+  }
+
+  send(frame: Uint8Array): boolean {
+    if (this.#socket.readyState !== 1) return false;
+    try {
+      this.#socket.send(frame, this.#written);
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  below(bytes: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.reject(signal.reason);
+    if (this.#socket.bufferedAmount <= bytes) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      // Text frames are written without a callback here, and a closed socket stops calling back:
+      // the backstop looks anyway.
+      const backstop = setInterval(() => check(), BELOW_BACKSTOP_MS);
+      const done = () => {
+        clearInterval(backstop);
+        this.#waiters.delete(check);
+        signal.removeEventListener("abort", onAbort);
+      };
+      const check = () => {
+        if (this.#socket.bufferedAmount > bytes && this.#socket.readyState === 1) return;
+        done();
+        resolve();
+      };
+      const onAbort = () => {
+        done();
+        reject(signal.reason);
+      };
+      this.#waiters.add(check);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
 }
 
 export interface RelayInboundOptions {
@@ -393,6 +471,7 @@ export class RelayInbound {
   readonly #queue: Uint8Array[] = [];
   #state: "open" | "ended" | "failed" = "open";
   #controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+  #expected: number | null = null;
   #wake: (() => void) | null = null;
   readonly #watchers = new Set<() => void>();
 
@@ -453,6 +532,14 @@ export class RelayInbound {
     return true;
   }
 
+  /**
+   * The body's stated length (`content-length`): a body that ends at another length fails its
+   * reader with `HostRelayLengthError` instead of closing, whatever the sender did.
+   */
+  expect(length: number): void {
+    this.#expected = length;
+  }
+
   /** The end arrived. False when it had already. */
   end(): boolean {
     if (this.#state === "failed") return true;
@@ -511,6 +598,11 @@ export class RelayInbound {
         return;
       }
       if (this.#state === "ended") {
+        const expected = this.#expected;
+        if (expected !== null && this.received !== expected) {
+          this.fail(new HostRelayLengthError(this.received, expected));
+          return;
+        }
         controller.close();
         return;
       }
@@ -532,10 +624,41 @@ export interface PumpRelayBodyOptions {
   window: RelaySendWindow;
   /** Stops the pump: it cancels the source and rejects with the reason. */
   signal: AbortSignal;
+  /**
+   * The body's length when its sender said it (`content-length`): a source that ends before it,
+   * or runs past it, is a `HostRelayLengthError` and no end frame is sent.
+   */
+  length?: number;
+}
+
+/** A body that ended short of its stated length, or ran past it. */
+export class HostRelayLengthError extends Error {
+  override name = "HostRelayLengthError";
+  readonly received: number;
+  readonly expected: number;
+
+  constructor(received: number, expected: number) {
+    super(
+      received < expected
+        ? `the body ended after ${received} of its ${expected} bytes`
+        : `the body ran past its ${expected} bytes`,
+    );
+    this.received = received;
+    this.expected = expected;
+  }
+}
+
+/** The `content-length` of a head, or `undefined` without a usable one. */
+export function relayContentLength(headers: Record<string, string>): number | undefined {
+  const value = headers["content-length"];
+  if (value === undefined || !/^\d{1,15}$/u.test(value.trim())) return undefined;
+  return Number(value.trim());
 }
 
 function socketDrained(sink: RelaySink, signal: AbortSignal): Promise<void> {
   if (sink.bufferedAmount <= HOST_RELAY_LIMITS.SOCKET_HIGH_WATER_BYTES) return Promise.resolve();
+  if (sink.below !== undefined)
+    return sink.below(HOST_RELAY_LIMITS.SOCKET_HIGH_WATER_BYTES, signal);
   return new Promise<void>((resolve, reject) => {
     const poll = () => {
       if (signal.aborted) {
@@ -556,11 +679,12 @@ export class HostRelayClosedError extends Error {
 
 /**
  * Sends `source` as chunk frames and an end frame, never more than the credit allows and only
- * while the socket's queue is short. Resolves after the end frame; rejects with the source's
- * error, the signal's reason, or `HostRelayClosedError`. The caller sends the abort frame.
+ * while the socket's queue is short. Resolves with the bytes sent after the end frame; rejects
+ * with the source's error, the signal's reason, `HostRelayLengthError` or `HostRelayClosedError`.
+ * The caller sends the abort frame.
  */
-export async function pumpRelayBody(options: PumpRelayBodyOptions): Promise<void> {
-  const { sink, stream, kind, window, signal } = options;
+export async function pumpRelayBody(options: PumpRelayBodyOptions): Promise<number> {
+  const { sink, stream, kind, window, signal, length } = options;
   const end = (kind + 1) as EndKind;
   const reader = options.source.getReader();
   const onAbort = () => {
@@ -574,6 +698,9 @@ export async function pumpRelayBody(options: PumpRelayBodyOptions): Promise<void
       signal.throwIfAborted();
       if (done) break;
       if (!(value instanceof Uint8Array)) throw new TypeError("a body chunk is not bytes");
+      if (length !== undefined && window.sent + value.byteLength > length) {
+        throw new HostRelayLengthError(window.sent + value.byteLength, length);
+      }
       let offset = 0;
       while (offset < value.byteLength) {
         await window.ready(signal);
@@ -591,9 +718,14 @@ export async function pumpRelayBody(options: PumpRelayBodyOptions): Promise<void
         offset += n;
       }
     }
+    // A short body never ends normally: the receiver would take it for the whole.
+    if (length !== undefined && window.sent !== length) {
+      throw new HostRelayLengthError(window.sent, length);
+    }
     if (!sink.send(encodeRelayFrame({ kind: end, stream }))) {
       throw new HostRelayClosedError("the control link closed");
     }
+    return window.sent;
   } catch (error) {
     reader.cancel(error).catch(() => {});
     throw error;

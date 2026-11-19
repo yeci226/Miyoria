@@ -6,13 +6,16 @@
 // - `curve.ts`: what is read off the reference curve (runs, onsets, held stretches, phrases).
 // - `score.ts`: `scoreSinging`, the four parts, phrases and the facts her comment uses.
 // - `expression.ts`: vibrato, long tones, scoops and falls.
-// - `live.ts`: `LiveScore`, the running number while singing.
+// - `clean.ts`: the browser's detections cleaned the way the song worker cleans RMVPE's.
+// - `live.ts`: `LiveScore` (the pitch part as it comes, and the octave) and `RunningScore` (the
+//   number shown while singing: the score of the song so far).
 // - `voice.ts`: placing a recording of the singer in song time, and the checks of its voice.
 // - `stream.ts`: `StreamScore`, a room singer's official score while their voice streams in.
 
+export { cleanPitch, cleanTrack } from "./clean.js";
 export type { Span } from "./curve.js";
 export type { Expression } from "./expression.js";
-export { LiveScore } from "./live.js";
+export { LiveScore, RunningScore } from "./live.js";
 export {
   alignSung,
   DEFAULT_TUNING,

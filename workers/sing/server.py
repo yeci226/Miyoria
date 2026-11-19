@@ -2245,7 +2245,8 @@ def _run_karaoke(job: Job) -> None:
     notes = lyricstage.L.merge_notes(pitch_notes, lyr.notes, lyr.spans)
     notes_method = melody.NOTES_METHOD if not lyr.notes else f"{lyricstage.L.NOTES_METHOD}+{melody.NOTES_METHOD}"
     quality = _karaoke_quality(midi, len(notes), lead["used"])
-    ref = kara.reference(kid, src.title, src.artist, duration, melody.curve_json(midi), melody.CURVE_HZ,
+    artist = kara.song_artist(src.artist, lyrics_meta, lyr.block)
+    ref = kara.reference(kid, src.title, artist, duration, melody.curve_json(midi), melody.CURVE_HZ,
                          notes, lyr.block, quality, notes_method, lyr.made)
     WorkersKaraokeReferenceV2.model_validate(ref)  # the format (karaoke.ts) before anyone reads it
     state.karaoke.write_json(kid, kara.REFERENCE_FILE, ref)
@@ -2256,7 +2257,7 @@ def _run_karaoke(job: Job) -> None:
     meta = {
         "id": kid,
         "title": src.title,
-        "artist": src.artist,
+        "artist": artist,
         "duration_s": ref["duration_s"],
         "quality": quality,
         "source": src.public(),

@@ -136,7 +136,9 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
           ? `${label} 已經準備好了(#${entry.no}),${entry.forced ? "她有空就會唱" : "可以用 sing_start 開唱"}。`
           : entry.state === "playing"
             ? `${label} 已經準備好了(#${entry.no}),她馬上就唱。`
-            : `開始準備 ${label}(#${entry.no},大約一到兩分鐘)。${entry.forced ? "好了她就會唱。" : practice ? "好了會告訴你,不會自己開唱。" : "好了會告訴你。"}`;
+            : singer.fetching(entry.no)
+              ? `${label} 已經做好了(#${entry.no}),正在把歌傳過來,${entry.forced ? "傳完她就會唱" : "傳完會告訴你"}。`
+              : `開始準備 ${label}(#${entry.no},大約一到兩分鐘)。${entry.forced ? "好了她就會唱。" : practice ? "好了會告訴你,不會自己開唱。" : "好了會告訴你。"}`;
       return {
         text: `${text}${ticket}`,
         data: { song: entry.no, state: entry.state, priority },

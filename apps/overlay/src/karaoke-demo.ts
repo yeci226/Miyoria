@@ -1,10 +1,14 @@
 // Scripted karaoke room for `?demo=karaoke` (or `?karaoke_demo=1`): the stream's karaoke scene
 // without Core or a Stage, for design work and OBS previews. It speaks the same frames the Stage
-// sends, in a loop: a lobby fills (people join, choose singing or watching, get ready), the round
-// counts down, is sung (made-up lines with aligned pieces and readings, a board whose ranks swap,
-// estimate tags, one singer's voice on the stream and halfway another's), the results come (a
-// winner and coins, someone who did not finish, or a round without a prize and its note), and the
-// next round's lobby. The songs and their words are made up for the demo.
+// sends, in a loop: a lobby fills (nobody has asked for a song, then the opener does and the others
+// queue theirs: one ready, one being prepared, one that failed; people join, choose singing or
+// watching, get ready; the join QR code of a sample link beside the code), the round counts down, is
+// sung (made-up lines with aligned pieces and readings, reference notes on the lanes and each
+// singer's pitch on them: one on the notes, one an octave down, one flat, one wandering; a board
+// whose ranks swap, estimate tags, one singer's voice on the stream and halfway another's; every
+// other round the QR code stays in a corner), it settles (結算中, waiting for two, one, nobody), the
+// results come (the four parts, a winner and coins, someone who did not finish, or a round without a
+// prize and its note), and the next round's lobby. The songs and their words are made up.
 //
 // It is heard too: a backing made here (a few soft chords and a beat, raw PCM like the worker's)
 // and the "voice" of the singer on the stream (a plain tone on each sung piece, µ-law in pieces a
@@ -15,8 +19,20 @@
 // dev server only: a production build has no video in it and shows the glass.
 
 import type { WorkersKaraokeLineV2, WorkersKaraokeLyricsV2 } from "@miyoria/contracts/workers";
-import type { FeedMessage, KaraokeAir, KaraokeLine, KaraokeMember, KaraokeScene } from "./feed.js";
+import type {
+  FeedMessage,
+  KaraokeAir,
+  KaraokeLine,
+  KaraokeMember,
+  KaraokeNote,
+  KaraokeParts,
+  KaraokePitch,
+  KaraokeQueueEntry,
+  KaraokeScene,
+  KaraokeSong,
+} from "./feed.js";
 import { bytesBase64, encodeMulaw, VOICE_RATE } from "./karaoke-audio.js";
+import { LANE_HZ } from "./lanes.js";
 
 /** One piece: its text, its reading (kanji or Chinese), its romaji (Japanese). */
 type Piece = [text: string, reading: string | null, roman: string | null];
@@ -156,13 +172,12 @@ export function demoVoice(lyrics: WorkersKaraokeLyricsV2, fromMs: number, ms: nu
   const n = Math.round((ms / 1000) * VOICE_RATE);
   const out = new Uint8Array(n);
   const pieces = lyrics.lines.flatMap((l) => l.pieces ?? []);
-  const scale = [0, 2, 4, 7, 9, 12, 9, 7];
   for (let i = 0; i < n; i++) {
     const t = fromMs / 1000 + i / VOICE_RATE;
     const k = pieces.findIndex((p) => p.start !== null && p.end !== null && t >= p.start && t < p.end);
     let v = 0;
     if (k >= 0) {
-      const semis = (scale[k % scale.length] as number) - (low ? 7 : 0);
+      const semis = (SCALE[k % SCALE.length] as number) - (low ? 7 : 0);
       const f = 440 * 2 ** (semis / 12) * (1 + 0.004 * Math.sin(2 * Math.PI * 5.5 * t));
       v = 0.18 * Math.sin(2 * Math.PI * f * t);
     }
@@ -179,6 +194,78 @@ function running(name: string, t: number, round: number): number {
   const base = 72 + 8 * Math.sin(k);
   return Math.max(0, Math.min(100, base + 9 * Math.sin(x / 4.5 + k) + Math.min(x, 20) * 0.25));
 }
+
+/** The scale step of the voice's `k`th piece, as `demoVoice` sings it (MIDI 69 is its 440 Hz). */
+const SCALE = [0, 2, 4, 7, 9, 12, 9, 7];
+
+/** The made-up reference notes: one per sung piece, on the voice's scale (the lanes' grey bars). */
+export function demoNotes(lyrics: WorkersKaraokeLyricsV2): KaraokeNote[] {
+  const pieces = lyrics.lines.flatMap((l) => l.pieces ?? []);
+  const out: KaraokeNote[] = [];
+  pieces.forEach((p, k) => {
+    if (p.start === null || p.end === null) return;
+    out.push({ start: p.start, end: p.end, midi: 69 + (SCALE[k % SCALE.length] as number) });
+  });
+  return out;
+}
+
+/**
+ * A singer's made-up pitch at song time `t` (MIDI, `null` when not singing): Mia on the notes with a
+ * little vibrato, 小明 an octave down (the lanes fold it back), Kai a bit flat and late, the cat
+ * wandering and dropping out now and then.
+ */
+export function demoPitch(notes: readonly KaraokeNote[], name: string, t: number): number | null {
+  const late = name === "Kai" ? 0.08 : name === "一隻路過的貓" ? 0.12 : 0.02;
+  const note = notes.find((n) => t - late >= n.start && t - late < n.end + 0.03);
+  if (note === undefined) return null;
+  const vibrato = 0.12 * Math.sin(2 * Math.PI * 5.5 * t);
+  switch (name) {
+    case "Mia":
+      return note.midi + vibrato;
+    case "小明":
+      return note.midi - 12 + 0.25 + vibrato;
+    case "Kai":
+      return note.midi - 0.45 + 0.6 * vibrato;
+    default:
+      // Drops out for a second now and then, and wanders around the note.
+      if (Math.sin(t * 0.9) > 0.8) return null;
+      return note.midi + 1.1 * Math.sin(1.3 * t) + vibrato;
+  }
+}
+
+/** A board line's recent pitch: frames from `fromS` to `toS` song seconds, as Core sends it. */
+function pitchPiece(notes: readonly KaraokeNote[], name: string, fromS: number, toS: number): KaraokePitch {
+  const from = Math.max(0, Math.floor(fromS * LANE_HZ));
+  const to = Math.floor(toS * LANE_HZ);
+  const midi: (number | null)[] = [];
+  for (let i = from; i < to; i++) {
+    const m = demoPitch(notes, name, i / LANE_HZ);
+    // Quarter semitones, as the one-byte track carries it.
+    midi.push(m === null ? null : Math.round(m * 4) / 4);
+  }
+  return { from, midi };
+}
+
+/** The four parts of a made-up result that add up to about `total`. */
+function demoParts(name: string, total: number): KaraokeParts {
+  const k = name.length * 0.7;
+  const r1 = (v: number) => Math.round(v * 10) / 10;
+  const pitch = Math.min(60, Math.max(0, total * 0.62 + 1.5 * Math.sin(k)));
+  const stability = Math.min(15, Math.max(0, total * 0.15 + Math.cos(k)));
+  // The cat never calibrated its delay: no rhythm part.
+  const rhythm = name === "一隻路過的貓" ? null : Math.min(15, Math.max(0, total * 0.14 - Math.sin(k)));
+  const expression = Math.min(10, Math.max(0, total - pitch - stability - (rhythm ?? 0)));
+  return { pitch: r1(pitch), stability: r1(stability), rhythm: rhythm === null ? null : r1(rhythm), expression: r1(expression) };
+}
+
+/** Songs people put in the queue (only the two above are ever sung). */
+const ASKED: KaraokeQueueEntry[] = [
+  { title: "星屑ステップ", artist: "示範歌手", by: "小明", state: "ready" },
+  { title: "海邊的夏天", artist: "示範樂團", by: "Kai", state: "preparing" },
+  { title: "壊れたテープ", artist: null, by: "一隻路過的貓", state: "failed" },
+];
+
+const songOf = (song: DemoSong): KaraokeSong => ({ id: song.id, title: song.title, artist: song.artist, durationMs: song.seconds * 1000 });
 
 export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
   let stopped = false;
@@ -222,6 +309,8 @@ export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
       if (stopped) return;
       await sing(song, round, loop);
       if (stopped) return;
+      await settle();
+      if (stopped) return;
       await results(round, loop);
     }
   })();
@@ -235,38 +324,46 @@ export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
       state: "lobby",
       round: round - 1,
       roundsLeft: left,
-      song: null,
-      shift: 0,
+      song: round === 1 ? null : songOf(song),
+      shift: loop % 3 === 2 ? -2 : 0,
       members,
       positionMs: null,
       board: [],
       note: null,
       air: QUIET,
+      settling: null,
+      queue: round === 1 ? [] : state.queue,
     });
-    await wait(1500);
-    send({ song: { id: song.id, title: song.title, artist: song.artist, durationMs: song.seconds * 1000 }, shift: loop % 3 === 2 ? -2 : 0 });
     if (round === 1) {
-      for (const person of PEOPLE.slice(1)) {
+      // Nobody has asked for a song yet; then the opener does, and the others queue theirs.
+      await wait(2200);
+      send({ song: songOf(song) });
+      for (const [i, person] of PEOPLE.slice(1).entries()) {
         await wait(1300);
         if (stopped) return;
-        send({ members: [...state.members, { ...person }] });
+        const asked = ASKED[i];
+        send({ members: [...state.members, { ...person }], queue: asked === undefined ? state.queue : [...state.queue, { ...asked }] });
       }
     }
-    // They get ready one by one.
+    // They get ready one by one, and the song being prepared is done meanwhile.
     for (const name of ["Mia", "小明", "Kai", "一隻路過的貓"]) {
       await wait(900);
       if (stopped) return;
-      send({ members: state.members.map((m) => (m.name === name ? { ...m, ready: true } : m)) });
+      send({
+        members: state.members.map((m) => (m.name === name ? { ...m, ready: true } : m)),
+        queue: name === "Kai" ? state.queue.map((e) => (e.state === "preparing" ? { ...e, state: "ready" } : e)) : state.queue,
+      });
     }
     await wait(1800);
   }
 
   async function sing(song: DemoSong, round: number, loop: number): Promise<void> {
     const lyrics = demoLyrics(song);
+    const notes = demoNotes(lyrics);
     if (backingUrl !== null) URL.revokeObjectURL(backingUrl);
     backingUrl = URL.createObjectURL(new Blob([demoBacking(song.seconds)], { type: "application/octet-stream" }));
     const backing = { url: backingUrl, format: "pcm" as const, rate: BACKING_RATE };
-    emit({ type: "karaoke_lyrics", lyrics: { room, round, song: song.id, lyrics, video, backing } });
+    emit({ type: "karaoke_lyrics", lyrics: { room, round, song: song.id, lyrics, video, backing, notes } });
     const singers = state.members.filter((m) => m.role === "singer");
     // One singer's voice is on the stream, and halfway another's (Core crossfades the change).
     const first = loop % 2 === 0 ? "Mia" : "Kai";
@@ -276,9 +373,12 @@ export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
       state: "countdown",
       round,
       roundsLeft: ROUNDS - round,
+      song: songOf(song),
       positionMs: -COUNTDOWN_MS,
       board: [],
       air: { ...ON_AIR, relay: first },
+      // Every other round the QR code stays in a corner while it is sung.
+      qrWhileSinging: loop % 2 === 1,
     });
     // The voice, a quarter of a second at a time, half a second ahead of the song.
     let nextAt = 0;
@@ -320,6 +420,10 @@ export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
           coins: 0,
           finished: false,
           onAir: m.name === relay,
+          parts: null,
+          // The singers are ahead of the stream: a board brings the last 1.5 s they sang, up to a
+          // second past where the stream is.
+          pitch: pitchPiece(notes, m.name, t - 0.5, t + 1),
         };
       });
       ranks = new Map(board.map((l) => [l.name, l.rank as number]));
@@ -328,21 +432,36 @@ export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
     clearInterval(voices);
   }
 
+  /** The song is over: the results come in one by one (結算中…), then it is about done. */
+  async function settle(): Promise<void> {
+    const board = state.board.map((l) => ({ ...l, pitch: null, onAir: false }));
+    for (const waiting of [["Kai", "一隻路過的貓"], ["一隻路過的貓"], []]) {
+      send({ state: "singing", positionMs: null, board, air: QUIET, settling: { waiting } });
+      await wait(1500);
+      if (stopped) return;
+    }
+  }
+
   async function results(round: number, loop: number): Promise<void> {
     const prize = loop % 2 === 0;
     const board = state.board.map((l, i) => {
       const finished = l.name !== "一隻路過的貓" || loop % 3 === 0;
       const winner = prize && i === 0;
+      const total = l.total === null ? null : Math.round((l.total + (l.source === "voice" ? 1.2 : 0)) * 10) / 10;
       return {
         ...l,
         move: "same" as const,
         onAir: false,
-        total: l.total === null ? null : Math.round((l.total + (l.source === "voice" ? 1.2 : 0)) * 10) / 10,
+        total,
         winner,
         finished,
         coins: (winner ? 15 : 0) + (finished ? 3 : 0),
+        parts: total === null ? null : demoParts(l.name, total),
+        pitch: null,
       };
     });
+    // The scene names the next song by now.
+    const next = SONGS[(loop + 1) % SONGS.length] as DemoSong;
     send({
       state: "results",
       positionMs: null,
@@ -350,8 +469,10 @@ export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
       note: prize ? null : "正式分數的人不到兩個,這一首沒有第一名",
       air: QUIET,
       roundsLeft: ROUNDS - round,
+      settling: null,
+      song: round < ROUNDS ? songOf(next) : null,
     });
-    await wait(9000);
+    await wait(10_000);
   }
 
   return () => {
@@ -376,5 +497,10 @@ function blank(room: string): KaraokeScene {
     note: null,
     currency: CURRENCY,
     air: QUIET,
+    queue: [],
+    // A sample link: the demo's QR code opens nothing real.
+    joinUrl: `https://example.com/karaoke/room/${room}`,
+    qrWhileSinging: false,
+    settling: null,
   };
 }

@@ -3,13 +3,27 @@
 // lrclib and is untrusted. Every request goes through Core's endpoint registry (`request`), which
 // adds the worker's token and relays it over a host's control link when the worker is not
 // reachable directly.
+//
+// Files (a song's audio and video, a karaoke song's files) are bounded by progress, not by a total:
+// the answer must come within the stall time, and then the bytes must keep coming (none for
+// `stallMs` and the transfer is given up), so a slow link that works finishes however long the
+// file is (2026-11-19: a 4-minute song's raw audio over a friend's home upload took longer than
+// the 200 s the whole download was allowed). Each transfer logs its size, time and rate; a stalled
+// one logs where it stopped. A file saved to disk is written to `<dest>.part` first and resumed
+// from there (`range` with `if-range`) when it is asked for again after a broken transfer.
 
-import { createWriteStream } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import {
+  type FileHandle,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { connect } from "node:net";
 import { dirname } from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import {
   type WORKERS_SING_PCM_TRACKS,
   WorkersHealthSchema,
@@ -29,7 +43,10 @@ import {
   type WorkersSingSongMeta,
   WorkersSingSongMetaSchema,
 } from "@miyoria/contracts/workers";
+import { getLogger } from "@miyoria/runtime/kernel";
 import type { Endpoint, EndpointSource } from "./endpoints.js";
+
+const log = getLogger("sing");
 
 export const SongMetaSchema = WorkersSingSongMetaSchema;
 export type SongMeta = WorkersSingSongMeta;
@@ -111,7 +128,10 @@ export interface SingWorker {
   songs(signal?: AbortSignal): Promise<SongMeta[]>;
   /** PCM s16le mono at `song.play.sample_rate`. */
   audio(song: string, track: SongTrack, signal?: AbortSignal): Promise<Int16Array>;
-  /** Saves one of the song's files (its video) to `dest`; the worker may be on another machine. */
+  /**
+   * Saves one of the song's files (its video, its audio) to `dest`; the worker may be on another
+   * machine. A transfer that broke leaves `<dest>.part`, which the next call resumes when it can.
+   */
   download(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void>;
   /** Saves one of a karaoke song's files (`GET /karaoke/{id}/files/{name}`) to `dest`. */
   karaokeFile(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void>;
@@ -153,14 +173,73 @@ function relayUnavailable(error: unknown): boolean {
   return error.name === "RelayError" && (error as { sent?: unknown }).sent === false;
 }
 
+/** How long a file transfer may go without a byte, by default. */
+export const DEFAULT_STALL_MS = 30_000;
+
+export interface HttpSingWorkerOptions {
+  /**
+   * A file transfer is given up when no byte came for this long (and when its answer took this
+   * long, or the request timeout when that is longer). Default `DEFAULT_STALL_MS`.
+   */
+  stallMs?: number;
+}
+
+/** Where a transfer's bytes go. */
+interface TransferSink {
+  /**
+   * The answer came: `status` 200 or 206 (`from`: where a 206 starts), the body's length when the
+   * worker said it, and the file's validator (its ETag, else Last-Modified) when it sent one.
+   */
+  start(
+    status: number,
+    from: number,
+    length: number | null,
+    validator: string | null,
+  ): Promise<void>;
+  write(chunk: Uint8Array): Promise<void> | void;
+}
+
+/** The body's length (`content-length`), or `null`. */
+function lengthOf(res: Response): number | null {
+  const raw = res.headers.get("content-length");
+  if (raw === null || !/^\d+$/.test(raw.trim())) return null;
+  return Number(raw.trim());
+}
+
+/** Where a 206 answer starts (`content-range: bytes <from>-<to>/<size>`), or -1. */
+function rangeStart(res: Response): number {
+  const m = /^bytes\s+(\d+)-\d+\/(?:\d+|\*)$/.exec((res.headers.get("content-range") ?? "").trim());
+  return m === null ? -1 : Number(m[1]);
+}
+
+/** s16le bytes as samples. */
+export function pcmOf(bytes: Uint8Array): Int16Array {
+  const n = bytes.byteLength >> 1;
+  if (LITTLE_ENDIAN && bytes.byteOffset % 2 === 0) {
+    return new Int16Array(bytes.buffer, bytes.byteOffset, n).slice();
+  }
+  const out = new Int16Array(n);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i < n; i++) out[i] = view.getInt16(i * 2, true);
+  return out;
+}
+
+const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+
 /** One song worker: an endpoint of Core's registry (`sing`). */
 export class HttpSingWorker implements SingWorker {
   readonly #endpoint: Endpoint;
   readonly #source: EndpointSource;
   readonly #where: string;
   readonly #timeoutMs: number;
+  readonly #stallMs: number;
 
-  constructor(endpoint: Endpoint, timeoutMs: number, source: EndpointSource) {
+  constructor(
+    endpoint: Endpoint,
+    timeoutMs: number,
+    source: EndpointSource,
+    options: HttpSingWorkerOptions = {},
+  ) {
     this.#endpoint = endpoint;
     this.#source = source;
     this.#where =
@@ -168,11 +247,13 @@ export class HttpSingWorker implements SingWorker {
         ? endpoint.url.replace(/\/+$/, "")
         : `${endpoint.service} on ${endpoint.host} (over its control link)`;
     this.#timeoutMs = timeoutMs;
+    this.#stallMs = options.stallMs ?? DEFAULT_STALL_MS;
   }
 
-  async #call(path: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal) {
-    const timeout = AbortSignal.timeout(timeoutMs);
-    const all = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  /** `timeoutMs` `null`: the caller's `signal` bounds it (a file transfer, see `#transfer`). */
+  async #call(path: string, init: RequestInit, timeoutMs: number | null, signal?: AbortSignal) {
+    const timeout = timeoutMs === null ? null : AbortSignal.timeout(timeoutMs);
+    const all = timeout === null ? signal : signal ? AbortSignal.any([signal, timeout]) : timeout;
     let res: Response;
     try {
       res = await this.#source.request(this.#endpoint, path, { ...init, signal: all });
@@ -298,34 +379,45 @@ export class HttpSingWorker implements SingWorker {
   }
 
   async audio(song: string, track: SongTrack, signal?: AbortSignal): Promise<Int16Array> {
-    const res = await this.#call(
+    let bytes = new Uint8Array(0);
+    let at = 0;
+    await this.#transfer(
       `/songs/${encodeURIComponent(song)}/files/${track}`,
+      `${song}/${track}`,
       {},
-      this.#timeoutMs * 10,
+      {
+        start: async (_status, _from, total) => {
+          // The length as said, within reason; it grows if more comes.
+          bytes = new Uint8Array(Math.min(total ?? 1024 * 1024, 256 * 1024 * 1024));
+        },
+        write: (chunk) => {
+          if (at + chunk.byteLength > bytes.byteLength) {
+            const grown = new Uint8Array(Math.max(bytes.byteLength * 2, at + chunk.byteLength));
+            grown.set(bytes.subarray(0, at));
+            bytes = grown;
+          }
+          bytes.set(chunk, at);
+          at += chunk.byteLength;
+        },
+      },
       signal,
     );
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    const out = new Int16Array(bytes.byteLength >> 1);
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    for (let i = 0; i < out.length; i++) out[i] = view.getInt16(i * 2, true);
-    return out;
+    return pcmOf(bytes.subarray(0, at));
   }
 
   download(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void> {
-    // A video is far bigger than the audio (up to `SING_VIDEO_MAX_MB`): allow it a long time.
     return this.#save(
       `/songs/${encodeURIComponent(song)}/files/${encodeURIComponent(file)}`,
-      Math.max(this.#timeoutMs * 60, 600_000),
+      `${song}/${file}`,
       dest,
       signal,
     );
   }
 
   karaokeFile(song: string, file: string, dest: string, signal?: AbortSignal): Promise<void> {
-    // A backing track is a few MB of AAC.
     return this.#save(
       `/karaoke/${encodeURIComponent(song)}/files/${encodeURIComponent(file)}`,
-      this.#timeoutMs * 10,
+      `karaoke ${song}/${file}`,
       dest,
       signal,
     );
@@ -389,17 +481,154 @@ export class HttpSingWorker implements SingWorker {
     return parsed.data;
   }
 
-  async #save(path: string, timeoutMs: number, dest: string, signal?: AbortSignal): Promise<void> {
-    const res = await this.#call(path, {}, timeoutMs, signal);
-    if (res.body === null) throw new SingWorkerError("song worker sent an empty file");
+  /**
+   * Saves a file to `dest` through `<dest>.part`. The part of a broken transfer is kept with the
+   * file's validator (`<dest>.part.tag`: its ETag, or Last-Modified) and resumed by the next call
+   * with `range` and `if-range`: a worker whose file changed since sends it whole (200), as does
+   * one that cannot resume, and a range it refuses (416) starts the file over once.
+   */
+  async #save(path: string, what: string, dest: string, signal?: AbortSignal): Promise<void> {
     await mkdir(dirname(dest), { recursive: true });
     const part = `${dest}.part`;
+    const tagFile = `${part}.tag`;
+    for (let fresh = false; ; fresh = true) {
+      const tag = fresh ? null : await readFile(tagFile, "utf8").catch(() => null);
+      const have = tag === null ? 0 : ((await stat(part).catch(() => null))?.size ?? 0);
+      const headers: Record<string, string> =
+        tag !== null && have > 0 ? { range: `bytes=${have}-`, "if-range": tag } : {};
+      const out: { file: FileHandle | null } = { file: null };
+      try {
+        await this.#transfer(
+          path,
+          what,
+          headers,
+          {
+            start: async (status, from, _length, validator) => {
+              if (status === 206 && (have === 0 || from !== have)) {
+                throw new SingWorkerError(`a range of ${what} that was not asked for`, {
+                  status: 416,
+                });
+              }
+              // 206: the rest of the part. 200: the file whole, over whatever part there was.
+              out.file = await open(part, status === 206 ? "a" : "w");
+              if (validator !== null) await writeFile(tagFile, validator);
+              else await rm(tagFile, { force: true });
+            },
+            write: async (chunk) => {
+              await out.file?.write(chunk);
+            },
+          },
+          signal,
+        );
+        await out.file?.close();
+        out.file = null;
+        await rename(part, dest);
+        await rm(tagFile, { force: true });
+        return;
+      } catch (error) {
+        await out.file?.close().catch(() => {});
+        if (!fresh && error instanceof SingWorkerError && error.status === 416) {
+          await rm(part, { force: true });
+          await rm(tagFile, { force: true });
+          continue;
+        }
+        // A part with its validator is kept for the next call; one without cannot be resumed.
+        if ((await readFile(tagFile, "utf8").catch(() => null)) === null) {
+          await rm(part, { force: true });
+        }
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * One file transfer: the answer within the stall time (or the request timeout when that is
+   * longer), then the body with no gap of `stallMs` between bytes; the bytes go to `sink`. Logs the
+   * size, time and rate when it is complete, and how far it got when it stalled.
+   */
+  async #transfer(
+    path: string,
+    what: string,
+    headers: Record<string, string>,
+    sink: TransferSink,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const where = this.#where;
+    const t0 = performance.now();
+    const seconds = () => Math.round((performance.now() - t0) / 100) / 10;
+    const stop = new AbortController();
+    const all = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+    const headMs = Math.max(this.#timeoutMs, this.#stallMs);
+    let received = 0;
+    let timer = setTimeout(() => {
+      stop.abort(
+        new SingWorkerError(`song worker at ${where} did not answer for ${what} in ${headMs} ms`, {
+          unreachable: true,
+          maybeReceived: true,
+        }),
+      );
+    }, headMs);
     try {
-      await pipeline(Readable.fromWeb(res.body as never), createWriteStream(part));
-      await rename(part, dest);
+      const res = await this.#call(path, { headers }, null, all);
+      if (res.body === null) throw new SingWorkerError("song worker sent an empty file");
+      const total = lengthOf(res);
+      const from = res.status === 206 ? rangeStart(res) : 0;
+      const validator = res.headers.get("etag") ?? res.headers.get("last-modified");
+      await sink.start(res.status, from, total, validator);
+      // From here only progress counts: no byte for `stallMs` and it is given up.
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        log.warn(
+          { worker: where, file: what, bytes: received, seconds: seconds() },
+          "a song worker file stopped arriving",
+        );
+        stop.abort(
+          new SingWorkerError(
+            `${what} stopped arriving from ${where}: ${received} bytes in ${seconds()} s, then ` +
+              `nothing for ${Math.round(this.#stallMs / 1000)} s`,
+            { unreachable: true, maybeReceived: true },
+          ),
+        );
+      }, this.#stallMs);
+      const reader = res.body.getReader();
+      try {
+        for (;;) {
+          const next = await reader.read();
+          if (next.done) break;
+          timer.refresh();
+          received += next.value.byteLength;
+          await sink.write(next.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      if (total !== null && received !== total) {
+        throw new SingWorkerError(
+          `${what} from ${where} ended after ${received} of ${total} bytes`,
+          {
+            unreachable: true,
+            maybeReceived: true,
+          },
+        );
+      }
+      const secs = seconds();
+      log.info(
+        {
+          worker: where,
+          file: what,
+          bytes: received,
+          ...(from > 0 ? { resumed_at: from } : {}),
+          seconds: secs,
+          mbit_s: secs > 0 ? Math.round(((received * 8) / 1e6 / secs) * 100) / 100 : null,
+        },
+        "song worker file fetched",
+      );
     } catch (error) {
-      await rm(part, { force: true });
+      // The stall (or the wait for the answer) is the reason, not the abort it caused.
+      if (stop.signal.aborted && !signal?.aborted) throw stop.signal.reason;
       throw error;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

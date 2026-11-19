@@ -3,7 +3,9 @@
 // song the microphone's stream (`ChunkScheduler` over the stream worklet), the browser's own pitch
 // once a second (`PitchFeed`), and the MediaRecorder recording kept as before for when the stream
 // does not hold. The one plate it adds is the singer's trend (上升中 / 下降中 / 保持, and whether the
-// live score is 正式 or 預估): never a rank, never anyone else's score.
+// live score is 正式 or 預估): never a rank, never anyone else's score. The corner number is the
+// singer's own running total from the trend once one comes (labelled 正式 or 預估), before that
+// the browser's own (預估).
 
 import type { KaraokeRoomView, KaraokeSession, KaraokeSongView } from "@miyoria/contracts/api";
 import { useMemo, useRef } from "react";
@@ -15,7 +17,7 @@ import { postAudio, postPitch } from "./room-api";
 import { contextTimeFor } from "./room-clock";
 import { AirPlate } from "./RoomAir";
 import { ChunkScheduler, PitchFeed } from "./room-stream";
-import { type TrendEvent, trendView } from "./room-text";
+import { stageScore, type TrendEvent, trendView } from "./room-text";
 import { type Finished, PLATE, Singing, type StageRoom, type StageRun } from "./Singing";
 
 /** The browser's own pitch goes this often, in ms. */
@@ -170,7 +172,7 @@ export function RoomStage({
       onFinished={onFinished}
       onQuit={onQuit}
       onCalibrate={() => {}}
-      room={{ ...base, plate }}
+      room={{ ...base, plate, score: stageScore(trend) }}
     />
   );
 }

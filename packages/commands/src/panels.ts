@@ -596,10 +596,10 @@ function mePages(policyUrl: string | null): PanelPage[] {
       ],
     },
     {
-      // The economy's second generation (quests, titles, predictions, her room). Commands come from the economy module; without it the page is hidden.
+      // The economy's second generation (quests, titles, predictions, her room). Commands come from the economy module; without it the page is hidden. 唱 K is the karaoke module's.
       id: "play",
       label: "一起玩",
-      description: "每日任務、稱號、預測、她的房間",
+      description: "每日任務、稱號、預測、她的房間、唱 K",
       refresh: true,
       status: [{ path: "me quests", label: "今天的任務" }],
       actions: [
@@ -628,6 +628,7 @@ function mePages(policyUrl: string | null): PanelPage[] {
             fields: [field("item", "要出錢的東西（名字或代號）"), field("amount", "出多少魚幣")],
           },
         },
+        { id: "karaoke", label: "唱 K", path: "me karaoke" },
       ],
     },
     {

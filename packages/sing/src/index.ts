@@ -4,8 +4,20 @@
 
 export { singCapabilities } from "./actions.js";
 export {
+  audioKey,
+  DiskSongAudio,
+  type DiskSongAudioOptions,
+  MemorySongAudio,
+  SONG_ID,
+  type SongAudio,
+  SongAudioMissingError,
+} from "./audio.js";
+export {
+  DEFAULT_STALL_MS,
   type GpuContext,
   HttpSingWorker,
+  type HttpSingWorkerOptions,
+  pcmOf,
   type SingWorker,
   SingWorkerError,
   type SongMeta,
@@ -31,9 +43,10 @@ export {
   SingerKey,
   SingModule,
   type SingWorkerFactory,
+  type SongAudioFactory,
   workerUrls,
 } from "./module.js";
-export { paced, singSong, sleep, songBeats, songVideoPath } from "./player.js";
+export { ensureVideo, paced, singSong, sleep, songBeats, songVideoPath } from "./player.js";
 export { PROMPT_KEY, SingPrompt } from "./prompt.js";
 export {
   BACKING_LABELS,
@@ -48,6 +61,8 @@ export {
   songLabel,
 } from "./setlist.js";
 export {
+  FETCH_ATTEMPTS,
+  FETCH_STAGE,
   REASONS,
   REFUND_RETRY_MS,
   SETLIST_KEY,

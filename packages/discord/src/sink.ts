@@ -40,6 +40,8 @@ export interface RestLike {
   put(route: `/${string}`, options?: RestRequest): Promise<unknown>;
   /** Only `describe` reads; without it contexts have no names. */
   get?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
+  /** Only `editCard` edits; without it cards stay as they were sent. */
+  patch?(route: `/${string}`, options?: RestRequest): Promise<unknown>;
 }
 
 /** Discord's longest voice channel status. */
@@ -406,6 +408,33 @@ export class DiscordSink implements PlatformSink, ReplySink {
       first ??= messageId(sent);
     }
     return { context, id: first as string };
+  }
+
+  /**
+   * `ReplySink`: replaces a card sent with `sendCard` (the first message of it) with `reply`'s
+   * first part, no pings. Without `patch` on the REST client it throws.
+   */
+  async editCard(message: MessageRef, reply: CommandReply, signal?: AbortSignal): Promise<void> {
+    const patch = this.#rest.patch?.bind(this.#rest);
+    if (message.context.platform !== PLATFORM) {
+      throw new DiscordSendError(
+        `context \`${contextKeyString(message.context)}\` is not on Discord`,
+      );
+    }
+    if (!patch) throw new DiscordSendError("this client cannot edit messages");
+    const [payload] = renderReply(reply, false);
+    if (payload === undefined) return;
+    const channel = channelOf(message.context);
+    await inContext(`editing a card in ${contextKeyString(message.context)}`, () =>
+      patch(Routes.channelMessage(channel, snowflake(message.id, "message")), {
+        body: {
+          components: payload.components,
+          flags: payload.flags,
+          allowed_mentions: { parse: [] },
+        },
+        signal,
+      }),
+    );
   }
 
   /** `"<server> / <channel>"` (just the channel name in DMs); `null` when Discord won't say. */

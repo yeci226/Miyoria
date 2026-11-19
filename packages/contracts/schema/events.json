@@ -4078,6 +4078,30 @@
           "minimum": -12,
           "maximum": 12
         },
+        "queue": {
+          "default": [],
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StageLinkKaraokeQueueEntry"
+          }
+        },
+        "join_url": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "qr_while_singing": {
+          "default": false,
+          "type": "boolean"
+        },
         "members": {
           "maxItems": 64,
           "type": "array",
@@ -4121,6 +4145,30 @@
         },
         "air": {
           "$ref": "#/$defs/StageLinkKaraokeAir"
+        },
+        "settling": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "waiting": {
+                  "maxItems": 16,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 60
+                  }
+                }
+              },
+              "required": [
+                "waiting"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -4184,6 +4232,32 @@
               "type": "null"
             }
           ]
+        },
+        "notes": {
+          "default": [],
+          "maxItems": 8000,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "number",
+                "minimum": 0
+              },
+              "end": {
+                "type": "number",
+                "minimum": 0
+              },
+              "midi": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "start",
+              "end",
+              "midi"
+            ]
+          }
         }
       },
       "required": [
@@ -9181,6 +9255,75 @@
         },
         "on_air": {
           "type": "boolean"
+        },
+        "parts": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "pitch": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "stability": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "rhythm": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "expression": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "pitch",
+                "stability",
+                "rhythm",
+                "expression"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pitch": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "track": {
+                  "type": "string",
+                  "maxLength": 2000
+                }
+              },
+              "required": [
+                "from",
+                "track"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -9228,6 +9371,44 @@
         "role",
         "ready",
         "opener"
+      ]
+    },
+    "StageLinkKaraokeQueueEntry": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "artist": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "by": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "preparing",
+            "failed"
+          ]
+        }
+      },
+      "required": [
+        "title",
+        "artist",
+        "by",
+        "state"
       ]
     },
     "StageLinkKaraokeSong": {

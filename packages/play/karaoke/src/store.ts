@@ -224,6 +224,23 @@ export class KaraokeStore {
     );
   }
 
+  /**
+   * Sessions that will take no result any more (a room's round settled without one): they expire
+   * now, so a late submit is refused. Only sessions still open; returns how many.
+   */
+  expireSessions(ids: readonly string[], now: number): number {
+    if (ids.length === 0) return 0;
+    return this.#write(() =>
+      Number(
+        this.#db.orm
+          .update(karaokeSessions)
+          .set({ expires_at: at(now - 1) })
+          .where(and(inArray(karaokeSessions.id, [...ids]), eq(karaokeSessions.status, "open")))
+          .run().changes,
+      ),
+    );
+  }
+
   // ---- results ------------------------------------------------------------------------------
 
   /**

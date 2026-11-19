@@ -1,9 +1,12 @@
-// Rooms (step 4) on screen: a singer's stage shows their trend and never a ranking (even if a board
-// reached it), a spectator's stage shows the live ranking, the round's results, opening a room
-// (price and balance before paying), the admin's notice while karaoke is closed, and the recording
-// sent only when Core asks for it (and asked for again on a later look).
+// Rooms (step 4) on screen: a singer's stage shows their trend and their own number and never a
+// ranking (even if a board reached it), a spectator's stage shows the live ranking, 結算中 and the
+// results coming up by themselves, the round's results, opening a room without a song (price and
+// balance before paying), the room's song queue (adding from the list or by a link, refusals,
+// removing, the opener's order, preparation, 下一首, when 開始 is possible), the admin's notice while
+// karaoke is closed, and the recording sent only when Core asks for it (and asked for again on a
+// later look).
 
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -119,12 +122,25 @@ const room = (over: Partial<KaraokeRoomView> = {}): KaraokeRoomView => {
   return { ...view, air: { ...view.air, singers: Number.isNaN(view.air.singers) ? counted : view.air.singers } };
 };
 
+const entry = (over: Partial<KaraokeRoomView["queue"][number]> & { id: string }): KaraokeRoomView["queue"][number] => ({
+  song: song(),
+  shift: 0,
+  by: { member: "a", name: "海苔" },
+  mine: false,
+  ...over,
+});
+
+const LIMITS = { per_person: 2, max: 10 };
+
 const roomOf = (over: Partial<KaraokeRoomView>): KaraokeRoomView => ({
   code: "KTV888",
   state: "lobby",
   closed_reason: null,
   song: song(),
   shift: 0,
+  queue: [entry({ id: "e1" })],
+  next: "e1",
+  queue_limits: LIMITS,
   members: [
     { id: "me", name: "小魚乾", role: "singer", ready: false, opener: true, color: 0, hear: false, skip: false },
     { id: "a", name: "海苔", role: "singer", ready: true, opener: false, color: 1, hear: false, skip: false },
@@ -137,6 +153,7 @@ const roomOf = (over: Partial<KaraokeRoomView>): KaraokeRoomView => ({
   result: null,
   terms: TERMS,
   air: air(),
+  settling: null,
   ...over,
 });
 
@@ -226,11 +243,11 @@ const overview = (over: Partial<KaraokeOverview> = {}): KaraokeOverview => ({
   ...over,
 });
 
-function renderRoom(engine: KaraokeEngine) {
+function renderRoom(engine: KaraokeEngine, o: Partial<KaraokeOverview> = {}) {
   return renderPage(
     <RoomPage
       code="KTV888"
-      overview={overview()}
+      overview={overview(o)}
       engine={() => engine}
       latency={{ latency_ms: 40, calibrated: true }}
       floor={null}
@@ -276,9 +293,9 @@ describe("一起唱: a singer's stage", () => {
     expect(screen.queryByRole("button", { name: "從頭開始" })).toBeNull();
     expect(screen.queryByRole("group", { name: "升降調" })).toBeNull();
 
-    emit({ type: "trend", round: 1, trend: "rising", source: "voice" });
+    emit({ type: "trend", round: 1, trend: "rising", source: "voice", total: null });
     expect(await screen.findByRole("status", { name: "上升中,正式" })).toBeInTheDocument();
-    emit({ type: "trend", round: 1, trend: "dropping", source: "estimate" });
+    emit({ type: "trend", round: 1, trend: "dropping", source: "estimate", total: null });
     expect(await screen.findByRole("status", { name: "下降中,預估" })).toBeInTheDocument();
 
     emit(BOARD);
@@ -286,6 +303,120 @@ describe("一起唱: a singer's stage", () => {
     expect(container.querySelector("[data-board]")).toBeNull();
     expect(screen.queryByText("海苔")).toBeNull();
     expect(screen.queryByText("81.3")).toBeNull();
+  });
+});
+
+describe("一起唱: a singer's own number", () => {
+  it("shows their own total from the trend, 正式 or 預估, and the browser's own as 預估 before there is one", async () => {
+    const view = room({
+      state: "singing",
+      round: 1,
+      start_at_ms: Date.now() - 1_000,
+      me: { id: "me", role: "singer", opener: true, singing: true, session: session() },
+    });
+    roomSite(view);
+    const { container } = renderRoom(fakeEngine().engine);
+    await screen.findByRole("region", { name: "唱 紙船" });
+    const plate = () => container.querySelector("[data-score]") as HTMLElement;
+    // No trend yet: the browser's own running number, 預估.
+    await waitFor(() => expect(plate()).toHaveTextContent(/^預估0/));
+    emit({ type: "trend", round: 1, trend: "rising", source: "voice", total: 64.46 });
+    await waitFor(() => expect(plate()).toHaveTextContent(/^正式64\.5/));
+    emit({ type: "trend", round: 1, trend: "holding", source: "estimate", total: 58 });
+    await waitFor(() => expect(plate()).toHaveTextContent(/^預估58\.0/));
+    // A trend without a total yet: back to the browser's own.
+    emit({ type: "trend", round: 1, trend: "holding", source: "voice", total: null });
+    await waitFor(() => expect(plate()).toHaveTextContent(/^預估0/));
+    // Never anyone else's number or a rank, even if a board reached this page.
+    emit(BOARD);
+    expect(container.querySelector("[data-board]")).toBeNull();
+    expect(screen.queryByText("81.3")).toBeNull();
+    expect(screen.queryByText("海苔")).toBeNull();
+  });
+});
+
+describe("一起唱: 結算中 and the results", () => {
+  const coreResult = (): KaraokeResult =>
+    ({
+      session: "S7",
+      source: "voice",
+      voice: { state: "scored", estimate_total: 70, checks: [], upload: false },
+      song: { id: "k1", title: "紙船", artist: null },
+      at: "2026-11-18T01:00:00Z",
+      total: 72.4,
+      pitch: { score: 40, max: 60, hit: 0.7 },
+      stability: { score: 10, max: 15, wobble_cents: 20, held: 3 },
+      rhythm: { score: 12, max: 15, calibrated: true, measured: true, offset_ms: 10, spread_ms: 30, onsets: 9, found: 8, feel: "steady" },
+      expression: { score: 10.4, max: 10, vibrato_s: 1, long_tones: 1, scoops: 0, falls: 0 },
+      phrases: [],
+      facts: { coverage: 0.9, best: null, weakest: null, octave: 0, offset_cents: null, sung_s: 20, reference_s: 22 },
+      unranked: false,
+      client_total: 70,
+      latency_ms: 40,
+      best_before: null,
+      comment: { state: "none", text: null },
+    }) as KaraokeResult;
+  const ranking = (): KaraokeRoomView["result"] => ({
+    round: 1,
+    song: { id: "k1", title: "紙船", artist: "示範" },
+    settling: false,
+    note: null,
+    places: [
+      { member: "me", name: "小魚乾", color: 0, rank: 1, total: 72.4, pitch: 40, stability: 10, rhythm: 12, expression: 10.4, source: "voice", finished: true, checks: [], coins: 3, winner: false, note: null },
+    ],
+  });
+
+  it("a singer who is done sees 結算中 and whom it waits for, then the ranking by itself", async () => {
+    const singing = room({
+      state: "singing",
+      round: 1,
+      start_at_ms: Date.now() - 1_000,
+      me: { id: "me", role: "singer", opener: true, singing: true, session: session() },
+    });
+    const { posts } = roomSite(singing, (method, url) => {
+      if (url.pathname === "/api/member/karaoke/sessions/S7/result" && method === "POST") return { body: coreResult() };
+      if (url.pathname === "/api/member/karaoke/sessions/S7") return { body: coreResult() };
+      return undefined;
+    });
+    renderRoom(fakeEngine().engine);
+    await screen.findByRole("region", { name: "唱 紙船" });
+    const done = await screen.findByRole("button", { name: "唱完了" });
+    await waitFor(() => expect(done).toBeEnabled());
+    fireEvent.click(done);
+    // The take goes, and the stage gives way to their own take while the others finish.
+    await waitFor(() => expect(posts.filter((p) => p.path === "/api/member/karaoke/sessions/S7/result")).toHaveLength(1), { timeout: 6_000 });
+    const card = await screen.findByRole("region", { name: "房間 KTV888" }, { timeout: 6_000 });
+    expect(card).toHaveTextContent("等其他人唱完");
+    expect(screen.queryByRole("region", { name: "唱 紙船" })).toBeNull();
+    // The song is over: 結算中, and for whom.
+    emit({ type: "room", room: { ...singing, settling: { waiting: ["海苔"], until_ms: Date.now() + 90_000 } } });
+    expect(await within(card).findByText("結算中…")).toBeInTheDocument();
+    expect(card).toHaveTextContent("等 海苔 的分數");
+    emit({ type: "room", room: { ...singing, settling: { waiting: [], until_ms: Date.now() + 90_000 } } });
+    expect(await within(card).findByText("馬上就好")).toBeInTheDocument();
+    // Settled: the ranking, with their own take beside it.
+    emit({ type: "room", room: room({ state: "results", round: 1, result: ranking() }) });
+    expect(await screen.findByRole("region", { name: "這一輪的名次" })).toHaveTextContent("小魚乾(你)");
+    expect(screen.getByRole("region", { name: "你這一輪" })).toHaveTextContent("72.4");
+    expect(screen.queryByText("結算中…")).toBeNull();
+  }, 15_000);
+
+  it("a spectator sees 結算中 on the stage, then the ranking replaces the stage by itself", async () => {
+    const watching = room({
+      state: "singing",
+      round: 1,
+      start_at_ms: Date.now() - 40_000,
+      me: { id: "b", role: "spectator", opener: false, singing: false, session: session() },
+      settling: { waiting: ["海苔", "Akari"], until_ms: Date.now() + 60_000 },
+    });
+    roomSite(watching);
+    renderRoom(fakeEngine().engine);
+    const stage = await screen.findByRole("region", { name: "看 紙船" });
+    const plate = within(stage).getByText("結算中…").closest("[data-settling]") as HTMLElement;
+    expect(plate).toHaveTextContent("等 海苔、Akari 的分數");
+    emit({ type: "room", room: room({ state: "results", round: 1, me: { id: "b", role: "spectator", opener: false, singing: false, session: null }, result: ranking() }) });
+    expect(await screen.findByRole("region", { name: "這一輪的名次" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "看 紙船" })).toBeNull();
   });
 });
 
@@ -355,8 +486,8 @@ describe("一起唱: the results", () => {
     expect(rows[2]).toHaveTextContent("—");
     expect(rows[2]).toHaveTextContent("沒有唱完");
     expect(ranking).toHaveTextContent("這一輪只有一個人唱完,沒有獎");
-    // The opener picks the next song or closes.
-    expect(screen.getByRole("button", { name: "選下一首" })).toBeEnabled();
+    // The opener starts the next song from the queue, or closes.
+    expect(screen.getByRole("button", { name: "開始下一首" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "關房" })).toBeEnabled();
   });
 });
@@ -379,6 +510,207 @@ describe("一起唱: the lobby", () => {
   });
 });
 
+describe("一起唱: the room's song queue", () => {
+  /** Every call to the queue's routes, and an answer for each. */
+  function queueSite(view: KaraokeRoomView, answer: (method: string, path: string, body: unknown) => { status?: number; body: unknown } | undefined = () => ({ body: view })) {
+    const calls: { method: string; path: string; body: unknown }[] = [];
+    roomSite(view, (method, url, body) => {
+      if (!url.pathname.startsWith("/api/member/karaoke/rooms/KTV888/queue")) return undefined;
+      calls.push({ method, path: url.pathname, body });
+      return answer(method, url.pathname, body);
+    });
+    return calls;
+  }
+  const queue = () => screen.findByRole("region", { name: "點歌清單" });
+  const rowOf = (card: HTMLElement, id: string) => card.querySelector(`[data-entry="${id}"]`) as HTMLElement;
+  const notOpener = { id: "me", role: "singer" as const, opener: false, singing: false, session: null };
+  const members = [member({ id: "a", name: "海苔", opener: true, color: 1, ready: true }), member({ id: "me", name: "小魚乾", color: 0 })];
+
+  it("shows each entry's song, who added it, its key and preparation, and which one is next", async () => {
+    queueSite(
+      room({
+        queue: [
+          entry({ id: "e1", shift: 2 }),
+          entry({ id: "e2", song: song({ id: "k3", title: "春日影", artist: null, state: "preparing", stage: "separate", progress: 0.42 }), by: { member: "me", name: "小魚乾" }, mine: true }),
+          entry({ id: "e3", song: song({ id: "k4", title: "一首很長的歌", artist: null, state: "failed", error: "太長了" }), by: { member: null, name: "走掉的人" } }),
+        ],
+      }),
+    );
+    renderRoom(fakeEngine().engine);
+    const card = await queue();
+    expect(card).toHaveTextContent("2 / 10 首 · 每人 2 首");
+    const ready = rowOf(card, "e1");
+    expect(ready).toHaveTextContent("紙船");
+    expect(ready).toHaveTextContent("海苔");
+    expect(ready).toHaveTextContent("+2");
+    expect(ready).toHaveTextContent("下一首");
+    const preparing = rowOf(card, "e2");
+    expect(preparing).toHaveTextContent("小魚乾(你)");
+    expect(preparing).toHaveTextContent("分離人聲 42%");
+    expect(within(preparing).getByRole("meter", { name: "春日影 準備進度" })).toHaveAttribute("aria-valuenow", "0.42");
+    expect(preparing).not.toHaveTextContent("下一首");
+    const failed = rowOf(card, "e3");
+    expect(failed).toHaveTextContent("準備失敗,輪到時會跳過");
+    expect(failed).toHaveTextContent("走掉的人");
+    // The room's own line says what is next.
+    expect(screen.getByRole("group", { name: "下一首" })).toHaveTextContent("紙船");
+  });
+
+  it("adds a song from the ready list in its own key, and the answer is the room", async () => {
+    const after = room({ queue: [entry({ id: "e1" }), entry({ id: "e2", song: song({ id: "k2", title: "Lemon" }), shift: 1, by: { member: "me", name: "小魚乾" }, mine: true })] });
+    const calls = queueSite(room(), () => ({ body: after }));
+    renderRoom(fakeEngine().engine);
+    const card = await queue();
+    const add = within(card).getByRole("form", { name: "點一首" });
+    const button = within(add).getByRole("button", { name: "點這首" });
+    expect(button).toBeDisabled();
+    // Default key: the original.
+    expect(within(add).getByRole("group", { name: "升降調" })).toHaveTextContent("原調");
+    await userEvent.click(within(add).getByRole("radio", { name: /Lemon/ }));
+    await userEvent.click(within(add).getByRole("button", { name: "升半音" }));
+    await userEvent.click(button);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toEqual({ method: "POST", path: "/api/member/karaoke/rooms/KTV888/queue", body: { song: "k2", shift: 1 } });
+    await waitFor(() => expect(rowOf(card, "e2")).toHaveTextContent("Lemon"));
+    // Ready for the next one: nothing picked, the original key.
+    expect(within(add).getByRole("group", { name: "升降調" })).toHaveTextContent("原調");
+    expect(within(add).getByRole("button", { name: "點這首" })).toBeDisabled();
+  });
+
+  it("adds by a link or words through Core's song request, and shows Core's refusal", async () => {
+    let n = 0;
+    const calls = queueSite(room(), () => (n++ === 0 ? { status: 409, body: { error: "今天已經準備了 10 首,明天再來" } } : { body: room() }));
+    renderRoom(fakeEngine().engine);
+    const card = await queue();
+    const add = within(card).getByRole("form", { name: "點一首" });
+    await userEvent.click(within(add).getByRole("radio", { name: "連結或歌名" }));
+    expect(add).toHaveTextContent("今天的 2 / 10 首");
+    await userEvent.type(within(add).getByLabelText("貼連結或打歌名"), "https://youtu.be/abc ");
+    await userEvent.click(within(add).getByRole("button", { name: "點這首" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.body).toEqual({ text: "https://youtu.be/abc", shift: 0 });
+    expect(await within(add).findByRole("alert")).toHaveTextContent("今天已經準備了 10 首,明天再來");
+    // Enter sends it again.
+    await userEvent.type(within(add).getByLabelText("貼連結或打歌名"), "{Enter}");
+    await waitFor(() => expect(calls).toHaveLength(2));
+    await waitFor(() => expect(within(add).queryByRole("alert")).toBeNull());
+    expect(within(add).getByLabelText("貼連結或打歌名")).toHaveValue("");
+  });
+
+  it("someone who did not open the room takes out their own entry only, and cannot reorder", async () => {
+    const view = room({
+      members,
+      me: notOpener,
+      queue: [entry({ id: "e1" }), entry({ id: "e2", song: song({ id: "k2", title: "Lemon" }), by: { member: "me", name: "小魚乾" }, mine: true })],
+    });
+    const calls = queueSite(view, () => ({ body: room({ ...view, queue: [entry({ id: "e1" })] }) }));
+    renderRoom(fakeEngine().engine);
+    const card = await queue();
+    expect(within(card).queryByRole("button", { name: /^往前移|^往後移/ })).toBeNull();
+    expect(within(rowOf(card, "e1")).queryByRole("button", { name: "拿掉 紙船" })).toBeNull();
+    await userEvent.click(within(rowOf(card, "e2")).getByRole("button", { name: "拿掉 Lemon" }));
+    await waitFor(() => expect(calls).toEqual([{ method: "DELETE", path: "/api/member/karaoke/rooms/KTV888/queue/e2", body: undefined }]));
+    await waitFor(() => expect(rowOf(card, "e2")).toBeNull());
+    // Not the opener: no start, they wait for the opener.
+    expect(screen.queryByRole("button", { name: "開始" })).toBeNull();
+    expect(screen.getByText("等房主開始")).toBeInTheDocument();
+  });
+
+  it("the opener moves entries up and down and takes out anyone's", async () => {
+    const view = room({ queue: [entry({ id: "e1" }), entry({ id: "e2", song: song({ id: "k2", title: "Lemon" }), by: { member: "b", name: "路過的人" } })] });
+    const calls = queueSite(view);
+    renderRoom(fakeEngine().engine);
+    const card = await queue();
+    expect(within(rowOf(card, "e1")).getByRole("button", { name: "往前移 紙船" })).toBeDisabled();
+    expect(within(rowOf(card, "e2")).getByRole("button", { name: "往後移 Lemon" })).toBeDisabled();
+    await userEvent.click(within(rowOf(card, "e1")).getByRole("button", { name: "往後移 紙船" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toEqual({ method: "POST", path: "/api/member/karaoke/rooms/KTV888/queue/e1/move", body: { to: 1 } });
+    await userEvent.click(within(rowOf(card, "e2")).getByRole("button", { name: "往前移 Lemon" }));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]?.body).toEqual({ to: 0 });
+    await userEvent.click(within(rowOf(card, "e2")).getByRole("button", { name: "拿掉 Lemon" }));
+    await waitFor(() => expect(calls).toHaveLength(3));
+    expect(calls[2]).toMatchObject({ method: "DELETE", path: "/api/member/karaoke/rooms/KTV888/queue/e2" });
+  });
+
+  it("a panel admin who did not open the room may reorder too; a refusal is Core's sentence", async () => {
+    const view = room({ members, me: notOpener, queue: [entry({ id: "e1" }), entry({ id: "e2", song: song({ id: "k2", title: "Lemon" }) })] });
+    queueSite(view, () => ({ status: 403, body: { error: "只有開房的人可以這樣做" } }));
+    renderRoom(fakeEngine().engine, { admin: true });
+    const card = await queue();
+    await userEvent.click(within(rowOf(card, "e2")).getByRole("button", { name: "往前移 Lemon" }));
+    expect(await within(card).findByRole("alert")).toHaveTextContent("只有開房的人可以這樣做");
+  });
+
+  it("開始 waits for a ready entry and for someone ready", async () => {
+    const preparing = entry({ id: "e1", song: song({ state: "preparing", stage: "download", progress: 0.1 }) });
+    roomSite(room({ queue: [preparing], next: null, song: null }));
+    const a = renderRoom(fakeEngine().engine);
+    expect(await screen.findByRole("button", { name: "開始" })).toBeDisabled();
+    expect(screen.getByRole("group", { name: "下一首" })).toHaveTextContent("清單裡的歌還在準備");
+    a.unmount();
+
+    roomSite(room({ queue: [], next: null, song: null }));
+    const b = renderRoom(fakeEngine().engine);
+    expect(await screen.findByRole("button", { name: "開始" })).toBeDisabled();
+    expect(await queue()).toHaveTextContent("還沒有人點歌");
+    expect(screen.getByRole("group", { name: "下一首" })).toHaveTextContent("還沒有人點歌");
+    b.unmount();
+
+    roomSite(room({ members: members.map((m) => ({ ...m, ready: false, opener: m.id === "me" })) }));
+    const c = renderRoom(fakeEngine().engine);
+    expect(await screen.findByRole("button", { name: "開始" })).toBeDisabled();
+    expect(screen.getByText("還沒有人準備好唱")).toBeInTheDocument();
+    c.unmount();
+
+    const { posts } = roomSite(room(), (method, url) => (url.pathname.endsWith("/start") && method === "POST" ? { body: room() } : undefined));
+    renderRoom(fakeEngine().engine);
+    await userEvent.click(await screen.findByRole("button", { name: "開始" }));
+    await waitFor(() => expect(posts.filter((p) => p.path.endsWith("/start"))).toHaveLength(1));
+  });
+
+  it("the results show what is next, let anyone add, and the opener starts again from there", async () => {
+    const view = room({
+      state: "results",
+      round: 1,
+      rounds_left: 3,
+      queue: [entry({ id: "e4", song: song({ id: "k2", title: "Lemon" }), shift: -1 })],
+      next: "e4",
+      song: song({ id: "k2", title: "Lemon" }),
+      shift: -1,
+      result: { round: 1, song: { id: "k1", title: "紙船", artist: "示範" }, settling: false, note: null, places: [] },
+    });
+    const calls = queueSite(view);
+    renderRoom(fakeEngine().engine);
+    expect(await screen.findByRole("region", { name: "這一輪的名次" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "下一首" })).toHaveTextContent("Lemon");
+    expect(screen.getByRole("group", { name: "下一首" })).toHaveTextContent("−1");
+    expect(screen.getByRole("button", { name: "開始下一首" })).toBeEnabled();
+    const card = await queue();
+    const add = within(card).getByRole("form", { name: "點一首" });
+    await userEvent.click(within(add).getByRole("radio", { name: /紙船/ }));
+    await userEvent.click(within(add).getByRole("button", { name: "點這首" }));
+    await waitFor(() => expect(calls[0]?.body).toEqual({ song: "k1", shift: 0 }));
+  });
+
+  it("says why a song cannot be added: their share is used, or the room's rounds are", async () => {
+    const mine = (id: string) => entry({ id, by: { member: "me", name: "小魚乾" }, mine: true });
+    roomSite(room({ queue: [mine("e1"), mine("e2")] }));
+    const a = renderRoom(fakeEngine().engine);
+    const card = await queue();
+    expect(within(card).getByRole("button", { name: "點這首" })).toBeDisabled();
+    expect(card).toHaveTextContent("你已經點了 2 首在等,唱完再點");
+    a.unmount();
+
+    roomSite(room({ state: "results", round: 4, rounds_left: 0, queue: [], next: null, song: null }));
+    renderRoom(fakeEngine().engine);
+    const done = await queue();
+    expect(within(done).queryByRole("form", { name: "點一首" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^開始/ })).toBeNull();
+  });
+});
+
 describe("一起唱: opening a room", () => {
   function listSite(o: { balance: number | null; open?: Partial<KaraokeOverview> }) {
     const posts: { path: string; body: unknown }[] = [];
@@ -396,7 +728,7 @@ describe("一起唱: opening a room", () => {
     return posts;
   }
 
-  it("shows the price and the balance before paying, and pays only on the explicit button", async () => {
+  it("opens without a song: the price and the balance before paying, and pays only on the explicit button", async () => {
     window.history.replaceState(null, "", "/karaoke");
     const posts = listSite({ balance: 128 });
     renderPage(<KaraokePage member={MEMBER as never} home="/" />);
@@ -410,14 +742,15 @@ describe("一起唱: opening a room", () => {
     expect(price).toHaveTextContent("你有128 魚幣");
     expect(price).toHaveTextContent("開房後108 魚幣");
     const pay = within(dialog).getByRole("button", { name: "付 20 魚幣開房" });
-    // A song first.
-    expect(pay).toBeDisabled();
-    await userEvent.click(within(dialog).getByRole("radio", { name: /Lemon/ }));
-    await userEvent.click(within(dialog).getByRole("button", { name: "升半音" }));
+    // No song to pick here: songs are queued inside the room.
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    expect(within(dialog).queryByRole("group", { name: "升降調" })).toBeNull();
+    expect(dialog).toHaveTextContent("開房後大家在房間裡點歌");
+    expect(pay).toBeEnabled();
     expect(posts.filter((p) => p.path === "/api/member/karaoke/rooms")).toHaveLength(0);
     await userEvent.click(pay);
     await waitFor(() => expect(posts.filter((p) => p.path === "/api/member/karaoke/rooms")).toHaveLength(1));
-    expect(posts.find((p) => p.path === "/api/member/karaoke/rooms")?.body).toEqual({ song: "k2", shift: 1 });
+    expect(posts.find((p) => p.path === "/api/member/karaoke/rooms")?.body).toEqual({});
     // And the room's own address.
     await waitFor(() => expect(window.location.pathname).toBe("/karaoke/room/KTV888"));
     window.history.replaceState(null, "", "/");
@@ -430,7 +763,6 @@ describe("一起唱: opening a room", () => {
     const block = await screen.findByRole("region", { name: "一起唱" });
     await userEvent.click(await within(block).findByRole("button", { name: "開一間房" }));
     const dialog = await screen.findByRole("dialog", { name: "開一間房" });
-    await userEvent.click(within(dialog).getByRole("radio", { name: /Lemon/ }));
     expect(within(dialog).getByRole("button", { name: "付 20 魚幣開房" })).toBeDisabled();
     expect(within(dialog).getByRole("alert")).toHaveTextContent("魚幣不夠,開房要 20 魚幣");
   });

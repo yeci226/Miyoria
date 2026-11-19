@@ -6,6 +6,8 @@ import type {
   KaraokeRoomEvent,
   KaraokeRoomMember,
   KaraokeRoomState,
+  KaraokeRoomView,
+  KaraokeSession,
 } from "@miyoria/contracts/api";
 import { decodeTrack, fromBase64, TRACK_HZ } from "@miyoria/play/karaoke/score";
 
@@ -46,6 +48,114 @@ export const SOURCE_WORDS: Record<"voice" | "estimate", string> = { voice: "正�
 export function trendView(e: Pick<TrendEvent, "trend" | "source"> | null): TrendView | null {
   if (e === null) return null;
   return { ...TREND_WORDS[e.trend], source: SOURCE_WORDS[e.source] };
+}
+
+/** The singer's own running number on their stage: Core's, labelled by where it comes from. */
+export interface StageScore {
+  total: number;
+  source: "voice" | "estimate";
+}
+
+/**
+ * The number a room's singer sees: their own running total from the latest `trend` (正式 from the
+ * stream, 預估 from the browser), or `null` while there is none (the stage shows the browser's own
+ * number as 預估). Their own only: a trend never carries anyone else's.
+ */
+export function stageScore(e: Pick<TrendEvent, "source" | "total"> | null): StageScore | null {
+  if (e === null || e.total === null || !Number.isFinite(e.total)) return null;
+  return { total: e.total, source: e.source };
+}
+
+// ---- a singer's stage ------------------------------------------------------------------------
+
+/** A singer's stage of one round: its session and start, as the room gave them. */
+export interface HeldStage {
+  round: number;
+  session: KaraokeSession;
+  startAt: number;
+}
+
+/**
+ * The stage this person sings on now, or `null`: the room's own word while it gives one (a round
+ * running, they sing it, its session and start), else the one held from it for the same round while
+ * that round is still on, so a later view (the song over, 結算中) cannot end the stage before the
+ * take is sent. The results, a closed room or the next round let it go.
+ */
+export function stageOf(room: KaraokeRoomView, held: { current: HeldStage | null }): HeldStage | null {
+  const running = room.state === "countdown" || room.state === "singing";
+  const me = room.me;
+  if (running && me?.singing && me.session !== null && room.start_at_ms !== null) {
+    const now = held.current;
+    if (now === null || now.round !== room.round || now.session.session !== me.session.session || now.startAt !== room.start_at_ms) {
+      held.current = { round: room.round, session: me.session, startAt: room.start_at_ms };
+    }
+    return held.current;
+  }
+  return running && held.current?.round === room.round ? held.current : null;
+}
+
+// ---- 結算中 -------------------------------------------------------------------------------------
+
+/** The room's `settling`. */
+export type Settling = KaraokeRoomView["settling"];
+
+/** 「結算中…」 and whom it waits for: `等 海苔、Akari 的分數`, or 馬上就好 when no one. */
+export function settlingView(s: NonNullable<Settling>): { title: string; detail: string } {
+  const names = s.waiting.filter((n) => n.trim() !== "");
+  return {
+    title: "結算中…",
+    detail: names.length === 0 ? "馬上就好" : `等 ${names.join("、")} 的分數`,
+  };
+}
+
+// ---- the queue (「第四步之後的修改:先開房再點歌」) ---------------------------------------------------
+
+type QueueRoom = Pick<KaraokeRoomView, "state" | "queue" | "next" | "queue_limits" | "rounds_left" | "members">;
+
+/** Entries waiting (a failed one is skipped and counts for nothing): all of them, and this person's. */
+export function queueCounts(room: Pick<KaraokeRoomView, "queue">): { waiting: number; mine: number } {
+  const live = room.queue.filter((e) => e.song.state !== "failed");
+  return { waiting: live.length, mine: live.filter((e) => e.mine).length };
+}
+
+/** Songs are queued in the lobby and after a round, while the room has rounds left. */
+export function canQueue(room: Pick<KaraokeRoomView, "state" | "rounds_left">): boolean {
+  return (room.state === "lobby" || room.state === "results") && room.rounds_left > 0;
+}
+
+/**
+ * Why this person cannot add a song now, in Core's own sentences (`null`: they can). Core checks
+ * the same and says the same; this only spares a refusal.
+ */
+export function queueBlocked(room: QueueRoom): string | null {
+  if (room.rounds_left <= 0) return "這間房的輪數用完了";
+  const { waiting, mine } = queueCounts(room);
+  const { per_person, max } = room.queue_limits;
+  if (mine >= per_person) return `你已經點了 ${per_person} 首在等,唱完再點`;
+  if (waiting >= max) return "點歌的清單滿了,等唱完幾首再點";
+  return null;
+}
+
+/** Why the opener cannot start the next round now (`null`: they can). */
+export function startBlocked(room: QueueRoom): string | null {
+  if (room.state !== "lobby" && room.state !== "results") return null;
+  if (room.rounds_left <= 0) return "這間房的輪數用完了";
+  if (room.next === null) {
+    return room.queue.some((e) => e.song.state === "preparing") ? "清單裡的歌還在準備" : "清單裡還沒有準備好的歌,先點一首";
+  }
+  if (!room.members.some((m) => m.role === "singer" && m.ready)) return "還沒有人準備好唱";
+  return null;
+}
+
+/** Where an entry's song is: `null` ready, else its preparation in words (failed ones are skipped). */
+export function entryState(
+  song: Pick<KaraokeRoomView["queue"][number]["song"], "state" | "stage" | "progress">,
+  stageWord: (stage: string | null) => string,
+): { word: string; failed: boolean; progress: number | null } | null {
+  if (song.state === "ready") return null;
+  if (song.state === "failed") return { word: "準備失敗,輪到時會跳過", failed: true, progress: null };
+  const p = Math.max(0, Math.min(1, song.progress));
+  return { word: `${stageWord(song.stage)} ${Math.round(p * 100)}%`, failed: false, progress: p };
 }
 
 // ---- colours -----------------------------------------------------------------------------------

@@ -3,9 +3,10 @@
 // while a round is sung) and Core's clock is learned beside it. What shows follows the room and
 // the person in it: joining (sing or watch), the lobby, a singer's stage (the step-3 scene with
 // their trend, never a ranking), a spectator's stage (the scene with the live ranking and every
-// singer's line), a singer who is done waiting for the others, the round's ranking, or why the
-// room closed. A singer's take is sent from here as a singer alone sends theirs, so it goes on
-// when the stage gives way to the results.
+// singer's line), a singer who is done waiting for the others (結算中 and whom Core still waits
+// for, once the song is over), the round's ranking, or why the room closed. A singer's take is sent
+// from here as a singer alone sends theirs, so it goes on when the stage gives way to the results;
+// the stage itself stays until it has handed its take on. Each screen comes in with a short fade.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Eye, Mic, RotateCcw } from "lucide-react";
@@ -18,8 +19,9 @@ import { SkeletonRows } from "@/components/query-state";
 import { Dot } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import type { KaraokeEngine } from "./audio";
-import { Fact, Refusal } from "./bits";
+import { ENTER, Fact, Refusal } from "./bits";
 import { keyLabel } from "./lyric-text";
 import { resultKey, ROOMS } from "./queries";
 import { uploadVoice } from "./recorder";
@@ -27,7 +29,15 @@ import { voicePollMs } from "./Result";
 import { score1, voiceView } from "./result-text";
 import { openRoomEvents, postClock, type RoomLink } from "./room-api";
 import { CLOCK_EVERY_MS, type ClockOffset, syncClock } from "./room-clock";
-import { type BoardEvent, BoardLines, type TrendEvent, wantsUpload } from "./room-text";
+import {
+  type BoardEvent,
+  BoardLines,
+  type HeldStage,
+  settlingView,
+  stageOf,
+  type TrendEvent,
+  wantsUpload,
+} from "./room-text";
 import { type RoomActions, RoomLobby, RoomResults } from "./RoomLobby";
 import { RoomStage } from "./RoomStage";
 import type { Finished } from "./Singing";
@@ -205,7 +215,7 @@ function MyTake({ take }: { take: ReturnType<typeof useRoundTake> }) {
 
 function Notice({ title, children, onBack }: { title: string; children: ReactNode; onBack: () => void }) {
   return (
-    <Page>
+    <Page className={ENTER}>
       <Card aria-label={title}>
         <CardHeader>
           <CardTitle>{title}</CardTitle>
@@ -232,7 +242,7 @@ function JoinRoom({ room, onRoom, onBack }: { room: KaraokeRoomView; onRoom: (r:
   const running = room.state === "countdown" || room.state === "singing";
   const seats = room.members.filter((m) => m.role === "singer").length < room.terms.max_singers;
   return (
-    <Page>
+    <Page className={ENTER}>
       <Card aria-label={`加入房間 ${room.code}`}>
         <CardHeader>
           <CardTitle>
@@ -294,6 +304,9 @@ export function RoomPage({
   const inRoom = room?.me != null && room.state !== "closed";
   const offset = useRoomClock(code, inRoom);
   const take = useRoundTake();
+  // The stage this singer is on, kept until their take is handed on: a later view of the room
+  // (the song over, 結算中) must not take it away before it has sent what was sung.
+  const held = useRef<HeldStage | null>(null);
 
   const leave = useCallback(() => {
     void api.rpc.karaokeRooms
@@ -347,42 +360,56 @@ export function RoomPage({
   if (me === null) return <JoinRoom room={room} onRoom={setRoom} onBack={back} />;
 
   const running = room.state === "countdown" || room.state === "singing";
-  const session = me.session;
-  const done = session !== null && take.finished?.session === session.session;
   const trend = feed.trend !== null && feed.trend.round === room.round ? feed.trend : null;
+  const settling = room.settling;
+  const stage = stageOf(room, held);
+  const handedIn = take.finished !== null && take.round === room.round;
 
-  if (running && me.singing && session !== null && room.start_at_ms !== null && !done) {
+  if (stage !== null && !(handedIn && take.finished?.session === stage.session.session)) {
     return (
       <RoomStage
-        key={session.session}
+        key={stage.session.session}
         room={room}
         onRoom={setRoom}
         code={code}
-        session={session}
-        song={session.song}
-        startAtMs={room.start_at_ms}
+        session={stage.session}
+        song={stage.session.song}
+        startAtMs={stage.startAt}
         offset={offset}
         trend={trend}
         engine={engine}
         latency={latency ?? { latency_ms: 0, calibrated: false }}
         floor={floor}
-        onFinished={(f) => take.finish(f, room.round)}
+        onFinished={(f) => take.finish(f, stage.round)}
         onQuit={leave}
       />
     );
   }
 
-  if (running && me.singing && done) {
-    // Done before the others: their own take only; the ranking comes when the round is over.
+  if (running && handedIn) {
+    // Done before the round is: their own take only; the ranking comes when the round is settled.
+    const s = settling === null ? null : settlingView(settling);
     return (
-      <Page>
+      <Page className={ENTER}>
         <Card aria-label={`房間 ${room.code}`}>
           <CardHeader>
             <CardTitle>你唱完了</CardTitle>
           </CardHeader>
-          <p className="flex items-center gap-2 text-[13px] text-muted-foreground" role="status">
+          <p
+            key={s === null ? "others" : "settling"}
+            className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground", ENTER)}
+            role="status"
+            data-settling={s === null ? undefined : ""}
+          >
             <Dot tone="brand" pulse />
-            等其他人唱完,名次會在這裡出來
+            {s === null ? (
+              "等其他人唱完,名次會在這裡出來"
+            ) : (
+              <>
+                <span className="font-medium text-foreground">{s.title}</span>
+                <span>{s.detail}</span>
+              </>
+            )}
           </p>
         </Card>
         <MyTake take={take} />
@@ -412,7 +439,7 @@ export function RoomPage({
         overview={overview}
         latency={latency}
         actions={actions}
-        mine={take.finished && take.round === room.round ? <MyTake take={take} /> : undefined}
+        mine={handedIn ? <MyTake take={take} /> : undefined}
       />
     );
   }

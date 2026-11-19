@@ -20,6 +20,12 @@
 //   `Events.SpeechPause`): the voice module neither speaks nor transcribes, the overlay says so.
 // * The song being prepared, its worker stage and progress are published as
 //   `Events.SingPrepare` whenever they change (the overlay's activity line).
+// * Once the worker has made a song, its audio is brought onto Core (`SongAudio`, stage `fetch`)
+//   before the song counts as ready, so she never sits "singing" while it comes over the network.
+//   A fetch that fails is tried again; the worker no longer having the song makes it again (the
+//   failover sends that to the next worker when the first is gone). A song whose audio went from
+//   Core (the budget, a restart without it) goes back to `fetch` when it is about to be sung, and
+//   keeps its place. She is shown as singing (`singing()`, the card) only once the playback started.
 // * A request with a song priority ticket (`priority`, the person's own command or member page
 //   only) pays it first through `SongPriorityKey` and stands ahead of the songs without one. A
 //   song that is not sung (it could not be listed or made, it failed, it was cancelled) gives the
@@ -33,6 +39,7 @@
 //   its refund due) still goes back. Her prompt says nothing of it: the order is the whole effect.
 
 import { randomUUID } from "node:crypto";
+import { access } from "node:fs/promises";
 import { CapabilityError } from "@miyoria/gate/actions";
 import { type RequestQueue, RequestQueueKey } from "@miyoria/play/queue";
 import { errorMessage, getLogger, type ModuleContext } from "@miyoria/runtime/kernel";
@@ -69,15 +76,17 @@ import {
   VoicePlayerKey,
   WorldStateKey,
 } from "@miyoria/types";
+import { MemorySongAudio, type SongAudio, SongAudioMissingError } from "./audio.js";
 import {
   type GpuContext,
   type SingWorker,
   SingWorkerError,
+  type SongMeta,
   type SongQuery,
   type WorkerJob,
 } from "./client.js";
 import type { SingConfig } from "./config.js";
-import { singSong, sleep } from "./player.js";
+import { ensureVideo, singSong, sleep, songVideoPath } from "./player.js";
 import {
   type BackingMode,
   type NewSong,
@@ -150,7 +159,14 @@ interface Playing {
   stop: AbortController;
   /** The song itself started streaming (before that she is still saying her opening). */
   audible: boolean;
+  /** The voice node reports it playing: her voice is out. */
+  started: boolean;
 }
+
+/** The stage of a song whose audio is being brought onto Core (`SONG_PREPARE_STAGES`). */
+export const FETCH_STAGE = "fetch";
+/** Tries at bringing a song's audio onto Core before it fails (a broken transfer resumes). */
+export const FETCH_ATTEMPTS = 5;
 
 /** She was told she is off to prepare a song; the worker waits for her to finish saying so. */
 interface Preparing {
@@ -229,11 +245,18 @@ export class Singer implements VoiceFloor, SpeechPause {
   #shown: { no: SongNo; progress: number } | null = null;
   /** Since when no poll of the worker got an answer (epoch ms), or `null`. */
   #lostSince: number | null = null;
+  /** Songs whose audio is being brought onto Core, by number: which song, and its stop. */
+  readonly #fetching = new Map<SongNo, { song: string; stop: AbortController }>();
+  /** Videos this process brought onto Core, and the fetches running. */
+  readonly #videos = new Set<string>();
+  readonly #videoFetches = new Map<string, Promise<string | null>>();
+  readonly #audio: SongAudio;
 
   /**
    * `videoDir`: the worker's cache dir (absolute) when song videos are shown on stream
    * (`[modules.sing] video`), else `null`. `tellContext`: also gets who listens and which songs
    * are needed now, each time the worker is told (Core sends it on to the hosts' GPU arbiters).
+   * `audio`: where the songs' audio is kept on Core (default in memory, from `worker.audio`).
    */
   constructor(
     private readonly cfg: SingConfig,
@@ -241,8 +264,15 @@ export class Singer implements VoiceFloor, SpeechPause {
     private readonly worker: SingWorker,
     private readonly videoDir: string | null = null,
     private readonly tellContext: ((context: GpuContext) => void) | null = null,
+    audio: SongAudio | null = null,
   ) {
     this.list = new SetList(cfg);
+    this.#audio =
+      audio ??
+      new MemorySongAudio(
+        worker,
+        cfg.lip_sync_vocals ? ["play_mix.pcm", "play_vocals.pcm"] : ["play_mix.pcm"],
+      );
   }
 
   /** Where she learns who is in voice (the module's `VoiceRoom`). */
@@ -274,8 +304,19 @@ export class Singer implements VoiceFloor, SpeechPause {
     return p?.audible && p.guild === guild ? "song" : null;
   }
 
+  /** The song started (from her opening line on), or `null`. */
   playing(): SongEntry | null {
     return this.#playing?.entry ?? null;
+  }
+
+  /** The song whose audio is going out now (the voice node reports it playing), or `null`. */
+  singing(): SongEntry | null {
+    return this.#playing?.started ? this.#playing.entry : null;
+  }
+
+  /** The song's audio is being brought onto Core. */
+  fetching(no: SongNo): boolean {
+    return this.#fetching.has(no);
   }
 
   /** `VoiceFloor`: songs still to sing in `guild` (a song asked for outside a server counts too). */
@@ -451,6 +492,8 @@ export class Singer implements VoiceFloor, SpeechPause {
   /** Worker job state → entry. */
   #apply(entry: SongEntry, job: WorkerJob): void {
     if (entry.state !== "preparing") return;
+    // The worker is done with it; its audio is on the way to Core.
+    if (this.#fetching.has(entry.no)) return;
     entry.stage = job.stage;
     entry.progress = job.progress;
     this.#jobs.set(entry.no, {
@@ -465,11 +508,8 @@ export class Singer implements VoiceFloor, SpeechPause {
           return;
         }
         entry.song = job.song;
-        entry.state = "ready";
-        entry.progress = 1;
-        entry.ready_at = toTimestamp(this.ctx.clock.now());
-        log.info({ no: entry.no, song: job.song.id, cached: job.cached }, "song ready");
-        this.#onReady(entry);
+        if (this.#audio.ready(job.song)) this.#ready(entry, false);
+        else this.#fetchAudio(entry, false);
         return;
       case "failed":
       case "cancelled":
@@ -478,6 +518,142 @@ export class Singer implements VoiceFloor, SpeechPause {
       default:
         return;
     }
+  }
+
+  /**
+   * The song is ready: its audio is on Core. `again`: it was ready before and its audio had to be
+   * fetched once more (it keeps its place and reminders; one that starts on its own starts).
+   */
+  #ready(entry: SongEntry, again: boolean): void {
+    entry.state = "ready";
+    entry.progress = 1;
+    if (entry.stage === FETCH_STAGE) entry.stage = "done";
+    // The video comes after the audio, while she gets to the song: it is shown when it is here.
+    if (entry.song !== null && this.cfg.video) void this.#fetchVideo(entry.song);
+    if (again && entry.ready_at !== null) {
+      log.info({ no: entry.no, song: entry.song?.id }, "song ready again");
+      if (!this.#closed) this.#autoStart();
+      return;
+    }
+    entry.ready_at = toTimestamp(this.ctx.clock.now());
+    log.info({ no: entry.no, song: entry.song?.id }, "song ready");
+    this.#onReady(entry);
+  }
+
+  /**
+   * Brings the song's audio onto Core (stage `fetch`); the song is ready once it is here. Tried
+   * `FETCH_ATTEMPTS` times, `fallback_retry_secs` apart (a broken transfer resumes); the worker no
+   * longer having the song makes it again; anything else fails the song.
+   */
+  #fetchAudio(entry: SongEntry, again: boolean): void {
+    const song = entry.song;
+    if (song === null || this.#closed) return;
+    entry.state = "preparing";
+    entry.stage = FETCH_STAGE;
+    if (this.#fetching.get(entry.no)?.song === song.id) return;
+    this.#fetching.get(entry.no)?.stop.abort();
+    const stop = new AbortController();
+    this.#fetching.set(entry.no, { song: song.id, stop });
+    this.#publishPrepare();
+    void (async () => {
+      let failure: unknown = null;
+      for (let attempt = 1; attempt <= FETCH_ATTEMPTS && !stop.signal.aborted; attempt++) {
+        try {
+          await this.#audio.fetch(song, stop.signal);
+          failure = null;
+          break;
+        } catch (error) {
+          failure = error;
+          if (stop.signal.aborted || isGone(error)) break;
+          log.warn(
+            { no: entry.no, song: song.id, attempt, err: errorMessage(error) },
+            "could not bring the song's audio onto Core",
+          );
+          if (attempt < FETCH_ATTEMPTS) {
+            await sleep(this.cfg.fallback_retry_secs * 1000, stop.signal);
+          }
+        }
+      }
+      if (this.#fetching.get(entry.no)?.stop === stop) this.#fetching.delete(entry.no);
+      // The song moved on meanwhile: cancelled, made again in another key, the module stopped.
+      if (stop.signal.aborted || entry.state !== "preparing" || entry.song?.id !== song.id) return;
+      if (failure === null) this.#ready(entry, again);
+      else if (isGone(failure)) await this.#makeAgain(entry);
+      else this.#fail(entry, `音檔傳不過來(${errorMessage(failure)})`);
+      this.#publishPrepare();
+    })().catch((error: unknown) => {
+      log.warn({ no: entry.no, err: errorMessage(error) }, "the song's audio fetch broke");
+    });
+  }
+
+  /** Stops bringing the song's audio onto Core (the song is over or changed). */
+  #dropFetch(no: SongNo): void {
+    this.#fetching.get(no)?.stop.abort();
+    this.#fetching.delete(no);
+  }
+
+  /** The worker no longer has a song it made: the same request again, the song keeps its place. */
+  async #makeAgain(entry: SongEntry): Promise<void> {
+    let job: WorkerJob;
+    try {
+      job = await this.worker.submit(this.#query(entry.query, entry.key, entry.backing));
+    } catch (error) {
+      this.#fail(entry, `歌曲工作站沒有這首了,也無法重做(${errorMessage(error)})`);
+      return;
+    }
+    if (entry.state !== "preparing") {
+      void this.worker.cancel(job.id).catch(() => undefined);
+      return;
+    }
+    log.info(
+      { no: entry.no, job: job.id },
+      "the song worker no longer has the song; making it again",
+    );
+    Object.assign(entry, {
+      stage: "queued",
+      progress: 0,
+      error: null,
+      song: null,
+      job: job.id,
+    } satisfies Partial<SongEntry>);
+    this.#apply(entry, job);
+    this.#updatePause();
+  }
+
+  /**
+   * The song's video to show now: on Core already (fetched by this process, or on disk), else
+   * `null`, and it is fetched for the next time. Singing never waits for a video.
+   */
+  async #videoNow(song: SongMeta): Promise<string | null> {
+    if (this.videoDir === null) return null;
+    const path = songVideoPath(this.videoDir, song);
+    if (path === null) return null;
+    if (this.#videos.has(song.id)) return path;
+    try {
+      await access(path);
+      this.#videos.add(song.id);
+      return path;
+    } catch {
+      void this.#fetchVideo(song);
+      return null;
+    }
+  }
+
+  /** Brings the song's video onto Core, once at a time; never throws. */
+  #fetchVideo(song: SongMeta): Promise<string | null> {
+    if (this.videoDir === null || songVideoPath(this.videoDir, song) === null) {
+      return Promise.resolve(null);
+    }
+    const running = this.#videoFetches.get(song.id);
+    if (running !== undefined) return running;
+    const work = ensureVideo(this.worker, this.videoDir, song, new AbortController().signal)
+      .then((path) => {
+        if (path !== null) this.#videos.add(song.id);
+        return path;
+      })
+      .finally(() => this.#videoFetches.delete(song.id));
+    this.#videoFetches.set(song.id, work);
+    return work;
   }
 
   // ----- the GPU to the worker -----
@@ -585,6 +761,7 @@ export class Singer implements VoiceFloor, SpeechPause {
 
   #fail(entry: SongEntry, why: string, tell = true): void {
     if (entry.state !== "preparing" && entry.state !== "ready") return;
+    this.#dropFetch(entry.no);
     log.info({ no: entry.no, why }, "song failed");
     this.list.finish(entry, "failed", why);
     this.#finishQueueItem(entry, false);
@@ -761,7 +938,7 @@ export class Singer implements VoiceFloor, SpeechPause {
   ): void {
     const stop = new AbortController();
     entry.state = "playing";
-    this.#playing = { entry, guild, stop, audible: false };
+    this.#playing = { entry, guild, stop, audible: false, started: false };
     this.ctx.spawn(`song-${entry.no}`, async (signal) => {
       const both = AbortSignal.any([signal, stop.signal]);
       let outcome: PlaybackState | "error" = "interrupted";
@@ -774,6 +951,10 @@ export class Singer implements VoiceFloor, SpeechPause {
         }
         if (!both.aborted) outcome = await this.#sing(entry, guild, both);
       } catch (error) {
+        if (error instanceof SongAudioMissingError && !both.aborted) {
+          this.#audioAgain(entry);
+          return;
+        }
         if (isGone(error) && !both.aborted && (await this.#prepareAgain(entry))) return;
         log.warn({ no: entry.no, err: errorMessage(error) }, "could not sing");
         outcome = "error";
@@ -820,28 +1001,47 @@ export class Singer implements VoiceFloor, SpeechPause {
     return true;
   }
 
+  /**
+   * The song was about to be sung but its audio is not on Core (any more): it goes back to
+   * `fetch`, keeps its place, and is sung (or offered) again once the audio is here.
+   */
+  #audioAgain(entry: SongEntry): void {
+    if (this.#playing?.entry === entry) this.#playing = null;
+    log.info(
+      { no: entry.no, song: entry.song?.id },
+      "the song's audio is not on Core; fetching it",
+    );
+    this.#fetchAudio(entry, true);
+    if (!this.#closed) this.#autoStart();
+  }
+
   async #sing(entry: SongEntry, guild: string, signal: AbortSignal): Promise<PlaybackState> {
     const voice = this.ctx.services.get(VoicePlayerKey);
     if (!voice) throw new SingError("voice is not running");
     const song = entry.song;
     if (!song) throw new SingError("the song has no audio");
+    if (!this.#audio.ready(song)) throw new SongAudioMissingError(`${song.id} is not on Core`);
+    const video = this.cfg.video ? await this.#videoNow(song) : null;
     log.info({ no: entry.no, song: song.id, guild }, "singing");
     if (this.#playing?.entry === entry) this.#playing.audible = true;
     return singSong(
       {
-        worker: this.worker,
+        load: (track, s) => this.#audio.load(song, track, s),
         voice,
         clock: this.ctx.clock,
         cue: (cue) => {
           // Her voice is out: the song is being sung, and its ticket is used.
-          if (cue.state === "started") this.#consumePriority(entry);
+          if (cue.state === "started") {
+            if (this.#playing?.entry === entry) this.#playing.started = true;
+            this.#consumePriority(entry);
+          }
           this.#cue(cue);
         },
         leadMs: this.cfg.lead_ms,
         fadeMs: this.cfg.fade_ms,
         lyrics: this.cfg.lyrics,
         lipSyncVocals: this.cfg.lip_sync_vocals,
-        videoDir: this.videoDir,
+        video,
       },
       song,
       guild,
@@ -923,9 +1123,10 @@ export class Singer implements VoiceFloor, SpeechPause {
     if (all) {
       for (const e of this.list.open()) {
         if (e === current?.entry) continue;
-        if (e.job !== null && e.state === "preparing") {
+        if (e.job !== null && e.state === "preparing" && !this.#fetching.has(e.no)) {
           await this.worker.cancel(e.job).catch(() => undefined);
         }
+        this.#dropFetch(e.no);
         this.list.finish(e, "cancelled");
         this.#finishQueueItem(e, false);
         await this.#giveBackPriority(e);
@@ -1004,10 +1205,11 @@ export class Singer implements VoiceFloor, SpeechPause {
       return { outcome: "too_late", detail: `#${entry.no} 已經開始了,key 來不及改` };
     }
     const old = entry.job;
-    if (entry.state === "preparing" && old !== null) {
+    if (entry.state === "preparing" && old !== null && !this.#fetching.has(entry.no)) {
       void this.worker.cancel(old).catch(() => undefined);
       this.#told.delete(old);
     }
+    this.#dropFetch(entry.no);
     entry.key = key;
     entry.state = "preparing";
     entry.stage = "queued";
@@ -1193,6 +1395,8 @@ export class Singer implements VoiceFloor, SpeechPause {
     let answered = 0;
     let lost = 0;
     for (const entry of this.list.preparing()) {
+      // Made already: its audio is on the way to Core.
+      if (this.#fetching.has(entry.no)) continue;
       try {
         if (entry.job === null) {
           // Restored before the worker took it (a request in flight is not ours to repeat).
@@ -1339,6 +1543,8 @@ export class Singer implements VoiceFloor, SpeechPause {
       const n = this.list.restore(raw);
       this.#saved = JSON.stringify(this.list.snapshot());
       for (const e of this.list.preparing()) if (e.job === null) this.#orphans.add(e.no);
+      // Ready means its audio is on Core: checked again (a disk cache finds it at once).
+      for (const e of this.list.ready()) if (e.song !== null) this.#fetchAudio(e, true);
       if (n > 0) {
         log.info(
           { songs: n, open: this.list.open().length, preparing: this.list.preparing().length },
@@ -1368,6 +1574,7 @@ export class Singer implements VoiceFloor, SpeechPause {
   close(): void {
     this.#closed = true;
     this.#playing?.stop.abort();
+    for (const no of [...this.#fetching.keys()]) this.#dropFetch(no);
     this.#updatePause();
     this.#publishPrepare();
   }

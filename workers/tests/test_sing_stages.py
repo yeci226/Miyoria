@@ -17,9 +17,9 @@ sys.path.insert(0, str(SING))
 import server  # noqa: E402
 
 CONTRACT = ROOT.parent / "packages" / "contracts" / "events" / "src" / "sing.ts"
-# Stages the worker does not report as such: the finished job, and the one the `sing` module makes up.
+# Stages the worker does not report as such: the finished job, and the ones the `sing` module makes up.
 NOT_PREPARING = {"done"}
-MODULE_ONLY = {"unreachable"}
+MODULE_ONLY = {"fetch", "unreachable"}
 
 
 def _contract_stages() -> set[str]:

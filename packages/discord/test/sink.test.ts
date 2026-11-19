@@ -76,6 +76,36 @@ describe("DiscordSink", () => {
     expect(sink.mention({ platform: "cli", id: "1234" })).toBeNull();
   });
 
+  test("edits_a_card_it_sent_without_pings", async () => {
+    const rest = new FakeRest();
+    const sink = new DiscordSink(rest);
+    const card = (text: string) => ({
+      text,
+      card: { accent: "neutral" as const, title: null, blocks: [{ type: "text" as const, text }] },
+    });
+    const sent = await sink.sendCard(channel, card("開了"));
+    // Without `patch` the client cannot edit.
+    await expect(sink.editCard(sent, card("已結束"))).rejects.toThrow(/cannot edit/);
+    const patched: Array<{ route: string; body: unknown }> = [];
+    const editing = Object.assign(rest, {
+      patch: async (route: `/${string}`, options?: RestRequest) => {
+        patched.push({ route, body: options?.body });
+        return undefined;
+      },
+    });
+    await new DiscordSink(editing).editCard(sent, card("已結束"));
+    expect(patched[0]?.route).toBe(`/channels/200/messages/${sent.id}`);
+    const body = patched[0]?.body as Record<string, unknown>;
+    expect(body.allowed_mentions).toEqual({ parse: [] });
+    expect(JSON.stringify(body.components)).toContain("已結束");
+    await expect(
+      new DiscordSink(editing).editCard(
+        { ...sent, context: { ...channel, platform: "cli" } },
+        card("x"),
+      ),
+    ).rejects.toThrow(/not on Discord/);
+  });
+
   test("opens_dms_and_sends_cards_without_pings", async () => {
     const rest = new FakeRest();
     const sink = new DiscordSink(rest);

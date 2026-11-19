@@ -75,3 +75,30 @@ export function voicedMidi(estimate: PitchEstimate, level: number, floor: number
   if (estimate.hz < HZ_MIN || estimate.hz > HZ_MAX) return null;
   return hzToMidi(estimate.hz);
 }
+
+/** Clarity that keeps a voice going once it has started (`voicedNext`). */
+export const CLARITY_KEEP = 0.75;
+/** How near (semitones) a kept window must be to the one before it. */
+export const KEEP_SEMITONES = 1;
+
+/**
+ * `voicedMidi` with hysteresis: a voice starts at `CLARITY_MIN`, and goes on while the window just
+ * before was voiced, this one is at least `CLARITY_KEEP` clear and within `KEEP_SEMITONES` of it.
+ * McLeod's clarity of a sung vowel hovers around 0.9 with a little breath in it, with vibrato, or
+ * with a weak fundamental (a low voice through a small microphone), so a single cut dropped a
+ * third of such singing or more, frame by frame, while RMVPE on the same voice drops almost none.
+ * Noise rarely starts a voice (it needs 0.9), and a window that keeps one must continue its pitch.
+ */
+export function voicedNext(
+  estimate: PitchEstimate,
+  level: number,
+  floor: number,
+  before: number | null,
+): number | null {
+  const strict = voicedMidi(estimate, level, floor);
+  if (strict !== null || before === null) return strict;
+  if (estimate.clarity < CLARITY_KEEP || level <= floor * FLOOR_RATIO) return null;
+  if (estimate.hz < HZ_MIN || estimate.hz > HZ_MAX) return null;
+  const midi = hzToMidi(estimate.hz);
+  return Math.abs(midi - before) < KEEP_SEMITONES ? midi : null;
+}

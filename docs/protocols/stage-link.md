@@ -73,7 +73,7 @@ Stage 節點(`miyoria stage`,跑在直播機)和 Core 的 `stage.link` 模組之
 | `game` | 玩遊戲中(`detail` 是遊戲名) | `game.director.session` `started` 到 `stopped` | 不確定 |
 | `song_prepare` | 見下表 | `sing.prepare` 有歌在準備,**而且上面都沒有在做**;否則這首歌是 `secondary` | worker 的整體進度 |
 
-準備中的歌(`sing.prepare`)一次一首,進度只進不退、換歌從自己的進度重來;`stage` 的白話(`SONG_PREPARE_STAGES` 每個都有,一個測試會檢查 worker、契約和這張表沒有對不上):排隊中 `queued`、找歌中 `resolve`、下載中 `download`、等待中 `exclusive` / `gpu_wait`(以及 `exclusive` 是 `waiting` / `offloading` 時)、分離人聲 `separate`、分離主唱 `lead`、轉換歌聲 `convert`、轉換和聲 `convert_backing`、混音 `mix`、抓節拍 `beats`、找歌詞 `lyrics`、下載影片 `video`、分析旋律 `reference`、製作伴奏 `encode`、對歌詞 `lyrics_asr` / `lyrics_align`、連不上 `unreachable`(`sing` 模組在 worker 20 秒沒回應時自己報的);沒看過的階段叫「準備歌曲」。排隊、等待、連不上是不確定(沒有條)。`detail` 是歌名,還沒有時是「某某 點的歌」(`sing.prepare` 的 `by`,選填),再沒有就是「連結」。連不上超過 60 秒就把這一行收起來。作為 `secondary` 時 `label` 固定是「準備歌曲」(連不上時是「連不上」)。
+準備中的歌(`sing.prepare`)一次一首,進度只進不退、換歌從自己的進度重來;`stage` 的白話(`SONG_PREPARE_STAGES` 每個都有,一個測試會檢查 worker、契約和這張表沒有對不上):排隊中 `queued`、找歌中 `resolve`、下載中 `download`、等待中 `exclusive` / `gpu_wait`(以及 `exclusive` 是 `waiting` / `offloading` 時)、分離人聲 `separate`、分離主唱 `lead`、轉換歌聲 `convert`、轉換和聲 `convert_backing`、混音 `mix`、抓節拍 `beats`、找歌詞 `lyrics`、下載影片 `video`、分析旋律 `reference`、製作伴奏 `encode`、對歌詞 `lyrics_asr` / `lyrics_align`、拿歌中 `fetch`(`sing` 模組自己報的:worker 做好了,歌的音檔正在傳到 Core,傳完才算準備好)、連不上 `unreachable`(`sing` 模組在 worker 20 秒沒回應時自己報的);沒看過的階段叫「準備歌曲」。排隊、等待、拿歌中、連不上是不確定(沒有條)。`detail` 是歌名,還沒有時是「某某 點的歌」(`sing.prepare` 的 `by`,選填),再沒有就是「連結」。連不上超過 60 秒就把這一行收起來。作為 `secondary` 時 `label` 固定是「準備歌曲」(連不上時是「連不上」)。
 
 - 一個回合的第一句開始播之後就交給字幕:句子之間(下一句在 TTS)不再顯示「思考中」或「產生語音」。文字頻道的回合只有 `subtitle_text_turns = true` 時才算。
 - `thinking` / `synthesizing` / `tool` 要持續 250 ms 才顯示(很快結束的不會閃一下);回合、工具呼叫 2 分鐘、TTS 30 秒沒有結束就不再算。

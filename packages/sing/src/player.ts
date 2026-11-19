@@ -1,7 +1,7 @@
-// Playing one song: fetch the worker's 48 kHz mix and converted vocal, stream them to the voice
-// node close to real time (the vocal as the levels track her mouth follows), and send the lyrics
-// lines as cues while it plays. The start cue carries the path of the song's original video for
-// the Stage node to show (muted) in OBS.
+// Playing one song: its 48 kHz mix and converted vocal, already on Core (`audio.ts`), streamed to
+// the voice node close to real time (the vocal as the levels track her mouth follows), and the
+// lyrics lines sent as cues while it plays. The start cue carries the path of the song's original
+// video for the Stage node to show (muted) in OBS.
 
 import { access } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -15,12 +15,14 @@ import {
   type SongCue,
   type VoicePlayer,
 } from "@miyoria/types";
-import type { SingWorker, SongMeta } from "./client.js";
+import { SONG_ID } from "./audio.js";
+import type { SingWorker, SongMeta, SongTrack } from "./client.js";
 
 const log = getLogger("sing");
 
 export interface PlayerDeps {
-  worker: SingWorker;
+  /** One track of the song, from Core (`SongAudio.load`). */
+  load: (track: SongTrack, signal: AbortSignal) => Promise<Int16Array>;
   voice: VoicePlayer;
   clock: Clock;
   cue: (cue: SongCue) => void;
@@ -28,12 +30,11 @@ export interface PlayerDeps {
   fadeMs: number;
   lyrics: boolean;
   lipSyncVocals: boolean;
-  /** The worker's cache dir (absolute) when videos are shown, else `null`. */
-  videoDir: string | null;
+  /** The song's video on this machine (absolute), shown while she sings; `null`: none. */
+  video: string | null;
 }
 
-/** Song ids and video names as the worker writes them (`safe_id`, `video<ext>`). */
-const SONG_ID = /^[A-Za-z0-9_-]{1,96}$/;
+/** Video names as the worker writes them (`video<ext>`). */
 const VIDEO_FILE = /^video\.(mp4|m4v|mkv|webm|mov)$/;
 
 /**
@@ -105,20 +106,17 @@ export async function* paced(
 }
 
 /**
- * Sings `song` in `guild`'s voice channel and resolves with how it ended. Aborting `signal`
- * fades it out (a skip or stop). Throws when the audio cannot be fetched or played.
- */
-/**
- * Makes sure the song's video is in `d.videoDir` (the song worker may run on another machine, so
+ * Makes sure the song's video is in `videoDir` (the song worker may run on another machine, so
  * Core fetches it from the worker once). The path to show, or `null` when there is none.
  */
 export async function ensureVideo(
-  d: PlayerDeps,
+  worker: SingWorker,
+  videoDir: string | null,
   song: SongMeta,
   signal: AbortSignal,
 ): Promise<string | null> {
-  if (d.videoDir === null) return null;
-  const path = songVideoPath(d.videoDir, song);
+  if (videoDir === null) return null;
+  const path = songVideoPath(videoDir, song);
   const file = song.video?.file;
   if (path === null || file === undefined) return null;
   try {
@@ -128,7 +126,7 @@ export async function ensureVideo(
     // not here yet: ask the worker
   }
   try {
-    await d.worker.download(song.id, file, path, signal);
+    await worker.download(song.id, file, path, signal);
     return path;
   } catch (error) {
     if (!signal.aborted) log.warn({ song: song.id, err: String(error) }, "song video not fetched");
@@ -136,6 +134,11 @@ export async function ensureVideo(
   }
 }
 
+/**
+ * Sings `song` in `guild`'s voice channel and resolves with how it ended. Aborting `signal`
+ * fades it out (a skip or stop). Throws when the audio cannot be read or played
+ * (`SongAudioMissingError` when it is not on Core).
+ */
 export async function singSong(
   d: PlayerDeps,
   song: SongMeta,
@@ -143,12 +146,11 @@ export async function singSong(
   signal: AbortSignal,
 ): Promise<PlaybackState> {
   const rate = song.play.sample_rate;
-  const videoFetch = ensureVideo(d, song, signal);
   const [mix, vocals] = await Promise.all([
-    d.worker.audio(song.id, "play_mix.pcm", signal),
-    d.lipSyncVocals ? d.worker.audio(song.id, "play_vocals.pcm", signal) : Promise.resolve(null),
+    d.load("play_mix.pcm", signal),
+    d.lipSyncVocals ? d.load("play_vocals.pcm", signal) : Promise.resolve(null),
   ]);
-  const video = await videoFetch;
+  const video = d.video;
   if (signal.aborted) return "interrupted";
   const streaming = new AbortController();
   const handle = await d.voice.play(
