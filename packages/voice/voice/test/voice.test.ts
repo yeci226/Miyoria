@@ -56,7 +56,7 @@ import {
   type TtsRequest,
 } from "../../speech/src/index.js";
 import { FakeEndpoints } from "../../speech/test/endpoints.js";
-import { VoiceModule } from "../src/index.js";
+import { CONSENT_ROUTES, VoiceModule } from "../src/index.js";
 import {
   deepseekVoice,
   Harness,
@@ -321,6 +321,27 @@ describe("voice", () => {
     e.speakStream(4, "u1", utteranceAudio());
     expect((await nextUtterance(events)).text).toBe("最後一句");
     expect(e.asr.calls.length).toBe(3); // silence never reaches ASR
+  });
+
+  it("the_consent_toggle_turns_the_presser's_own_consent_the_other_way", async () => {
+    const e = await boot();
+    const press = (who: string) =>
+      e.registry().dispatchComponent({
+        custom_id: `mi:${CONSENT_ROUTES.toggle}`,
+        invoker: account(who),
+        invoker_display_name: who,
+        context: { platform: "discord", scope: "g1", channel: "text1", kind: "channel" },
+        invoker_is_guild_admin: false,
+      });
+    const off = await press("u2");
+    expect(off?.ephemeral).toBe(true);
+    expect(off?.result.type === "reply" && off.result.reply.text).toBe(
+      "已更新：她在語音頻道中不會聽你說話。",
+    );
+    expect(await e.settings.get("_global", "voice_consent:discord:u2")).toBe(false);
+    expect(await e.settings.get("_global", "voice_consent:discord:u1")).toBeNull();
+    await press("u2");
+    expect(await e.settings.get("_global", "voice_consent:discord:u2")).toBe(true);
   });
 
   it("consent_is_respected", async () => {

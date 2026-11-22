@@ -116,6 +116,14 @@ describe("actions module", () => {
     expect((await a.registry.privacy.get({ platform: "discord", id: "6" })).watch).toBe(true);
     await a.click(`mi:${PRIVACY_ROUTES.watchOn}`, "5");
     expect((await a.registry.privacy.get(me)).watch).toBe(true);
+    // The toggle turns it the other way each time.
+    const toggled = await a.click(`mi:${PRIVACY_ROUTES.watchToggle}`, "5");
+    expect(toggled?.result.type === "reply" && toggled.result.reply.text).toContain(
+      "看你的直播：不可以",
+    );
+    expect((await a.registry.privacy.get(me)).watch).toBe(false);
+    await a.click(`mi:${PRIVACY_ROUTES.watchToggle}`, "5");
+    expect((await a.registry.privacy.get(me)).watch).toBe(true);
     await a.sup.stopAll();
   });
 

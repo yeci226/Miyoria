@@ -548,8 +548,8 @@ describe("the watch capabilities", () => {
     expect(reply.text).toContain("小明");
     const buttons = reply.card?.blocks.find((b) => b.type === "buttons");
     expect(buttons?.type === "buttons" && buttons.buttons.map((b) => [b.id, b.label])).toEqual([
-      ["mi:me:privacy:watch:off", "不讓她看"],
-      ["mi:voice:consent:off", "不讓她聽"],
+      ["mi:me:privacy:watch:toggle", "看我直播:開/關"],
+      ["mi:voice:consent:toggle", "聽我說話:開/關"],
     ]);
   });
 

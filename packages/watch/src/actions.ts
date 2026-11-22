@@ -82,13 +82,17 @@ export function noticeCard(name: string): CommandReply {
       {
         type: "buttons",
         buttons: [
-          { id: componentId(PRIVACY_ROUTES.watchOff), label: "不讓她看", style: "secondary" },
-          { id: componentId(CONSENT_ROUTES.off), label: "不讓她聽", style: "secondary" },
+          {
+            id: componentId(PRIVACY_ROUTES.watchToggle),
+            label: "看我直播:開/關",
+            style: "secondary",
+          },
+          { id: componentId(CONSENT_ROUTES.toggle), label: "聽我說話:開/關", style: "secondary" },
         ],
       },
       {
         type: "muted",
-        text: "按了只改你自己的設定,之後可以用 /me privacy、/voice consent 改回來。",
+        text: "按一下切換你自己的設定(只有你看得到結果),再按一次切回來。",
       },
     ],
     { accent: "neutral", title: "看直播" },

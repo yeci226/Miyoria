@@ -28,12 +28,14 @@ export const NODE_APPROVE = "owner.autonomy.approve";
 export const NODE_PRIVACY = "me.privacy";
 
 /**
- * Buttons that set the `watch` opt-out of whoever presses them, on any message (the watch notice
- * in a voice channel's chat): no session, so they work as long as the message is there.
+ * Buttons that change the `watch` opt-out of whoever presses them, on any message (the watch
+ * notice in a voice channel's chat): no session, so they work as long as the message is there.
+ * `watchToggle` turns it the other way each time.
  */
 export const PRIVACY_ROUTES = {
   watchOn: "me:privacy:watch:on",
   watchOff: "me:privacy:watch:off",
+  watchToggle: "me:privacy:watch:toggle",
 } as const;
 
 async function statusReply(registry: ActuatorRegistry): Promise<CommandReply> {
@@ -140,12 +142,14 @@ export function registerCommands(
     { components: [answer(true), answer(false)] },
   );
 
-  const watchButton = (watch: boolean) =>
+  const watchButton = (route: string, watch: (now: boolean) => boolean) =>
     defineRoute({
-      route: watch ? PRIVACY_ROUTES.watchOn : PRIVACY_ROUTES.watchOff,
+      route,
       ephemeral: true,
       handle: async (inv) => {
-        const next = await actuators().privacy.set(inv.invoker, { watch });
+        const privacy = actuators().privacy;
+        const now = (await privacy.get(inv.invoker)).watch;
+        const next = await privacy.set(inv.invoker, { watch: watch(now) });
         const book = presence();
         const seen = book?.loaded ? book.presenceAllowed(inv.invoker) : null;
         const text = privacyText(next.dm, next.approach, next.watch, seen);
@@ -200,7 +204,13 @@ export function registerCommands(
         `已更新。\n${privacyText(next.dm, next.approach, next.watch, seen())}`,
       );
     },
-    { components: [watchButton(true), watchButton(false)] },
+    {
+      components: [
+        watchButton(PRIVACY_ROUTES.watchOn, () => true),
+        watchButton(PRIVACY_ROUTES.watchOff, () => false),
+        watchButton(PRIVACY_ROUTES.watchToggle, (now) => !now),
+      ],
+    },
   );
 }
 
