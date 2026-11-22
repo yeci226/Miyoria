@@ -276,6 +276,7 @@ describe("WatchModule", () => {
     // How old the notes are, and to look again before saying what is on screen now.
     expect(section?.body).toMatch(/最近一次看畫面是 \d+ 秒前/);
     expect(section?.body).toContain("先用 watch_look 看一眼");
+    expect(section?.body).not.toContain("要看就呼叫 watch_start");
 
     expect(await rig.prompt(text)).toEqual([]);
     expect(await rig.prompt(voice("c9"))).toEqual([]);
@@ -301,6 +302,8 @@ describe("WatchModule", () => {
     const [section] = await rig.prompt(voice("c1"));
     expect(section?.body).toContain("小明");
     expect(section?.body).not.toContain("阿華");
+    // Not watching yet: only the tool starts it, a plain "ok" does not.
+    expect(section?.body).toContain("要看就呼叫 watch_start");
     expect(await rig.prompt(voice("c9"))).toEqual([]);
     expect(await rig.prompt({ ...voice("c1"), kind: "channel" })).toEqual([]);
 

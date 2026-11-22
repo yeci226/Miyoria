@@ -72,6 +72,12 @@ export class WatchPrompt implements PromptContributor {
     if (others.length > 0) {
       const names = others.map((m) => `${safeName(m.display_name)}(${m.account.id})`);
       lines.push(`這個頻道裡在開播、可以看的人:${names.join("、")}`);
+      // Asked to watch, a model may answer "ok" and never call the tool (2026-11-22).
+      if (here === null) {
+        lines.push(
+          "你現在沒有在看任何人的直播。要看就呼叫 watch_start;只回「好」不會開始看,畫面也不會送到你這裡。",
+        );
+      }
     }
     if (lines.length === 0) return [];
     return [
