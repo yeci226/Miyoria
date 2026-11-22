@@ -2,5 +2,10 @@
 # chunk streaming. Use a SEPARATE venv (Python 3.12), no torch needed:
 #   uv venv --python 3.12 venv-tts-mlx
 #   VIRTUAL_ENV=venv-tts-mlx uv pip install -r requirements-mlx.txt
--r requirements.txt
+# Not `-r requirements.txt`: qwen-tts pins transformers 4.57, mlx-audio needs >= 5.14.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+numpy>=1.26
+soundfile>=0.12
+scipy>=1.11
 mlx-audio>=0.6.7,<0.7
