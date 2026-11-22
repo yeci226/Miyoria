@@ -1,0 +1,6 @@
+# Qwen3-TTS worker on Apple silicon (TTS_BACKEND=mlx): mlx-audio runs the model on Metal with
+# chunk streaming. Use a SEPARATE venv (Python 3.12), no torch needed:
+#   uv venv --python 3.12 venv-tts-mlx
+#   VIRTUAL_ENV=venv-tts-mlx uv pip install -r requirements-mlx.txt
+-r requirements.txt
+mlx-audio>=0.6.7,<0.7

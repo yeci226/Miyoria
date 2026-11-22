@@ -439,6 +439,43 @@ def test_qwen_tts_backend_is_sentence_level(load_server, monkeypatch):
     assert [c[1] for c in calls if c[0] == "gen" and c[1] != PRIME] == [S1, S2]
 
 
+def test_mlx_backend_streams_chunks_from_one_thread_of_its_own(load_server):
+    calls, threads = [], set()
+
+    class Model:
+        sample_rate = 24000
+
+        def generate(self, text, **kw):
+            threads.add(threading.get_ident())
+            calls.append((text, kw))
+            for v in ((0.5, -0.5) if text == S1 else (0.25,)):
+                yield types.SimpleNamespace(audio=np.full(4, v, dtype=np.float32), sample_rate=24000)
+
+    def load_model(name):
+        threads.add(threading.get_ident())
+        calls.append(("load", name))
+        return Model()
+
+    utils = types.ModuleType("mlx_audio.tts.utils")
+    utils.load_model = load_model
+    server = load_server({"faster_qwen3_tts": None, "mlx_audio": types.ModuleType("mlx_audio"),
+                          "mlx_audio.tts": types.ModuleType("mlx_audio.tts"), "mlx_audio.tts.utils": utils},
+                         TTS_BACKEND="mlx")
+    with TestClient(server.app) as client:
+        h = client.get("/health").json()
+        assert (h["backend"], h["streaming"], h["sample_rate"]) == ("mlx", True, 24000)
+        r = client.post("/tts", json={"text": TWO, "language": "ja"})
+    assert r.status_code == 200 and r.headers["x-sample-rate"] == "24000"
+    assert r.content == pcm(np.full(4, 0.5), np.full(4, -0.5), np.full(4, 0.25))
+    assert calls[0] == ("load", "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16")
+    said = [(t, kw) for t, kw in calls[1:] if t != PRIME]
+    assert [t for t, _ in said] == [S1, S2]
+    kw = said[0][1]
+    assert kw["lang_code"] == "japanese" and kw["stream"] is True
+    assert kw["ref_audio"].endswith("ref.wav") and kw["ref_text"] == "參考音檔的文字"
+    assert len(threads) == 1 and threading.get_ident() not in threads
+
+
 # ── offload / reload (the song worker borrows the GPU) ───────────────────────
 
 

@@ -77,8 +77,11 @@ INSTRUCT / EMOTION: only models with instruction control honour ``instruct``:
     ``emotion`` is informational: Miyoria sends the already-mapped ``instruct`` (from voice.toml).
 
 Environment
-    TTS_BACKEND            auto | faster | qwen-tts       (default auto = faster if importable)
-    TTS_MODEL              HF id or local dir            (default Qwen/Qwen3-TTS-12Hz-1.7B-Base)
+    TTS_BACKEND            auto | faster | qwen-tts | mlx (default auto = faster if importable, else
+                           qwen-tts; mlx = Apple silicon via mlx-audio, requirements-mlx.txt)
+    TTS_MODEL              HF id or local dir            (default Qwen/Qwen3-TTS-12Hz-1.7B-Base;
+                           mlx: mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16)
+    TTS_MLX_INTERVAL       mlx only: seconds of audio per streamed chunk (default 0.32)
     TTS_MODE               auto | clone | custom_voice | voice_design   (default auto)
     TTS_CHUNK_SIZE         faster only: codec steps per streamed chunk (default 4 ≈ 333 ms of audio).
                            Smaller = earlier first audio but more decode calls per second of audio
@@ -830,8 +833,142 @@ class FasterEngine(BaseEngine):
         yield from self._generate(args, kw)
 
 
+class MlxEngine(BaseEngine):
+    """`mlx-audio` on Apple silicon: the same Qwen3-TTS converted to MLX (Metal), chunk streaming.
+
+    For a Mac, where faster-qwen3-tts (CUDA graphs) cannot run and qwen-tts on MPS is slower than
+    real time. ``TTS_MODEL`` names an MLX repo (default below). MLX keeps its GPU stream per thread,
+    so every model call runs on one thread of its own and the chunks come back through a queue.
+    """
+
+    backend = "mlx"
+    streaming = True
+    DEFAULT_MODEL = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
+
+    def _load_model(self) -> None:
+        import queue
+
+        self._jobs: Any = queue.Queue()
+        threading.Thread(target=self._loop, name="mlx", daemon=True).start()
+        self.model_id = os.environ.get("TTS_MODEL") or self.DEFAULT_MODEL
+        self.mode = self._detect_mode(self.model_id)
+        self.device = "metal (mlx)"
+        self.interval = float(os.environ.get("TTS_MLX_INTERVAL", "0.32"))
+        log.info("loading %s with mlx-audio (mode=%s, a chunk every %.2f s of audio) …",
+                 self.model_id, self.mode, self.interval)
+
+        def load() -> Any:
+            from mlx_audio.tts.utils import load_model  # type: ignore
+
+            return load_model(self.model_id)
+
+        self.model = self._call(load)
+        rate = getattr(self.model, "sample_rate", 0)
+        if isinstance(rate, int) and rate > 0:
+            self.sample_rate = rate
+
+    def _loop(self) -> None:
+        while True:
+            self._jobs.get()()
+
+    def _call(self, fn: Any) -> Any:
+        """Runs `fn()` on the MLX thread and returns what it returned (or raises what it raised)."""
+        import queue
+
+        done: Any = queue.Queue(maxsize=1)
+
+        def job() -> None:
+            try:
+                done.put((True, fn()))
+            except BaseException as e:  # noqa: BLE001 - handed back to the caller
+                done.put((False, e))
+
+        self._jobs.put(job)
+        ok, value = done.get()
+        if not ok:
+            raise value
+        return value
+
+    def _iterate(self, make: Any) -> Iterator[tuple[Any, int]]:
+        """Iterates `make()` on the MLX thread; stops it at the next chunk once nobody reads on."""
+        import queue
+
+        out: Any = queue.Queue()
+        stop = threading.Event()
+        end = object()
+
+        def job() -> None:
+            try:
+                for item in make():
+                    if stop.is_set():
+                        break
+                    out.put(item)
+                out.put(end)
+            except BaseException as e:  # noqa: BLE001 - raised again on the reading side
+                out.put(e)
+
+        self._jobs.put(job)
+        try:
+            while True:
+                item = out.get()
+                if item is end:
+                    return
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            stop.set()
+
+    def _load_voice(self, d: Path) -> Voice | None:
+        ref_wav, text, base_instruct = self._read_voice_files(d)
+        if self.mode != "clone":
+            return Voice(d.name, base_instruct=base_instruct)
+        if not ref_wav.exists():
+            log.warning("voice %r has no ref.wav — skipped", d.name)
+            return None
+        v = Voice(d.name, ref_wav, text or None, None, base_instruct, not text)
+        v.plain = Reference("ref", ref_wav, text or None)
+        self._extra_references(v, d)
+        return v
+
+    def _generate(self, text: str, language: str, extra: dict[str, Any]) -> Iterator[tuple[Any, int]]:
+        import numpy as np
+
+        kw = dict(self.gen_kwargs)
+        cap = max_new_tokens(text)
+        if cap is not None:
+            kw.setdefault("max_tokens", cap)
+        model, sr = self.model, self.sample_rate
+
+        def make() -> Iterator[tuple[Any, int]]:
+            for r in model.generate(text=text, lang_code=(language or "auto").lower(), stream=True,
+                                    streaming_interval=self.interval, **extra, **kw):
+                yield np.array(r.audio, dtype=np.float32).reshape(-1), int(getattr(r, "sample_rate", 0) or sr)
+
+        return self._iterate(make)
+
+    def stream(self, text: str, language: str, voice: str | None, instruct: str,
+               emotion: str | None = None) -> Iterator[tuple[Any, int]]:
+        v = self.resolve_voice(voice)
+        if self.mode == "clone":
+            assert v is not None
+            yield from self._clone_attempts(
+                v, language, emotion,
+                lambda ref: self._generate(text, language, {"ref_audio": str(ref.wav), "ref_text": ref.text}),
+            )
+            return
+        if self.mode == "custom_voice":
+            assert v is not None
+            extra: dict[str, Any] = {"voice": v.name}
+            if instruct:
+                extra["instruct"] = instruct
+        else:  # voice_design
+            extra = {"instruct": self._design_instruct(v, instruct)}
+        yield from self._generate(text, language, extra)
+
+
 def make_engine() -> BaseEngine:
-    """Pick the backend from TTS_BACKEND (default: faster when importable, else qwen-tts)."""
+    """Pick the backend from TTS_BACKEND (default: faster when importable, else qwen-tts; mlx only by name)."""
     choice = os.environ.get("TTS_BACKEND", "auto").strip().lower().replace("_", "-")
     if choice in ("", "auto"):
         try:
@@ -842,10 +979,12 @@ def make_engine() -> BaseEngine:
             log.info("faster_qwen3_tts not importable (%s) — using the qwen-tts backend", e)
             choice = "qwen-tts"
         log.info("TTS backend: %s (auto-selected)", choice)
-    elif choice in ("faster", "qwen-tts"):
+    elif choice in ("faster", "qwen-tts", "mlx"):
         log.info("TTS backend: %s (TTS_BACKEND)", choice)
     else:
-        raise RuntimeError(f"bad TTS_BACKEND={choice!r} (expected auto | faster | qwen-tts)")
+        raise RuntimeError(f"bad TTS_BACKEND={choice!r} (expected auto | faster | qwen-tts | mlx)")
+    if choice == "mlx":
+        return MlxEngine()
     return FasterEngine() if choice == "faster" else QwenTtsEngine()
 
 
