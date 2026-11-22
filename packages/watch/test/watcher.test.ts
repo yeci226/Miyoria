@@ -265,6 +265,21 @@ describe("the loop", () => {
     await vi.waitFor(() => expect(h.source.snapshot).toHaveBeenCalledTimes(13));
   });
 
+  it("tells the log what each look saw", async () => {
+    const seen = vi.fn();
+    const h = track(harness({}, { seen }));
+    h.reply = () => ({ note: "他在打王", worth_saying: true, topic: "打王" });
+    await h.watcher.start(target());
+    await vi.waitFor(() =>
+      expect(seen).toHaveBeenCalledWith({
+        kind: "round",
+        text: "他在打王",
+        topic: "打王",
+        worth: true,
+      }),
+    );
+  });
+
   it("speaks when the gate allows, with the notes after the header", async () => {
     const h = track(harness());
     h.reply = () => ({ note: "他在打王", worth_saying: true, topic: "打王" });

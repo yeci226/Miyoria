@@ -152,6 +152,8 @@ export class WatchModule implements Module {
       now,
       sleep,
       warn,
+      seen: ({ kind, text, topic, worth }) =>
+        ctx.log.info({ kind, topic, worth, text }, "watch look"),
     });
     const pending = new PendingStart();
     const stopFor = (reason: string): void => {

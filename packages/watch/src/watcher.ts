@@ -51,6 +51,8 @@ export interface WatcherDeps {
   now(): number;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   warn(message: string, error?: unknown): void;
+  /** What a look saw, for the log (the owner's own record; nothing is stored). */
+  seen?(what: { kind: "round" | "question"; text: string; topic?: string; worth?: boolean }): void;
 }
 
 export interface WatchView {
@@ -203,6 +205,7 @@ export class Watcher {
     }
     this.#assertLive(run);
     this.#resetTimer(run);
+    this.#deps.seen?.({ kind: "question", text: res.text.trim() });
     return res.text.trim();
   }
 
@@ -420,6 +423,7 @@ export class Watcher {
       if (signal.aborted) return;
 
       const topic = cutTopic(look.topic);
+      this.#deps.seen?.({ kind: "round", text: look.note, topic, worth: look.worth_saying });
       run.notes.addNote(look.note);
       this.#maybeSpeak(run, look.worth_saying, topic);
     } catch (error) {
