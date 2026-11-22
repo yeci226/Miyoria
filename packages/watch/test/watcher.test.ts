@@ -239,6 +239,32 @@ describe("the loop", () => {
     expect(h.clock.t).toBe(t0 + 60_000);
   });
 
+  it("stops looking on her own when nobody spoke for active_secs, and starts again on a voice", async () => {
+    const h = track(harness({ snapshot_secs: 30, active_secs: 60 }, {}, { manualSleep: true }));
+    await h.watcher.start(target());
+    for (let i = 1; i <= 4; i++) {
+      await vi.waitFor(() => expect(h.sleeps.length).toBe(i));
+      h.sleeps[i - 1]?.wake();
+    }
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(5));
+    // At 0, 30 and 60 s the watch is fresh; at 90 and 120 s nobody has spoken for over a minute.
+    expect(h.source.snapshot).toHaveBeenCalledTimes(3);
+    h.watcher.noteVoice(h.clock.t);
+    h.sleeps[4]?.wake();
+    await vi.waitFor(() => expect(h.sleeps.length).toBe(6));
+    expect(h.source.snapshot).toHaveBeenCalledTimes(4);
+  });
+
+  it("looks every snapshot_secs with active_secs = 0, however quiet the room", async () => {
+    const h = track(harness({ snapshot_secs: 30, active_secs: 0 }, {}, { manualSleep: true }));
+    await h.watcher.start(target());
+    for (let i = 1; i <= 12; i++) {
+      await vi.waitFor(() => expect(h.sleeps.length).toBe(i));
+      h.sleeps[i - 1]?.wake();
+    }
+    await vi.waitFor(() => expect(h.source.snapshot).toHaveBeenCalledTimes(13));
+  });
+
   it("speaks when the gate allows, with the notes after the header", async () => {
     const h = track(harness());
     h.reply = () => ({ note: "他在打王", worth_saying: true, topic: "打王" });
@@ -311,7 +337,7 @@ describe("the loop", () => {
   });
 
   it("bad model output only skips the round, not counted as a snapshot failure", async () => {
-    const h = track(harness({ max_snapshot_failures: 2 }));
+    const h = track(harness({ max_snapshot_failures: 2, active_secs: 0 }));
     h.complete.mockImplementation(async () => response("not json at all"));
     await h.watcher.start(target());
     await vi.waitFor(() => expect(h.source.snapshot.mock.calls.length).toBeGreaterThanOrEqual(5));
@@ -358,7 +384,7 @@ describe("the loop", () => {
   });
 
   it("a good snapshot starts the count again", async () => {
-    const h = track(harness());
+    const h = track(harness({ active_secs: 0 }));
     let n = 0;
     h.source.snapshot.mockImplementation(async () => {
       if (++n % 5 === 0) return Buffer.from([1]);
@@ -402,7 +428,7 @@ describe("the loop", () => {
   });
 
   it("stops when canLook turns false", async () => {
-    const h = track(harness());
+    const h = track(harness({ active_secs: 0 }));
     await h.watcher.start(target());
     await vi.waitFor(() => expect(h.modelCalls).toBeGreaterThanOrEqual(1));
     h.canLook = false;

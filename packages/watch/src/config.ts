@@ -14,6 +14,11 @@ export const WatchConfigSchema = z.object({
   /** Seconds between two looks, counted from the end of the last one. */
   snapshot_secs: z.number().positive().default(30),
   /**
+   * She looks on her own only while someone spoke in the voice channel within this many seconds
+   * (or the watch began that recently): a stream nobody talks over costs no pictures. 0 = always.
+   */
+  active_secs: z.number().nonnegative().default(300),
+  /**
    * How much of each picture the model sees: `high` reads the text on screen (titles, names), `low`
    * (about 512 px, a third of the tokens) does not.
    */

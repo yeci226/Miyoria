@@ -335,11 +335,22 @@ export class Watcher {
           continue;
         }
         due = false;
-        await this.#round(run);
+        if (this.#active(run)) await this.#round(run);
       }
     } catch (error) {
       if (!signal.aborted) void this.#finish(run, "the watch loop failed", true, error);
     }
+  }
+
+  /**
+   * Whether a look on her own is worth paying for: someone spoke in the voice channel (or the watch
+   * began) within `active_secs`. A stream left running to an empty room costs nothing; a question
+   * (`look`) is answered either way.
+   */
+  #active(run: Run): boolean {
+    if (this.#cfg.active_secs === 0) return true;
+    const last = Math.max(run.startedAt, this.#lastVoiceAt ?? Number.NEGATIVE_INFINITY);
+    return this.#deps.now() - last <= this.#cfg.active_secs * 1000;
   }
 
   async #round(run: Run): Promise<void> {
