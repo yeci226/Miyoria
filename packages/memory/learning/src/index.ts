@@ -21,6 +21,8 @@ export {
   type ReflectConfig,
   ReflectConfigSchema,
   reflectConfig,
+  TidyConfigSchema,
+  type TidyNightConfig,
 } from "./config.js";
 export {
   ConversationEngine,
@@ -118,4 +120,5 @@ export {
   RUN_PREFIX,
 } from "./reflect.js";
 export { dropStale, noteUnits, similarity, touchUnits } from "./threads.js";
+export { NightlyTidy, type NightlyTidyDeps, TIDY_GOAL, TIDY_STATE_KEY } from "./tidy.js";
 export { KNOWLEDGE_TOOL, KnowledgeTool, type ToolDeps } from "./tool.js";

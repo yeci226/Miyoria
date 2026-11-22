@@ -7,6 +7,8 @@
 //   for the song-guessing game. The singing module provides it; without it that game is off.
 // * `GameSecrets`: whether a line of hers would give away what a game hides (a turtle soup's
 //   bottom). The party module provides it; the brain's line guard asks it.
+// * `PartyOutcomes`: how a game came out, told once when it ends (a turtle soup guessed or not),
+//   for whatever settles on it (the economy's predictions). Optional on both sides.
 
 import type { AccountRef, ContextKey } from "./platform.js";
 import { serviceKey } from "./service-key.js";
@@ -45,6 +47,32 @@ export interface PartyRewards {
 }
 
 export const PartyRewardsKey = serviceKey<PartyRewards>("PartyRewards");
+
+// ---- outcomes -------------------------------------------------------------------------------
+
+/** A game that ended, as the game itself saw it: nothing a player typed decides any of it. */
+export interface PartyOutcome {
+  /** The session's id (the one `PartyOverview` lists while it runs). */
+  session: string;
+  /** The game's id (`soup`, `song`). */
+  game: string;
+  /** Where it was played. */
+  context: ContextKey;
+  /** How it ended (`done`, `host`, `stop`, `idle`, `empty`, `left`, `away`). */
+  reason: string;
+  /**
+   * Turtle soup: whether someone guessed the bottom before it ended (the referee's ruling, as the
+   * game took it); `null` for a game without such an answer.
+   */
+  solved: boolean | null;
+}
+
+/** Told when a game ends; not when the module shuts down mid-game (then nothing is known). */
+export interface PartyOutcomes {
+  ended(outcome: PartyOutcome): void;
+}
+
+export const PartyOutcomesKey = serviceKey<PartyOutcomes>("PartyOutcomes");
 
 // ---- song clips -----------------------------------------------------------------------------
 

@@ -177,8 +177,8 @@ const BOARD: KaraokeRoomEvent = {
   round: 1,
   at_ms: 0,
   lines: [
-    { member: "a", name: "海苔", color: 1, rank: 1, total: 81.25, source: "voice", move: "up", pitch: { from: 0, track: toBase64(encodeTrack([60, 60, 61])) } },
-    { member: "c", name: "Akari", color: 3, rank: 2, total: 77, source: "estimate", move: "down", pitch: null },
+    { member: "a", name: "海苔", color: 1, rank: 1, total: 81.25, source: "voice", move: "up", pitch: { from: 0, track: toBase64(encodeTrack([60, 60, 61])) }, cheers: 0 },
+    { member: "c", name: "Akari", color: 3, rank: 2, total: 77, source: "estimate", move: "down", pitch: null, cheers: 0 },
   ],
 };
 
@@ -303,6 +303,32 @@ describe("一起唱: a singer's stage", () => {
     expect(container.querySelector("[data-board]")).toBeNull();
     expect(screen.queryByText("海苔")).toBeNull();
     expect(screen.queryByText("81.3")).toBeNull();
+    // A cheer for them shows; one for someone else would never reach them, and is not shown either.
+    emit({ type: "cheer", round: 1, id: "c1-1", member: "a", by: { name: "路過的人", color: 4 }, kind: "wow" });
+    expect(screen.queryByText("幫你喊")).toBeNull();
+    emit({ type: "cheer", round: 1, id: "c1-2", member: "me", by: { name: "路過的人", color: 4 }, kind: "encore" });
+    const note = await screen.findByText("幫你喊");
+    expect(note.parentElement).toHaveTextContent("路過的人幫你喊安可");
+    // A cheer is not a trend: the plate still says what the last trend said.
+    expect(screen.getByRole("status", { name: "下降中,預估" })).toBeInTheDocument();
+  });
+
+  it("sends its own pitch four times a second", async () => {
+    const view = room({
+      state: "singing",
+      round: 1,
+      start_at_ms: Date.now() - 2_000,
+      me: { id: "me", role: "singer", opener: true, singing: true, session: session() },
+    });
+    const { posts } = roomSite(view);
+    const { engine } = fakeEngine();
+    renderRoom(engine);
+    await screen.findByRole("region", { name: "唱 紙船" });
+    const pitch = () => posts.filter((p) => p.path.endsWith("/pitch")).length;
+    await waitFor(() => expect(pitch()).toBeGreaterThan(0), { timeout: 3_000 });
+    const from = pitch();
+    await new Promise((r) => setTimeout(r, 1_100));
+    expect(pitch() - from).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -448,6 +474,51 @@ describe("一起唱: a spectator's stage", () => {
     expect(within(stage).getByRole("button", { name: "聽伴奏" })).toHaveAttribute("aria-pressed", "false");
     expect(posts.some((p) => p.path === "/api/member/karaoke/songs/k1/sessions")).toBe(false);
     expect(posts.some((p) => p.path.endsWith("/result"))).toBe(false);
+  });
+
+  it("cheers a singer: whom, then a word; waits the time Core says; shows everyone's cheers", async () => {
+    const view = room({
+      state: "singing",
+      round: 1,
+      start_at_ms: Date.now() - 5_000,
+      me: { id: "b", role: "spectator", opener: false, singing: false, session: session() },
+    });
+    const { posts } = roomSite(view, (method, url) =>
+      method === "POST" && url.pathname === "/api/member/karaoke/rooms/KTV888/cheer" ? { body: { wait_ms: 60_000 } } : undefined,
+    );
+    const { engine } = fakeEngine();
+    renderRoom(engine);
+    const stage = await screen.findByRole("region", { name: "看 紙船" });
+    emit(BOARD);
+    const cheering = await within(stage).findByRole("group", { name: "幫唱的人加油" });
+    await userEvent.click(within(cheering).getByRole("radio", { name: "Akari" }));
+    await userEvent.click(within(cheering).getByRole("button", { name: "幫 Akari 喊太強了" }));
+    await waitFor(() =>
+      expect(posts.find((p) => p.path.endsWith("/cheer"))?.body).toEqual({ member: "c", kind: "wow" }),
+    );
+    // Core said to wait: the words are off, and say why.
+    await waitFor(() => expect(within(cheering).getByRole("button", { name: "幫 Akari 喊加油" })).toBeDisabled());
+    expect(within(cheering).getByRole("button", { name: "幫 Akari 喊加油" })).toHaveAccessibleDescription("等一下才能再加油");
+    // Everyone's cheers come back on the stream of the room and show for a while.
+    emit({ type: "cheer", round: 1, id: "c1-9", member: "a", by: { name: "Kai", color: 2 }, kind: "nice" });
+    const list = await within(stage).findByRole("list", { name: "大家的加油" });
+    expect(list).toHaveTextContent("Kai幫海苔好聽");
+  });
+
+  it("takes the singers' pitch from `live` between boards", async () => {
+    const view = room({
+      state: "singing",
+      round: 1,
+      start_at_ms: Date.now() - 5_000,
+      me: { id: "b", role: "spectator", opener: false, singing: false, session: session() },
+    });
+    roomSite(view);
+    const { engine } = fakeEngine();
+    renderRoom(engine);
+    await screen.findByRole("region", { name: "看 紙船" });
+    // A `live` before any board is not a trend and changes no ranking.
+    emit({ type: "live", round: 1, at_ms: 0, lines: [{ member: "a", pitch: { from: 0, track: toBase64(encodeTrack([60, 61])) } }] });
+    expect(screen.getByText("開始唱之後會出現")).toBeInTheDocument();
   });
 });
 
@@ -783,6 +854,39 @@ describe("一起唱: opening a room", () => {
   });
 });
 
+describe("一起唱: when she is not in voice yet", () => {
+  it("says why 開一間房 cannot be pressed, and lets it be pressed within seconds of her joining, without a reload", async () => {
+    window.history.replaceState(null, "", "/karaoke");
+    let inVoice = false;
+    let asked = 0;
+    mockFetch((method, url) => {
+      const path = url.pathname;
+      if (path === "/api/member/karaoke") return { body: overview() };
+      if (path === "/api/member/karaoke/rooms" && method === "GET") {
+        asked++;
+        return {
+          body: inVoice
+            ? { available: true, reason: null, terms: TERMS, balance: 50, mine: null }
+            : { available: false, reason: "她要在語音頻道裡才能開房間", terms: TERMS, balance: 50, mine: null },
+        };
+      }
+      return undefined;
+    });
+    renderPage(<KaraokePage member={MEMBER as never} home="/" />);
+    const block = await screen.findByRole("region", { name: "一起唱" });
+    const open = await within(block).findByRole("button", { name: "開一間房" });
+    // The page was loaded before she joined: the button is off and says why and what happens next.
+    expect(open).toBeDisabled();
+    expect(open).toHaveAccessibleDescription(/她要在語音頻道裡才能開房間。她進語音頻道後,這裡一兩秒內就能按,不用重新整理/);
+    const before = asked;
+    // She joins. Nothing on the page is touched: no reload, no focus change.
+    inVoice = true;
+    await waitFor(() => expect(within(block).getByRole("button", { name: "開一間房" })).toBeEnabled(), { timeout: 3_000 });
+    expect(asked).toBeGreaterThan(before);
+    window.history.replaceState(null, "", "/");
+  });
+});
+
 describe("唱歌 while it is closed", () => {
   it("is closed to members, and open to an admin with a quiet line", async () => {
     mockFetch((_m, url) => (url.pathname === "/api/member/karaoke" ? { body: overview({ open: false }) } : undefined));
@@ -1090,5 +1194,78 @@ describe("一起唱: her stream on the stages", () => {
     emit(BOARD);
     await within(stage).findByRole("list", { name: "即時排名" });
     expect(within(stage).queryByText("播出中")).toBeNull();
+  });
+});
+
+describe("一起唱: per server", () => {
+  const space = (id: string, name: string, primary = false) => ({
+    id,
+    platform: "discord",
+    external_id: `g-${id}`,
+    name,
+    primary,
+    established: true,
+  });
+
+  /** Their servers; she is in voice in `voiceIn` only. Records what was asked. */
+  function serverSite(spaces: ReturnType<typeof space>[], voiceIn: string) {
+    const asked: { method: string; space: string | null }[] = [];
+    mockFetch((method, url) => {
+      const path = url.pathname;
+      if (path === "/api/member/spaces") return { body: { spaces, default: spaces[0]?.id ?? null } };
+      if (path === "/api/member/karaoke") return { body: overview() };
+      if (path === "/api/member/karaoke/rooms") {
+        const at = url.searchParams.get("space");
+        asked.push({ method, space: at });
+        if (method === "POST") return { body: room() };
+        const here = (at ?? spaces[0]?.id) === voiceIn;
+        return {
+          body: here
+            ? { available: true, reason: null, terms: TERMS, balance: 50, mine: null }
+            : {
+                available: false,
+                reason: "她現在在別的伺服器的語音頻道裡,要在這個伺服器的語音頻道才能開房間",
+                terms: TERMS,
+                balance: 50,
+                mine: null,
+              },
+        };
+      }
+      if (path === "/api/member/karaoke/rooms/KTV888") return { body: room() };
+      return undefined;
+    });
+    return asked;
+  }
+
+  it("one server: no choice, the rooms of that server", async () => {
+    window.history.replaceState(null, "", "/karaoke");
+    const asked = serverSite([space("a", "伺服器 A", true)], "a");
+    renderPage(<KaraokePage member={MEMBER as never} home="/" />);
+    const block = await screen.findByRole("region", { name: "一起唱" });
+    await waitFor(() => expect(within(block).getByRole("button", { name: "開一間房" })).toBeEnabled());
+    expect(within(block).queryByRole("radiogroup")).toBeNull();
+    expect(asked.every((a) => a.space === null || a.space === "a")).toBe(true);
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("two servers: picks the server, follows its voice, and opens the room there", async () => {
+    window.history.replaceState(null, "", "/karaoke");
+    const asked = serverSite([space("a", "伺服器 A", true), space("b", "伺服器 B")], "b");
+    renderPage(<KaraokePage member={MEMBER as never} home="/" />);
+    const block = await screen.findByRole("region", { name: "一起唱" });
+    const picker = await within(block).findByRole("radiogroup", { name: "在哪個伺服器開房" });
+    // Their own server first: she is in voice in the other one, so it says so.
+    await waitFor(() => expect(within(block).getByRole("button", { name: "開一間房" })).toBeDisabled());
+    expect(block).toHaveTextContent("別的伺服器的語音頻道");
+    await userEvent.click(within(picker).getByRole("radio", { name: "伺服器 B" }));
+    await waitFor(() => expect(within(block).getByRole("button", { name: "開一間房" })).toBeEnabled());
+    expect(asked.some((a) => a.method === "GET" && a.space === "b")).toBe(true);
+    await userEvent.click(within(block).getByRole("button", { name: "開一間房" }));
+    const dialog = await screen.findByRole("dialog", { name: "開一間房" });
+    await userEvent.click(within(dialog).getByRole("button", { name: /開房$/ }));
+    await waitFor(() => expect(asked.filter((a) => a.method === "POST")).toEqual([{ method: "POST", space: "b" }]));
+    await waitFor(() => expect(window.location.pathname).toBe("/karaoke/room/KTV888"));
+    window.localStorage.clear();
+    window.history.replaceState(null, "", "/");
   });
 });

@@ -112,6 +112,56 @@ describe("one wish, one key", () => {
     expect(written.at(-1)?.body).toMatchObject({ wish: { key: wish?.key, state: "closed" } });
   });
 
+  it("a line in a channel asks it of whom it was said to, and only what is said to her answers", async () => {
+    // 2026-11-22: a line for someone else, in a turn that was S's, counted as asking S; S's next
+    // line to someone else counted as the answer.
+    const r = await rig();
+    r.book.hold("S", "問 S 期末報告的結果", "commitment:c1");
+    const line = (to: string[], at: number) =>
+      r.log.append({
+        kind: "delivered",
+        source: "delivery.text",
+        context: C,
+        body: {
+          attention_key: `line:${at}`,
+          revision: 1,
+          channel: "text",
+          context: C,
+          said: "期末報告的結果出來了嗎?",
+          delivered_at: toTimestamp(at),
+          audience: ["S"],
+          to,
+          answered_by: [],
+          line: `line-${at}`,
+        },
+      });
+    line(["K"], T0);
+    expect(r.book.of("commitment:c1")?.state).toBe("open");
+    r.advance(HOUR);
+    line(["S"], T0 + HOUR);
+    expect(r.book.of("commitment:c1")).toMatchObject({ state: "asked", asked: 1 });
+    r.advance(60_000);
+    r.log.observe(
+      {
+        source: "platform.test",
+        silent: false,
+        salience: "notable",
+        attention_key: "msg:other",
+        revision: 1,
+        summary: "S:K 你好",
+        addressed_to_her: false,
+        from: "S",
+        context: C,
+      },
+      { speech: true },
+    );
+    await Promise.resolve();
+    expect(r.book.of("commitment:c1")?.state).toBe("asked");
+    r.says("還不錯,拿了 A");
+    await Promise.resolve();
+    expect(r.book.of("commitment:c1")).toMatchObject({ state: "closed", end: "answered" });
+  });
+
   it("a DM that paraphrases a long wish still asks it; an unrelated DM does not", async () => {
     // 2026-11-11: the topic carried its plan's steps and the DM reworded it (0.30 shared).
     const r = await rig();

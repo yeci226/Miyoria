@@ -8,9 +8,12 @@
 // - `initiative_inbox`: what is not a line of a conversation but is for her: a due schedule, a
 //   salient world event, a followup that is due, a promise that is overdue, a long action's
 //   result. One row per thing (`key`); `session` is the place it belongs to (`null`: home). An
-//   item is shown in block 6 of the next run in its place (home items in any place) and is seen
-//   once a run that showed it finished. `woke_at` is set when it woke her itself: an item wakes
-//   her at most once, whatever came of that run.
+//   item is shown in block 6 of the next run in its place and is seen once a run that showed it
+//   finished; a home item is shown in the runs of its Space (`space_id`, the server it came from)
+//   and, without one (her own timers, her morning), in any run. `woke_at` is set when it woke her
+//   itself: an item wakes her at most once, whatever came of that run.
+// - `space_id` (both tables, phase 6, docs/design/v5-places.md): identity's Space of the place a
+//   row came from; `null` for one of no server (a DM, her home). Not a foreign key, like the rest.
 //
 // No foreign keys, like the transcripts: a place or a person need not be known to identity.
 // `initiative-migrations.ts` holds the SQL drizzle-kit generates from these tables, `STRICT`
@@ -52,6 +55,8 @@ export const initiativeSchedules = sqliteTable(
     context: text({ mode: "json" }).$type<ContextKey>(),
     /** The handle of the person it is about, when one. */
     person: text(),
+    /** The Space of `context` (identity's id); `null`: none (home, a DM). */
+    space_id: text(),
     /** Who asked for it (`remind_me` for someone); `null`: she set it herself. */
     for_account: text({ mode: "json" }).$type<AccountRef>(),
     source: text({ enum: SCHEDULE_SOURCES }).notNull(),
@@ -80,6 +85,11 @@ export const initiativeInbox = sqliteTable(
     session: text(),
     /** The place of that session, to wake her there. */
     context: text({ mode: "json" }).$type<ContextKey>(),
+    /**
+     * The Space it came from (identity's id), also for a home item (a voice event of a server):
+     * a run sees only its own Space's items and items of none. `null`: no server.
+     */
+    space_id: text(),
     /** What she is told (may quote others: shown as data). */
     text: text().notNull(),
     /** The handle of the person it is about, when one. */
@@ -95,6 +105,7 @@ export const initiativeInbox = sqliteTable(
   (t) => [
     uniqueIndex("initiative_inbox_key").on(t.key),
     index("initiative_inbox_open_idx").on(t.session).where(sql`${t.seen_at} IS NULL`),
+    index("initiative_inbox_space_idx").on(t.space_id).where(sql`${t.seen_at} IS NULL`),
     check("initiative_inbox_kind_check", sql`${t.kind} IN (${oneOf(INBOX_KINDS)})`),
   ],
 );

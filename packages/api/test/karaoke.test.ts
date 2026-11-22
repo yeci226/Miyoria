@@ -62,7 +62,7 @@ interface Rig {
 let rig: Rig;
 
 beforeEach(async () => {
-  const raw = openTestDb({ plugins: [karaokeSchema] });
+  const raw = openTestDb({ identity: true, plugins: [karaokeSchema] });
   const worker = new FakeKaraokeWorker();
   const clock = { t: T0 };
   const dir = await mkdtemp(join(tmpdir(), "karaoke-api-"));

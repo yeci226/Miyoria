@@ -23,6 +23,8 @@ export function createApi(client: ApiClient) {
 
     // what anyone may see, and what a logged-in person has of their own: the cookie alone
     memberExportUrl: () => client.url("/api/member/export"),
+    /** Where the browser goes to link the member's GitHub account (`mention`: name them on their reports). */
+    githubLinkUrl: (mention: boolean) => client.url("/api/member/github/link", { mention: mention ? "1" : "0" }),
 
     // her data: the inventory and the deletes are on the route table, the downloads are not
     /** A JSON backup of `categories` (all exportable ones without). */

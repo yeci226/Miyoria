@@ -10,6 +10,11 @@
 // results come (the four parts, a winner and coins, someone who did not finish, or a round without a
 // prize and its note), and the next round's lobby. The songs and their words are made up.
 //
+// Spectating: the board comes four times a second with each singer's latest pitch (as Core sends
+// it from their browsers), so the lanes judge the notes (Mia, 小明 an octave down and Kai land them,
+// the cat misses many); people watching cheer the singers every second or two; someone comes in to
+// watch partway and leaves again; the lead changes hands.
+//
 // It is heard too: a backing made here (a few soft chords and a beat, raw PCM like the worker's)
 // and the "voice" of the singer on the stream (a plain tone on each sung piece, µ-law in pieces a
 // quarter of a second long, half a second ahead, like Core's), both through the scene's player.
@@ -22,6 +27,7 @@ import type { WorkersKaraokeLineV2, WorkersKaraokeLyricsV2 } from "@miyoria/cont
 import type {
   FeedMessage,
   KaraokeAir,
+  KaraokeCheer,
   KaraokeLine,
   KaraokeMember,
   KaraokeNote,
@@ -258,6 +264,15 @@ function demoParts(name: string, total: number): KaraokeParts {
   return { pitch: r1(pitch), stability: r1(stability), rhythm: rhythm === null ? null : r1(rhythm), expression: r1(expression) };
 }
 
+/** Who cheers in the demo (the room's watchers), and with what. */
+const CHEERERS = [
+  { name: "阿翔", color: 3 },
+  { name: "小雨", color: 4 },
+];
+const CHEER_KINDS: KaraokeCheer["kind"][] = ["cheer", "nice", "wow", "encore"];
+/** Someone who comes in to watch partway through a round, and leaves again. */
+const VISITOR: KaraokeMember = { name: "小雨", color: 4, role: "spectator", ready: false, opener: false };
+
 /** Songs people put in the queue (only the two above are ever sung). */
 const ASKED: KaraokeQueueEntry[] = [
   { title: "星屑ステップ", artist: "示範歌手", by: "小明", state: "ready" },
@@ -392,19 +407,41 @@ export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
       }
     }, VOICE_PIECE_MS / 2);
     let ranks = new Map<string, number>();
-    for (;;) {
-      await wait(1000);
+    let scored = singers.map((m) => ({ m, total: 0 }));
+    const cheered = new Map<string, number>();
+    let cheers: KaraokeCheer[] = [];
+    let nextCheer = 3;
+    let cheerId = 0;
+    // The countdown, then the board four times a second (the ranks and scores move once a second).
+    for (let tick = 0; ; tick++) {
+      await wait(250);
       const position = performance.now() - start;
       if (stopped || position >= song.seconds * 1000) break;
       if (position < 0) {
-        send({ state: "countdown", positionMs: position });
+        // The countdown's board lists who sings the round, with no score yet.
+        const lined = singers.map((m) => ({ ...unscored(m), pitch: null }));
+        if (tick % 4 === 0) send({ state: "countdown", positionMs: position, board: lined, cheers: [] });
         continue;
       }
       const t = position / 1000;
       const relay = relayAt(t);
-      const scored = singers
-        .map((m) => ({ m, total: running(m.name, t, round) }))
-        .sort((a, b) => b.total - a.total);
+      const second = tick % 4 === 0;
+      if (second) {
+        ranks = new Map(scored.map((s, i) => [s.m.name, i + 1]));
+        scored = singers.map((m) => ({ m, total: running(m.name, t, round) })).sort((a, b) => b.total - a.total);
+      }
+      // Someone comes in to watch for a while; the watchers cheer now and then.
+      const visiting = t > 7 && t < song.seconds - 8;
+      const here = state.members.some((m) => m.name === VISITOR.name);
+      const members = visiting === here ? state.members : visiting ? [...state.members, { ...VISITOR }] : state.members.filter((m) => m.name !== VISITOR.name);
+      if (t >= nextCheer) {
+        const by = (CHEERERS[cheerId % (visiting ? 2 : 1)] ?? CHEERERS[0]) as { name: string; color: number };
+        const to = singers[(cheerId * 3 + round) % singers.length] as KaraokeMember;
+        cheerId++;
+        cheered.set(to.name, (cheered.get(to.name) ?? 0) + 1);
+        cheers = [...cheers, { id: `demo-${round}-${cheerId}`, kind: CHEER_KINDS[cheerId % 4] ?? "cheer", to: { name: to.name, color: to.color }, by }].slice(-6);
+        nextCheer = t + 1.1 + ((cheerId * 7) % 10) / 10;
+      }
       const board: KaraokeLine[] = scored.map(({ m, total }, i) => {
         const rank = i + 1;
         const before = ranks.get(m.name);
@@ -421,13 +458,13 @@ export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
           finished: false,
           onAir: m.name === relay,
           parts: null,
-          // The singers are ahead of the stream: a board brings the last 1.5 s they sang, up to a
-          // second past where the stream is.
-          pitch: pitchPiece(notes, m.name, t - 0.5, t + 1),
+          // The singers are ahead of the stream: each frame brings the last second they sang, up to
+          // a second past where the stream is.
+          pitch: pitchPiece(notes, m.name, t, t + 1),
+          cheers: cheered.get(m.name) ?? 0,
         };
       });
-      ranks = new Map(board.map((l) => [l.name, l.rank as number]));
-      send({ state: "singing", positionMs: position, board, air: { ...ON_AIR, relay } });
+      send({ state: "singing", positionMs: position, board, members, cheers, air: { ...ON_AIR, relay } });
     }
     clearInterval(voices);
   }
@@ -435,8 +472,9 @@ export function startKaraokeDemo(emit: (m: FeedMessage) => void): () => void {
   /** The song is over: the results come in one by one (結算中…), then it is about done. */
   async function settle(): Promise<void> {
     const board = state.board.map((l) => ({ ...l, pitch: null, onAir: false }));
+    const members = state.members.filter((m) => m.name !== VISITOR.name);
     for (const waiting of [["Kai", "一隻路過的貓"], ["一隻路過的貓"], []]) {
-      send({ state: "singing", positionMs: null, board, air: QUIET, settling: { waiting } });
+      send({ state: "singing", positionMs: null, board, members, air: QUIET, settling: { waiting }, cheers: [] });
       await wait(1500);
       if (stopped) return;
     }
@@ -502,5 +540,24 @@ function blank(room: string): KaraokeScene {
     joinUrl: `https://example.com/karaoke/room/${room}`,
     qrWhileSinging: false,
     settling: null,
+    cheers: [],
+  };
+}
+
+/** A singer on the countdown's board: in the round, no score yet. */
+function unscored(m: KaraokeMember): Omit<KaraokeLine, "pitch"> {
+  return {
+    name: m.name,
+    color: m.color,
+    rank: null,
+    total: null,
+    source: null,
+    move: "same",
+    winner: false,
+    coins: 0,
+    finished: false,
+    onAir: false,
+    parts: null,
+    cheers: 0,
   };
 }

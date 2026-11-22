@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type { ModuleDetail, ModuleSettings, SettingField, SettingsHistory } from "@miyoria/contracts/api";
+import type { AdminSpace, AdminSpaces, ModuleDetail, ModuleSettings, SettingField, SettingsHistory } from "@miyoria/contracts/api";
 import { mockFetch, renderRoute } from "@/test/render";
 
 const field = (over: Partial<SettingField> & Pick<SettingField, "path" | "kind" | "label">): SettingField => ({
@@ -13,6 +13,7 @@ const field = (over: Partial<SettingField> & Pick<SettingField, "path" | "kind" 
   danger: null,
   secret: false,
   scope: "cluster",
+  merge: "replace",
   unit: null,
   labels: null,
   room: null,
@@ -97,6 +98,21 @@ const ROOMS = {
   ],
 };
 
+const SPACE_A: AdminSpace = { id: "a", platform: "discord", external_id: "9", name: "魚缸", primary: true, established: true, members: 3 };
+const SPACE_B: AdminSpace = { id: "b", platform: "discord", external_id: "8", name: "第二", primary: false, established: false, members: 1 };
+
+/** `fetch`'s handler with `GET /api/places/spaces` answered first. */
+function spacesFirst(fetch: ReturnType<typeof mockFetch>, spaces: AdminSpaces) {
+  const inner = fetch.getMockImplementation();
+  return async (input: string | URL | Request, init?: RequestInit) => {
+    if (new URL(String(input), "http://panel.test").pathname === "/api/places/spaces") {
+      return new Response(JSON.stringify(spaces), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (inner === undefined) throw new Error("no fetch");
+    return inner(input, init);
+  };
+}
+
 function core(view: ModuleSettings, save: (body: unknown) => { status?: number; body: unknown }) {
   const puts: unknown[] = [];
   const fetch = mockFetch((method, url, body) => {
@@ -167,6 +183,68 @@ describe("a module's page", () => {
     expect(puts).toEqual([]);
     await user.click(within(dialog).getByRole("button", { name: "儲存,之後套用" }));
     await waitFor(() => expect(puts).toHaveLength(1));
+  });
+
+  it("with one server shows no server switch and no scope, as before", async () => {
+    const { fetch } = core(settings({ fields: [field({ path: "song_rounds", kind: "number", label: "猜歌幾首", scope: "space", default: 8 })] }), () => ({ body: {} }));
+    const one: AdminSpaces = { spaces: [SPACE_A], default: "a" };
+    fetch.mockImplementation(spacesFirst(fetch, one));
+    renderRoute("/system/party");
+    expect(await screen.findByLabelText("猜歌幾首")).toHaveValue(12);
+    expect(screen.queryByRole("combobox", { name: "伺服器" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "範圍" })).not.toBeInTheDocument();
+  });
+
+  it("with two servers sets a server's own value at once, and says what it inherits", async () => {
+    const view = settings({
+      fields: [
+        field({ path: "song_rounds", kind: "number", label: "猜歌幾首", scope: "space", default: 8 }),
+        field({ path: "rewards.enabled", kind: "switch", label: "玩完發魚幣", default: true }),
+      ],
+    });
+    const atA = settings({
+      ...view,
+      place: { space: { id: "a", name: "魚缸" }, room: null },
+      values: {
+        ...view.values,
+        song_rounds: { value: 5, source: "space", file: 8, file_set: true, set: true, env: null, invalid: null, place: { own: 5, own_set: true, inherited: 12, inherited_from: "panel" } },
+      },
+    });
+    const puts: { url: string; body: unknown }[] = [];
+    mockFetch((method, url, body) => {
+      if (url.pathname === "/api/places/spaces") return { body: { spaces: [SPACE_A, SPACE_B], default: "a" } };
+      if (url.pathname === "/api/modules/party") return { body: DETAIL };
+      if (url.pathname === "/api/modules/party/settings" && method === "GET") return { body: url.searchParams.get("space") === "a" ? atA : view };
+      if (url.pathname === "/api/modules/party/settings" && method === "PUT") {
+        puts.push({ url: url.search, body });
+        return { body: { revision: 4, applied: "immediate", state: "running", reason: null } };
+      }
+      if (url.pathname === "/api/modules/party/settings/history") return { body: { items: [], next_before: null } };
+      if (url.pathname === "/api/places/rooms") return { body: ROOMS };
+      if (url.pathname === "/api/modules") return { body: [] };
+      return undefined;
+    });
+    const user = userEvent.setup();
+    renderRoute("/system/party");
+    expect(await screen.findByRole("combobox", { name: "伺服器" })).toBeInTheDocument();
+    const scope = await screen.findByRole("radiogroup", { name: "範圍" });
+    expect(within(scope).getByRole("radio", { name: "魚缸" })).toBeChecked();
+    const rounds = await screen.findByLabelText("猜歌幾首");
+    await waitFor(() => expect(rounds).toHaveValue(5));
+    expect(screen.getByText(/這個伺服器設的 · 拿掉後是 12/)).toBeInTheDocument();
+    // A field that is the same everywhere is not on a server's form.
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.getByText(/其他 1 項設定所有地方都一樣/)).toBeInTheDocument();
+    await user.clear(rounds);
+    await user.type(rounds, "7");
+    await user.click(screen.getByRole("button", { name: "儲存到魚缸" }));
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]).toEqual({ url: "?space=a", body: { expected: 4, set: { song_rounds: 7 }, reset: [] } });
+
+    // The whole install's values are one click away.
+    await user.click(within(scope).getByRole("radio", { name: "全部伺服器" }));
+    expect(await screen.findByRole("switch")).toBeInTheDocument();
+    expect(screen.getByLabelText("猜歌幾首")).toHaveValue(12);
   });
 
   it("is read only for someone without the module's settings node", async () => {

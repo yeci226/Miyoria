@@ -169,7 +169,7 @@ export const API_BIND = tomlField(
 
 export const VOICE: readonly Field[] = [
   tomlField("ASR worker URL", "speech.asr.local.url", URL_KIND, {
-    default: "http://127.0.0.1:8001",
+    default: "http://127.0.0.1:8003",
   }),
   tomlField("TTS worker URL", "speech.tts.local.url", URL_KIND, {
     default: "http://127.0.0.1:8002",

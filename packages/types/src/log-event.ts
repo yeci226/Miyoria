@@ -264,6 +264,11 @@ export interface Delivery {
   delivered_at: Timestamp;
   /** Who was there. */
   audience: Handle[];
+  /**
+   * Whom it is said to: the person it replies to, else the people it names; empty: nobody in
+   * particular. Unset: not known (an older line; readers guess from `audience`).
+   */
+  to?: Handle[];
   /** Who responded inside the answer window. */
   answered_by: Handle[];
   /** Its `utterance` event. */
@@ -296,6 +301,11 @@ export interface SpokenLine {
   context: ContextKey;
   said: string;
   audience: Handle[];
+  /**
+   * Whom it is said to: the person it replies to, else the people it names; empty: nobody in
+   * particular. Unset: not known (an older line; readers guess from `audience`).
+   */
+  to?: Handle[];
   turn: TurnId | null;
   state: LineState;
   at: Timestamp;
@@ -312,6 +322,8 @@ export interface NewLine {
   context: ContextKey;
   said: string;
   audience?: readonly Handle[];
+  /** Whom it is said to (`Delivery.to`); unset: not known. */
+  to?: readonly Handle[];
   turn?: TurnId | null;
   /** What led to it (the decision). */
   cause?: string | null;
@@ -326,6 +338,8 @@ export interface UtteranceBody {
   channel: DeliveryChannel;
   said: string;
   audience: Handle[];
+  /** See `Delivery.to`. */
+  to?: Handle[];
   turn: TurnId | null;
 }
 

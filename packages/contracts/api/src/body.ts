@@ -268,6 +268,17 @@ export const LedgerLimitsSchema = z
     ),
     /** The unanswered limit was reached here: she starts nothing until a person speaks. */
     waiting_for_response: z.boolean().optional(),
+    /** What did not work lately (a task that failed after the gate let it run), until when. */
+    failed: z
+      .array(
+        z.object({
+          capability: z.string(),
+          reason: z.string(),
+          at: TimestampSchema,
+          until: TimestampSchema,
+        }),
+      )
+      .optional(),
   })
   .meta({ id: "ApiLedgerLimits" });
 export type LedgerLimits = z.output<typeof LedgerLimitsSchema>;

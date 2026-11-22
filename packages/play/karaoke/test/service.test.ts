@@ -70,7 +70,7 @@ interface Rig {
 let rig: Rig;
 
 async function makeRig(overrides: Partial<KaraokeConfig> = {}): Promise<Rig> {
-  const raw = openTestDb({ plugins: [karaokeSchema] });
+  const raw = openTestDb({ identity: true, plugins: [karaokeSchema] });
   const store = new KaraokeStore(raw.db, raw.events);
   const worker = new FakeKaraokeWorker();
   const notes: KaraokeNote[] = [];
@@ -249,6 +249,26 @@ describe("asking for a song", () => {
     // Her day starts at midnight UTC+8 (16:00 UTC).
     rig.clock.t = Date.UTC(2026, 10, 18, 16, 0, 1);
     await expect(rig.service.request(ALICE, "d")).resolves.toMatchObject({ created: true });
+  });
+
+  it("keeps a made song in preparation while its files are still on their way", async () => {
+    const a = await rig.service.request(ALICE, "slow link");
+    rig.worker.finish(rig.store.song(a.song.id)?.job as string, referenceOf(song, "k-slow"));
+    rig.worker.breakFiles = 2;
+    await rig.service.tick(signal);
+    expect(rig.service.song(ALICE, a.song.id)).toMatchObject({ state: "preparing" });
+    await rig.service.tick(signal);
+    expect(rig.service.song(ALICE, a.song.id)).toMatchObject({ state: "preparing" });
+    await rig.service.tick(signal);
+    expect(rig.service.song(ALICE, a.song.id)).toMatchObject({ state: "ready", error: null });
+  });
+
+  it("fails a made song whose files never arrive", async () => {
+    const a = await rig.service.request(ALICE, "dead link");
+    rig.worker.finish(rig.store.song(a.song.id)?.job as string, referenceOf(song, "k-dead"));
+    rig.worker.breakFiles = 1000;
+    for (let i = 0; i < 8; i++) await rig.service.tick(signal);
+    expect(rig.service.song(ALICE, a.song.id).error).toBe("準備好了但拿不到檔案,再點一次");
   });
 
   it("says why a song could not be prepared", async () => {
@@ -628,6 +648,10 @@ describe("the background video", () => {
     r.worker.finish(job, referenceOf(song, `k-${job}`), true);
     await r.service.tick(signal);
     await vi.waitFor(() => expect(r.worker.fetched).toContain(`k-${job}/video.mp4`));
+    // The fake worker counts a file as fetched before it has written it, and Core's upkeep leaves a
+    // video being fetched alone: under load an upkeep right after this skipped it (the flake).
+    // Wait for the fetch itself.
+    await r.service.filesSettled();
     return asked.song.id;
   }
 

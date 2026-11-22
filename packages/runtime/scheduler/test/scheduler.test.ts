@@ -596,6 +596,39 @@ describe("the main line", () => {
     expect(done).toMatchObject({ action: speak.id, ok: false, error: "cancelled" });
     await h.sup.stopAll();
   });
+
+  it("interruptTurn stops a turn's lines in every lane it speaks in", async () => {
+    vi.useRealTimers();
+    const h = await harness();
+    const stopped: string[] = [];
+    const voice: VoiceSink = {
+      speak: (context, _t, _e, _turn, signal) =>
+        new Promise<SpeakOutcome>((resolve) => {
+          signal?.addEventListener("abort", () => {
+            stopped.push(context.scope ?? "");
+            resolve("interrupted");
+          });
+        }),
+    };
+    h.sup.services.provide("app", VoiceSinkKey, voice);
+    for (const guild of ["g1", "g2"]) {
+      const context: ContextKey = { platform: "fake", scope: guild, channel: "v", kind: "voice" };
+      await h.actions.submit(
+        newAction(
+          voiceLane("fake", guild),
+          "direct",
+          { type: "speak", context, text: "一句很長的話", emotion: null },
+          { turn: "t1" },
+        ),
+      );
+    }
+    await new Promise((r) => setTimeout(r, 5));
+    await (h.actions as Scheduler).interruptTurn("t1");
+    await nextDone(h.completed);
+    await nextDone(h.completed);
+    expect(stopped.sort()).toEqual(["g1", "g2"]);
+    await h.sup.stopAll();
+  });
 });
 
 describe("the emergency stop", () => {

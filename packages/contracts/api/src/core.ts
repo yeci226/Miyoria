@@ -198,8 +198,9 @@ export const decisions = route
  * envelope's id), from the moment the stream opens; nothing is replayed, so `Last-Event-ID` is
  * not read. `topics` is a comma-separated list of topic patterns (`platform.*,agent.turn.completed`);
  * none or empty: everything. A comment line comes after 15 s without an event. A reader that falls
- * far behind skips the oldest events; the stream ends when the API module stops. `HEAD` answers
- * the headers without subscribing.
+ * far behind skips the oldest events; the stream ends when the API module stops, and when the
+ * caller no longer may (checked again every 30 s: the session, the token, the lockout). `HEAD`
+ * answers the headers without subscribing.
  */
 export const events = route
   .meta({ audience: "admin", permission: null })

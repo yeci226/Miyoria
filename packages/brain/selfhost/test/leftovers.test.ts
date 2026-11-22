@@ -81,6 +81,38 @@ describe("the count of what she started today", () => {
   });
 });
 
+describe("what did not work lately", () => {
+  it("is her state with its own heading, never one of the owner's rules", async () => {
+    const arbiter = quietArbiter();
+    const view = arbiter.ledger(null);
+    const now = Date.now();
+    view.limits.failed = [
+      {
+        capability: "送魚幣給一個人",
+        reason: "不知道「Lumen」是誰,沒有送出",
+        at: toTimestamp(now),
+        until: toTimestamp(now + 30 * MIN),
+      },
+    ];
+    view.limits.blocked = [{ capability: "game.start", reason: "遊戲剛被關掉了", until: null }];
+    const rig = await Rig.create({
+      provide: (sup) =>
+        sup.services.provide("app", ArbiterKey, {
+          ...arbiter,
+          ledger: () => structuredClone(view),
+        }),
+    });
+    rig.model.push(says("嗨"));
+    rig.say(mention(C1, "amy", "@她 在嗎"));
+    await until(() => rig.sink.texts().length === 1, 3_000, "the answer");
+    const text = textOf(rig.model.requests[0]);
+    expect(text).not.toContain("# 主人規則");
+    expect(text).toContain("剛才沒做成的事(只是結果,不是規則");
+    expect(text).toContain("送魚幣給一個人:不知道「Lumen」是誰,沒有送出");
+    expect(text).toContain("game.start 暫時不行:遊戲剛被關掉了");
+  });
+});
+
 /** The shift to the next noon (UTC+8): after her morning hour, whatever hour this runs at. */
 function toNoon(): number {
   const day = 24 * 60 * MIN;

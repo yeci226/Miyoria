@@ -6,12 +6,13 @@
 // "whenever S speaks, ask about X". She had asked by DM at 11:07 and S had answered at 11:22 and
 // 11:33; nothing knew. This book is what knows: it follows the EventLog, so a restart keeps it.
 //
-// * She asked: a line delivered to an audience with the person in it (a DM she sends, `message_dm`,
-//   goes through the main line with the recipient as its audience), about the same topic; or the
-//   main line says a turn raised it.
-// * They answered: anything the person said after she asked, in any place (what the memory's
-//   `PersonThreads` counts as an answer too). They said "you asked already" or "stop asking":
-//   every wish of theirs closes for good.
+// * She asked: a line delivered to the person (whom it was said to, `Delivery.to`: whom it
+//   replies to, else whom it names; an older line without it, its audience; a DM she sends,
+//   `message_dm`, goes through the main line to the recipient), about the same topic; or the main
+//   line says a turn raised it.
+// * They answered: a line of theirs said to her after she asked (a reply, a mention, her name, a
+//   DM), in any place; not merely the next thing they said to someone else. They said "you asked
+//   already" or "stop asking": every wish of theirs closes for good.
 // * A state change is one `decision` event (source `wish`) with the whole wish; the stores that
 //   hold it (commitments, the proposal board, goals, timers) close their entries from it.
 // * `screen` is asked before anything raises a wish again. Answered or told to stop: never. Asked
@@ -333,8 +334,11 @@ export class WishBook implements Wishes, Projection {
   #delivered(delivery: Delivery, at: number): void {
     if (!Array.isArray(delivery?.audience) || typeof delivery.said !== "string") return;
     // A DM is for them alone: it is held to the looser share (`DM_SAME_WISH`).
-    const min = delivery.context?.kind === "dm" ? DM_SAME_WISH : 0.5;
-    for (const person of delivery.audience) this.#reached(person, delivery.said, at, min);
+    const dm = delivery.context?.kind === "dm";
+    const min = dm ? DM_SAME_WISH : 0.5;
+    // Whom it was said to; an older line without it, everyone it was for.
+    const to = !dm && Array.isArray(delivery.to) ? delivery.to : delivery.audience;
+    for (const person of to) this.#reached(person, delivery.said, at, min);
   }
 
   /** A person said something: an answer to what she asked them, or "stop asking". */
@@ -345,10 +349,17 @@ export class WishBook implements Wishes, Projection {
     if (body.speech !== true || from === null) return;
     const at = timestampMs(event.at);
     const stop = stopsAsking(saidIn(body));
+    // Said to her: a reply to her, a mention, her name, a DM.
+    const toHer = body.observation.addressed_to_her === true || event.context?.kind === "dm";
     for (const w of [...this.#wishes.values()]) {
       if (w.state === "closed" || !samePerson(w.person, from)) continue;
       if (stop) this.close(w.key, "stop");
-      else if (w.state === "asked" && w.asked_at !== null && at > timestampMs(w.asked_at)) {
+      else if (
+        toHer &&
+        w.state === "asked" &&
+        w.asked_at !== null &&
+        at > timestampMs(w.asked_at)
+      ) {
         this.close(w.key, "answered");
       }
     }

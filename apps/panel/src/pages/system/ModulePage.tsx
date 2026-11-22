@@ -4,25 +4,32 @@
 // waits for her to finish singing / the stream to end when the restart would stop what she is
 // using, which the button's confirm says first. The form keeps its own draft; it does not check
 // values beyond HTML's limits, Core's problems come back under each field.
+//
+// A field that may differ per server or per channel (docs/design/v5-places.md) can be set for the
+// server picked in the header (`?space=`) or for one of its channels: 範圍 switches the form to
+// that place's own values, which apply at once, with no restart. The switch is drawn only when it
+// means something (more than one server, or a field per channel).
 
 import { getRouteApi, Link } from "@tanstack/react-router";
 import { ChevronLeft, Power, PowerOff, RotateCcw, RotateCw } from "lucide-react";
 import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
-import type { ModuleDetail, ModuleSettings, SettingField, SettingsChange } from "@miyoria/contracts/api";
+import type { ModuleDetail, ModuleSettings, SettingField, SettingsChange, SettingValue } from "@miyoria/contracts/api";
 import type { JsonValue } from "@miyoria/contracts/wire";
 import { isApiError } from "@/api/http";
 import type { ModuleAction } from "@/api/types";
-import { useModuleAction, useModuleDetail, useModuleSettings, usePlaceRooms, useRevertSettings, useSaveSettings, useSettingsHistory } from "@/app/queries";
+import { type SettingsPlaceArg, useModuleAction, useModuleDetail, useModuleSettings, usePlaceRooms, useRevertSettings, useSaveSettings, useSettingsHistory } from "@/app/queries";
+import { useAdminSpace } from "@/app/space";
 import { ConfirmDialog } from "@/components/confirm";
 import { Page, PageHeader } from "@/components/page";
 import { EmptyLine, ErrorLine, SkeletonRows } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { Segmented } from "@/components/ui/segmented";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { CardActions, Facts, fmtWhen, guardWords, ModuleIcon, NoteLine, StateLine } from "./module-bits";
-import { DRAWN_KINDS, roomIndex, SettingControl, valueText } from "./setting-fields";
+import { DRAWN_KINDS, RoomPicker, roomIndex, SettingControl, valueText } from "./setting-fields";
 
 const route = getRouteApi("/system/$id");
 
@@ -148,6 +155,41 @@ function problemsOf(error: unknown): Record<string, string> {
   return out;
 }
 
+/**
+ * Which values the form changes: the whole install's (`cluster`), the selected server's own, or one
+ * of its channels' own. A server's and a channel's take effect at once, with no restart.
+ */
+type Scope = "cluster" | "space" | "room";
+
+/** Where a place's inherited value comes from, in words. */
+function inheritedWords(from: SettingValue["source"]): string {
+  if (from === "room") return "上層頻道";
+  if (from === "space") return "這個伺服器";
+  return "全部";
+}
+
+/** The place line under a field of a server's or a channel's values. */
+function PlaceLine({ field, saved, scope, resetting, canEdit, onReset, view, rooms }: { field: SettingField; saved: SettingValue | undefined; scope: Scope; resetting: boolean; canEdit: boolean; onReset: () => void; view: ModuleSettings; rooms: ReturnType<typeof roomIndex> }) {
+  const place = saved?.place;
+  if (!place) return null;
+  const here = scope === "room" ? "這個頻道" : "這個伺服器";
+  const inherited = valueText(field, place.inherited, view.currency, rooms);
+  if (resetting) return <p className="text-[13px] text-muted-foreground">存了之後改回{inheritedWords(place.inherited_from)}的值:{inherited}</p>;
+  if (!place.own_set) return <p className="text-[13px] text-muted-foreground">沿用{inheritedWords(place.inherited_from)}的值</p>;
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-[13px] text-muted-foreground">
+      <span>
+        {here}設的 · 拿掉後是 {inherited}
+      </span>
+      {canEdit && (
+        <button type="button" className="rounded-sm text-foreground underline-offset-4 outline-none hover:underline focus-visible:underline" onClick={onReset}>
+          拿掉{here}的值
+        </button>
+      )}
+    </p>
+  );
+}
+
 function FieldRow({
   field,
   view,
@@ -157,6 +199,8 @@ function FieldRow({
   onSet,
   onReset,
   rooms,
+  scope,
+  guild,
 }: {
   field: SettingField;
   view: ModuleSettings;
@@ -166,16 +210,20 @@ function FieldRow({
   onSet: (path: string, value: JsonValue) => void;
   onReset: (path: string) => void;
   rooms: ReturnType<typeof roomIndex>;
+  scope: Scope;
+  guild: string | null;
 }) {
   const id = useId();
   const saved = view.values[field.path];
   const resetting = draft.reset.includes(field.path);
   const changed = field.path in draft.set;
-  const value: JsonValue | null = changed ? (draft.set[field.path] as JsonValue) : resetting ? (saved?.file_set ? saved.file : field.default) : (saved?.value ?? field.default);
+  const atPlace = scope !== "cluster";
+  const resetTo = atPlace ? (saved?.place?.inherited ?? field.default) : saved?.file_set ? saved.file : field.default;
+  const value: JsonValue | null = changed ? (draft.set[field.path] as JsonValue) : resetting ? resetTo : (saved?.value ?? field.default);
   const helpId = field.help ? `${id}-help` : undefined;
   const errId = problem ? `${id}-err` : undefined;
   const describedBy = [helpId, errId].filter(Boolean).join(" ") || undefined;
-  const fromPanel = saved?.source === "panel" && !resetting;
+  const fromPanel = !atPlace && saved?.source === "panel" && !resetting;
   const drawn = DRAWN_KINDS.has(field.kind) && !field.secret;
   const isSwitch = field.kind === "switch";
 
@@ -200,6 +248,7 @@ function FieldRow({
             invalid={problem !== undefined}
             describedBy={describedBy}
             currency={view.currency}
+            guild={atPlace ? guild : null}
           />
         ) : (
           <SettingControl field={field} id={id} value={value} onChange={() => undefined} disabled invalid={false} describedBy={undefined} currency={view.currency} />
@@ -221,7 +270,8 @@ function FieldRow({
             )}
           </p>
         )}
-        {resetting && <p className="text-[13px] text-muted-foreground">存了之後改回檔案的值</p>}
+        {atPlace && <PlaceLine field={field} saved={saved} scope={scope} resetting={resetting} canEdit={canEdit} onReset={() => onReset(field.path)} view={view} rooms={rooms} />}
+        {resetting && !atPlace && <p className="text-[13px] text-muted-foreground">存了之後改回檔案的值</p>}
         {saved?.invalid && !changed && (
           <p className="text-[13px] text-primary" role="alert">
             面板存的值不再有效,現在用的是檔案或預設值:{saved.invalid}
@@ -239,19 +289,23 @@ function FieldRow({
   );
 }
 
-function SettingsForm({ view, onConflict }: { view: ModuleSettings; onConflict: () => void }) {
-  const save = useSaveSettings(view.module);
+function SettingsForm({ view, onConflict, scope, place, placeName, guild }: { view: ModuleSettings; onConflict: () => void; scope: Scope; place: SettingsPlaceArg | null; placeName: string; guild: string | null }) {
+  const save = useSaveSettings(view.module, place);
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [problems, setProblems] = useState<Record<string, string>>({});
   const [confirming, setConfirming] = useState(false);
-  const needsRooms = view.fields.some((f) => f.kind === "channel");
+  const atPlace = scope !== "cluster";
+  // A server's or a channel's own values: only the fields that may differ there.
+  const fields = scope === "cluster" ? view.fields : view.fields.filter((f) => (scope === "room" ? f.scope === "room" : f.scope !== "cluster"));
+  const needsRooms = fields.some((f) => f.kind === "channel");
   const roomsQuery = usePlaceRooms(null, needsRooms);
   const byField = useMemo(() => new Map(view.fields.map((f) => [f.path, roomIndex(f, roomsQuery.data?.rooms ?? [])])), [view.fields, roomsQuery.data]);
 
   const dirty = Object.keys(draft.set).length + draft.reset.length;
   const canEdit = view.can_edit;
-  const dangers = view.fields.filter((f) => f.danger && f.path in draft.set);
-  const guard = view.guard;
+  const dangers = fields.filter((f) => f.danger && f.path in draft.set);
+  // A place's values are in effect at once: nothing restarts, so nothing waits for a guard.
+  const guard = atPlace ? null : view.guard;
 
   const onSet = (path: string, value: JsonValue) => {
     setDraft((d) => ({ set: { ...d.set, [path]: value }, reset: d.reset.filter((p) => p !== path) }));
@@ -277,6 +331,7 @@ function SettingsForm({ view, onConflict }: { view: ModuleSettings; onConflict: 
           setDraft(EMPTY);
           setProblems({});
           if (r.applied === "unchanged") notify.ok("沒有變更");
+          else if (r.applied === "immediate") notify.ok(`已套用到${placeName},不用重新啟動`);
           else if (r.applied === "deferred") notify.ok(`已儲存,${guardWords(guard ?? "")}後重新啟動${view.name}`);
           else if (r.applied === "stored") notify.ok(`已儲存,${view.name}啟用時套用`);
           else if (r.state === "running") notify.ok(`已儲存,${view.name}重新啟動了`);
@@ -312,21 +367,28 @@ function SettingsForm({ view, onConflict }: { view: ModuleSettings; onConflict: 
   }, [dirty]);
 
   const groups = [...view.groups, { id: "", label: "其他" }]
-    .map((g) => ({ ...g, fields: view.fields.filter((f) => (f.group ?? "") === g.id || (g.id === "" && f.group !== null && !view.groups.some((x) => x.id === f.group))) }))
+    .map((g) => ({ ...g, fields: fields.filter((f) => (f.group ?? "") === g.id || (g.id === "" && f.group !== null && !view.groups.some((x) => x.id === f.group))) }))
     .filter((g) => g.fields.length > 0);
-  const buttonLabel = `儲存並重新啟動${view.name}`;
+  const buttonLabel = atPlace ? `儲存到${placeName}` : `儲存並重新啟動${view.name}`;
+  const elsewhere = view.fields.length - fields.length;
 
   return (
     <form onSubmit={onSubmit} aria-label={`${view.name}的設定`} className="flex flex-col gap-6">
-      {!canEdit && <p className="text-[13px] text-muted-foreground">你只能看:改這個子系統的設定要有 admin.settings.{view.module}</p>}
+      {!canEdit && (
+        <p className="text-[13px] text-muted-foreground">
+          你只能看:改{atPlace ? `${placeName}的` : "這個子系統的"}設定要有 admin.settings.{view.module}
+        </p>
+      )}
+      {atPlace && fields.length === 0 && <EmptyLine>這個子系統沒有能{scope === "room" ? "每個頻道" : "每個伺服器"}不同的設定</EmptyLine>}
       {groups.map((g) => (
         <fieldset key={g.id} className="flex min-w-0 flex-col">
           <legend className="mb-1 text-[13px] font-semibold text-foreground">{g.label}</legend>
           {g.fields.map((f) => (
-            <FieldRow key={f.path} field={f} view={view} draft={draft} problem={problems[f.path]} canEdit={canEdit} onSet={onSet} onReset={onReset} rooms={byField.get(f.path) ?? new Map()} />
+            <FieldRow key={f.path} field={f} view={view} draft={draft} problem={problems[f.path]} canEdit={canEdit} onSet={onSet} onReset={onReset} rooms={byField.get(f.path) ?? new Map()} scope={scope} guild={guild} />
           ))}
         </fieldset>
       ))}
+      {atPlace && elsewhere > 0 && <p className="text-[13px] text-muted-foreground">其他 {elsewhere} 項設定所有地方都一樣,在「全部」裡改</p>}
       {dirty > 0 && (
         <div
           role="region"
@@ -367,20 +429,83 @@ function SettingsForm({ view, onConflict }: { view: ModuleSettings; onConflict: 
   );
 }
 
-function SettingsBlock({ id }: { id: string }) {
-  const settings = useModuleSettings(id);
+/** Which values the page reads and changes: the whole install's, the selected server's, or a channel's. */
+interface ScopeState {
+  scope: Scope;
+  setScope: (s: Scope) => void;
+  /** The scopes worth offering; none (nothing drawn) when only `cluster` makes sense. */
+  options: { value: Scope; label: string }[];
+  room: string | null;
+  setRoom: (room: string | null) => void;
+  /** `null`: the whole install, or a channel scope with no channel picked yet. */
+  place: SettingsPlaceArg | null;
+  /** The server's platform id, for the channel pickers. */
+  guild: string | null;
+  spaceName: string;
+}
+
+/**
+ * The scope switch's state. Offered only when it means something: more than one server and fields
+ * that may differ per server, or fields that may differ per channel. With one server and no
+ * per-channel field the page is the whole install's, as it always was.
+ */
+function useSettingsScope(fields: readonly SettingField[] | undefined): ScopeState {
+  const { space, spaces, multiple } = useAdminSpace();
+  const current = spaces.find((s) => s.id === space) ?? null;
+  const [picked, setScope] = useState<Scope | null>(null);
+  const [room, setRoom] = useState<string | null>(null);
+  // Another server: its channels are others.
+  useEffect(() => setRoom(null), [space]);
+  const perSpace = multiple && (fields?.some((f) => f.scope !== "cluster") ?? false);
+  const perRoom = fields?.some((f) => f.scope === "room") ?? false;
+  const options: ScopeState["options"] = [];
+  if (current !== null && (perSpace || perRoom)) {
+    options.push({ value: "cluster", label: multiple ? "全部伺服器" : "全部" });
+    if (perSpace) options.push({ value: "space", label: current.name });
+    if (perRoom) options.push({ value: "room", label: "一個頻道" });
+  }
+  const offered = options.map((o) => o.value);
+  const scope: Scope = picked !== null && offered.includes(picked) ? picked : perSpace && current !== null ? "space" : "cluster";
+  const place: SettingsPlaceArg | null = current === null || scope === "cluster" ? null : scope === "space" ? { space: current.id } : room === null ? null : { space: current.id, room };
+  return { scope, setScope, options, room, setRoom, place, guild: current?.external_id ?? null, spaceName: current?.name ?? "" };
+}
+
+function ScopeBar({ where }: { where: ScopeState }) {
+  const id = useId();
+  if (where.options.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <Segmented label="範圍" value={where.scope} options={where.options} onChange={(v) => where.setScope(v as Scope)} />
+      {where.scope === "room" && (
+        <div className="w-full max-w-sm min-w-56 flex-1">
+          <RoomPicker id={id} guild={where.guild} value={where.room} onChange={where.setRoom} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SettingsBlock({ id, where }: { id: string; where: ScopeState }) {
+  const cluster = useModuleSettings(id);
+  const atPlace = where.scope !== "cluster";
+  const placeView = useModuleSettings(id, where.place);
+  const settings = atPlace && where.place !== null ? placeView : cluster;
   const view = settings.data;
+  const placeName = where.scope === "room" ? (view?.place?.room?.name ? `#${view.place.room.name}` : "這個頻道") : where.spaceName;
   return (
     <Card aria-labelledby="settings-title">
       <CardHeader>
         <CardTitle id="settings-title">設定</CardTitle>
-        {view?.updated && (
+        {view?.updated && !atPlace && (
           <span className="ml-auto text-xs text-muted-foreground tabular-nums">
             第 {view.updated.version} 版 · {view.updated.by_label} · {fmtWhen(view.updated.at)}
           </span>
         )}
       </CardHeader>
-      {settings.isPending ? (
+      <ScopeBar where={where} />
+      {where.scope === "room" && where.place === null ? (
+        <EmptyLine>選一個頻道</EmptyLine>
+      ) : settings.isPending ? (
         <SkeletonRows count={5} />
       ) : settings.isError ? (
         isApiError(settings.error) && settings.error.status === 403 ? (
@@ -391,8 +516,16 @@ function SettingsBlock({ id }: { id: string }) {
       ) : view && view.fields.length === 0 ? (
         <EmptyLine>這個子系統沒有能在面板上改的設定</EmptyLine>
       ) : view ? (
-        // A new revision (another save, a revert) starts the form over from what Core has.
-        <SettingsForm key={view.revision} view={view} onConflict={() => void settings.refetch()} />
+        // A new revision (another save, a revert) or another place starts the form over from what Core has.
+        <SettingsForm
+          key={`${view.revision}|${where.scope}|${where.place?.space ?? ""}|${where.place?.room ?? ""}`}
+          view={view}
+          onConflict={() => void settings.refetch()}
+          scope={where.scope}
+          place={where.place}
+          placeName={placeName}
+          guild={where.guild}
+        />
       ) : null}
       {view?.pending && <p className="text-[13px] text-muted-foreground">已存的變更{guardWords(view.pending)}後套用</p>}
     </Card>
@@ -401,8 +534,11 @@ function SettingsBlock({ id }: { id: string }) {
 
 // --- change log -------------------------------------------------------------------------------
 
-function ChangeLog({ id }: { id: string }) {
-  const history = useSettingsHistory(id);
+function ChangeLog({ id, where }: { id: string; where: ScopeState }) {
+  const atPlace = where.scope !== "cluster";
+  // A channel scope with no channel picked yet has no log to show.
+  const place = where.place;
+  const history = useSettingsHistory(id, place);
   const settings = useModuleSettings(id);
   const revert = useRevertSettings(id);
   const rooms = usePlaceRooms(null, settings.data?.fields.some((f) => f.kind === "channel") ?? false);
@@ -410,7 +546,10 @@ function ChangeLog({ id }: { id: string }) {
   const view = settings.data;
   const items = history.data?.pages.flatMap((p) => p.items) ?? [];
   const fieldOf = (path: string) => view?.fields.find((f) => f.path === path);
+  // What a missing value means: the file's for the whole install, what a place inherits for a place.
+  const unset = place === null ? "檔案的值" : "繼承的值";
 
+  if (atPlace && place === null) return null;
   if (view && view.fields.length === 0 && items.length === 0) return null;
   return (
     <Card aria-labelledby="log-title">
@@ -429,9 +568,7 @@ function ChangeLog({ id }: { id: string }) {
             <li key={item.version} className="grid gap-x-6 gap-y-1 border-b border-line-soft py-(--row-y) last:border-0 md:grid-cols-[12rem_minmax(0,1fr)_auto]">
               <div className="flex flex-wrap gap-x-2 text-[13px] text-muted-foreground md:flex-col md:gap-0">
                 <span className="tabular-nums text-foreground">{fmtWhen(item.at)}</span>
-                <span>
-                  {item.by_label} · 第 {item.version} 版
-                </span>
+                <span>{place === null ? `${item.by_label} · 第 ${item.version} 版` : item.by_label}</span>
               </div>
               <ul className="flex min-w-0 flex-col gap-0.5 text-[13px]">
                 {item.changes.map((c) => {
@@ -439,16 +576,17 @@ function ChangeLog({ id }: { id: string }) {
                   const index = f ? roomIndex(f, rooms.data?.rooms ?? []) : undefined;
                   return (
                     <li key={c.path} className="min-w-0 break-words">
+                      {item.place?.scope === "room" && place?.room == null && <span className="text-muted-foreground">#{item.place.name ?? item.place.room} </span>}
                       <span className="font-medium">{c.label}</span>{" "}
-                      <span className="text-muted-foreground">{c.before === null ? "檔案的值" : valueText(f, c.before, view?.currency ?? "", index)}</span>
+                      <span className="text-muted-foreground">{c.before === null ? unset : valueText(f, c.before, view?.currency ?? "", index)}</span>
                       {" → "}
-                      <span>{c.after === null ? "檔案的值" : valueText(f, c.after, view?.currency ?? "", index)}</span>
+                      <span>{c.after === null ? unset : valueText(f, c.after, view?.currency ?? "", index)}</span>
                     </li>
                   );
                 })}
                 {item.note && <li className="text-muted-foreground">{item.note}</li>}
               </ul>
-              {view?.can_edit && (
+              {view?.can_edit && place === null && (
                 <Button size="sm" variant="ghost" writes className="justify-self-start md:justify-self-end" onClick={() => setAsking(item)}>
                   <RotateCcw />
                   {i === 0 ? "復原這次" : "回到這次之前"}
@@ -514,12 +652,20 @@ export function ModulePage() {
           <ErrorLine error={detail.error} onRetry={() => void detail.refetch()} />
         )
       ) : m ? (
-        <>
-          <StatusBlock m={m} />
-          <SettingsBlock id={id} />
-          <ChangeLog id={id} />
-        </>
+        <ModuleBody m={m} />
       ) : null}
     </Page>
+  );
+}
+
+function ModuleBody({ m }: { m: ModuleDetail }) {
+  const fields = useModuleSettings(m.id).data?.fields;
+  const where = useSettingsScope(fields);
+  return (
+    <>
+      <StatusBlock m={m} />
+      <SettingsBlock id={m.id} where={where} />
+      <ChangeLog id={m.id} where={where} />
+    </>
   );
 }

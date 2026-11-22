@@ -1,6 +1,6 @@
 import type { Tool } from "@miyoria/llm/tools";
 import { describe, expect, it } from "vitest";
-import { ToolRegistry, truncate } from "../src/index.js";
+import { ReactTool, ToolArgumentError, ToolRegistry, truncate } from "../src/index.js";
 
 const named = (name: string): Tool => ({
   spec: { name, description: "test", parameters: { type: "object" } },
@@ -29,5 +29,40 @@ describe("turn", () => {
   it("truncates_tool_results", () => {
     expect(truncate("短", 5)).toBe("短");
     expect(truncate("一二三四五六", 3)).toBe("一二三…");
+  });
+});
+
+describe("react", () => {
+  const context = { platform: "discord", scope: "g", channel: "100", kind: "channel" } as const;
+  function tool() {
+    const actions: { payload: { type: string; message?: { id: string } } }[] = [];
+    const sink = { submit: async (a: (typeof actions)[number]) => void actions.push(a) };
+    const react = new ReactTool({ services: { require: () => sink } } as never);
+    return { react, actions };
+  }
+  const ctx = (message: string) =>
+    ({
+      turn: "01M7TURNULID",
+      context,
+      message: { context, id: message },
+      priority: "direct",
+    }) as never;
+
+  it("reacts to the message that woke her", async () => {
+    const { react, actions } = tool();
+    expect(await react.call(ctx("112233445566778899"), { emoji: "👍" })).toBe("reacted with 👍");
+    expect(actions.map((a) => a.payload)).toEqual([
+      { type: "react", message: { context, id: "112233445566778899" }, emoji: "👍" },
+    ]);
+  });
+
+  // Core's log on text lanes for days: `invalid Discord message id 01M7…`, "action failed": on a
+  // glance or a timer the message is the turn's placeholder, whose id is the turn's own ULID.
+  it("refuses, sending nothing, when no message woke the turn", async () => {
+    const { react, actions } = tool();
+    await expect(react.call(ctx("01M7TURNULID"), { emoji: "👍" })).rejects.toBeInstanceOf(
+      ToolArgumentError,
+    );
+    expect(actions).toEqual([]);
   });
 });

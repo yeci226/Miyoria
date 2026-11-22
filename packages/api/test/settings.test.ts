@@ -21,6 +21,7 @@ import {
   type ModuleSettingsService,
   type ModuleSettingsView,
   SettingsError,
+  type SettingsPlace,
   type SettingsSaveRequest,
   Supervisor,
   SupervisorKey,
@@ -28,14 +29,23 @@ import {
 } from "@miyoria/runtime/kernel";
 import { AuditLogKey } from "@miyoria/store";
 import {
+  type AccountRef,
+  AuthorizerKey,
+  BaseAuthorizer,
   type JsonObject,
   type JsonValue,
   type PlaceDirectory,
   PlaceDirectoryKey,
+  type Places,
+  PlacesKey,
   type Principal,
+  type SpaceRef,
+  type Subject,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActiveProfileKey, ApiModule } from "../src/index.js";
+import { mayEdit } from "../src/settings.js";
+import type { ApiContext, ApiState } from "../src/state.js";
 import { call, raw } from "./support/http.js";
 import { TestStore } from "./support/stores.js";
 
@@ -80,10 +90,13 @@ class FakeSettings implements ModuleSettingsService {
   editable(id: string): boolean {
     return id === "party";
   }
-  describe(id: string): ModuleSettingsView {
+  readonly places: (SettingsPlace | null | undefined)[] = [];
+  describe(id: string, place?: SettingsPlace | null): ModuleSettingsView {
     if (id !== "party") throw new SettingsError("unknown", `unknown module \`${id}\``);
+    this.places.push(place);
     const found = settingFields(configJsonSchema(PartyConfigSchema));
     return {
+      place: place ? { space: { id: place.space, name: place.space }, room: null } : null,
       module: id,
       name: "派對遊戲",
       revision: this.revision,
@@ -106,6 +119,15 @@ class FakeSettings implements ModuleSettingsService {
     };
   }
   async save(id: string, request: SettingsSaveRequest, by: string) {
+    if (request.place) {
+      this.saves.push({ by, request });
+      return {
+        revision: this.revision,
+        applied: "immediate" as const,
+        state: "running" as const,
+        reason: null,
+      };
+    }
     if (request.expected !== this.revision) throw new SettingsError("conflict", "stale");
     const rounds = request.set.song_rounds;
     if (typeof rounds === "number" && rounds > 30) {
@@ -140,6 +162,10 @@ class FakeSettings implements ModuleSettingsService {
       })),
       next_before: null,
     };
+  }
+  async placeHistory(_id: string, place: SettingsPlace) {
+    this.places.push(place);
+    return { items: [], next_before: null };
   }
   async revert(id: string, _version: number, _expected: number, _by: string) {
     this.layer = {};
@@ -181,6 +207,30 @@ const directory: PlaceDirectory = {
     ].filter((r) => o?.kind === undefined || r.kind === o.kind),
 };
 
+const SPACE_A: SpaceRef = {
+  id: "S1",
+  platform: "discord",
+  external_id: "9",
+  name: "魚缸",
+  primary: true,
+  established: true,
+};
+const SPACE_B: SpaceRef = {
+  ...SPACE_A,
+  id: "S2",
+  external_id: "8",
+  name: "第二",
+  primary: false,
+  established: false,
+};
+
+/** The two Spaces she is in, as far as the routes ask. */
+const places = {
+  primary: () => SPACE_A,
+  spaces: () => [SPACE_A, SPACE_B],
+  space: (id: string) => [SPACE_A, SPACE_B].find((s) => s.id === id) ?? null,
+} as unknown as Places;
+
 let sup: Supervisor | null = null;
 afterEach(async () => {
   await sup?.stopAll();
@@ -197,6 +247,7 @@ async function start() {
   const settings = new FakeSettings(sup);
   s.provide("kernel", ModuleSettingsKey, settings);
   s.provide("discord", PlaceDirectoryKey, directory);
+  s.provide("kernel", PlacesKey, places);
   const party = new Party();
   await sup.register(party, { song_rounds: 5 }, true);
   const api = new ApiModule({ env: () => undefined });
@@ -295,6 +346,64 @@ describe("module settings routes", () => {
     party.slow = true;
     const list = await call<ModuleInfo[]>(base, TOKEN, "GET", "/api/modules");
     expect(list.find((m) => m.id === "party")?.card).toBeNull();
+  });
+
+  it("read, save and list the history of one server's own values", async () => {
+    const { base, settings, party } = await start();
+    const view = await call<ModuleSettings>(
+      base,
+      TOKEN,
+      "GET",
+      "/api/modules/party/settings?space=S2",
+    );
+    expect(view.place).toEqual({ space: { id: "S2", name: "S2" }, room: null });
+    expect(settings.places.at(-1)).toEqual({ space: "S2", room: null });
+
+    const restarts = party.seen.length;
+    const saved = await call<SaveSettingsResult>(
+      base,
+      TOKEN,
+      "PUT",
+      "/api/modules/party/settings?space=S2&room=55",
+      { expected: 0, set: { song_rounds: 3 } },
+    );
+    expect(saved.applied).toBe("immediate");
+    expect(settings.saves.at(-1)?.request.place).toEqual({ space: "S2", room: "55" });
+    expect(party.seen).toHaveLength(restarts);
+
+    await call<SettingsHistory>(base, TOKEN, "GET", "/api/modules/party/settings/history?space=S1");
+    expect(settings.places.at(-1)).toEqual({ space: "S1", room: null });
+
+    const unknown = await raw(base, "GET", "/api/modules/party/settings?space=nope", {
+      token: TOKEN,
+    });
+    expect(unknown.status).toBe(404);
+    const roomAlone = await raw(base, "GET", "/api/modules/party/settings?room=55", {
+      token: TOKEN,
+    });
+    expect(roomAlone.status).toBe(400);
+  });
+
+  it("let a role assigned in one server change that server's values only", () => {
+    const MOD: AccountRef = { platform: "discord", id: "2" };
+    // `admin.settings.party` through a role assigned in server 8 (SPACE_B) only.
+    const authorizer = new (class extends BaseAuthorizer {
+      allowsSubject(subject: Subject, node: string): boolean {
+        if (node !== "admin.settings.party") return false;
+        return subject.context?.scope === SPACE_B.external_id;
+      }
+    })();
+    const state = {
+      optional: (key: unknown) => (key === AuthorizerKey ? authorizer : undefined),
+    } as unknown as ApiState;
+    const session = (write: boolean) =>
+      ({
+        get: () => ({ kind: "session", write, record: { account: MOD } }),
+      }) as unknown as ApiContext;
+    expect(mayEdit(state, session(true), "party")).toBe(false);
+    expect(mayEdit(state, session(true), "party", SPACE_A)).toBe(false);
+    expect(mayEdit(state, session(true), "party", SPACE_B)).toBe(true);
+    expect(mayEdit(state, session(false), "party", SPACE_B)).toBe(false);
   });
 
   it("list the rooms for the channel picker", async () => {

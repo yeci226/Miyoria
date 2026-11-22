@@ -189,6 +189,197 @@ export interface AuctionPictureData {
   history: { amount: number; name: string; at: string }[];
 }
 
+/**
+ * A gift she kept (docs/design/economy.md §16), for its giver to show: what it was, her line and
+ * the day. No price and no bond: only what the member page shows them.
+ */
+export interface GiftPictureData {
+  /** The giver's display name. */
+  name: string;
+  /** The gift as it was named (`一杯珍奶`). */
+  item: string;
+  /** 「吃的」「小東西」; `""` when unknown. */
+  kind: string;
+  /** Her line, or the plain line when it was taken for her. */
+  line: string;
+  /** `2026-11-21`. */
+  date: string;
+  favourite: boolean;
+}
+
+// ---- the deep-sea exchange (docs/design/exchange.md §7), filled by `@miyoria/play/exchange` ----
+
+/**
+ * Which colour means up (owner 2026-11-21: one convention for the whole product, a config choice):
+ * `tw` red up and green down (the default: the community is Taiwanese), `us` green up and red down.
+ * Every chart states it in a legend, and a move is never colour alone (signs and arrows too).
+ */
+export type ExchangeColors = "tw" | "us";
+
+/** A chart's timeframe: 當日 (the current or last session), 日線, 週線, 月線. */
+export type ExchangeTimeframe = "intraday" | "daily" | "weekly" | "monthly";
+
+/** One candle as a picture draws it: prices in cents of the ticker's own currency. */
+export interface ExchangeCandlePoint {
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  /** Shares traded (`null`: none known). */
+  v: number | null;
+  /** Its time as the date axis writes it (`10:05`, `11/20`, `2025/11`). */
+  label: string;
+}
+
+/** One ticker's quote: its price in its currency and in coins, the move, its candle chart. */
+export interface ExchangeQuotePicture {
+  code: string;
+  name: string;
+  /** The market's word (`台股`, `美股`, `這裡獨家`). */
+  sector: string;
+  blurb: string;
+  /** The price's own currency word (`TWD`, `USD`, `魚幣`). */
+  currency: string;
+  /** Prices are in cents (10000 = 100.00), in the ticker's own currency. */
+  price: number;
+  /**
+   * What `price` is, as the headline's label: `現價`, `收盤價(11/20)・休市中` (its market is
+   * closed, or today's first quote has not come), `開盤參考價`.
+   */
+  price_label: string;
+  ref: number;
+  /** From the reference, as a fraction. */
+  change: number;
+  limit: "up" | "down" | null;
+  timeframe: ExchangeTimeframe;
+  /**
+   * The bars, oldest first (more than are drawn: the moving averages need the bars before the
+   * first one shown).
+   */
+  candles: ExchangeCandlePoint[];
+  /** What the chart covers (`11/8 – 11/21`); `null`: nothing yet. */
+  range: string | null;
+  /** A local stock's line of what moved today's open (`null`: none, or a real stock). */
+  today: string | null;
+  news: { headline: string; direction: "up" | "down" }[];
+  /** The quote's time (`2026-11-23 10:05 的報價`). */
+  as_of: string;
+  /** The price in coins (`約 2,000 魚幣一股`); `null` when it is already in coins. */
+  coin_line: string | null;
+  /** `開盤中` / `休市`, and how old the quote is (`延遲約 3 分鐘`). */
+  market_line: string;
+  colors: ExchangeColors;
+  /** The exchange's small print (`exchangeSmallPrint`), drawn at the bottom. */
+  small_print: string;
+}
+
+/** A member's own holdings: only ever drawn for them (or shared by them, with their name). */
+export interface ExchangePortfolioPicture {
+  name: string;
+  currency: string;
+  balance: number | null;
+  /** Wallet plus holdings at market value. */
+  worth: number | null;
+  holdings: { code: string; qty: string; cost: number; value: number }[];
+  leveraged: {
+    code: string;
+    margin: number;
+    equity: number;
+    ratio: number;
+    price: number;
+    line_price: number;
+  }[];
+  as_of: string;
+  colors: ExchangeColors;
+  /** The exchange's small print (`exchangeSmallPrint`), drawn at the bottom. */
+  small_print: string;
+}
+
+/** The market at a glance: the five local stocks with their lines, what the server holds most, the sessions. */
+export interface ExchangeOverviewPicture {
+  /** The coins' name (absent: `DEFAULT_CURRENCY`, 魚幣). */
+  currency?: string;
+  /** The five local stocks (新手推薦 · 這裡獨家), prices in cents of coins. */
+  local: { code: string; name: string; price: number; change: number; series: number[] }[];
+  /** The tickers most held in the server: counts of holders only, never who. */
+  popular: { code: string; name: string; holders: number; change: number | null }[];
+  /** Each market: open or not and its hours (`台股 09:00–13:30 開盤中`). */
+  markets: { label: string; open: boolean; hours: string }[];
+  as_of: string;
+  colors: ExchangeColors;
+  small_print: string;
+}
+
+/** A trade's receipt: bought or sold what, at what price. Its owner may share it. */
+export interface ExchangeReceiptPicture {
+  name: string;
+  side: "buy" | "sell";
+  code: string;
+  ticker: string;
+  /** Shares as drawn (`0.0500`). */
+  shares: string;
+  /** The fill price in its own currency, as drawn (`TWD 2,000.00`). */
+  price: string;
+  /** Coins paid (a buy, fee included) or received (a sale, after the fee). */
+  coins: number;
+  fee: number;
+  currency: string;
+  leverage: number;
+  at: string;
+  small_print: string;
+}
+
+/** The bankruptcy notice: everything closed, the cooling-off, nothing owed. */
+export interface ExchangeBankruptPicture {
+  name: string;
+  currency: string;
+  /** Coins the house wrote off (never owed by them). */
+  written_off: number;
+  since: string;
+  until: string;
+  small_print: string;
+}
+
+/** One tile of a heat map (`ExchangeMapPicture`). */
+export interface ExchangeMapTile {
+  code: string;
+  /** The display name (zh-TW for Taiwan), written first where it fits. */
+  name: string;
+  sector: string;
+  /** Its area. */
+  weight: number;
+  /** Today's change as a fraction (`null`: not known). */
+  change: number | null;
+}
+
+/**
+ * A heat map (伺服器持股圖, 熱門台股圖, 熱門美股圖): tiles by area and today's change, grouped by
+ * sector. The holdings map never carries who holds what.
+ */
+export interface ExchangeMapPicture {
+  title: string;
+  tiles: ExchangeMapTile[];
+  /** What the tiles' size means (「格子大小為預設權重,非即時市值」). */
+  footnote: string;
+  /** No tile is laid out bigger than this share of the map (`1`: no cap). */
+  max_share: number;
+  as_of: string;
+  colors: ExchangeColors;
+  small_print: string;
+}
+
+/** The rich list (people who hide are not on it). */
+export interface ExchangeBoardPicture {
+  currency: string;
+  /** Kept for the board's layout; `null` for the rich list. */
+  week_start: string | null;
+  rows: { rank: number; name: string; value: number; extra: string | null }[];
+  /** The viewer's own place, when the picture is for someone (`null`: off the table or hidden). */
+  me: { rank: number | null; hidden: boolean } | null;
+  /** The exchange's small print (`exchangeSmallPrint`), drawn at the bottom. */
+  small_print: string;
+}
+
 /** Every template and its data. */
 export interface PictureDataMap {
   wallet: WalletPictureData;
@@ -198,6 +389,14 @@ export interface PictureDataMap {
   odds: OddsPictureData;
   lottery: LotteryPictureData;
   auction: AuctionPictureData;
+  exchange_quote: ExchangeQuotePicture;
+  exchange_portfolio: ExchangePortfolioPicture;
+  exchange_overview: ExchangeOverviewPicture;
+  exchange_rich: ExchangeBoardPicture;
+  exchange_receipt: ExchangeReceiptPicture;
+  exchange_bankrupt: ExchangeBankruptPicture;
+  exchange_map: ExchangeMapPicture;
+  gift: GiftPictureData;
 }
 
 export type PictureKind = keyof PictureDataMap;

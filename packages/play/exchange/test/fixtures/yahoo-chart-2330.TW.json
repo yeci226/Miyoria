@@ -1,0 +1,89 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "TWD",
+          "symbol": "2330.TW",
+          "exchangeName": "TAI",
+          "fullExchangeName": "Taiwan",
+          "instrumentType": "EQUITY",
+          "firstTradeDate": 946947600,
+          "regularMarketTime": 1795152601,
+          "hasPrePostMarketData": false,
+          "gmtoffset": 28800,
+          "timezone": "CST",
+          "exchangeTimezoneName": "Asia/Taipei",
+          "regularMarketPrice": 2000,
+          "regularMarketChangePercent": -4.762,
+          "fulldayPrice": 2000,
+          "fulldayChange": -100,
+          "fulldayChangePercent": -4.762,
+          "fiftyTwoWeekHigh": 2590,
+          "fiftyTwoWeekLow": 1375,
+          "regularMarketDayHigh": 2060,
+          "regularMarketDayLow": 1970,
+          "regularMarketVolume": 87546393,
+          "longName": "Taiwan Semiconductor Manufacturing Company Limited",
+          "shortName": "TAIWAN SEMICONDUCTOR MANUFACTUR",
+          "chartPreviousClose": 2100,
+          "previousClose": 2100,
+          "scale": 3,
+          "priceHint": 2,
+          "currentTradingPeriod": {
+            "pre": {
+              "timezone": "CST",
+              "end": 1795136400,
+              "start": 1795136400,
+              "gmtoffset": 28800
+            },
+            "regular": {
+              "timezone": "CST",
+              "end": 1795152600,
+              "start": 1795136400,
+              "gmtoffset": 28800
+            },
+            "post": {
+              "timezone": "CST",
+              "end": 1795152600,
+              "start": 1795152600,
+              "gmtoffset": 28800
+            }
+          },
+          "tradingPeriods": [
+            [
+              {
+                "timezone": "CST",
+                "end": 1795152600,
+                "start": 1795136400,
+                "gmtoffset": 28800
+              }
+            ]
+          ],
+          "dataGranularity": "5m",
+          "range": "1d",
+          "validRanges": ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
+        },
+        "timestamp": [
+          1795149300, 1795149600, 1795149900, 1795150200, 1795150500, 1795150800, 1795151100,
+          1795151400, 1795151700, 1795152000, 1795152300, 1795152600
+        ],
+        "indicators": {
+          "quote": [
+            {
+              "high": [2000, 2000, 1995, 1995, 1995, 1995, 1985, 1985, 1985, 1995, null, 2000],
+              "volume": [
+                1024341, 1040329, 1285744, 1263446, 3061827, 1578960, 1930013, 2646827, 1447932,
+                2854410, 0, 0
+              ],
+              "close": [2000, 1990, 1990, 1990, 1985, 1980, 1975, 1985, 1975, 1985, null, 2000],
+              "low": [1995, 1990, 1990, 1990, 1980, 1980, 1975, 1970, 1975, 1975, null, 2000],
+              "open": [2000, 2000, 1990, 1990, 1990, 1985, 1980, 1975, 1980, 1975, null, 2000]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

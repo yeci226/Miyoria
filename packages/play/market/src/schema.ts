@@ -7,18 +7,32 @@
 //   skipped ahead is a `planned` or `skipped` row.
 // - `market_bids`: every bid, with the coins its row holds (a raise holds only the difference) and
 //   when they went back.
-// - `market_lottery_weeks`: one row per draw (the local day it is drawn): the totals, the winner
-//   and the draw itself, and the week's notice.
+// - `market_lottery_draws` (version 3): one row per Space and draw (the local day it is drawn): the
+//   totals, the winner and the draw itself, and the week's notice.
+// - `market_lottery_weeks`: the draws of before version 3, one per week for the one server there
+//   was. Copied into `market_lottery_draws` (the primary Space's) by version 3, then never read or
+//   written again; it stays as it was.
 // - `market_lottery_tickets`: one row per purchase, `pending` until it is paid.
 // - `market_song_tickets` (version 2): one row per song priority ticket, written before the wallet
 //   is asked, until the song is sung (`consumed`) or the ticket is given back (`refunded`).
 //
-// The coins themselves are rows of the economy's ledger, keyed by these ids. No foreign key to
-// `persons`: the rows are money records and stay when a person is forgotten.
+// Every row of a Space carries its `space_id` (identity's `spaces.id`, version 3). A row from before
+// version 3 got its Space then: a lot from its channel's room, anything else the primary Space's;
+// `null` (or `''` for a draw) only when the database had no Space yet, and the module gives those
+// to the primary Space once there is one. No foreign key to `spaces` or `persons`: the rows are
+// money records and stay whatever happens to a Space or a person.
 
 import { micros } from "@miyoria/store";
 import { sql } from "drizzle-orm";
-import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  check,
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 export const marketLots = sqliteTable(
   "market_lots",
@@ -26,6 +40,8 @@ export const marketLots = sqliteTable(
     id: text().primaryKey(),
     /** The local day number the lot opens on. */
     week: integer().notNull(),
+    /** The Space it runs in (version 3). */
+    space_id: text(),
     /** `call_name`, `frame`; `null` for a week the owner skipped. */
     kind: text(),
     status: text().notNull(),
@@ -54,7 +70,7 @@ export const marketLots = sqliteTable(
     settled_at: micros(),
   },
   (t) => [
-    uniqueIndex("market_lots_week_idx").on(t.week),
+    uniqueIndex("market_lots_space_week_idx").on(t.space_id, t.week),
     index("market_lots_status_idx").on(t.status, t.ends_at),
     check(
       "market_lots_status_check",
@@ -97,6 +113,52 @@ export const marketBids = sqliteTable(
   ],
 );
 
+/** The columns of a draw, shared by the legacy weeks and the draws per Space. */
+const drawColumns = () => ({
+  /** `open`, `drawing` (winner picked, prize not paid yet), `drawn`, `refunding`, `refunded`. */
+  status: text().notNull(),
+  draw_at: micros().notNull(),
+  tickets: integer().notNull().default(0),
+  buyers: integer().notNull().default(0),
+  pot: integer().notNull().default(0),
+  prize: integer().notNull().default(0),
+  burned: integer().notNull().default(0),
+  winner_person: text(),
+  winner_platform: text(),
+  winner_account_id: text(),
+  winner_name: text(),
+  winner_tickets: integer(),
+  /** The winning ticket's index in the week's tickets (the system CSPRNG drew it). */
+  pick: integer(),
+  drawn_at: micros(),
+  paid_at: micros(),
+  announced_at: micros(),
+  /** The week's notice with its buy button. */
+  notice_message: text(),
+  notice_at: micros(),
+});
+
+/** The draws per Space (version 3): what the lottery reads and writes. */
+export const marketLotteryDraws = sqliteTable(
+  "market_lottery_draws",
+  {
+    /** The Space it is drawn in; `''` for a draw of before there was any Space. */
+    space_id: text().notNull(),
+    /** The local day number it is drawn on. */
+    week: integer().notNull(),
+    ...drawColumns(),
+  },
+  (t) => [
+    primaryKey({ name: "market_lottery_draws_pk", columns: [t.space_id, t.week] }),
+    index("market_lottery_draws_status_idx").on(t.status, t.draw_at),
+    check(
+      "market_lottery_draws_status_check",
+      sql`${t.status} IN ('open', 'drawing', 'drawn', 'refunding', 'refunded')`,
+    ),
+  ],
+);
+
+/** The draws of before version 3 (one server): copied into `market_lottery_draws`, kept, unused. */
 export const marketLotteryWeeks = sqliteTable(
   "market_lottery_weeks",
   {
@@ -138,6 +200,8 @@ export const marketLotteryTickets = sqliteTable(
   {
     id: text().primaryKey(),
     week: integer().notNull(),
+    /** The Space whose draw it is in (version 3). */
+    space_id: text(),
     person_id: text().notNull(),
     platform: text().notNull(),
     account_id: text().notNull(),
@@ -167,6 +231,11 @@ export const marketSongTickets = sqliteTable(
   {
     /** The key it was charged under (the singer's `song:<uuid>`), the ledger row's key too. */
     key: text().primaryKey(),
+    /**
+     * The Space whose request queue it is used in (version 3); price and the daily limit are
+     * everyone's, across Spaces.
+     */
+    space_id: text(),
     person_id: text().notNull(),
     platform: text().notNull(),
     account_id: text().notNull(),

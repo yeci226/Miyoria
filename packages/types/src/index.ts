@@ -126,6 +126,14 @@ export {
   KaraokeWorkerKey,
 } from "./karaoke.js";
 export {
+  DEFAULT_LANDING,
+  type LandingContent,
+  type LandingKind,
+  type LandingSection,
+  type ProfileLanding,
+  ProfileLandingKey,
+} from "./landing.js";
+export {
   CONVERSATION_FOLDED_TOPIC,
   type ConversationFolded,
   type ConversationState,
@@ -200,11 +208,24 @@ export {
   type ThoughtTriggerKind,
 } from "./mind.js";
 export {
+  type PlaceAt,
+  type PlaceConfig,
+  type PlaceConfigChange,
+  PlaceConfigKey,
+  type PlaceConfigRequest,
+  type PlaceConfigService,
   type PlaceDirectory,
   PlaceDirectoryKey,
+  type PlaceField,
   type PlaceRoom,
   type PlaceRoomKind,
   type PlaceSpace,
+  type Places,
+  type PlacesChange,
+  PlacesKey,
+  type PlaceWhere,
+  type RoomRef,
+  type SpaceRef,
 } from "./places.js";
 export {
   type AccountRef,
@@ -483,7 +504,7 @@ export {
   type SegmentFlushOutcome,
 } from "./memory-layers.js";
 
-// ---- v2 contracts (docs/design/v2-architecture.md, docs/design/v2-implementation.md) ----------
+// ---- v2 contracts (docs/design/v2-architecture.md) ----------
 
 export {
   type ActivityFailure,
@@ -615,6 +636,17 @@ export {
   CardWalletKey,
 } from "./cards.js";
 export {
+  type Character,
+  CharacterKey,
+  CurrencyKey,
+  characterNames,
+  DEFAULT_CHARACTER,
+  DEFAULT_CURRENCY,
+  orList,
+  type RunningProfile,
+  RunningProfileKey,
+} from "./character.js";
+export {
   DIRECTIVE_AUTHORITIES,
   DIRECTIVE_EFFECTS,
   type Directive,
@@ -644,6 +676,31 @@ export {
   type TurnSilencer,
   TurnSilencerKey,
 } from "./emergency.js";
+export {
+  EXCHANGE_DISCLAIMER,
+  EXCHANGE_DISCLAIMER_LEVERAGE,
+  EXCHANGE_DISCLAIMER_REAL,
+  EXCHANGE_REASONS,
+  type ExchangeEntry,
+  type ExchangePerson,
+  type ExchangePost,
+  type ExchangeReason,
+  type ExchangeWallet,
+  ExchangeWalletKey,
+  exchangeDisclaimer,
+  exchangeSmallPrint,
+} from "./exchange.js";
+export {
+  AMOUNT_CURRENCY,
+  AMOUNT_HELP,
+  amountExamples,
+  amountHelp,
+  type OrderAmount,
+  type OrderAmountResult,
+  parseOrderAmount,
+  SHARE_DECIMALS,
+  sharesWord,
+} from "./exchange-amount.js";
 export { type GameTaskOutcome, parseGameOutcome } from "./game-outcome.js";
 export {
   assignHandle,
@@ -774,6 +831,9 @@ export {
   type GameSecrets,
   GameSecretsKey,
   type PartyAward,
+  type PartyOutcome,
+  type PartyOutcomes,
+  PartyOutcomesKey,
   type PartyRewardRequest,
   type PartyRewards,
   PartyRewardsKey,
@@ -790,11 +850,39 @@ export {
   type PartySessionView,
   type PartySnapshot,
 } from "./party-overview.js";
+export {
+  type CallNames,
+  describePerson,
+  directoryCandidates,
+  directoryMatch,
+  isOrdinaryWord,
+  MAX_NAME_CANDIDATES,
+  matchPersonName,
+  namedIn,
+  nameKey,
+  nameRefusal,
+  ORDINARY_WORDS,
+  type PersonCandidate,
+  type PersonNameMatch,
+  shownNames,
+} from "./person-names.js";
 export { CORE_CHARS, CORE_SENTENCES, characterCore } from "./persona-core.js";
 export {
   type AdminProfilePicture,
   type AuctionPictureData,
   type DexPictureData,
+  type ExchangeBankruptPicture,
+  type ExchangeBoardPicture,
+  type ExchangeCandlePoint,
+  type ExchangeColors,
+  type ExchangeMapPicture,
+  type ExchangeMapTile,
+  type ExchangeOverviewPicture,
+  type ExchangePortfolioPicture,
+  type ExchangeQuotePicture,
+  type ExchangeReceiptPicture,
+  type ExchangeTimeframe,
+  type GiftPictureData,
   type LotteryPictureData,
   type MemberPictureKind,
   type MemberPictureResult,

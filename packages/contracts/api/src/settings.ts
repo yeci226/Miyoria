@@ -11,7 +11,7 @@ import { z } from "zod";
 import { JsonValueSchema, TimestampSchema } from "../../wire/src/index.js";
 import { ModuleInfoSchema, ModuleStateKindSchema } from "./core.js";
 import { route } from "./route.js";
-import { DigitsQuery } from "./shared.js";
+import { DigitsQuery, SpaceQuery } from "./shared.js";
 
 /** How a field is drawn (`role`, `person`, `multi` and `rows` are declared for later steps). */
 export const SettingKindSchema = z
@@ -55,7 +55,10 @@ export const SettingFieldSchema = z
     /** Why changing it is dangerous (the panel asks first). */
     danger: z.string().nullable(),
     secret: z.boolean(),
-    scope: z.enum(["cluster", "space"]),
+    /** `space` / `room`: may differ per server / per room (docs/design/v5-places.md). */
+    scope: z.enum(["cluster", "space", "room"]),
+    /** How a place's value meets the ones above it: the nearest wins, or a list takes them all. */
+    merge: z.enum(["replace", "union"]),
     unit: z.enum(["ms", "s", "min", "h", "day"]).nullable(),
     labels: z.record(z.string(), z.string()).nullable(),
     room: z.enum(["text", "voice", "thread"]).nullable(),
@@ -76,12 +79,32 @@ export const SettingFieldSchema = z
   .meta({ id: "ApiSettingField" });
 export type SettingField = z.output<typeof SettingFieldSchema>;
 
+/**
+ * Where a value comes from: the schema default, the file, the database's cluster layer (`panel`,
+ * while it differs from the file), or a place's own value (`space`, `room`).
+ */
+export const SettingSourceSchema = z
+  .enum(["default", "file", "panel", "space", "room"])
+  .meta({ id: "ApiSettingSource" });
+export type SettingSource = z.output<typeof SettingSourceSchema>;
+
+/** A field's value at a place: the place's own value and what clearing it returns to. */
+export const SettingPlaceValueSchema = z
+  .object({
+    own: JsonValueSchema.nullable(),
+    own_set: z.boolean(),
+    inherited: JsonValueSchema.nullable(),
+    inherited_from: SettingSourceSchema,
+  })
+  .meta({ id: "ApiSettingPlaceValue" });
+export type SettingPlaceValue = z.output<typeof SettingPlaceValueSchema>;
+
 /** A field's value, and where it comes from. */
 export const SettingValueSchema = z
   .object({
     /** What the module runs with; `null` for a secret. */
     value: JsonValueSchema.nullable(),
-    source: z.enum(["default", "file", "panel"]),
+    source: SettingSourceSchema,
     /** What `miyoria.toml` says (`null`: it does not set the key, or a secret). */
     file: JsonValueSchema.nullable(),
     file_set: z.boolean(),
@@ -90,9 +113,29 @@ export const SettingValueSchema = z
     env: z.string().nullable(),
     /** The panel's value no longer fits the schema and is skipped, with why. */
     invalid: z.string().nullable(),
+    /** Read for a place, a field that may differ there: its own value and what it inherits. */
+    place: SettingPlaceValueSchema.nullable().optional(),
   })
   .meta({ id: "ApiSettingValue" });
 export type SettingValue = z.output<typeof SettingValueSchema>;
+
+/** The place a view was read for: a Space, and one of its rooms by channel id. */
+export const SettingsPlaceViewSchema = z
+  .object({
+    space: z.object({ id: z.string(), name: z.string() }),
+    room: z.object({ id: z.string(), name: z.string().nullable() }).nullable(),
+  })
+  .meta({ id: "ApiSettingsPlaceView" });
+export type SettingsPlaceView = z.output<typeof SettingsPlaceViewSchema>;
+
+/**
+ * `?space=&room=` of the settings routes: a Space (identity's id) and optionally one of its rooms
+ * (the platform's channel id). Without `space` the routes are about the whole cluster.
+ */
+export const SettingsPlaceQuery = z.object({
+  ...SpaceQuery.shape,
+  room: z.string().min(1).max(64).optional(),
+});
 
 /** `GET /api/modules/{id}/settings`. */
 export const ModuleSettingsSchema = z
@@ -111,10 +154,12 @@ export const ModuleSettingsSchema = z
     guard: z.string().nullable(),
     /** A saved change waits for this guarded state. */
     pending: z.string().nullable(),
-    /** The caller may save (`admin.settings.<id>` and write access). */
+    /** The caller may save (`admin.settings.<id>` and write access; for a place, there). */
     can_edit: z.boolean(),
     /** The coins' name, for `coins` fields. */
     currency: z.string(),
+    /** The place asked for (`?space=&room=`); `null`: the whole cluster. */
+    place: SettingsPlaceViewSchema.nullable().optional(),
   })
   .meta({ id: "ApiModuleSettings" });
 export type ModuleSettings = z.output<typeof ModuleSettingsSchema>;
@@ -132,12 +177,13 @@ export type SaveSettingsRequest = z.input<typeof SaveSettingsRequestSchema>;
 
 /**
  * What a save did: `restarted` the module with it, `deferred` the restart until a guarded state
- * ends, `stored` it for a module that is off, or found it `unchanged`.
+ * ends, `stored` it for a module that is off, found it `unchanged`, or (a place's values) put it
+ * in effect at once without a restart (`immediate`).
  */
 export const SaveSettingsResultSchema = z
   .object({
     revision: z.number(),
-    applied: z.enum(["restarted", "deferred", "stored", "unchanged"]),
+    applied: z.enum(["restarted", "deferred", "stored", "unchanged", "immediate"]),
     state: ModuleStateKindSchema,
     reason: z.string().nullable(),
   })
@@ -166,6 +212,15 @@ export const SettingsChangeSchema = z
         after: JsonValueSchema.nullable(),
       }),
     ),
+    /** A place's change: the Space's own value, or a room's (channel id and name). */
+    place: z
+      .object({
+        scope: z.enum(["space", "room"]),
+        room: z.string().nullable(),
+        name: z.string().nullable(),
+      })
+      .nullable()
+      .optional(),
   })
   .meta({ id: "ApiSettingsChange" });
 export type SettingsChange = z.output<typeof SettingsChangeSchema>;
@@ -239,28 +294,44 @@ export const moduleSettings = {
     .route({ method: "GET", path: "/api/modules/{id}" })
     .input(z.object({ params: ModuleParams }))
     .output(ModuleDetailSchema),
+  /** With `?space=` (and `room=`): the values there. 404 for a Space she is not in. */
   settings: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "GET", path: "/api/modules/{id}/settings" })
-    .input(z.object({ params: ModuleParams }))
+    .input(z.object({ params: ModuleParams, query: SettingsPlaceQuery.optional() }))
     .output(ModuleSettingsSchema),
   /**
    * Saves and applies. 403 without `admin.settings.<id>`; 400 `{ error, problems }` for values
-   * Core refuses; 409 when the config changed since `expected`.
+   * Core refuses; 409 when the config changed since `expected`. With `?space=` (and `room=`): the
+   * place's own values, in effect at once (`expected` is not checked); `admin.settings.<id>` may
+   * then come from a role assigned in that server.
    */
   saveSettings: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "PUT", path: "/api/modules/{id}/settings" })
-    .input(z.object({ params: ModuleParams, body: SaveSettingsRequestSchema }))
+    .input(
+      z.object({
+        params: ModuleParams,
+        query: SettingsPlaceQuery.optional(),
+        body: SaveSettingsRequestSchema,
+      }),
+    )
     .output(SaveSettingsResultSchema),
-  /** Newest first; `before` is the last version shown. `limit` 1..100, default 10. */
+  /**
+   * Newest first; `before` is the last version shown. `limit` 1..100, default 10. With `?space=`
+   * (and `room=`): that place's own changes, `version` being their place in the event log.
+   */
   settingsHistory: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "GET", path: "/api/modules/{id}/settings/history" })
     .input(
       z.object({
         params: ModuleParams,
-        query: z.object({ limit: DigitsQuery.optional(), before: DigitsQuery.optional() }),
+        query: z.object({
+          limit: DigitsQuery.optional(),
+          before: DigitsQuery.optional(),
+          ...SettingsPlaceQuery.shape,
+        }),
       }),
     )
     .output(SettingsHistorySchema),

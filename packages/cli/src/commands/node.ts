@@ -3,10 +3,19 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { type CoreLogLevel, loadProfile, logFilter, logLevel } from "@miyoria/core/light";
-import { Config, configureLogging } from "@miyoria/runtime/kernel";
-import { isJsonObject } from "@miyoria/types";
+import {
+  type CoreLogLevel,
+  loadProfile,
+  logFilter,
+  logLevel,
+  type MachineSource,
+  machineSource,
+  type ResolvedProfile,
+} from "@miyoria/core/light";
+import { Config, configureLogging, getLogger } from "@miyoria/runtime/kernel";
+import { isJsonObject, RunningProfileKey } from "@miyoria/types";
 import { PACKAGE_ROOT } from "../assets.js";
+import { profileLine } from "../profile.js";
 import { fail, ok, println, warn } from "../ui.js";
 
 export class NodeCommandError extends Error {
@@ -42,22 +51,49 @@ function preferBundledPanel(config: Config): void {
   if (existsSync(join(bundled, "index.html"))) process.env.MIYORIA_PANEL_DIR = bundled;
 }
 
-export async function core(configPath: string): Promise<void> {
+/**
+ * Where a core for `profile` resolves its relative paths, whether the profile has its own data,
+ * and for one that does, where the install's machines are (docs/design/v5-profiles.md); without a
+ * profile, the config file's folder as always.
+ */
+function profileOptions(
+  configPath: string,
+  profile: ResolvedProfile | undefined,
+): { baseDir: string; ownProfile: boolean; machines: MachineSource | null } {
+  return {
+    baseDir: profile?.baseDir ?? dirname(resolve(configPath)),
+    ownProfile: profile?.own ?? false,
+    machines: profile === undefined ? null : machineSource(profile, (name) => process.env[name]),
+  };
+}
+
+export async function core(configPath: string, profile?: ResolvedProfile): Promise<void> {
   const config = await loadConfig(configPath);
   setLogLevel(config);
   preferBundledPanel(config);
   const { buildCore, runUntilSignal } = await import("@miyoria/core");
-  const node = await buildCore(config, { baseDir: dirname(resolve(configPath)) });
+  const node = await buildCore(config, profileOptions(configPath, profile));
+  if (profile !== undefined) {
+    getLogger("cli").info(
+      { profile: profile.id, own: profile.own, config: profile.configPath },
+      `running ${profileLine(profile, node.services.get(RunningProfileKey)?.character ?? profile.id)}`,
+    );
+  }
   await runUntilSignal(node);
 }
 
-export async function chat(configPath: string, name: string, withDiscord: boolean): Promise<void> {
+export async function chat(
+  configPath: string,
+  name: string,
+  withDiscord: boolean,
+  profile?: ResolvedProfile,
+): Promise<void> {
   const config = await loadConfig(configPath);
   // Keep the terminal readable: only warnings unless MIYORIA_LOG_LEVEL says otherwise.
   setLogLevel(config, "warn");
   const { buildCore, runUntilSignal } = await import("@miyoria/core");
   const node = await buildCore(config, {
-    baseDir: dirname(resolve(configPath)),
+    ...profileOptions(configPath, profile),
     cliChatName: name,
     discord: withDiscord,
     api: false,
@@ -173,11 +209,14 @@ export async function stageObsSetup(configPath: string, flags: StageObsSetupFlag
   }
 }
 
-export async function profileValidate(configPath: string): Promise<void> {
+export async function profileValidate(
+  configPath: string,
+  running?: ResolvedProfile,
+): Promise<void> {
   const config = await loadConfig(configPath);
-  const profile = await loadProfile(config, dirname(resolve(configPath)));
+  const profile = await loadProfile(config, profileOptions(configPath, running).baseDir);
   ok(
-    `${profile.displayName}(${profile.id}):${profile.sections.length} 個人格段落、${profile.examples.length} 個範例對話,聲音設定 ${profile.voice ? "有" : "無"},模型設定 ${profile.avatar ? "有" : "無"}`,
+    `${profile.character.name} · ${profile.displayName}(${profile.id}):${profile.sections.length} 個人格段落、${profile.examples.length} 個範例對話,聲音設定 ${profile.voice ? "有" : "無"},模型設定 ${profile.avatar ? "有" : "無"}`,
   );
 }
 

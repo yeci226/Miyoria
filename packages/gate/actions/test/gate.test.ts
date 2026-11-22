@@ -5,6 +5,7 @@ import {
   ActionSinkKey,
   HandleDirectoryKey,
   type JsonValue,
+  type PlaceConfig,
   type Principal,
   Principals,
   type TurnId,
@@ -14,6 +15,7 @@ import { z } from "zod";
 import {
   ActionDeniedError,
   type ActionRequest,
+  type ActionsConfig,
   APPROVE_ROUTE,
   CapabilityTool,
   defineCapability,
@@ -66,6 +68,31 @@ describe("gate order", () => {
       const out = await g.registry.invoke(request("t.low", p));
       expect(out.decision.stage).toBe("prohibition");
     }
+    g.registry.configure({ ...g.registry.config, forbidden: [] });
+
+    // Per place (docs/design/v5-places.md): a room adds to the cluster's list and never lifts it.
+    const cluster = { ...g.registry.config, forbidden: ["t.high"] };
+    const perRoom: PlaceConfig<ActionsConfig> = {
+      base: () => cluster,
+      for: (where) =>
+        where !== null && where !== undefined && "channel" in where && where.channel === CTX.channel
+          ? { ...cluster, forbidden: ["t.high", "t.low"] }
+          : cluster,
+      onChange: () => () => {},
+    };
+    g.registry.configure(cluster, null, perRoom);
+    expect(g.registry.forbiddenAt(CTX)).toEqual(["t.high", "t.low"]);
+    expect((await g.registry.invoke(request("t.low", command()))).decision.stage).toBe(
+      "prohibition",
+    );
+    const other = Principals.command(OWEN, { ...CTX, channel: "elsewhere" }, true);
+    expect((await g.registry.invoke(request("t.low", other))).status).toBe("done");
+    // A room whose list leaves the cluster's entry out still has it.
+    g.registry.configure(cluster, null, {
+      ...perRoom,
+      for: () => ({ ...cluster, forbidden: [] }),
+    });
+    expect(g.registry.forbiddenAt(CTX)).toEqual(["t.high"]);
     g.registry.configure({ ...g.registry.config, forbidden: [] });
 
     // Not across servers (her and chat requests).

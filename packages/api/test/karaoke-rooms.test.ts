@@ -16,6 +16,7 @@ import {
   KaraokeStore,
   karaokeSchema,
   RoomDesk,
+  roomPlaces,
 } from "@miyoria/play/karaoke";
 import { encodeTrack, toBase64 } from "@miyoria/play/karaoke/score";
 import {
@@ -26,8 +27,9 @@ import {
   synthSong,
 } from "@miyoria/play/karaoke/testing";
 import { configureLogging } from "@miyoria/runtime/kernel";
+import { PeopleStoreKey, SpacePlaces } from "@miyoria/store";
 import { openTestDb, type TestDb } from "@miyoria/store/testing";
-import type { AccountRef, PersonId } from "@miyoria/types";
+import { type AccountRef, type PersonId, type Places, PlacesKey } from "@miyoria/types";
 import type { AnyRouter } from "@orpc/server";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it } from "vitest";
@@ -58,19 +60,48 @@ interface Rig {
   as: { account: AccountRef; tier: "admin" | "member" };
   raw: TestDb;
   dir: string;
+  /** With `servers`: the Spaces A (primary) and B, and who is a member where. */
+  spaces: { A: string; B: string } | null;
+  /** With `servers`: the servers she is in voice in. */
+  voice: Set<string>;
 }
 
 let rig: Rig | null = null;
 
-async function makeRig(open = true): Promise<Rig> {
-  const raw = openTestDb({ plugins: [karaokeSchema] });
+async function makeRig(open = true, servers = false): Promise<Rig> {
+  const raw = openTestDb({ identity: true, plugins: [karaokeSchema] });
+  // Two servers (phase 6): Alice is a member of both, Bob of A only, Carol of none.
+  let places: Places | undefined;
+  let spaces: Rig["spaces"] = null;
+  const voice = new Set<string>();
+  const people = new Map<string, PersonId>();
+  if (servers) {
+    const identity = raw.identity;
+    if (identity === null) throw new Error("identity");
+    const at = (scope: string, id: string) => {
+      const r = identity.resolve(
+        { platform: "discord", scope, channel: `${scope}-c`, kind: "channel" },
+        { account: { platform: "discord", id }, display_name: NAMES[id] ?? id },
+      );
+      people.set(id, r.person_id as PersonId);
+      return r.space_id as string;
+    };
+    const A = at("gA", "1");
+    const B = at("gB", "1");
+    at("gA", "2");
+    raw.db.run("UPDATE spaces SET established = 1");
+    places = new SpacePlaces(raw.db, identity);
+    spaces = { A, B };
+    voice.add(A);
+    voice.add(B);
+  }
   const worker = new FakeKaraokeWorker();
   const clock = { t: T0 };
   const dir = await mkdtemp(join(tmpdir(), "karaoke-rooms-api-"));
   const config = KaraokeConfigSchema.parse({ comment_channel: "discord:111111:222222", open });
   const store = new KaraokeStore(raw.db, raw.events);
   const who = (account: AccountRef) => ({
-    person: `p-${account.id}` as PersonId,
+    person: people.get(account.id) ?? (`p-${account.id}` as PersonId),
     blocked: false,
   });
   const log = { info: () => {}, warn: () => {} };
@@ -93,7 +124,18 @@ async function makeRig(open = true): Promise<Rig> {
     service,
     worker: () => worker,
     wallet: () => wallet,
-    inVoice: () => true,
+    inVoice: (s) => !servers || (s === null ? voice.size > 0 : voice.has(s)),
+    ...(places === undefined
+      ? {}
+      : {
+          places: roomPlaces(places, {
+            base: () => config,
+            for: ({ space_id }) => ({
+              ...config,
+              comment_channel: space_id === spaces?.B ? "discord:gB:gB-c" : "discord:gA:gA-c",
+            }),
+          }),
+        }),
     who,
     tell: () => {},
     together: () => {},
@@ -104,10 +146,18 @@ async function makeRig(open = true): Promise<Rig> {
   const as: Rig["as"] = { account: ALICE, tier: "member" };
   const state = {
     publicSide: { config: { enabled: true }, admitMember: () => null },
-    optional: () => undefined,
+    optional: (key: unknown) => {
+      if (places === undefined) return undefined;
+      if (key === PlacesKey) return places;
+      if (key === PeopleStoreKey) {
+        return { personByAccount: async (a: AccountRef) => ({ id: people.get(a.id) ?? null }) };
+      }
+      return undefined;
+    },
     service: (key: unknown, what: string) => {
       if (key === KaraokeKey) return service;
       if (key === KaraokeRoomsKey) return desk;
+      if (key === PlacesKey && places !== undefined) return places;
       throw ApiError.unavailable(`${what} is not available`);
     },
   };
@@ -139,7 +189,7 @@ async function makeRig(open = true): Promise<Rig> {
   const job = store.song(asked.song.id)?.job as string;
   worker.finish(job, referenceOf(song, `k-${job}`));
   await service.tick(new AbortController().signal);
-  return { hono, desk, service, worker, wallet, clock, as, raw, dir };
+  return { hono, desk, service, worker, wallet, clock, as, raw, dir, spaces, voice };
 }
 
 afterEach(async () => {
@@ -309,6 +359,22 @@ describe("karaoke rooms through the routes", () => {
     }
     await alice.stop();
     await bob.stop();
+    // Carol, watching, cheers Bobby (once: the second right after is too soon).
+    const bobby = (
+      await call<KaraokeRoomView>(r, CAROL, `/api/member/karaoke/rooms/${code}`)
+    ).body.members.find((m) => m.name === "Bobby")?.id;
+    const cheer = (kind: string) =>
+      call<{ wait_ms: number }>(
+        r,
+        CAROL,
+        `/api/member/karaoke/rooms/${code}/cheer`,
+        post({ member: bobby, kind }),
+      );
+    const cheered = await cheer("wow");
+    expect(cheered).toEqual({ status: 200, body: { wait_ms: 1_500 } });
+    expect((await cheer("nice")).status).toBe(429);
+    expect((await cheer("boo")).status).toBe(422);
+    await tick(r);
     await carol.stop();
     for (const singer of [alice, bob]) {
       const got = singer.events();
@@ -331,6 +397,15 @@ describe("karaoke rooms through the routes", () => {
     expect(JSON.stringify(boards.at(-1))).toMatch(/Alice/);
     expect(JSON.stringify(boards.at(-1))).toMatch(/Bobby/);
     expect(watched.some((e) => e.type === "trend")).toBe(false);
+    // The singers' own pitch, a few times a second, and the cheer.
+    const live = watched.filter((e) => e.type === "live");
+    expect(live.length).toBeGreaterThan(5);
+    expect(live.at(-1)?.data.lines).toHaveLength(2);
+    expect(watched.find((e) => e.type === "cheer")?.data).toMatchObject({
+      member: bobby,
+      kind: "wow",
+      by: { name: "Carol" },
+    });
     // Too much in one go is refused before it is read.
     const big = await r.hono.request(`/api/member/karaoke/rooms/${code}/audio?at=0&song_ms=0`, {
       method: "POST",
@@ -485,5 +560,54 @@ describe("karaoke rooms through the routes", () => {
       "/api/member/karaoke/rooms",
     );
     expect(rooms.body).toMatchObject({ available: false, reason: "現在沒有開放唱 K" });
+  });
+});
+
+describe("karaoke rooms per server", () => {
+  it("lists and opens in the server asked for, and refuses a server they are not in", async () => {
+    const r = await makeRig(true, true);
+    rig = r;
+    const { A, B } = r.spaces as { A: string; B: string };
+    // Alice opens one in B; Bob (A only) is refused B, and a server that does not exist.
+    const opened = await call<KaraokeRoomView>(
+      r,
+      ALICE,
+      `/api/member/karaoke/rooms?space=${B}`,
+      post({}),
+    );
+    expect(opened.status).toBe(200);
+    expect(r.desk.briefs(B).map((x) => x.code)).toEqual([opened.body.code]);
+    expect(r.desk.briefs(A)).toEqual([]);
+    const refused = await call<{ message: string }>(r, BOB, `/api/member/karaoke/rooms?space=${B}`);
+    expect(refused.status).toBe(403);
+    expect((await call(r, BOB, `/api/member/karaoke/rooms?space=${B}`, post({}))).status).toBe(403);
+    expect((await call(r, BOB, "/api/member/karaoke/rooms?space=nowhere")).status).toBe(404);
+    // Left out: their own server (Bob's is A); she is in A's voice.
+    const own = await call<{ available: boolean }>(r, BOB, "/api/member/karaoke/rooms");
+    expect(own.body.available).toBe(true);
+    // Carol is a member nowhere: the primary, as before there were servers.
+    const carol = await call<KaraokeRoomView>(r, CAROL, "/api/member/karaoke/rooms", post({}));
+    expect(carol.status).toBe(200);
+    expect(r.desk.briefs(A).map((x) => x.code)).toEqual([carol.body.code]);
+    // The voice check is the server's own: out of A's voice, A says so; B is still open.
+    r.voice.delete(A);
+    const a = await call<{ available: boolean; reason: string }>(
+      r,
+      BOB,
+      `/api/member/karaoke/rooms?space=${A}`,
+    );
+    expect(a.body).toMatchObject({ available: false });
+    expect(a.body.reason).toContain("別的伺服器");
+  });
+
+  it("splits the admin's results by server only when asked", async () => {
+    const r = await makeRig(true, true);
+    rig = r;
+    const all = await call<{ results: unknown[] }>(r, ALICE, "/api/karaoke/results");
+    expect(all.status).toBe(200);
+    expect(
+      (await call(r, ALICE, `/api/karaoke/results?space=${(r.spaces as { A: string }).A}`)).status,
+    ).toBe(200);
+    expect((await call(r, ALICE, "/api/karaoke/results?space=nowhere")).status).toBe(404);
   });
 });

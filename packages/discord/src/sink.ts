@@ -33,6 +33,13 @@ import {
 import { PLATFORM, snowflake } from "./mapping.js";
 import { renderReply } from "./render.js";
 import { MAX_MESSAGE_LEN, splitMessage } from "./split.js";
+import {
+  renderStickers,
+  type ServerSticker,
+  type StickerLimits,
+  type StickerTable,
+  type StickerUsage,
+} from "./stickers.js";
 
 /** The slice of discord.js's `REST` the sink uses (so tests can fake it). */
 export interface RestLike {
@@ -75,6 +82,13 @@ export const MAX_MESSAGE_FILES = 10;
 const ENTITY_TOO_LARGE = 40005;
 const MISSING_ACCESS = 50001;
 const MISSING_PERMISSIONS = 50013;
+/** Discord's code for a sticker it will not send ("Invalid sticker sent"). */
+const INVALID_STICKER = 50081;
+const STICKER_REFUSED: ReadonlySet<number> = new Set([
+  INVALID_STICKER,
+  MISSING_PERMISSIONS,
+  MISSING_ACCESS,
+]);
 
 function discordCode(error: unknown): number | null {
   const code = (error as { code?: unknown } | null)?.code;
@@ -124,9 +138,20 @@ export type DiscordOutgoing = OutgoingMessage & { proactive?: boolean };
 export interface SinkEmoji {
   table: EmojiTable;
   usage: EmojiUsage;
-  /** Read per message, so a config change applies at once. */
-  enabled(): boolean;
+  /** Read per message, so a config change applies at once; per server. */
+  enabled(guild: string): boolean;
   limits(): EmojiLimits;
+}
+
+/** Server stickers in her messages (stickers.ts). */
+export interface SinkStickers {
+  table: StickerTable;
+  usage: StickerUsage;
+  /** Read per message, so a config change applies at once; per server. */
+  enabled(guild: string): boolean;
+  limits(): StickerLimits;
+  /** Clock ms, for the cap per hour. */
+  now(): number;
 }
 
 export class DiscordSink implements PlatformSink, ReplySink {
@@ -135,6 +160,7 @@ export class DiscordSink implements PlatformSink, ReplySink {
   readonly #moderation: () => ModerationService | undefined;
   readonly #emoji: SinkEmoji | null;
   readonly #attachments: SinkAttachments | null;
+  readonly #stickers: SinkStickers | null;
 
   /** `moderation`: looked up per message, it may come and go. */
   constructor(
@@ -142,11 +168,37 @@ export class DiscordSink implements PlatformSink, ReplySink {
     moderation: () => ModerationService | undefined = () => undefined,
     emoji: SinkEmoji | null = null,
     attachments: SinkAttachments | null = null,
+    stickers: SinkStickers | null = null,
   ) {
     this.#rest = rest;
     this.#moderation = moderation;
     this.#emoji = emoji;
     this.#attachments = attachments;
+    this.#stickers = stickers;
+  }
+
+  /**
+   * `[貼圖: 名字]` taken out of the text; the one sticker that goes with the message, in guild
+   * channels with stickers on and within the limits. Recorded per channel. A token that cannot
+   * go is only taken out: it is never text for people.
+   */
+  #withStickers(
+    context: ContextKey,
+    text: string,
+  ): { text: string; sticker: ServerSticker | null } {
+    const stickers = this.#stickers;
+    const guild = context.scope;
+    const on = stickers !== null && guild !== null && stickers.enabled(guild);
+    const now = stickers?.now() ?? 0;
+    const rendered = renderStickers(
+      text,
+      on ? (name) => stickers.table.get(guild, name) : null,
+      stickers?.usage.recent(context.channel) ?? [],
+      on ? stickers.usage.sentInHour(context.channel, now) : 0,
+      stickers?.limits() ?? { window_messages: 1, max_in_window: 0, per_hour: 0 },
+    );
+    if (on) stickers.usage.record(context.channel, rendered.sticker?.id ?? null, now);
+    return rendered;
   }
 
   /** What one message's files may weigh together; `null` while nothing can resolve them. */
@@ -199,7 +251,9 @@ export class DiscordSink implements PlatformSink, ReplySink {
   /** `:name:` → server emoji in guild channels, within the limits; recorded per channel. */
   #withEmoji(context: ContextKey, text: string): string {
     const emoji = this.#emoji;
-    if (emoji === null || context.scope === null || !emoji.enabled()) return uncodeEmoji(text);
+    if (emoji === null || context.scope === null || !emoji.enabled(context.scope)) {
+      return uncodeEmoji(text);
+    }
     const guild = context.scope;
     const rendered = renderEmoji(
       text,
@@ -226,10 +280,12 @@ export class DiscordSink implements PlatformSink, ReplySink {
     // Last line of defence: nothing moderation stops, no role / everyone / here mentions, no
     // secrets, whoever got this far.
     const safe = safeOutgoing(this.#moderation(), { path: "reply", text: message.text, context });
-    const chunks = splitMessage(this.#withEmoji(context, safe.text), MAX_MESSAGE_LEN);
-    // Files alone make a message.
-    if (chunks.length === 0 && files.length > 0) chunks.push("");
+    const { text, sticker } = this.#withStickers(context, safe.text);
+    const chunks = splitMessage(this.#withEmoji(context, text), MAX_MESSAGE_LEN);
+    // Files alone make a message, and so does a sticker.
+    if (chunks.length === 0 && (files.length > 0 || sticker !== null)) chunks.push("");
     if (chunks.length === 0) throw new DiscordSendError("cannot send an empty message");
+    const last = chunks.length - 1;
     let reference: Record<string, unknown> | null = null;
     if (message.reply_to) {
       reference = {
@@ -256,6 +312,8 @@ export class DiscordSink implements PlatformSink, ReplySink {
       if (upload.length > 0) {
         body.attachments = upload.map((f, id) => ({ id, filename: f.filename }));
       }
+      // The sticker comes under the words, as people send one.
+      if (sticker !== null && index === last) body.sticker_ids = [sticker.id];
       const request: RestRequest = { body, signal };
       if (upload.length > 0) {
         request.files = upload.map((f) => ({
@@ -265,11 +323,21 @@ export class DiscordSink implements PlatformSink, ReplySink {
         }));
       }
       const sent = await inContext(`sending message to ${contextKeyString(context)}`, async () => {
+        const post = () => this.#rest.post(Routes.channelMessages(channel), request);
         try {
-          return await this.#rest.post(Routes.channelMessages(channel), request);
+          try {
+            return await post();
+          } catch (error) {
+            // Discord refused the sticker (gone since, or not allowed there): the words still go.
+            const refused = STICKER_REFUSED.has(discordCode(error) ?? 0);
+            if (body.sticker_ids === undefined || !refused) throw error;
+            delete body.sticker_ids;
+            if (chunk === "" && upload.length === 0) throw error;
+            return await post();
+          }
         } catch (error) {
-          if (upload.length === 0) throw error;
           const code = discordCode(error);
+          if (upload.length === 0) throw error;
           if (code === ENTITY_TOO_LARGE) {
             throw new AttachmentError("too_large", "Discord says the upload is too large", {
               cause: error,

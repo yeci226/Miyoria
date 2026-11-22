@@ -12,6 +12,7 @@ import {
   type JsonObject,
   type JsonValue,
   type PersonId,
+  type Places,
   type PlatformId,
   type ProfileId,
   serviceKey,
@@ -19,6 +20,7 @@ import {
   type TurnOutcomeRecord,
 } from "@miyoria/types";
 import type { ArtifactStore } from "./artifacts/store.js";
+import type { PlaceSettings } from "./config/places.js";
 import type { ConfigModuleState } from "./config/revisions.js";
 import type { DataCategoryId, DataExport, DataInventory, WipeCounts, WipeOptions } from "./data.js";
 import type { ChatLogStore } from "./events/chat.js";
@@ -374,6 +376,17 @@ export interface Store {
    * (`person-data.ts`). Optional for test doubles.
    */
   readonly personData?: PersonDataStore;
+  /**
+   * Identity's Spaces, Rooms and members (`identity/places.ts`), which Core provides as
+   * `PlacesKey`. Optional for test doubles; without it Core provides no `Places` and every module
+   * runs on the cluster config.
+   */
+  readonly places?: Places;
+  /**
+   * The per-place settings (`config/places.ts`) Core's `PlaceConfig` reads. Optional for test
+   * doubles, like `places`.
+   */
+  readonly config?: { readonly places: PlaceSettings };
   /**
    * A plugin's tables on this database and its code over them (`plugin.ts`): migrated when the
    * store opened with it, or the first time it is asked for; built once per store.

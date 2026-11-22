@@ -24,7 +24,13 @@ import {
   intParam,
   notice,
 } from "@miyoria/commands";
-import { type AccountRef, newId } from "@miyoria/types";
+import {
+  type AccountRef,
+  type ContextKey,
+  DEFAULT_CHARACTER,
+  DEFAULT_CURRENCY,
+  newId,
+} from "@miyoria/types";
 import { LOT_TITLE } from "./lots.js";
 import { auctionNotice, BUY_COUNTS, lotteryNotice, md, ROUTES } from "./notices.js";
 import { withPicture } from "./pictures.js";
@@ -90,17 +96,27 @@ function lastLotCard(
   return result(lines.join("\n") || "現在沒有在拍賣。", note);
 }
 
-function registerAll(registry: CommandRegistry, service: () => MarketService | null): void {
+/** The market of where a command or a button was used (its Space; a DM's is the primary's). */
+type MarketAt = (context: ContextKey | null) => MarketService | null;
+
+function registerAll(
+  registry: CommandRegistry,
+  service: MarketAt,
+  coin: string,
+  her: string,
+): void {
   const run = async (
+    inv: { context: ContextKey },
     fn: (market: MarketService) => Promise<CommandReply>,
   ): Promise<CommandReply> => {
-    const market = service();
+    const market = service(inv.context);
     return market === null ? notice("info", OFF) : fn(market);
   };
   const runComponent = async (
+    inv: { context: ContextKey },
     fn: (market: MarketService) => Promise<ComponentResult>,
   ): Promise<ComponentResult> => {
-    const market = service();
+    const market = service(inv.context);
     return market === null ? ComponentResult.reply(notice("info", OFF)) : fn(market);
   };
 
@@ -108,8 +124,8 @@ function registerAll(registry: CommandRegistry, service: () => MarketService | n
     {
       route: ROUTES.bid,
       ephemeral: true,
-      handle: () =>
-        runComponent(async (market) => {
+      handle: (inv) =>
+        runComponent(inv, async (market) => {
           const view = await market.auctionView(null);
           const min = view.lot?.min_bid ?? null;
           if (min === null) return ComponentResult.reply(notice("info", "現在沒有在拍賣。"));
@@ -132,7 +148,7 @@ function registerAll(registry: CommandRegistry, service: () => MarketService | n
       route: ROUTES.bidForm,
       ephemeral: true,
       handle: (inv) =>
-        runComponent(async (market) => {
+        runComponent(inv, async (market) => {
           const raw = inv.field("amount").replace(/[,\s]/g, "");
           const amount = /^\d{1,9}$/.test(raw) ? Number(raw) : Number.NaN;
           const r = await market.bid(inv.invoker, amount);
@@ -147,14 +163,14 @@ function registerAll(registry: CommandRegistry, service: () => MarketService | n
     },
     {
       route: ROUTES.auctionRefresh,
-      handle: () =>
-        runComponent(async (market) => ComponentResult.update(await auctionCard(market))),
+      handle: (inv) =>
+        runComponent(inv, async (market) => ComponentResult.update(await auctionCard(market))),
     },
     {
       route: ROUTES.name,
       ephemeral: true,
-      handle: () =>
-        runComponent(async () =>
+      handle: (inv) =>
+        runComponent(inv, async () =>
           ComponentResult.modal({
             id: componentId(ROUTES.nameForm),
             title: "她怎麼叫你",
@@ -166,7 +182,7 @@ function registerAll(registry: CommandRegistry, service: () => MarketService | n
       route: ROUTES.nameForm,
       ephemeral: true,
       handle: (inv) =>
-        runComponent(async (market) =>
+        runComponent(inv, async (market) =>
           ComponentResult.reply(await name(market, inv.invoker, inv.field("name"))),
         ),
     },
@@ -174,7 +190,7 @@ function registerAll(registry: CommandRegistry, service: () => MarketService | n
       route: ROUTES.giveUp,
       ephemeral: true,
       handle: (inv) =>
-        runComponent(async (market) => {
+        runComponent(inv, async (market) => {
           const r = await market.giveUpName(inv.invoker);
           if (!r.ok) return ComponentResult.reply(refusal(r));
           const back = "refunded" in r ? r.refunded : 0;
@@ -186,17 +202,17 @@ function registerAll(registry: CommandRegistry, service: () => MarketService | n
   registry.register(
     commandSpec("me auction", "每週拍賣:看現在拍什麼、出價,或幫得標的稱呼取名", {
       args: [
-        argSpec("bid", "出價(會先押住你的魚幣,被超過就退回)", ArgKind.integer, {
+        argSpec("bid", `出價(會先押住你的${coin},被超過就退回)`, ArgKind.integer, {
           required: false,
         }),
-        argSpec("name", "得標「她怎麼叫你」之後,想讓她怎麼叫你", ArgKind.string, {
+        argSpec("name", `得標「${her}怎麼叫你」之後,想讓${her}怎麼叫你`, ArgKind.string, {
           required: false,
         }),
       ],
       permission: NODE,
     }),
     (inv) =>
-      run(async (market) => {
+      run(inv, async (market) => {
         const typed = inv.str("name")?.trim() ?? "";
         if (typed !== "") return { ...(await name(market, inv.invoker, typed)), ephemeral: true };
         const amount = inv.int("bid");
@@ -219,14 +235,16 @@ function registerAll(registry: CommandRegistry, service: () => MarketService | n
         return n !== null && (BUY_COUNTS as readonly number[]).includes(n) ? n : null;
       },
       handle: (inv, count) =>
-        runComponent(async (market) =>
-          ComponentResult.reply(await buy(market, inv.invoker, count)),
+        runComponent(inv, async (market) =>
+          ComponentResult.reply(await buy(market, inv.invoker, count, inv.context.platform)),
         ),
     }),
     {
       route: ROUTES.lotteryRefresh,
-      handle: () =>
-        runComponent(async (market) => ComponentResult.update(await lotteryCard(market, null))),
+      handle: (inv) =>
+        runComponent(inv, async (market) =>
+          ComponentResult.update(await lotteryCard(market, null)),
+        ),
     },
   ];
 
@@ -237,9 +255,11 @@ function registerAll(registry: CommandRegistry, service: () => MarketService | n
       ephemeral: true,
     }),
     (inv) =>
-      run(async (market) => {
+      run(inv, async (market) => {
         const count = inv.int("count");
-        if (count !== null && count !== undefined) return buy(market, inv.invoker, count);
+        if (count !== null && count !== undefined) {
+          return buy(market, inv.invoker, count, inv.context.platform);
+        }
         return lotteryCard(market, inv.invoker);
       }),
     { components: lotteryRoutes },
@@ -252,7 +272,7 @@ function registerAll(registry: CommandRegistry, service: () => MarketService | n
     commandSpec("game lottery", "每週樂透:把這週的獎池和開獎時間貼在這個頻道(大家都看得到)", {
       permission: NODE,
     }),
-    () => run(async (market) => lotteryCard(market, null)),
+    (inv) => run(inv, async (market) => lotteryCard(market, null)),
   );
 }
 
@@ -272,9 +292,10 @@ async function buy(
   market: MarketService,
   account: Parameters<MarketService["buyTickets"]>[0],
   count: number,
+  platform: string,
 ): Promise<CommandReply> {
   // The platform does not hand a command its interaction id, so a press is its own key.
-  const r = await market.buyTickets(account, count, `discord:${newId()}`);
+  const r = await market.buyTickets(account, count, `${platform}:${newId()}`);
   if (!r.ok) return refusal(r);
   const left = r.balance === null ? "" : `,剩 ${r.balance}`;
   const done = result(`買了 ${r.count} 張,這週你一共 ${r.mine} 張。花了 ${r.charged}${left}。`);
@@ -298,11 +319,14 @@ async function lotteryCard(
   return withPicture(lotteryNotice(view, market.config), await market.lotteryPicture(view));
 }
 
+/** `coin` and `her`: the profile's coin name and pronoun (the first character's by default). */
 export function registerCommands(
   registry: CommandRegistry,
-  service: () => MarketService | null,
+  service: MarketAt,
+  coin: string = DEFAULT_CURRENCY,
+  her: string = DEFAULT_CHARACTER.pronoun,
 ): void {
-  registerAll(registry, service);
+  registerAll(registry, service, coin, her);
 }
 
 export function unregisterCommands(registry: CommandRegistry): void {

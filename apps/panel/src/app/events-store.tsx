@@ -1,5 +1,5 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
+import { createContext, type ReactNode, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { type StreamStatus, streamEvents } from "../api/sse";
 import { asE2eRecord } from "../lib/e2e";
 import type { BusEnvelope } from "../lib/events";
@@ -7,6 +7,27 @@ import { useConnection } from "./connection";
 import { queryKeys } from "./queries";
 
 export const EVENT_BUFFER = 500;
+
+/**
+ * The admin live page's views kept fresh by the event stream (v5-architecture §11.4): each is
+ * fetched again when a bus topic says it changed, and polled only slowly while the stream is open
+ * (`useLivePoll`). After a gap in the stream they are all fetched again. A function, not a
+ * constant: `queries.ts` imports this module too.
+ */
+export const liveViews = (): ReadonlyArray<{ key: readonly unknown[]; topics: (type: string) => boolean }> => [
+  { key: queryKeys.queue, topics: (t) => t === "queue.changed" },
+  { key: queryKeys.songs, topics: (t) => t.startsWith("sing.") || t === "queue.item_activated" },
+  {
+    key: queryKeys.voice,
+    topics: (t) => t === "voice.joined" || t === "voice.left" || t === "voice.participants" || t === "voice.golive",
+  },
+  { key: queryKeys.stage, topics: (t) => t === "stage.status" || t === "voice.golive" },
+];
+
+/** A view is fetched again at most this often for its topics (a song's progress comes often). */
+export const LIVE_REFETCH_MS = 1_000;
+/** How often a view kept fresh by the stream is still polled while the stream is open. */
+export const LIVE_SAFETY_MS = 60_000;
 
 /**
  * Keeps the body, arbiter, affect, plan and turn views fresh from the v2 topics. The topics that
@@ -119,13 +140,44 @@ export function EventStreamProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const store = useMemo(() => new EventStore(), []);
 
+  // The live views: at most one fetch per `LIVE_REFETCH_MS` each, the last change never lost.
+  const later = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const last = useRef(new Map<string, number>());
+  useEffect(() => {
+    const timers = later.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    };
+  }, []);
+
   useEffect(() => {
     const ctl = new AbortController();
+    const refetch = (key: readonly unknown[]) => {
+      const id = JSON.stringify(key);
+      if (later.current.has(id)) return;
+      const wait = Math.max(0, (last.current.get(id) ?? 0) + LIVE_REFETCH_MS - Date.now());
+      later.current.set(
+        id,
+        setTimeout(() => {
+          later.current.delete(id);
+          last.current.set(id, Date.now());
+          void queryClient.invalidateQueries({ queryKey: key });
+        }, wait),
+      );
+    };
+    let wasOpen = false;
     void streamEvents(api.rpc, {
       signal: ctl.signal,
-      onStatus: (s) => store.setStatus(s),
+      onStatus: (s) => {
+        store.setStatus(s);
+        // Back after a gap: what changed meanwhile is fetched, as a snapshot.
+        if (s.state === "open" && !wasOpen) for (const view of liveViews()) refetch(view.key);
+        wasOpen = s.state === "open";
+      },
       onEnvelope: (env) => {
         store.push(env);
+        for (const view of liveViews()) if (view.topics(env.type)) refetch(view.key);
         // Keep cached lists fresh without polling.
         const t = env.type;
         if (t === "system.module.state") void queryClient.invalidateQueries({ queryKey: queryKeys.modules });
@@ -150,4 +202,20 @@ export function useEventStore(): EventStore {
 export function useEvents(): EventSnapshot {
   const store = useEventStore();
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+const noStore = () => () => {};
+
+/**
+ * The polling interval of a live view (`liveViews`): `ms` while the admin event stream is not
+ * open (or outside the admin shell), `LIVE_SAFETY_MS` while it is.
+ */
+export function useLivePoll(ms: number): number {
+  const store = useContext(EventStoreContext);
+  const open = useSyncExternalStore(
+    store ? store.subscribe : noStore,
+    () => store?.getSnapshot().status.state === "open",
+    () => false,
+  );
+  return open ? Math.max(ms, LIVE_SAFETY_MS) : ms;
 }

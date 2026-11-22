@@ -158,6 +158,84 @@ function fileProblems(descriptor: ServiceDescriptor): string[] {
   return out;
 }
 
+/** The placeholders a `[routing]` path may use (those of `install.manual`). */
+const ROUTING_PATH_PLACEHOLDERS: ReadonlySet<string> = new Set([
+  "voice",
+  "state",
+  "models",
+  "workspace",
+  "service",
+]);
+
+/** What `[routing]` says that its schema cannot check. */
+function routingProblems(descriptor: ServiceDescriptor): string[] {
+  const routing = descriptor.routing;
+  if (routing === undefined) return [];
+  const out: string[] = [];
+  if (routing.class === "job" && routing.latency === "realtime") {
+    out.push('routing: a realtime service keeps its sessions on one host; use class = "session"');
+  }
+  if (routing.queue && descriptor.run?.health.http === undefined) {
+    out.push(
+      "routing.queue: the load is read from [run.health] http, which this service has none of",
+    );
+  }
+  if (descriptor.kind === "external" && routing.queue) {
+    out.push("routing.queue: hostd does not probe an external service for its load");
+  }
+  const paths: Array<[string, string]> = [
+    ...routing.needs.files.map((p, i): [string, string] => [`routing.needs.files[${i}]`, p]),
+    ...(routing.variant?.files ?? []).map((p, i): [string, string] => [
+      `routing.variant.files[${i}]`,
+      p,
+    ]),
+  ];
+  for (const [where, path] of paths) {
+    for (const name of placeholdersIn(path)) {
+      if (!ROUTING_PATH_PLACEHOLDERS.has(name)) out.push(`${where}: unknown placeholder {${name}}`);
+    }
+  }
+  if (routing.yields_to.includes(descriptor.name)) {
+    out.push("routing.yields_to: a service does not yield to itself");
+  }
+  return out;
+}
+
+/** The file that may hold a service's `[routing]` beside its `service.toml`. */
+export const ROUTING_FILE = "routing.toml";
+
+type RoutingRead = { ok: true; table: unknown } | { ok: false; file: string; message: string };
+
+/**
+ * `[routing]` of a descriptor folder: the table in `service.toml`, or the whole of `routing.toml`
+ * beside it. The repository uses the second for now: an older hostd rejects an unknown table in
+ * `service.toml` and would disable the service, while it never reads `routing.toml`.
+ */
+function readRouting(dir: string, descriptor: unknown): RoutingRead {
+  const file = join(dir, ROUTING_FILE);
+  const inline =
+    typeof descriptor === "object" && descriptor !== null && "routing" in descriptor
+      ? (descriptor as { routing: unknown }).routing
+      : undefined;
+  if (!existsSync(file)) return { ok: true, table: inline };
+  if (inline !== undefined) {
+    return {
+      ok: false,
+      file,
+      message: `[routing] is in service.toml and in ${ROUTING_FILE}; keep one`,
+    };
+  }
+  try {
+    return { ok: true, table: parseToml(readFileSync(file, "utf8")) };
+  } catch (error) {
+    return {
+      ok: false,
+      file,
+      message: `not valid TOML: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 /** Loads every descriptor under the catalog roots of a workspace folder. */
 export function loadCatalog(root: string): Catalog {
   const base = resolve(root);
@@ -177,6 +255,12 @@ export function loadCatalog(root: string): Catalog {
         fail(`not valid TOML: ${error instanceof Error ? error.message : String(error)}`);
         continue;
       }
+      const routing = readRouting(dir, raw);
+      if (!routing.ok) {
+        problems.push({ file: routing.file, message: routing.message });
+        continue;
+      }
+      if (routing.table !== undefined) raw = { ...(raw as object), routing: routing.table };
       const parsed = ServiceDescriptorSchema.safeParse(raw);
       if (!parsed.success) {
         for (const message of describeIssues(parsed.error)) fail(message);
@@ -186,6 +270,7 @@ export function loadCatalog(root: string): Catalog {
       const found = [
         ...kindProblems(descriptor),
         ...fileProblems(descriptor),
+        ...routingProblems(descriptor),
         ...placeholderTexts(descriptor).flatMap(([where, text]) =>
           placeholdersIn(text).flatMap((name) => {
             if (!isKnownPlaceholder(name)) return [`${where}: unknown placeholder {${name}}`];

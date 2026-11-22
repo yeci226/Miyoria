@@ -6,6 +6,12 @@
 // rules forbid naming what was said in private and the post goes through the platform sink, which
 // runs moderation like every other line of hers; the owner chooses the channel.
 //
+// One diary, in one channel the owner chose (phase 6, owner decision Q2). The reflection's summary
+// is of every place she was in; once the day had talk in a server other than the diary channel's,
+// the entry is not written from that summary but from the recaps of the diary server's own
+// channels (`ConversationStates`), with her feelings, lessons and goals: nothing said in one
+// server is posted in another.
+//
 // With a channel it is also something she does, not only something that follows the reflection:
 // the capability `diary.write` (`diaryCapability`) is the "diary" row of her activity table
 // (packages/heart/mind/src/life/activities.ts), so her mind can suggest it in the evening and her life
@@ -19,6 +25,7 @@ import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import type { SettingsStore } from "@miyoria/store";
 import {
   type ContextKey,
+  type ConversationState,
   characterCore,
   type PlatformSinks,
   type ProfileId,
@@ -43,9 +50,26 @@ export function diaryRules(maxChars: number): string {
 - 只回日記本文。`;
 }
 
-/** What the reflection said, as the entry's material. */
-export function diaryMaterial(run: ReflectionRun): string {
-  const lines = [`今天的回顧:${run.summary.trim()}`];
+/** How far back the day's talk goes (as the daily reflection gathers it). */
+const DAY_TALK_MS = 1.5 * 24 * 3600 * 1000;
+/** A recap is cut to this many characters in the material. */
+const RECAP_CHARS = 300;
+
+/**
+ * What the reflection said, as the entry's material. With `here` (the recaps of the diary
+ * server's channels, when the day had talk in other servers too) the summary of every place is
+ * left out and those recaps stand in its place.
+ */
+export function diaryMaterial(run: ReflectionRun, here: readonly string[] | null = null): string {
+  const lines =
+    here === null
+      ? [`今天的回顧:${run.summary.trim()}`]
+      : here.length === 0
+        ? []
+        : [
+            "今天在這裡聊的事:",
+            ...here.map((r) => `- ${[...r.trim()].slice(0, RECAP_CHARS).join("")}`),
+          ];
   if (run.feelings.length > 0) lines.push(`心情:${run.feelings.join("、")}`);
   if (run.lessons.length > 0) lines.push(`學到的事:${run.lessons.join("、")}`);
   if (run.goals.length > 0) lines.push(`接下來想做的:${run.goals.join("、")}`);
@@ -71,6 +95,33 @@ export interface DiaryDeps {
   /** The settings store (the day of the last entry survives a restart); `null`: memory only. */
   store?: SettingsStore | null;
   profile?: ProfileId;
+  /** The conversation states of every place (`ConversationStatesKey`); unset: none known. */
+  conversations?: () => readonly ConversationState[];
+}
+
+/**
+ * The recaps of the diary server's channels, when the day had talk in another server too;
+ * `null` when it had not (the reflection's summary is then all about the diary's server, and DMs,
+ * which the rules keep out).
+ */
+export function diaryRecaps(
+  where: ContextKey,
+  states: readonly ConversationState[],
+  at: number,
+): string[] | null {
+  const day = states.filter(
+    (c) =>
+      c.context.kind !== "dm" &&
+      c.context.scope !== null &&
+      at - Date.parse(c.updated_at) < DAY_TALK_MS,
+  );
+  const here = (c: ConversationState) =>
+    c.context.platform === where.platform && c.context.scope === where.scope;
+  if (day.every(here)) return null;
+  return day
+    .filter(here)
+    .map((c) => c.recap)
+    .filter((r) => r.trim() !== "");
 }
 
 /** Settings key of the day of her last entry. */
@@ -96,6 +147,17 @@ export class Diary {
     if (!store || this.d.profile === undefined) return;
     const day = await store.get(this.d.profile, DIARY_STATE_KEY);
     if (typeof day === "string") this.#lastDay = day;
+  }
+
+  /** The diary server's recaps when the day had talk elsewhere too (`diaryRecaps`). */
+  #recaps(where: ContextKey, run: ReflectionRun): string[] | null {
+    try {
+      return diaryRecaps(where, this.d.conversations?.() ?? [], Date.parse(run.at));
+    } catch (error) {
+      log.warn({ error: errorMessage(error) }, "cannot read the day's talk for her diary");
+      // Unknown: only what is not about any place.
+      return [];
+    }
   }
 
   /** The channel entries go to, or `null` when the diary is off. */
@@ -133,7 +195,7 @@ export class Diary {
           {
             messages: [
               systemMessage(`${who}\n\n${diaryRules(this.config.max_chars)}`),
-              userMessage(diaryMaterial(run)),
+              userMessage(diaryMaterial(run, this.#recaps(where, run))),
             ],
             reasoning_purpose: "diary",
             max_tokens: 800,

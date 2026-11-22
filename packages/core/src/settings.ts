@@ -1,7 +1,7 @@
 // Core-level settings read from `[core]`.
 
 import { isAbsolute, resolve } from "node:path";
-import type { Config } from "@miyoria/runtime/kernel";
+import { CharacterSectionSchema, type Config } from "@miyoria/runtime/kernel";
 import { Profile } from "@miyoria/runtime/profile";
 
 /** Used when `core.database_url` is missing or empty. */
@@ -51,12 +51,17 @@ export class ProfileLoadError extends Error {
   override readonly name = "ProfileLoadError";
 }
 
-/** Loads the active profile (`core.profiles_dir` / `core.profile`). */
+/**
+ * Loads the active profile (`core.profiles_dir` / `core.profile`) with who she is in it
+ * (`[character]`, docs/design/v5-profiles.md). A `[character]` that does not fit its schema stops
+ * the load: she would otherwise start under another name.
+ */
 export async function loadProfile(config: Config, baseDir = process.cwd()): Promise<Profile> {
   const dir = str(config, "core.profiles_dir") ?? DEFAULT_PROFILES_DIR;
   const id = profileId(config);
   try {
-    return await Profile.load(resolve(baseDir, dir), id);
+    const character = config.get("character", CharacterSectionSchema);
+    return await Profile.load(resolve(baseDir, dir), id, character);
   } catch (error) {
     throw new ProfileLoadError(
       `loading profile \`${id}\` from \`${dir}\`: ${(error as Error).message}`,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HostRoutingSchema } from "./routing.js";
 
 /** Cluster states in which a voluntary restart of a service waits (`run.guard`). */
 export const HostGuardStateSchema = z.enum(["singing", "live"]).meta({ id: "HostGuardState" });
@@ -223,6 +224,12 @@ export const HostServiceSchema = z
     gpu: HostGpuSchema.optional(),
     probe: HostProbeSchema.optional(),
     launch: HostLaunchSchema.optional(),
+    /**
+     * How Core may route its work across hosts (v5-hostd §15). Without it Core routes the service
+     * as before: the first healthy endpoint in order. An older daemon rejects this table (its
+     * schema is strict), so the repository keeps it in `routing.toml` beside `service.toml`.
+     */
+    routing: HostRoutingSchema.optional(),
   })
   .strict()
   .meta({ id: "HostService" });

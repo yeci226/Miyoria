@@ -10,6 +10,8 @@
 
 import type { WorkersKaraokeLyricsV2 } from "@miyoria/contracts/workers";
 import type {
+  KaraokeCheer,
+  KaraokeCheerKind,
   KaraokeLine,
   KaraokeLyrics,
   KaraokeMember,
@@ -122,6 +124,8 @@ export interface BoardRow {
   name: string;
   color: number;
   score: string;
+  /** The score as a number (it counts up to it on the page), `null` before there is one. */
+  total: number | null;
   /** The browser's estimate, not the official score: tagged 「預估」. */
   estimate: boolean;
   /** Since the last board (Core's word): an arrow beside the score. */
@@ -152,6 +156,7 @@ export function boardRows(lines: readonly KaraokeLine[], previous: ReadonlyMap<s
       name: line.name,
       color: line.color,
       score: scoreText(line.total),
+      total: line.total,
       estimate: line.source === "estimate",
       move: line.move,
       moved: before !== undefined && before !== line.rank,
@@ -295,7 +300,8 @@ export function karaokeBlocks(scene: KaraokeScene | null, on: boolean): KaraokeB
   const live = phase === "countdown" || phase === "singing";
   return {
     lobby: phase === "lobby",
-    title: live || phase === "settling",
+    // The countdown's intro names the song itself; the plate comes in as it starts.
+    title: phase === "singing" || phase === "settling",
     lanes: live,
     lyrics: live,
     board: live || phase === "settling",
@@ -353,4 +359,129 @@ export function queueRows(scene: Pick<KaraokeScene, "song" | "queue">): QueueRow
  */
 export function qrPixels(modules: number, target: number): number {
   return Math.max(1, Math.round(target / modules)) * modules;
+}
+
+// ---- spectating: what happens, the line-up, the next song, numbers that count ---------------------
+
+/** What a cheer says on the stream. */
+export const CHEER_WORDS: Record<KaraokeCheerKind, string> = {
+  cheer: "加油",
+  nice: "好聽",
+  wow: "太強了",
+  encore: "安可",
+};
+
+/** How a judged note reads beside the now line. */
+export const VERDICT_WORDS = { perfect: "完美", good: "不錯", miss: "沒中" } as const;
+
+/** Notes hit in a row before the lane says so. */
+export const COMBO_SHOWN = 3;
+
+/** A lane's run of notes hit in a row, as it reads (`null`: too short to say). */
+export function comboText(combo: number): string | null {
+  return combo >= COMBO_SHOWN ? `連續 ${combo}` : null;
+}
+
+/** Song time before which a change of leader is not called (the first ranks are noise). */
+export const LEAD_AFTER_MS = 8_000;
+
+/** Something the stream says as it happens (a line in the scene's feed). */
+export type KaraokeHappening =
+  | { kind: "join"; name: string; color: number; role: KaraokeMember["role"] }
+  | { kind: "leave"; name: string; color: number }
+  | { kind: "lead"; name: string; color: number }
+  | { kind: "phrase"; name: string; color: number };
+
+/**
+ * What changed between two frames of one room that the stream calls out: who came in, who left,
+ * and, while a round is sung, who took the lead (after its first seconds, and only from someone
+ * else who led). Nothing across rooms (a new room is not everyone arriving at once).
+ */
+export function happenings(before: KaraokeScene | null, after: KaraokeScene): KaraokeHappening[] {
+  if (before === null || before.room !== after.room) return [];
+  const out: KaraokeHappening[] = [];
+  const was = new Map(before.members.map((m) => [lineKey(m), m]));
+  const now = new Map(after.members.map((m) => [lineKey(m), m]));
+  for (const [key, m] of now) {
+    if (!was.has(key)) out.push({ kind: "join", name: m.name, color: m.color, role: m.role });
+  }
+  for (const [key, m] of was) if (!now.has(key)) out.push({ kind: "leave", name: m.name, color: m.color });
+  const leader = (s: KaraokeScene) => s.board.find((l) => l.rank === 1 && l.total !== null) ?? null;
+  const a = leader(before);
+  const b = leader(after);
+  if (
+    before.state === "singing" &&
+    after.state === "singing" &&
+    before.round === after.round &&
+    after.settling === null &&
+    (after.positionMs ?? 0) >= LEAD_AFTER_MS &&
+    a !== null &&
+    b !== null &&
+    lineKey(a) !== lineKey(b) &&
+    // A tie at the top is not a new leader.
+    (b.total ?? 0) > (after.board.find((l) => lineKey(l) === lineKey(a))?.total ?? 0)
+  ) {
+    out.push({ kind: "lead", name: b.name, color: b.color });
+  }
+  return out;
+}
+
+/** A happening's words (the name is shown beside them, as text). */
+export function happeningText(h: KaraokeHappening): string {
+  switch (h.kind) {
+    case "join":
+      return h.role === "singer" ? "加入了" : "進來看了";
+    case "leave":
+      return "離開了";
+    case "lead":
+      return "領先了";
+    case "phrase":
+      return "這一句唱得很完美";
+  }
+}
+
+/** Several names in one line of the feed: 「Mia、小明 和 Kai」, or the first few and how many more. */
+export function phraseNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length > 3) return `${names.slice(0, 2).join("、")} 等 ${names.length} 人`;
+  return `${names.slice(0, -1).join("、")} 和 ${names.at(-1)}`;
+}
+
+/** The cheers of a frame not shown yet (by id), oldest first; `seen` learns them. */
+export function freshCheers(seen: Set<string>, cheers: readonly KaraokeCheer[]): KaraokeCheer[] {
+  const out = cheers.filter((c) => !seen.has(c.id));
+  for (const c of out) seen.add(c.id);
+  return out;
+}
+
+/** Who sings the round, for its intro: the round's board (everyone in it), else the members who sing. */
+export function lineup(scene: Pick<KaraokeScene, "board" | "members">): { name: string; color: number }[] {
+  const from = scene.board.length > 0 ? scene.board : scene.members.filter((m) => m.role === "singer");
+  return from.map((l) => ({ name: l.name, color: l.color }));
+}
+
+/** 「下一首」 while a round is on (the first song queued after it), else `null`. */
+export function nextUp(scene: Pick<KaraokeScene, "state" | "queue">): { title: string; by: string | null } | null {
+  if (scene.state !== "countdown" && scene.state !== "singing") return null;
+  const next = scene.queue.find((e) => e.state !== "failed");
+  return next === undefined ? null : { title: next.title, by: next.by === "" ? null : next.by };
+}
+
+/** A number on its way from `from` to `to` at `t` (0..1 of the way), eased out. */
+export function countUp(from: number, to: number, t: number): number {
+  const k = Math.min(Math.max(t, 0), 1);
+  return from + (to - from) * (1 - (1 - k) ** 3);
+}
+
+/** The letter of a singer's mark: the name's first character (a whole one), Latin in capitals. */
+export function initialOf(name: string): string {
+  const trimmed = name.trim();
+  let first = "";
+  if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
+    const seg = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+    first = seg.segment(trimmed)[Symbol.iterator]().next().value?.segment ?? "";
+  } else {
+    first = Array.from(trimmed)[0] ?? "";
+  }
+  return first.toLocaleUpperCase();
 }

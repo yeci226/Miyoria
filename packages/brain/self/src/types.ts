@@ -287,7 +287,10 @@ export type RunOutcome =
   | "failed"
   /** The signal aborted the run. */
   | "cancelled"
-  /** The session's hourly cap was reached before the first step: no model call was made. */
+  /**
+   * The session's hourly cap was reached before the first step: no model call was made. Someone
+   * waiting was told when she is back, once per capped stretch (`HOUR_CAP_LINE`).
+   */
   | "over_budget";
 
 export type RunEvent =

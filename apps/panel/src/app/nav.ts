@@ -1,5 +1,7 @@
+import { SITE_NAME } from "@/lib/site-name";
 import {
   Activity,
+  Bug,
   CalendarClock,
   Clapperboard,
   Coins,
@@ -28,6 +30,7 @@ export type NavPath =
   | "/rules"
   | "/llm"
   | "/eval"
+  | "/reports"
   | "/system"
   | "/machines"
   | "/access"
@@ -73,6 +76,8 @@ export const ECONOMY_TABS = [
   { tab: "predictions", label: "預測" },
   { tab: "room", label: "房間" },
   { tab: "market", label: "市集" },
+  { tab: "exchange", label: "交易所" },
+  { tab: "gifts", label: "禮物" },
 ] as const;
 
 export const INNER_TABS = [
@@ -133,6 +138,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { to: "/machines", label: "電腦", icon: Monitor },
       { to: "/economy", label: "經濟", icon: Coins, tabs: [...ECONOMY_TABS] },
       { to: "/eval", label: "評測", icon: Target },
+      { to: "/reports", label: "回報", icon: Bug },
     ],
   },
   {
@@ -150,7 +156,7 @@ export const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 export const isActive = (to: NavPath, path: string) => (to === "/" ? path === "/" : path === to || path.startsWith(`${to}/`));
 
 export function titleFor(path: string): string {
-  return NAV.find((i) => isActive(i.to, path))?.label ?? "Miyoria";
+  return NAV.find((i) => isActive(i.to, path))?.label ?? SITE_NAME;
 }
 
 export function groupFor(path: string): string | null {

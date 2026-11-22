@@ -74,6 +74,14 @@ export class ReactTool implements Tool {
     if (emoji.length > MAX_REACTIONS) {
       throw new ToolArgumentError(`at most ${MAX_REACTIONS} emoji in one call`);
     }
+    // A turn nobody's message woke (a glance, a timer, the world, a result) carries a placeholder
+    // message whose id is the turn's own: no platform message to react to. Said to her instead of
+    // sent, where the platform would refuse the id ("invalid Discord message id").
+    if (ctx.message.id === ctx.turn) {
+      throw new ToolArgumentError(
+        "there is no message to react to in this turn (nobody's message woke you); say it instead",
+      );
+    }
     const sink = this.#ctx.services.require(ActionSinkKey);
     for (const one of emoji) {
       const action = newAction(

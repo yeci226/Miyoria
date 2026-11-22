@@ -366,6 +366,7 @@ describe("bounties", () => {
       expires_at: at(ms + 5_000),
       closed_at: null,
       winner: null,
+      space: null,
     });
     const one = bounty(1_000, "guess");
     const two = bounty(2_000, "draw");

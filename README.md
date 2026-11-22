@@ -108,7 +108,7 @@ start = "decide"              # she picks the moment; a requested song starts on
 Core, the speech workers, the voice node and the Stage node talk over WebSocket and HTTP, so they can share one PC or be split across machines.
 
 ```
-packages/         The Core modules (@miyoria/*): kernel, agent, mind, self, world, memory, voice, stage, sing, game, ...
+packages/         The Core modules (@miyoria/*), partly grouped (brain, heart, memory, runtime, play, ...), plus hostd, store, types, contracts, stage, sing, ...
 apps/panel        Admin panel (React + shadcn/ui), served by Core on :7878
 apps/overlay      OBS browser-source overlay, served by the Stage node on :7884
 apps/voice-node   Self-account voice node: Discord voice and Go Live streaming
@@ -122,14 +122,15 @@ docs/             Architecture, design notes, protocols, decisions and the roadm
 
 ## Guides
 
-- [Architecture](docs/ARCHITECTURE.md): node topology, the kernel and module model, agent, memory, social, queue, extensions, voice, stage, games.
+- [Architecture](docs/ARCHITECTURE.md): node topology, the kernel and module model, the brain, memory, social, queue, extensions, voice, stage, games.
 - [Autonomy design](docs/design/autonomy.md): the mind loop, the action gate, guardrails, and the record of each phase as it shipped.
 - [Operations](docs/OPERATIONS.md): deployment layouts, ports, Docker, upgrades, backups, logs, and a security checklist.
 - [Speech workers](workers/README.md): ASR, TTS and singing on a GPU, and the fake workers for running without one.
 - [Voice node](apps/voice-node/README.md): the self-account voice client and Go Live.
 - [Stage link](docs/protocols/stage-link.md): VTube Studio, OBS scenes, the overlay, lip sync and song videos.
 - [Minecraft](extensions/minecraft/README.md): the bridge mod, Baritone settings and what she can do in game.
-- [Decisions](docs/DECISIONS.md) and [Roadmap](docs/ROADMAP.md): why things are the way they are, and what is next.
+- [Decisions](docs/DECISIONS.md): why things are the way they are.
+- [V5 plan](docs/design/v5-architecture.md) and [backlog](docs/design/backlog.md): what is built, what is next, and what is open or waiting for a decision. The [Roadmap](docs/ROADMAP.md) is the history of the earlier phases.
 
 ## Building from source
 
@@ -148,7 +149,7 @@ pnpm --filter miyoria build   # the npm package (esbuild) in packages/cli/dist/
 
 ## Status
 
-Every phase on the [roadmap](docs/ROADMAP.md) is implemented. Since November 2026 she has run live on a real Discord server: voice chat, Go Live, VTube Studio, OBS, singing and Minecraft. Rough edges are tracked on the roadmap. The rewrite from the original Rust prototype is complete; the prototype is still in the git history.
+Phases 0 to 5 of the [V5 plan](docs/design/v5-architecture.md) are merged and run live (the contracts and data layer, the per-machine supervisor hostd, the new brain, the heart, and the play features such as daily cards, the economy sinks, party games and karaoke step 1). Since November 2026 she has run live on a real Discord server: voice chat, Go Live, VTube Studio, OBS and singing. What is open, deferred or waiting for a decision is listed in [docs/design/backlog.md](docs/design/backlog.md); what is next (the deep-sea exchange of phase 5, then phases 6 and 7) is in [docs/design/v5-architecture.md](docs/design/v5-architecture.md) and [docs/design/v5-play.md](docs/design/v5-play.md). Minecraft is paused ([notes](docs/design/minecraft-findings.md)). The older [roadmap](docs/ROADMAP.md) is kept as history. The rewrite from the original Rust prototype is complete; the prototype is still in the git history.
 
 ## License
 

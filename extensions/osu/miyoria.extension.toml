@@ -1,11 +1,11 @@
-# osu! AI 玩家:讓她把 osu_rl 的 AI 送進 lazer 多人房跟大家一起打,或單獨打一張譜。
-# 這個擴充只是 HTTP 用戶端;AI 本體是 osu_rl 的 live.service(https://github.com/SQL1024-sql/osu_RL/tree/master/live)。
+# osu! 直播:觀眾用 /queue osu 點譜給 AI 打;她或管理員讓 AI 進多人房、離開、單獨打一張譜。
+# 這個擴充只是 HTTP 用戶端;AI 本體是 osu_rl 的 live.requests 和 live.room_play(https://github.com/SQL1024-sql/osu_RL/tree/master/live),全部用 vision 學生看畫面打。
 # 建置:先 `pnpm build` packages/sdk,再在這裡 `pnpm install && pnpm build`。
 id = "miyoria.osu"
-version = "0.1.0"
+version = "0.2.0"
 name = "osu!"
-description = "osu! AI 玩家(osu_rl live.service):進 lazer 多人房、換難度、打單張譜"
-kind = ["tools"]
+description = "osu! AI 玩家(osu_rl,看畫面打):點譜佇列、進出 lazer 多人房、單獨打一張譜"
+kind = ["tools", "commands"]
 runtime = "node"
 entry = "dist/index.js"
 placement = "any"
@@ -13,7 +13,8 @@ placement = "any"
 [permissions]
 events = []
 tools = true
-network = ["127.0.0.1:8765"]
+commands = true
+network = ["127.0.0.1:8766", "127.0.0.1:8767"]
 
 [config]
 schema = "config.schema.json"

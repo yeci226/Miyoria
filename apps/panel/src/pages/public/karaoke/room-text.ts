@@ -13,6 +13,38 @@ import { decodeTrack, fromBase64, TRACK_HZ } from "@miyoria/play/karaoke/score";
 
 export type TrendEvent = Extract<KaraokeRoomEvent, { type: "trend" }>;
 export type BoardEvent = Extract<KaraokeRoomEvent, { type: "board" }>;
+export type LiveEvent = Extract<KaraokeRoomEvent, { type: "live" }>;
+export type CheerEvent = Extract<KaraokeRoomEvent, { type: "cheer" }>;
+
+/** What a cheer says (the same words as her stream). */
+export const CHEER_WORDS: Record<CheerEvent["kind"], string> = {
+  cheer: "加油",
+  nice: "好聽",
+  wow: "太強了",
+  encore: "安可",
+};
+
+/** The kinds in the order the buttons show them. */
+export const CHEER_ORDER: CheerEvent["kind"][] = ["cheer", "nice", "wow", "encore"];
+
+/** Cheers kept on screen at once, and how long each stays (ms). */
+export const CHEERS_SHOWN = 3;
+export const CHEER_SHOW_MS = 4_000;
+
+/** The latest cheers with the new one, oldest first, those older than `CHEER_SHOW_MS` gone. */
+export function keepCheers<T extends { id: string; at: number }>(list: readonly T[], next: T, now: number): T[] {
+  if (list.some((c) => c.id === next.id)) return [...list];
+  return [...list.filter((c) => now - c.at < CHEER_SHOW_MS), next].slice(-CHEERS_SHOWN);
+}
+
+/** Who may be cheered: the round's singers on the board, else the members who sing. */
+export function cheerTargets(
+  board: readonly { member: string; name: string; color: number }[],
+  members: readonly { id: string; name: string; color: number; role: "singer" | "spectator" }[],
+): { member: string; name: string; color: number }[] {
+  if (board.length > 0) return board.map((l) => ({ member: l.member, name: l.name, color: l.color }));
+  return members.filter((m) => m.role === "singer").map((m) => ({ member: m.id, name: m.name, color: m.color }));
+}
 
 /** A room's code: six letters and digits people can read out (`KARAOKE_ROOM_CODE`). */
 export const ROOM_CODE = /^[2-9A-HJKMNP-Z]{6}$/;
@@ -235,8 +267,8 @@ export function foldOctave(midi: number, ref: number | null): number {
 export class BoardLines {
   readonly #frames = new Map<string, (number | null)[]>();
 
-  /** Takes one board's lines; what is far behind the newest frame is forgotten. */
-  take(lines: readonly KaraokeBoardLine[]): void {
+  /** Takes one board's (or `live`'s) lines; what is far behind the newest frame is forgotten. */
+  take(lines: readonly Pick<KaraokeBoardLine, "member" | "pitch">[]): void {
     const keep = LINE_KEEP_S * TRACK_HZ;
     for (const l of lines) {
       if (!l.pitch) continue;

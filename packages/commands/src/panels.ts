@@ -12,6 +12,13 @@
 
 import type { ServiceLookup } from "@miyoria/runtime/kernel";
 import {
+  type Character,
+  CharacterKey,
+  CurrencyKey,
+  DEFAULT_CHARACTER,
+  DEFAULT_CURRENCY,
+} from "@miyoria/types";
+import {
   type FieldAsk,
   mappedPaths,
   type PanelAction,
@@ -440,7 +447,7 @@ function songPages(): PanelPage[] {
 
 // ---- /me ----------------------------------------------------------------------------------
 
-function mePages(policyUrl: string | null): PanelPage[] {
+function mePages(policyUrl: string | null, her: Character, coin: string): PanelPage[] {
   const policy = (): CardBlock[] =>
     policyUrl
       ? [
@@ -457,7 +464,7 @@ function mePages(policyUrl: string | null): PanelPage[] {
       description: "第一次來？從這裡開始",
       alwaysVisible: true,
       intro: [
-        "我是 Miyoria，一個 AI。這是你自己的面板，其他人看不到，也不用背指令。",
+        `我是 ${her.name}，一個 AI。這是你自己的面板，其他人看不到，也不用背指令。`,
         "想聽她唱歌：按「點歌」。想管她能不能聽你、私訊你、看你的狀態：切到「隱私」。",
         "她記得的關於你的事可以查看、匯出和刪除：切到「記憶與刪除」。",
       ],
@@ -558,13 +565,23 @@ function mePages(policyUrl: string | null): PanelPage[] {
       // Commands come from the economy module; without it the page is hidden.
       id: "wallet",
       label: "錢包",
-      description: "魚幣、簽到、餵她",
+      description: `${coin}、簽到、餵${her.pronoun}`,
       refresh: true,
       status: [{ path: "me wallet", label: "我的錢包", args: { picture: false } }],
       actions: [
         { id: "checkin", label: "簽到", path: "me checkin", style: "primary" },
         { id: "rice", label: "餵一碗", path: "me feed", args: { item: "rice" } },
         { id: "big-bowl", label: "餵鋼盆", path: "me feed", args: { item: "big_bowl" } },
+        {
+          // Anything they name (`/me feed thing:`): a quote first, charged only on 確認.
+          id: "gift",
+          label: `送${her.pronoun}別的`,
+          path: "me feed",
+          ask: {
+            title: `自己取名送${her.pronoun}一樣東西（先報價，確認才扣）`,
+            fields: [field("thing", "想送什麼，例如「一杯珍奶」", { maxLength: 24 })],
+          },
+        },
         {
           id: "screen",
           label: "留言上大螢幕",
@@ -588,8 +605,11 @@ function mePages(policyUrl: string | null): PanelPage[] {
           label: "轉給別人",
           path: "me give",
           ask: {
-            title: "轉魚幣給別人（另收手續費，會燒掉）",
-            fields: [USER_FIELD, field("amount", "對方收到多少魚幣", { placeholder: "1 到 50" })],
+            title: `轉${coin}給別人（另收手續費，會燒掉）`,
+            fields: [
+              USER_FIELD,
+              field("amount", `對方收到多少${coin}`, { placeholder: "1 到 50" }),
+            ],
           },
         },
         { id: "board", label: "排行榜", path: "me board" },
@@ -610,11 +630,11 @@ function mePages(policyUrl: string | null): PanelPage[] {
           label: "押預測",
           path: "me bet",
           ask: {
-            title: "押魚幣猜結果",
+            title: `押${coin}猜結果`,
             fields: [
               field("prediction", "預測的代號", { placeholder: "「看預測」裡的代號" }),
               field("option", "選項的號碼或名字"),
-              field("amount", "押多少魚幣"),
+              field("amount", `押多少${coin}`),
             ],
           },
         },
@@ -624,8 +644,8 @@ function mePages(policyUrl: string | null): PanelPage[] {
           label: "出錢佈置房間",
           path: "me room",
           ask: {
-            title: "出魚幣佈置她的房間",
-            fields: [field("item", "要出錢的東西（名字或代號）"), field("amount", "出多少魚幣")],
+            title: `出${coin}佈置${her.pronoun}的房間`,
+            fields: [field("item", "要出錢的東西（名字或代號）"), field("amount", `出多少${coin}`)],
           },
         },
         { id: "karaoke", label: "唱 K", path: "me karaoke" },
@@ -843,10 +863,12 @@ export interface PanelsOptions {
 /** The four panels (see the page tables above). */
 export function panelDefs(options: PanelsOptions = {}): PanelDef[] {
   const policyUrl = options.policyUrl?.trim() || null;
+  // Who she is in this profile (docs/design/v5-profiles.md); Miyoria without a running Core.
+  const her = options.services?.get(CharacterKey) ?? DEFAULT_CHARACTER;
   return [
     {
       command: "miyo",
-      title: "Miyoria 控制面板",
+      title: `${her.name} 控制面板`,
       description: "她的控制面板：語音、直播、遊戲、聊天等級與緊急停止",
       pages: miyoPages(),
     },
@@ -861,7 +883,7 @@ export function panelDefs(options: PanelsOptions = {}): PanelDef[] {
       title: "我的面板",
       description: "你的資料、隱私、語音同意與她記得的事",
       ephemeral: true,
-      pages: mePages(policyUrl),
+      pages: mePages(policyUrl, her, options.services?.get(CurrencyKey) ?? DEFAULT_CURRENCY),
     },
     {
       command: "admin",

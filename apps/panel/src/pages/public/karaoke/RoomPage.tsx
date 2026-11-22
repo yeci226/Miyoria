@@ -1,6 +1,7 @@
 // A karaoke room on the member page (docs/design/karaoke.md 「做了什麼第四步」), at
 // `/karaoke/room/<code>`. The room comes from its event stream (`room`, and `board` or `trend`
-// while a round is sung) and Core's clock is learned beside it. What shows follows the room and
+// while a round is sung, `live` with the singers' latest pitch a few times a second for the people
+// watching, and `cheer`s) and Core's clock is learned beside it. What shows follows the room and
 // the person in it: joining (sing or watch), the lobby, a singer's stage (the step-3 scene with
 // their trend, never a ranking), a spectator's stage (the scene with the live ranking and every
 // singer's line), a singer who is done waiting for the others (結算中 and whom Core still waits
@@ -32,7 +33,9 @@ import { CLOCK_EVERY_MS, type ClockOffset, syncClock } from "./room-clock";
 import {
   type BoardEvent,
   BoardLines,
+  type CheerEvent,
   type HeldStage,
+  keepCheers,
   settlingView,
   stageOf,
   type TrendEvent,
@@ -52,6 +55,8 @@ export function useRoomFeed(code: string) {
   const [board, setBoard] = useState<BoardEvent | null>(null);
   const [link, setLink] = useState<RoomLink>("connecting");
   const [lines] = useState(() => new BoardLines());
+  /** The latest cheers this person may see (with when they came), for a few seconds each. */
+  const [cheers, setCheers] = useState<(CheerEvent & { at: number })[]>([]);
   const round = useRef(-1);
 
   useEffect(() => {
@@ -73,14 +78,17 @@ export function useRoomFeed(code: string) {
           if (e.type === "room") {
             setRoom(e.room);
             setError(null);
-          } else if (e.type === "board") {
+          } else if (e.type === "board" || e.type === "live") {
             if (e.round !== round.current) {
               lines.clear();
               round.current = e.round;
             }
             lines.take(e.lines);
-            setBoard(e);
-          } else {
+            if (e.type === "board") setBoard(e);
+          } else if (e.type === "cheer") {
+            const at = Date.now();
+            setCheers((list) => keepCheers(list, { ...e, at }, at));
+          } else if (e.type === "trend") {
             setTrend(e);
           }
         },
@@ -88,7 +96,7 @@ export function useRoomFeed(code: string) {
     [client, code, lines],
   );
 
-  return { room, setRoom, error, trend, board, lines, link };
+  return { room, setRoom, error, trend, board, lines, link, cheers };
 }
 
 /** Core's clock less this browser's, learned while in the room and again every ten seconds. */
@@ -377,6 +385,7 @@ export function RoomPage({
         startAtMs={stage.startAt}
         offset={offset}
         trend={trend}
+        cheers={feed.cheers.filter((c) => c.round === room.round && c.member === room.me?.id)}
         engine={engine}
         latency={latency ?? { latency_ms: 0, calibrated: false }}
         floor={floor}
@@ -424,6 +433,7 @@ export function RoomPage({
         room={room}
         board={feed.board !== null && feed.board.round === room.round ? feed.board : null}
         lines={feed.lines}
+        cheers={feed.cheers.filter((c) => c.round === room.round)}
         offset={offset}
         engine={engine}
         onLeave={leave}

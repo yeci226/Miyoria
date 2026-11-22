@@ -1,7 +1,7 @@
 {
   "name": "@miyoria/brain",
   "version": "0.1.0",
-  "description": "agent: Cognition core: sessions, attention, prompt assembly, generation and expression parsing; arbiter: Arbiter: the one place that decides whether she speaks or acts now, and her ledger; activity: ActivityManager: the one owner of what she is doing (voice presence, broadcast, activity); directive: the owner's standing rules for what she may do; self: the phase-3 turn runner: one run, its profiles, prompt layout, guard, loop and triage; selfhost: the text conversations on that runner, wired to today's services",
+  "description": "agent: Cognition core: sessions, attention, prompt assembly, generation and expression parsing; arbiter: Arbiter: the one place that decides whether she speaks or acts now, and her ledger; activity: ActivityManager: the one owner of what she is doing (voice presence, broadcast, activity); directive: the owner's standing rules for what she may do; self: the phase-3 turn runner: one run, its profiles, prompt layout, guard, loop and triage; selfhost: the text conversations on that runner, wired to today's services; report: problems members report through her, as drafts the owner turns into GitHub issues",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -36,6 +36,11 @@
       "@miyoria/source": "./selfhost/src/index.ts",
       "types": "./dist/selfhost/src/index.d.ts",
       "default": "./dist/selfhost/src/index.js"
+    },
+    "./report": {
+      "@miyoria/source": "./report/src/index.ts",
+      "types": "./dist/report/src/index.d.ts",
+      "default": "./dist/report/src/index.js"
     }
   },
   "files": [

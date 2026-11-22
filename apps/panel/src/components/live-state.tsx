@@ -10,8 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/misc";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { notify } from "@/lib/notify";
+import { WORLD } from "@/lib/world";
 
-export const HER_NAME = "DeepSeek-chan";
+/** The persona's name until the Core says (`lib/world.ts`; DeepSeek-chan for the first character). */
+export const HER_NAME = WORLD.persona;
 
 export function mindState(m: MindView): { tone: Tone; label: string } {
   if (m.paused) return { tone: "warning", label: "已緊急停止" };

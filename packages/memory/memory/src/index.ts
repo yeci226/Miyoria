@@ -197,7 +197,16 @@ export {
 } from "./notes-recall.js";
 export { PersonNotes } from "./person-note.js";
 export { PINNED_TITLE, PinnedReader } from "./pinned.js";
-export { type Disclosure, disclose, PRIVATE_MARK, placeRef, type Viewer } from "./places.js";
+export {
+  type Disclosure,
+  disclose,
+  ELSEWHERE_MARK,
+  fromElsewhere,
+  PRIVATE_MARK,
+  placeRef,
+  quotable,
+  type Viewer,
+} from "./places.js";
 export { type ProfileSources, Profiles, profileLine } from "./profiles.js";
 export {
   clockOf,

@@ -4,9 +4,10 @@
 // kept) in the same transaction. A place must exist (`spaces` / `rooms` of identity) before it
 // gets a setting.
 //
-// Nothing reads these yet: the per-channel modes still come from `[modules.agent]` and the
-// `channel_mode:` settings keys until the cut-over imports the config (`import.ts`) and the agent
-// reads them here.
+// Core's `PlaceConfig` (`core/src/place-config.ts`, docs/design/v5-places.md) reads them for every
+// module, and drops its cache when `onChange` reports a write: a place setting applies at once.
+// The per-channel modes still come from `[modules.agent]` and the `channel_mode:` settings keys
+// until the agent moves here (phase 6, P3).
 
 import { JsonValueSchema } from "@miyoria/contracts/wire";
 import { type JsonValue, newId, toTimestamp } from "@miyoria/types";
@@ -34,6 +35,21 @@ export interface ResolvedPlaceSetting {
   scope: PlaceScope;
   scope_id: string;
 }
+
+/** One write or removal `onChange` reports, once written (inside the write's transaction). */
+export interface PlaceSettingChange {
+  scope: PlaceScope;
+  scope_id: string;
+  plugin: string;
+  key: string;
+  /** The Space of the place (a room's Space); `null` for a room outside one (a DM). */
+  space_id: string | null;
+  /** The new value; `null` when it was removed. */
+  value: JsonValue | null;
+}
+
+// Listeners by database, so a write through any `PlaceSettings` on one connection reaches them all.
+const listeners = new WeakMap<Db, Set<(change: PlaceSettingChange) => void>>();
 
 export interface PlaceSettingsOptions {
   /** Checks (and may normalise) a value before it is written: the plugin's schema. */
@@ -87,6 +103,42 @@ export class PlaceSettings {
         asc(placeSettings.key),
       )
       .all();
+  }
+
+  /**
+   * Every setting of one Space: the Space's own and those of its rooms (spaces first, then rooms),
+   * of one plugin when `plugin` is given.
+   */
+  listBySpace(space: string, plugin?: string): PlaceSetting[] {
+    this.#db.ensureOpen();
+    const place = sql`((${placeSettings.scope} = 'space' AND ${placeSettings.scope_id} = ${space})
+      OR (${placeSettings.scope} = 'room' AND ${placeSettings.scope_id} IN
+        (SELECT ${rooms.id} FROM ${rooms} WHERE ${rooms.space_id} = ${space})))`;
+    return this.#db.orm
+      .select()
+      .from(placeSettings)
+      .where(plugin === undefined ? place : and(place, eq(placeSettings.plugin, plugin)))
+      .orderBy(
+        sql`${placeSettings.scope} = 'room'`,
+        asc(placeSettings.scope_id),
+        asc(placeSettings.plugin),
+        asc(placeSettings.key),
+      )
+      .all();
+  }
+
+  /**
+   * Calls `listener` after every write or removal on this database (by any `PlaceSettings` on it);
+   * returns the unsubscribe. A listener that throws is ignored.
+   */
+  onChange(listener: (change: PlaceSettingChange) => void): () => void {
+    let set = listeners.get(this.#db);
+    if (set === undefined) {
+      set = new Set();
+      listeners.set(this.#db, set);
+    }
+    set.add(listener);
+    return () => set.delete(listener);
   }
 
   /**
@@ -200,6 +252,14 @@ export class PlaceSettings {
         },
         source: CONFIG_SOURCE,
       });
+      const change = { scope, scope_id: scopeId, plugin, key, space_id: spaceId, value: checked };
+      for (const listener of listeners.get(this.#db) ?? []) {
+        try {
+          listener(change);
+        } catch {
+          // A reader's cache must not break a write.
+        }
+      }
     });
   }
 }

@@ -195,6 +195,9 @@ interface Live {
   position: number | null;
 }
 
+/** How many looks may fail to bring a made song's files over before the song fails. */
+const FETCH_TRIES = 8;
+
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** `url:<link>` or `query:<words>` of what a member typed, or `null` when it is neither. */
@@ -231,6 +234,11 @@ export class KaraokeService {
   readonly #keying = new Map<string, Promise<void>>();
   /** Songs whose files are being fetched, so two sessions do not fetch them twice. */
   readonly #fetching = new Map<string, Promise<void>>();
+  /**
+   * Songs the worker has made whose files did not all arrive, and how many looks failed: the next
+   * look resumes them (a broken transfer keeps its part) instead of failing the song at once.
+   */
+  readonly #fetchTries = new Map<string, number>();
   /** Videos being fetched. */
   readonly #videos = new Map<string, Promise<boolean>>();
   /** Recordings being read by a worker and scored, by session. */
@@ -459,13 +467,15 @@ export class KaraokeService {
     }
     // Prepared again (after a failure): what Core kept of the song before is the worker's old
     // version, so it is fetched anew (an edit of the song stays, in the store).
-    if (song.worker_song !== null) {
+    // Not while its files are still on their way: those parts are what the next look resumes.
+    if (song.worker_song !== null && !this.#fetchTries.has(song.id)) {
       this.#parsed.delete(song.id);
       await rm(this.#dir(song.id), { recursive: true, force: true }).catch(() => {});
     }
     this.#d.store.patchSong(song.id, { worker_song: made.id });
     try {
       await this.#fetch({ ...song, worker_song: made.id }, signal);
+      this.#fetchTries.delete(song.id);
       const ref = await this.reference(song.id);
       this.#d.store.patchSong(song.id, {
         status: "ready",
@@ -486,6 +496,19 @@ export class KaraokeService {
       }
     } catch (error) {
       if (signal.aborted) return;
+      // The link to the worker's machine drops long transfers now and then: the song stays in
+      // preparation and the next look carries on from what arrived.
+      const tries = (this.#fetchTries.get(song.id) ?? 0) + 1;
+      if (tries < FETCH_TRIES) {
+        this.#fetchTries.set(song.id, tries);
+        this.#d.log.warn(
+          { song: song.id, attempt: tries, err: errorText(error) },
+          "karaoke: a song's files did not all arrive, trying again",
+        );
+        this.#live.set(song.id, { stage: "fetch", progress: 1, position: null });
+        return;
+      }
+      this.#fetchTries.delete(song.id);
       this.#fail(song, "準備好了但拿不到檔案,再點一次", errorText(error));
     }
   }
@@ -1099,6 +1122,11 @@ export class KaraokeService {
     await Promise.allSettled([...this.#voices.values()]);
   }
 
+  /** Every file being fetched onto Core (a song's, its video) is in or given up (tests). */
+  async filesSettled(): Promise<void> {
+    await Promise.allSettled([...this.#fetching.values(), ...this.#videos.values()]);
+  }
+
   /** What every score of a song is scored against (the reference already in the session's key). */
   scoreInput(
     reference: WorkersKaraokeReferenceV2,
@@ -1553,9 +1581,16 @@ export class KaraokeService {
 
   // ---- the owner's look -----------------------------------------------------------------------
 
-  adminResults(limit = 50): KaraokeAdminResults {
+  /**
+   * The latest results for the panel. `space`: only the rooms of that server beside the results
+   * sung alone; left out: all.
+   */
+  adminResults(limit = 50, space?: string): KaraokeAdminResults {
+    const rows = this.#d.store
+      .latest(limit)
+      .filter((r) => space === undefined || r.space === null || r.space === space);
     return {
-      results: this.#d.store.latest(limit).map((r) => ({
+      results: rows.map((r) => ({
         session: r.session_id,
         person: r.person_id,
         name: r.name,
@@ -1572,6 +1607,7 @@ export class KaraokeService {
         calibrated: r.track?.calibrated ?? false,
         browser: r.track?.browser ?? "",
         at: r.created_at,
+        space: r.space,
       })),
     };
   }

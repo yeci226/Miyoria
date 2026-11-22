@@ -58,6 +58,8 @@ export class SoupGame implements Game {
   readonly #deadline: number;
   #hints = 0;
   #over = false;
+  /** Someone guessed the bottom (the referee said so), before it ended any other way. */
+  #guessed = false;
 
   constructor(host: Host, _options: StartOptions) {
     this.#host = host;
@@ -126,6 +128,7 @@ export class SoupGame implements Game {
 
   #solved(player: Player | null): string {
     this.#over = true;
+    this.#guessed = true;
     this.#host.clearTimer("time");
     if (player !== null && !player.her) this.#host.score(player, SOLVE_POINTS);
     const who = player === null || player.her ? "有人" : nameOf(player);
@@ -148,6 +151,11 @@ export class SoupGame implements Game {
     if (hint === undefined) return "提示用完了。";
     this.#hints++;
     return `提示:${hint}`;
+  }
+
+  /** Whether someone guessed the bottom: what a prediction on this soup settles on. */
+  solved(): boolean {
+    return this.#guessed;
   }
 
   input(): boolean {

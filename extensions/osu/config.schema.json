@@ -2,34 +2,50 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "url": {
-      "type": "string",
-      "description": "osu_rl live.service 的網址(環境變數 MIYORIA_OSU_URL)",
-      "default": "http://127.0.0.1:8765"
-    },
     "token": {
       "type": "string",
-      "description": "live.service 的 OSU_RL_CONTROL_TOKEN(環境變數 MIYORIA_OSU_TOKEN)"
-    },
-    "public_url": {
-      "type": "string",
-      "description": "replay 下載連結用的對外網址;沒設就用 url(127.0.0.1 的連結別人點不開)"
-    },
-    "account": {
-      "type": "string",
-      "description": "AI 在 osu! 伺服器上自己的帳號名稱(環境變數 MIYORIA_OSU_ACCOUNT)。live.service 登入的不是這個帳號時,所有工具都拒絕執行"
-    },
-    "blocked_accounts": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "AI 絕對不能用的帳號(例如擁有者自己的);live.service 登入的是其中一個就拒絕",
-      "default": []
+      "description": "osu_rl 的 OSU_RL_CONTROL_TOKEN(環境變數 MIYORIA_OSU_TOKEN);點播佇列和 live.room_play 都用它"
     },
     "request_timeout_ms": {
       "type": "integer",
-      "description": "一次呼叫最多等多久;打一張沒打過的譜要 10–30 秒以上",
+      "description": "點播最多等多久;點一張沒抓過的譜要先下載整組譜",
       "minimum": 1000,
       "default": 120000
+    },
+    "queue_url": {
+      "type": "string",
+      "description": "osu_rl 點譜佇列(live.stream --requests)的網址,例如 http://127.0.0.1:8766(環境變數 MIYORIA_OSU_QUEUE_URL)。有設才會有點播指令和 osu_ai_play_map"
+    },
+    "queue_permissions": {
+      "type": "object",
+      "description": "/queue osu 各指令要的權限節點",
+      "properties": {
+        "request": {
+          "type": "string",
+          "default": "queue.request"
+        },
+        "list": {
+          "type": "string",
+          "default": "queue.list"
+        },
+        "skip": {
+          "type": "string",
+          "default": "queue.osu.skip"
+        },
+        "clear": {
+          "type": "string",
+          "default": "queue.osu.clear"
+        },
+        "room": {
+          "type": "string",
+          "default": "queue.osu.room"
+        }
+      },
+      "additionalProperties": false
+    },
+    "seat_url": {
+      "type": "string",
+      "description": "osu_rl live.room_play(AI 坐在直播機的 lazer 前面打)的網址,例如 http://127.0.0.1:8767(環境變數 MIYORIA_OSU_SEAT_URL)。有設才有 /queue osu status、join、leave 和進房的工具"
     }
   }
 }

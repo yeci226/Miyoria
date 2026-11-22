@@ -6,7 +6,7 @@
 // Failures redirect to `/login?error=<code>` and never carry details: `disabled`,
 // `cancelled`, `state`, `exchange`, `discord`, `denied`, `unavailable`. Details go to the log.
 
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { AuthMethods, SessionInfo } from "@miyoria/contracts/api";
 import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
@@ -18,7 +18,9 @@ import {
   COOKIE,
   cookieHeader,
   cookieToken,
+  cookieValue,
   hasCsrfHeader,
+  LOGIN_COOKIE,
   PANEL_ACCESS,
   randomToken,
 } from "./session.js";
@@ -34,6 +36,12 @@ export const DEFAULT_NEXT = "/";
 export const CDN = "https://cdn.discordapp.com";
 /** Timeout of each request to Discord. */
 const REQUEST_TIMEOUT_MS = 15_000;
+/** Where the login comes back, as mounted here; a reverse proxy may put a prefix in front. */
+const CALLBACK_PATH = "/api/auth/oauth/callback";
+/** Where a login starts, as mounted here. */
+const LOGIN_PATH = "/api/auth/oauth/login";
+/** Marks a login already sent over to its redirect's host, so it is never sent twice. */
+const MOVED_PARAM = "moved";
 
 /**
  * `[modules.api.discord_oauth]`. Login is on only when `client_id`, `client_secret` and
@@ -50,8 +58,9 @@ export const DiscordOAuthConfigSchema = z.object({
   redirect_uri: z.string().default(""),
   /**
    * More addresses the panel is reached at, e.g. a public domain. A login comes back to the one
-   * whose host it started on; any other host uses `redirect_uri`. Each must be registered in the
-   * Developer Portal too.
+   * whose host it started on; a login started on any other host is first sent over to
+   * `redirect_uri`'s host and starts there, since the cookie tying it to the browser only comes
+   * back to the host it was set on. Each must be registered in the Developer Portal too.
    */
   redirect_uris: z.array(z.string()).default([]),
   /** Session lifetime in days (1–365). Default 7. */
@@ -79,6 +88,8 @@ export interface PendingLogin {
   next: string;
   /** Where Discord sends this login back: the token exchange must name the same address. */
   redirect: URL;
+  /** What the browser that started this login holds in `LOGIN_COOKIE`. */
+  binding: string;
   /** Epoch ms. */
   at: number;
 }
@@ -181,7 +192,13 @@ function redirectUrl(value: string): URL {
   if (redirect.protocol !== "http:" && redirect.protocol !== "https:") {
     throw new OAuthConfigError("`[modules.api.discord_oauth] redirect_uri` is not an http(s) URL");
   }
-  if (!redirect.pathname.endsWith("/api/auth/oauth/callback")) {
+  // The login cookie's `Path` comes from here, and a `;` would end it early.
+  if (redirect.pathname.includes(";") || !isHeaderValue(redirect.pathname)) {
+    throw new OAuthConfigError(
+      "`[modules.api.discord_oauth] redirect_uri` has a path a cookie cannot name (a `;`)",
+    );
+  }
+  if (!redirect.pathname.endsWith(CALLBACK_PATH)) {
     log.warn(
       { redirect: redirect.href },
       "discord_oauth redirect_uri should end in /api/auth/oauth/callback",
@@ -250,7 +267,7 @@ export class OAuth {
   }
 
   /** The configured address for `host`. A host nobody configured never becomes a redirect. */
-  #redirectFor(host: string | null): URL {
+  redirectFor(host: string | null): URL {
     return this.#alternates.find((u) => u.host === host) ?? this.#redirectUri;
   }
 
@@ -258,13 +275,16 @@ export class OAuth {
     return new URL(path, this.#discord);
   }
 
-  /** Starts a login: remembers `state` and the PKCE verifier, returns the authorize URL. */
-  begin(next: string, host: string | null = null): URL {
+  /**
+   * Starts a login: remembers `state`, the PKCE verifier and the browser's `binding`, returns
+   * the authorize URL.
+   */
+  begin(next: string, host: string | null, binding: string): URL {
     const state = randomToken(32);
     const verifier = randomToken(32);
     const now = this.#clock.now();
-    const redirect = this.#redirectFor(host);
-    this.pending.insert(state, { verifier, next, redirect, at: now }, now);
+    const redirect = this.redirectFor(host);
+    this.pending.insert(state, { verifier, next, redirect, binding, at: now }, now);
     const url = this.#endpoint("oauth2/authorize");
     const q = url.searchParams;
     q.append("response_type", "code");
@@ -371,13 +391,13 @@ function isHeaderValue(value: string): boolean {
 }
 
 /** A `302 Found` that is never cached or leaks the callback URL. */
-export function found(location: string, cookie: string | null = null): Response {
+export function found(location: string, ...cookies: string[]): Response {
   const headers = new Headers({
     "cache-control": "no-store",
     "referrer-policy": "no-referrer",
   });
   headers.set("location", isHeaderValue(location) ? location : DEFAULT_NEXT);
-  if (cookie !== null) headers.set("set-cookie", cookie);
+  for (const cookie of cookies) headers.append("set-cookie", cookie);
   return new Response(null, { status: 302, headers });
 }
 
@@ -395,7 +415,72 @@ export function login(state: ApiState, c: ApiContext): Response {
   const next = c.req.query("next");
   const target = next !== undefined && safeNext(next) !== null ? next : DEFAULT_NEXT;
   const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? null;
-  return found(oauth.begin(target, host).href);
+  const redirect = oauth.redirectFor(host);
+  // The login cookie is set on the host the browser is on, and the callback must find it there:
+  // a login started on another host (`localhost` while the redirect names `127.0.0.1`) starts
+  // over on the redirect's host first. Only a configured address is ever a target, and only once.
+  if (host !== null && host.toLowerCase() !== redirect.host) {
+    const moved = loginUrlOn(redirect);
+    if (c.req.query(MOVED_PARAM) !== undefined) {
+      // A proxy that rewrites `Host` looks like this; the browser is on the redirect's host.
+      log.info({ host, redirect: redirect.host }, "a moved Discord login still names another host");
+    } else if (moved) {
+      moved.searchParams.set("next", target);
+      moved.searchParams.set(MOVED_PARAM, "1");
+      return found(moved.href);
+    } else {
+      log.warn(
+        { host, redirect: redirect.href },
+        "a Discord login started on a host its redirect_uri does not name, and that redirect_uri does not end in /api/auth/oauth/callback; the callback will not see the login cookie and fails. Add the host to redirect_uris",
+      );
+    }
+  }
+  const binding = randomToken(18);
+  const url = oauth.begin(target, host, binding);
+  const https = redirect.protocol === "https:";
+  return found(url.href, loginCookie(binding, state.auth.cookieSecure || https, redirect));
+}
+
+/** `redirect`'s login route: its callback path with `login` for `callback`. */
+function loginUrlOn(redirect: URL): URL | null {
+  if (!redirect.pathname.endsWith(CALLBACK_PATH)) return null;
+  const url = new URL(redirect.origin);
+  url.pathname = `${redirect.pathname.slice(0, -CALLBACK_PATH.length)}${LOGIN_PATH}`;
+  return url;
+}
+
+/**
+ * The login cookie's `Path`: the directory of the callback, prefix included, so a panel mounted
+ * under `/miyoria/` still gets it back.
+ */
+export function loginCookiePath(redirect: URL): string {
+  const path = redirect.pathname;
+  const slash = path.lastIndexOf("/");
+  return slash <= 0 ? "/" : path.slice(0, slash);
+}
+
+/**
+ * `Set-Cookie` value tying a login to this browser, for as long as the login may take; an empty
+ * `binding` deletes it.
+ */
+function loginCookie(binding: string, secure: boolean, redirect: URL): string {
+  const maxAge = binding === "" ? 0 : Math.floor(STATE_TTL_MS / 1000);
+  const path = loginCookiePath(redirect);
+  return `${LOGIN_COOKIE}=${binding}; Max-Age=${maxAge}; Path=${path}; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`;
+}
+
+/** Whether the browser asking is the one that started `pending`. */
+function sameBrowser(pending: PendingLogin, c: ApiContext): boolean {
+  const held = cookieValue(requestCookies(c), LOGIN_COOKIE);
+  if (held === null) {
+    log.info("a Discord login came back without its login cookie (another browser or host)");
+    return false;
+  }
+  const a = Buffer.from(held, "utf8");
+  const b = Buffer.from(pending.binding, "utf8");
+  if (a.length === b.length && timingSafeEqual(a, b)) return true;
+  log.info("a Discord login came back in a browser that did not start it");
+  return false;
 }
 
 export async function callback(state: ApiState, c: ApiContext): Promise<Response> {
@@ -405,6 +490,8 @@ export async function callback(state: ApiState, c: ApiContext): Promise<Response
   const pending = stateParam !== undefined ? oauth.take(stateParam) : null;
   if (c.req.query("error") !== undefined) return loginError("cancelled");
   if (!pending) return loginError("state");
+  // `pending` is already taken: a refused callback uses its state up.
+  if (!sameBrowser(pending, c)) return loginError("state");
   const code = c.req.query("code");
   if (!code) return loginError("exchange");
   const user = await oauth.fetchUser(code, pending.verifier, pending.redirect, state.ctx.signal);
@@ -429,7 +516,12 @@ export async function callback(state: ApiState, c: ApiContext): Promise<Response
   log.info({ account: actor, name, tier }, "panel login");
   await state.auditAs(actor, admin ? "panel.login" : "member.login", actor, { name }, true);
   const secure = state.auth.cookieSecure || pending.redirect.protocol === "https:";
-  return found(pending.next, sessionCookie(state.auth, token, secure));
+  // The login is done: the cookie that tied it to this browser has nothing left to do.
+  return found(
+    pending.next,
+    sessionCookie(state.auth, token, secure),
+    loginCookie("", secure, pending.redirect),
+  );
 }
 
 export function session(c: ApiContext): SessionInfo {

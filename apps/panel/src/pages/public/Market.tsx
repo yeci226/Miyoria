@@ -2,6 +2,9 @@
 // bid and bought. Everything is what `/api/member/market/*` answers; a refusal is the Core's own
 // sentence under the button. A Core without the routes leaves the block out, the market module
 // stopped is one line, and someone she does not know never gets this far (the wallet says so first).
+//
+// Each server has its own market (phase 6): someone in several picks which (`SpacePicker`, drawn
+// only then), everyone else sees their own server's, so a single-server install looks as it did.
 
 import { type UseQueryResult, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, type ReactNode, useId, useState } from "react";
@@ -16,7 +19,9 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { fmtDateTime, fmtInt, fmtPct, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
+import { WORLD } from "@/lib/world";
 import { BID_STATE, LOT_STATE, WEEK_STATE } from "./market-labels";
+import { SpacePicker, useMemberSpace } from "./member-space";
 import { newKey, priceText, useWallet, WALLET } from "./spend";
 
 const MARKET = ["member", "market"] as const;
@@ -34,36 +39,49 @@ const LIST_MAX = 8;
 /** An older Core has no such route, and a stopped module stays stopped: asking again will not change either. */
 const retry = (n: number, e: Error) => !isNotProvided(e) && !(isApiError(e) && e.kind === "unavailable") && n < 2;
 const poll = (ms: number) => (q: { state: { error: unknown } }) => (q.state.error ? false : ms);
+/** `?space=` of the server the block is about; left out while unknown (the Core's default then). */
+const spaceQuery = (space: string | null) => (space ? { space } : {});
 
-/** This week's auction: shared with the song form, which offers the priority ticket while the market answers. */
-export function useAuction() {
+/** This week's auction of `space`: shared with the song form, which offers the priority ticket while the market answers. */
+export function useAuction(space: string | null = null, enabled = true) {
   const api = useApi();
   return useQuery({
-    queryKey: AUCTION,
-    queryFn: ({ signal }) => api.rpc.market.auction(undefined, { signal }),
+    queryKey: [...AUCTION, space ?? ""],
+    queryFn: ({ signal }) => api.rpc.market.auction({ query: spaceQuery(space) }, { signal }),
     refetchInterval: poll(AUCTION_POLL_MS),
     retry,
+    enabled,
   });
 }
 
-function useLottery() {
+function useLottery(space: string | null) {
   const api = useApi();
   return useQuery({
-    queryKey: LOTTERY,
-    queryFn: ({ signal }) => api.rpc.market.lottery(undefined, { signal }),
+    queryKey: [...LOTTERY, space ?? ""],
+    queryFn: ({ signal }) => api.rpc.market.lottery({ query: spaceQuery(space) }, { signal }),
     refetchInterval: poll(POLL_MS),
     retry,
   });
 }
 
-function useMyBids() {
+function useMyBids(space: string | null) {
   const api = useApi();
-  return useQuery({ queryKey: BIDS, queryFn: ({ signal }) => api.rpc.market.bids(undefined, { signal }), refetchInterval: poll(POLL_MS), retry });
+  return useQuery({
+    queryKey: [...BIDS, space ?? ""],
+    queryFn: ({ signal }) => api.rpc.market.bids({ query: spaceQuery(space) }, { signal }),
+    refetchInterval: poll(POLL_MS),
+    retry,
+  });
 }
 
-function useMyTickets() {
+function useMyTickets(space: string | null) {
   const api = useApi();
-  return useQuery({ queryKey: TICKETS, queryFn: ({ signal }) => api.rpc.market.tickets(undefined, { signal }), refetchInterval: poll(POLL_MS), retry });
+  return useQuery({
+    queryKey: [...TICKETS, space ?? ""],
+    queryFn: ({ signal }) => api.rpc.market.tickets({ query: spaceQuery(space) }, { signal }),
+    refetchInterval: poll(POLL_MS),
+    retry,
+  });
 }
 
 /** After a bid, a name or a ticket: the market's views and the wallet read again. */
@@ -116,7 +134,7 @@ function Refusal({ text }: { text: string | null }) {
 // ---------------------------------------------------------------------------
 // the auction
 
-function BidForm({ lot, currency }: { lot: LotView & { min_bid: number }; currency: string }) {
+function BidForm({ lot, currency, space }: { lot: LotView & { min_bid: number }; currency: string; space: string | null }) {
   const api = useApi();
   const refresh = useRefresh();
   const id = useId();
@@ -127,7 +145,7 @@ function BidForm({ lot, currency }: { lot: LotView & { min_bid: number }; curren
   const n = Number(text);
   const ok = text.trim() !== "" && Number.isInteger(n) && n > 0;
   const bid = useMutation({
-    mutationFn: (amount: number) => api.rpc.market.bid({ body: { amount } }),
+    mutationFn: (amount: number) => api.rpc.market.bid({ query: spaceQuery(space), body: { amount } }),
     onMutate: () => setRefused(null),
     onSuccess: (r) => {
       setTyped(null);
@@ -171,7 +189,7 @@ function BidForm({ lot, currency }: { lot: LotView & { min_bid: number }; curren
 }
 
 /** The winner of a name lot gives the name, or gives the lot up for a full refund. */
-function NameForm({ lot, currency }: { lot: LotView; currency: string }) {
+function NameForm({ lot, currency, space }: { lot: LotView; currency: string; space: string | null }) {
   const api = useApi();
   const refresh = useRefresh();
   const id = useId();
@@ -179,7 +197,7 @@ function NameForm({ lot, currency }: { lot: LotView; currency: string }) {
   const [asking, setAsking] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
   const run = useMutation({
-    mutationFn: (body: NameRequest) => api.rpc.market.name({ body }),
+    mutationFn: (body: NameRequest) => api.rpc.market.name({ query: spaceQuery(space), body }),
     onMutate: () => setRefused(null),
     onSuccess: (r) => {
       setAsking(false);
@@ -228,7 +246,7 @@ function NameForm({ lot, currency }: { lot: LotView; currency: string }) {
   );
 }
 
-function Lot({ view }: { view: AuctionView & { lot: LotView } }) {
+function Lot({ view, space }: { view: AuctionView & { lot: LotView }; space: string | null }) {
   const { lot, mine, currency } = view;
   const open = lot.state === "open" && lot.min_bid !== null;
   const ends = fmtRelative(lot.ends_at);
@@ -270,8 +288,8 @@ function Lot({ view }: { view: AuctionView & { lot: LotView } }) {
         </p>
       )}
       {mine?.won && lot.kind === "frame" && <p className="text-[13px]">這個卡框是你的了,在商店的卡框那邊換上。</p>}
-      {lot.state === "naming" && mine?.won && lot.kind === "call_name" && <NameForm lot={lot} currency={currency} />}
-      {open && view.running && <BidForm key={lot.id} lot={{ ...lot, min_bid: lot.min_bid as number }} currency={currency} />}
+      {lot.state === "naming" && mine?.won && lot.kind === "call_name" && <NameForm lot={lot} currency={currency} space={space} />}
+      {open && view.running && <BidForm key={lot.id} lot={{ ...lot, min_bid: lot.min_bid as number }} currency={currency} space={space} />}
       {view.history.length > 0 && (
         <div className="grid gap-1">
           <p className="text-xs text-muted-foreground">最近的出價</p>
@@ -290,7 +308,7 @@ function Lot({ view }: { view: AuctionView & { lot: LotView } }) {
   );
 }
 
-function Auction({ query }: { query: UseQueryResult<AuctionView> }) {
+function Auction({ query, space }: { query: UseQueryResult<AuctionView>; space: string | null }) {
   return (
     <Part title="這一週的拍賣">
       <Loaded query={query}>
@@ -306,7 +324,7 @@ function Auction({ query }: { query: UseQueryResult<AuctionView> }) {
               </div>
             );
           }
-          return <Lot view={{ ...v, lot: v.lot }} />;
+          return <Lot view={{ ...v, lot: v.lot }} space={space} />;
         }}
       </Loaded>
     </Part>
@@ -333,14 +351,15 @@ function Draw({ last, currency }: { last: NonNullable<LotteryView["last"]>; curr
   );
 }
 
-function Lottery() {
+function Lottery({ space }: { space: string | null }) {
   const api = useApi();
   const refresh = useRefresh();
-  const lottery = useLottery();
+  const lottery = useLottery(space);
   const [refused, setRefused] = useState<string | null>(null);
   const buy = useMutation({
     // One fresh key per press: a retry of the same request is charged once, a second press is a second purchase.
-    mutationFn: (count: number) => api.rpc.market.buy({ headers: { "idempotency-key": newKey() }, body: { count } }),
+    mutationFn: (count: number) =>
+      api.rpc.market.buy({ query: spaceQuery(space), headers: { "idempotency-key": newKey() }, body: { count } }),
     onMutate: () => setRefused(null),
     onSuccess: (r) => {
       notify.ok(`買了 ${fmtInt(r.count)} 張,這一週你有 ${fmtInt(r.mine)} 張`);
@@ -406,8 +425,8 @@ function Lottery() {
 // ---------------------------------------------------------------------------
 // what they did
 
-function BidsList({ currency }: { currency: string }) {
-  const bids = useMyBids();
+function BidsList({ currency, space }: { currency: string; space: string | null }) {
+  const bids = useMyBids(space);
   return (
     <Part title="你的出價">
       <Loaded query={bids} rows={2}>
@@ -438,8 +457,8 @@ function ticketResult(w: MyTickets["weeks"][number], currency: string): string {
   return WEEK_STATE[w.state] ?? w.state;
 }
 
-function TicketsList({ currency }: { currency: string }) {
-  const tickets = useMyTickets();
+function TicketsList({ currency, space }: { currency: string; space: string | null }) {
+  const tickets = useMyTickets(space);
   return (
     <Part title="你的彩券">
       <Loaded query={tickets} rows={2}>
@@ -466,16 +485,20 @@ function TicketsList({ currency }: { currency: string }) {
 /** The weekly market: this week's auction and lottery, then their own bids and tickets. */
 export function Market() {
   const wallet = useWallet();
-  const auction = useAuction();
+  // Their server's market; the parts below wait until it is known, so nothing is asked twice.
+  const own = useMemberSpace();
+  const space = own.space;
+  const auction = useAuction(space, !own.loading);
   if (wallet.data && !wallet.data.can_earn) return null;
   if (auction.isError && isNotProvided(auction.error)) return null;
   const off = auction.isError && isApiError(auction.error) && auction.error.kind === "unavailable";
-  const currency = auction.data?.currency ?? wallet.data?.currency ?? "魚幣";
+  const currency = auction.data?.currency ?? wallet.data?.currency ?? WORLD.currency;
   return (
     <Card aria-label="市集">
       <CardHeader>
         <CardTitle>市集</CardTitle>
       </CardHeader>
+      <SpacePicker value={space} spaces={own.spaces} onChange={own.setSpace} />
       {off ? (
         <OffLine title="市集現在沒有開" onRetry={() => void auction.refetch()} />
       ) : auction.isError ? (
@@ -484,12 +507,12 @@ export function Market() {
       ) : (
         <div className="grid gap-8">
           <div className="grid items-start gap-8 lg:grid-cols-2 lg:gap-x-(--stage-gap)">
-            <Auction query={auction} />
-            <Lottery />
+            <Auction query={auction} space={space} />
+            <Lottery space={space} />
           </div>
           <div className="grid items-start gap-8 lg:grid-cols-2 lg:gap-x-(--stage-gap)">
-            <BidsList currency={currency} />
-            <TicketsList currency={currency} />
+            <BidsList currency={currency} space={space} />
+            <TicketsList currency={currency} space={space} />
           </div>
         </div>
       )}

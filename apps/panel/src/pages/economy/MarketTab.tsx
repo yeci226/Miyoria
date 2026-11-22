@@ -8,6 +8,7 @@ import { type FormEvent, useId, useState } from "react";
 import type { LotPlan, LotPlanRequest, MarketHistory, SettleRequest } from "@miyoria/contracts/api";
 import { describeError, isApiError } from "@/api/http";
 import { useMarketHistory, usePlanLot, useSettleMarket } from "@/app/queries";
+import { useAdminSpace } from "@/app/space";
 import { useCanWrite } from "@/app/session";
 import { ConfirmDialog } from "@/components/confirm";
 import { ModuleQuery } from "@/components/module-query";
@@ -127,7 +128,8 @@ function NextLot({
   denied: boolean;
   onDenied: () => void;
 }) {
-  const plan = usePlanLot();
+  // The server the page is about (the shell's switcher); each has its own market.
+  const plan = usePlanLot(useAdminSpace().space);
   const canWrite = useCanWrite();
   const id = useId();
   const [choice, setChoice] = useState<Plan | null>(null);
@@ -203,7 +205,7 @@ const SETTLE: Record<SettleRequest["what"], { title: string; confirm: string; bo
 };
 
 function SettleNow({ denied, onDenied }: { denied: boolean; onDenied: () => void }) {
-  const settle = useSettleMarket();
+  const settle = useSettleMarket(useAdminSpace().space);
   // What is asked stays while the dialog closes, so its words do not blank out mid-fade.
   const [what, setWhat] = useState<SettleRequest["what"]>("auction");
   const [open, setOpen] = useState(false);
@@ -256,7 +258,7 @@ function SettleNow({ denied, onDenied }: { denied: boolean; onDenied: () => void
 
 /** The market's history first, then the owner's hand on the coming week. */
 export function MarketTab() {
-  const q = useMarketHistory();
+  const q = useMarketHistory(useAdminSpace().space);
   const [denied, setDenied] = useState(false);
   const deny = () => setDenied(true);
   const running = !q.isError;

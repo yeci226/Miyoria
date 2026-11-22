@@ -86,6 +86,20 @@
             "path": "/api/persona/{key}/history"
           }
         }
+      },
+      "profile": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/profile"
+          }
+        }
       }
     },
     "self": {
@@ -490,6 +504,20 @@
             "path": "/api/places/rooms"
           }
         }
+      },
+      "spaces": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/places/spaces"
+          }
+        }
       }
     },
     "decisions": {
@@ -634,6 +662,20 @@
             "path": "/api/channels/level"
           }
         }
+      },
+      "setSpaceLevel": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.channel.mode"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "PUT",
+            "path": "/api/channels/space-level"
+          }
+        }
       }
     },
     "cluster": {
@@ -747,6 +789,79 @@
             "inputStructure": "detailed",
             "method": "GET",
             "path": "/api/cluster/endpoints"
+          }
+        }
+      },
+      "checkout": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/cluster/checkout"
+          }
+        }
+      },
+      "upgrade": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "owner.cluster.update",
+            "refusal": "更新電腦需要 owner.cluster.update 權限(預設只有擁有者有)"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/cluster/upgrade"
+          }
+        }
+      },
+      "upgradeCancel": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "owner.cluster.update",
+            "refusal": "更新電腦需要 owner.cluster.update 權限(預設只有擁有者有)"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/cluster/hosts/{name}/upgrade/cancel"
+          }
+        }
+      },
+      "routing": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/cluster/routing"
+          }
+        }
+      },
+      "routingControl": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "owner.cluster.route",
+            "refusal": "調整分派需要 owner.cluster.route 權限(預設只有擁有者有)"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/cluster/routing/controls"
           }
         }
       },
@@ -1725,6 +1840,34 @@
           }
         }
       },
+      "resolvePrediction": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/economy/predictions/{id}/resolve"
+          }
+        }
+      },
+      "cancelPrediction": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/economy/predictions/{id}/cancel"
+          }
+        }
+      },
       "room": {
         "~orpc": {
           "errorMap": {},
@@ -2136,6 +2279,36 @@
         }
       }
     },
+    "push": {
+      "public": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "public",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/public/stream"
+          }
+        }
+      },
+      "member": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/stream"
+          }
+        }
+      }
+    },
     "member": {
       "session": {
         "~orpc": {
@@ -2236,6 +2409,21 @@
             "inputStructure": "detailed",
             "method": "POST",
             "path": "/api/member/live/pat"
+          }
+        }
+      },
+      "spaces": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/spaces"
           }
         }
       }
@@ -2513,6 +2701,21 @@
           }
         }
       },
+      "boardView": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/board"
+          }
+        }
+      },
       "frame": {
         "~orpc": {
           "errorMap": {},
@@ -2525,6 +2728,51 @@
             "inputStructure": "detailed",
             "method": "POST",
             "path": "/api/member/frame"
+          }
+        }
+      },
+      "quests": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/quests"
+          }
+        }
+      },
+      "predictions": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/predictions"
+          }
+        }
+      },
+      "bet": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/bet"
           }
         }
       }
@@ -2714,6 +2962,514 @@
         }
       }
     },
+    "exchange": {
+      "market": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/exchange"
+          }
+        }
+      },
+      "list": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/exchange/list/{kind}"
+          }
+        }
+      },
+      "suggest": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/exchange/suggest"
+          }
+        }
+      },
+      "lookup": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/exchange/lookup"
+          }
+        }
+      },
+      "ticker": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/exchange/ticker/{code}"
+          }
+        }
+      },
+      "candles": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/exchange/candles/{code}"
+          }
+        }
+      },
+      "map": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/exchange/map/{kind}"
+          }
+        }
+      },
+      "watch": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/exchange/watch"
+          }
+        }
+      },
+      "account": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/exchange/account"
+          }
+        }
+      },
+      "open": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/exchange/account"
+          }
+        }
+      },
+      "leverage": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/exchange/leverage"
+          }
+        }
+      },
+      "visibility": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/exchange/visibility"
+          }
+        }
+      },
+      "quote": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/exchange/quote"
+          }
+        }
+      },
+      "order": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/exchange/order"
+          }
+        }
+      },
+      "cancel": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/exchange/cancel"
+          }
+        }
+      },
+      "portfolio": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/exchange/portfolio"
+          }
+        }
+      },
+      "boards": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/exchange/boards"
+          }
+        }
+      }
+    },
+    "exchangeAdmin": {
+      "view": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/exchange"
+          }
+        }
+      },
+      "ticker": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/exchange/ticker"
+          }
+        }
+      },
+      "split": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/exchange/split"
+          }
+        }
+      },
+      "settle": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/exchange/settle"
+          }
+        }
+      },
+      "name": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/exchange/name"
+          }
+        }
+      },
+      "sell": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/exchange/sell"
+          }
+        }
+      }
+    },
+    "gifts": {
+      "mine": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/gifts"
+          }
+        }
+      },
+      "quote": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/gifts/quote"
+          }
+        }
+      },
+      "confirm": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/gifts/{id}/confirm"
+          }
+        }
+      },
+      "cancel": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/gifts/{id}/cancel"
+          }
+        }
+      },
+      "picture": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/gifts/{id}/picture"
+          }
+        }
+      }
+    },
+    "giftsAdmin": {
+      "list": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/economy/gifts"
+          }
+        }
+      },
+      "refund": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/economy/gifts/{id}/refund"
+          }
+        }
+      },
+      "prices": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/economy/gifts/prices"
+          }
+        }
+      },
+      "pin": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "PUT",
+            "path": "/api/economy/gifts/prices"
+          }
+        }
+      },
+      "unpin": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.economy.adjust"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "DELETE",
+            "path": "/api/economy/gifts/prices"
+          }
+        }
+      }
+    },
+    "giftsPublic": {
+      "collection": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "public",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/public/gifts"
+          }
+        }
+      }
+    },
     "karaoke": {
       "overview": {
         "~orpc": {
@@ -2875,8 +3631,7 @@
           "errorMap": {},
           "meta": {
             "audience": "member",
-            "permission": null,
-            "limited": true
+            "permission": null
           },
           "route": {
             "inputStructure": "detailed",
@@ -3020,6 +3775,21 @@
           }
         }
       },
+      "cheer": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/karaoke/rooms/{code}/cheer"
+          }
+        }
+      },
       "start": {
         "~orpc": {
           "errorMap": {},
@@ -3047,6 +3817,280 @@
             "inputStructure": "detailed",
             "method": "POST",
             "path": "/api/member/karaoke/rooms/{code}/close"
+          }
+        }
+      }
+    },
+    "reports": {
+      "list": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.reports.review",
+            "refusal": "reviewing problem reports needs `admin.reports.review`"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/reports"
+          }
+        }
+      },
+      "approve": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.reports.review",
+            "refusal": "reviewing problem reports needs `admin.reports.review`"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/reports/{id}/approve"
+          }
+        }
+      },
+      "comment": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.reports.review",
+            "refusal": "reviewing problem reports needs `admin.reports.review`"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/reports/{id}/comment"
+          }
+        }
+      },
+      "duplicate": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.reports.review",
+            "refusal": "reviewing problem reports needs `admin.reports.review`"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/reports/{id}/duplicate"
+          }
+        }
+      },
+      "mention": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.reports.review",
+            "refusal": "reviewing problem reports needs `admin.reports.review`"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/reports/{id}/mention"
+          }
+        }
+      },
+      "reject": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": "admin.reports.review",
+            "refusal": "reviewing problem reports needs `admin.reports.review`"
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/reports/{id}/reject"
+          }
+        }
+      }
+    },
+    "githubLink": {
+      "status": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/github"
+          }
+        }
+      },
+      "mention": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/github/mention"
+          }
+        }
+      },
+      "unlink": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/github/unlink"
+          }
+        }
+      }
+    },
+    "memberFiles": {
+      "list": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/member/files"
+          }
+        }
+      },
+      "keep": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/files/{id}/keep"
+          }
+        }
+      },
+      "remove": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "DELETE",
+            "path": "/api/member/files/{id}"
+          }
+        }
+      },
+      "visibility": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/files/{id}/visibility"
+          }
+        }
+      },
+      "download": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "member",
+            "permission": null,
+            "limited": true
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/member/files/{id}/download"
+          }
+        }
+      }
+    },
+    "filesAdmin": {
+      "list": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/files"
+          }
+        }
+      },
+      "history": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "GET",
+            "path": "/api/files/history"
+          }
+        }
+      },
+      "takedown": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/files/{id}/takedown"
+          }
+        }
+      },
+      "revoke": {
+        "~orpc": {
+          "errorMap": {},
+          "meta": {
+            "audience": "admin",
+            "permission": null
+          },
+          "route": {
+            "inputStructure": "detailed",
+            "method": "POST",
+            "path": "/api/files/shares/{id}/revoke"
           }
         }
       }

@@ -473,6 +473,24 @@ export const KARAOKE_BOARD_MAX = 16;
 export const KARAOKE_QUEUE_MAX = 5;
 /** Longest join link the stream's QR code carries. */
 export const KARAOKE_JOIN_URL_MAX = 200;
+/** Most recent cheers one scene carries. */
+export const KARAOKE_CHEERS_MAX = 12;
+
+/**
+ * A cheer someone watching sent a singer (`kind`: 「加油」「好聽」「太強了」「安可」), for the scene to
+ * show beside that singer's lane: `to` names the singer as the board does (name and colour), `by`
+ * who sent it. `id` is unique within the room: a scene sent again carries the same cheers, and
+ * each is shown once. Names are untrusted (shown as text).
+ */
+export const StageLinkKaraokeCheerSchema = z
+  .object({
+    id: z.string().max(32),
+    kind: z.enum(["cheer", "nice", "wow", "encore"]),
+    to: z.object({ name: z.string().max(KARAOKE_NAME_MAX), color: z.number().int().min(0).max(7) }),
+    by: z.object({ name: z.string().max(KARAOKE_NAME_MAX), color: z.number().int().min(0).max(7) }),
+  })
+  .meta({ id: "StageLinkKaraokeCheer" });
+export type KaraokeStageCheer = z.output<typeof StageLinkKaraokeCheerSchema>;
 
 /** One person in the room on the stream. Names are untrusted (shown as text). */
 export const StageLinkKaraokeMemberSchema = z
@@ -517,12 +535,16 @@ export const StageLinkKaraokeLineSchema = z
       .default(null),
     /**
      * Their pitch lately, for the scene's pitch lanes (§7.1): frames from `from` at 50 Hz in song
-     * time, one byte a frame (`encodeTrack`), base64; `null` without any (and after the round).
+     * time with their device's latency taken off (where it lands on the reference), one byte a
+     * frame (`encodeTrack`), base64; `null` without any (and after the round). It is their
+     * browser's own detection, so it is there whether or not the song worker keeps up.
      */
     pitch: z
       .object({ from: z.number().int().min(0), track: z.string().max(KARAOKE_PITCH_MAX_CHARS) })
       .nullable()
       .default(null),
+    /** Cheers they got this round from the people watching. Left out by an older Core: none. */
+    cheers: z.number().int().min(0).default(0),
   })
   .meta({ id: "StageLinkKaraokeLine" });
 export type KaraokeStageLine = z.output<typeof StageLinkKaraokeLineSchema>;
@@ -579,7 +601,8 @@ export type KaraokeStageAir = z.output<typeof StageLinkKaraokeAirSchema>;
  * then empty. `position_ms`: during the countdown and the round, where the song is *on the stream*
  * at the moment the message was sent (negative while it counts down): the singers' start plus the
  * stream's delay (`stream_delay_ms`), so the voice channel's backing and the overlay agree;
- * `null` otherwise. Sent on every change and once a second while a round is sung (the board).
+ * `null` otherwise. Sent on every change, once a second while a round is sung (the board), and
+ * a few times a second when the singers' pitch moves on.
  */
 export const StageLinkKaraokeSceneSchema = z
   .object({
@@ -621,6 +644,8 @@ export const StageLinkKaraokeSceneSchema = z
       .object({ waiting: z.array(z.string().max(KARAOKE_NAME_MAX)).max(KARAOKE_BOARD_MAX) })
       .nullable()
       .default(null),
+    /** The latest cheers of the round (the last few seconds' worth), oldest first. */
+    cheers: z.array(StageLinkKaraokeCheerSchema).max(KARAOKE_CHEERS_MAX).default([]),
   })
   .meta({ id: "StageLinkKaraokeScene" });
 export type KaraokeStageScene = z.output<typeof StageLinkKaraokeSceneSchema>;

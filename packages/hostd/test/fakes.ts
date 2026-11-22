@@ -27,7 +27,7 @@ if (process.env.IGNORE_TERM) process.on("SIGTERM", () => console.log("ignoring S
 const status = process.env.HEALTH_STATUS || "ok";
 const server = http.createServer((req, res) => {
   const send = (body) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
-  if (req.url === "/health" || req.url === "/api/health") return send({ status });
+  if (req.url === "/health" || req.url === "/api/health") return send({ status, ...JSON.parse(process.env.HEALTH_EXTRA || "{}") });
   if (req.url === "/env") return send(process.env);
   if (req.url === "/argv") return send({ argv: process.argv, execArgv: process.execArgv });
   if (req.url === "/api/public/status") return send({ state: process.env.CORE_STATE || "idle", live: process.env.CORE_LIVE === "1" });

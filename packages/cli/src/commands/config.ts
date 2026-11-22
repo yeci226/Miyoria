@@ -469,19 +469,39 @@ export async function get(
     const ws = Workspace.open(configPath);
     const path = parseKey(key);
     const covered = await layerKey(ws, configPath, path);
+    const places = await placeLines(ws, configPath, path);
+    const showPlaces = () => {
+      if (places.length === 0) return;
+      eprintln(dim("每個地方自己的值(蓋過上面的值):"));
+      for (const line of places) eprintln(`  ${line}`);
+    };
     if (covered !== null && covered.key === formatKey(path)) {
-      // The value the module runs with is the panel's; say where the file's stands.
       const file = getIn(ws.doc.data, path);
-      println(showValue(covered.value));
+      if (file !== undefined && layerResolved(ws, covered.value) === layerResolved(ws, file)) {
+        // The database holds what the file says (after the import): the file's words apply.
+        getFromFile(configPath, key, env, reveal);
+        eprintln(
+          dim(
+            `(來源:資料庫第 ${covered.version} 版(${covered.by},${when(covered.at)}),和 miyoria.toml 一樣)`,
+          ),
+        );
+        showPlaces();
+        return;
+      }
+      // The value the module runs with is the database's; say where the file's stands.
+      println(layerShown(ws, path, covered.value, reveal));
       eprintln(
         yellow(
-          `(${layerNote(covered).replace(";檔案的值不會生效", "")};miyoria.toml:${file === undefined ? "沒設" : showValue(file)})`,
+          `(來源:資料庫。${layerNote(covered).replace(";檔案的值不會生效", "")};miyoria.toml:${file === undefined ? "沒設" : showValue(file)})`,
         ),
       );
+      showPlaces();
       return;
     }
     getFromFile(configPath, key, env, reveal);
     if (covered !== null) eprintln(yellow(`(${covered.key} ${layerNote(covered)})`));
+    else if (isTable(getIn(ws.doc.data, path)) === false) eprintln(dim("(來源:miyoria.toml)"));
+    showPlaces();
     return;
   }
   getFromFile(configPath, key, env, reveal);
@@ -577,14 +597,16 @@ interface Revisions {
   write(doc: Doc, by: string, options?: { note?: string | null; expected?: number }): unknown;
 }
 
+type OpenedStore = Awaited<ReturnType<typeof import("@miyoria/store")["SqliteStore"]["open"]>>;
+
 /**
  * Opens the database the config names, when its file is there (a missing one is not created),
- * runs `fn` with its config revisions and closes it. `null` when there is no database.
+ * runs `fn` with it and closes it. `null` when there is no database.
  */
-async function withRevisions<T>(
+async function withStore<T>(
   ws: Workspace,
   configPath: string,
-  fn: (revisions: Revisions) => T,
+  fn: (store: OpenedStore) => T,
 ): Promise<T | null> {
   let path: string;
   try {
@@ -596,10 +618,19 @@ async function withRevisions<T>(
   const { SqliteStore } = await import("@miyoria/store");
   const store = await SqliteStore.open(path);
   try {
-    return fn(store.config.revisions as unknown as Revisions);
+    return fn(store);
   } finally {
     await store.close();
   }
+}
+
+/** `withStore` over the config revisions. */
+function withRevisions<T>(
+  ws: Workspace,
+  configPath: string,
+  fn: (revisions: Revisions) => T,
+): Promise<T | null> {
+  return withStore(ws, configPath, (store) => fn(store.config.revisions as unknown as Revisions));
 }
 
 /** A JSON value as TOML holds it: a whole number is an integer (`48`, not `48.0`). */
@@ -656,8 +687,59 @@ function when(at: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** Who put a layer key there, in words: the panel, or `miyoria config import`. */
+function layerWho(k: LayerKey): string {
+  return k.by === "import" ? "匯入到資料庫" : "面板改過";
+}
+
 function layerNote(k: LayerKey): string {
-  return `面板改過:${showValue(k.value)}(第 ${k.version} 版,${k.by},${when(k.at)});檔案的值不會生效`;
+  return `${layerWho(k)}:${showValue(k.value)}(第 ${k.version} 版,${k.by},${when(k.at)});檔案的值不會生效`;
+}
+
+/** A value as the module gets it, in words: its `${NAME}` references resolved like the file's. */
+function layerResolved(ws: Workspace, value: TomlValue): string {
+  const shown = showValue(value);
+  if (!shown.includes("${")) return shown;
+  if (typeof value === "string") return showValue(ws.resolve(value)[0]);
+  if (Array.isArray(value)) {
+    return showValue(value.map((v) => (typeof v === "string" ? ws.resolve(v)[0] : v)) as TomlValue);
+  }
+  return shown;
+}
+
+/** `layerResolved`, masked for a secret key unless `reveal`. */
+function layerShown(ws: Workspace, path: readonly string[], value: TomlValue, reveal: boolean) {
+  const shown = layerResolved(ws, value);
+  return isSecret(path.at(-1) ?? "") && !reveal ? mask(shown) : shown;
+}
+
+/** The place settings of `modules.<id>.<path>`: each Space's and room's own value, in words. */
+async function placeLines(ws: Workspace, configPath: string, path: readonly string[]) {
+  if (path[0] !== "modules" || path.length < 3) return [];
+  const module = path[1] as string;
+  const key = path.slice(2).join(".");
+  try {
+    const lines = await withStore(ws, configPath, (store) =>
+      store.config.places
+        .list({ plugin: module })
+        .filter((r) => r.key === key)
+        .map((r) => {
+          let where: string;
+          if (r.scope === "space")
+            where = `伺服器 ${store.places.space(r.scope_id)?.name ?? r.scope_id}`;
+          else {
+            const room = store.places.room(r.scope_id);
+            const space = room?.space_id ? store.places.space(room.space_id)?.name : undefined;
+            where = `頻道 ${room?.name ? `#${room.name}` : (room?.external_id ?? r.scope_id)}${space ? `(${space})` : ""}`;
+          }
+          return `${where}:${showValue(tomlOf(r.value))}  ${dim(`${r.updated_by} · ${when(r.updated_at)}`)}`;
+        }),
+    );
+    return lines ?? [];
+  } catch {
+    // An unreadable database is not this command's business.
+    return [];
+  }
 }
 
 /** `miyoria config overrides`: every key the panel covers, its value, the file's and who set it. */
@@ -724,6 +806,164 @@ export async function bake(configPath: string, yes: boolean, p: Prompter | null)
   });
   plainReporter.ok("已清掉面板的值;現在 miyoria.toml 是唯一的來源");
   plainReporter.note("core 正在執行的話,模組用的值沒有變(檔案和面板一樣),下次啟動照檔案讀");
+}
+
+// ---- the import into the database --------------------------------------------------------
+//
+// `miyoria config import` (docs/design/v5-settings.md §13): the file becomes the next config
+// revision, merged with what the panel set; per-channel levels and per-server channels go to the
+// places' own settings. By hand, after a backup; Core never runs it by itself.
+
+/** At most this many lines of one list are printed. */
+const IMPORT_SAMPLE = 20;
+
+export interface ImportCommandOptions {
+  /** Write the file as it is over the database's config (and import again after an import). */
+  replace: boolean;
+  /** Print what would change and write nothing. */
+  dryRun: boolean;
+  yes: boolean;
+}
+
+/** The channel fields that may differ per server, from every module's schema. */
+async function spaceChannelFields() {
+  const [{ MODULE_CONFIG_SCHEMAS }, { placeFields }] = await Promise.all([
+    import("@miyoria/core"),
+    import("@miyoria/runtime/kernel"),
+  ]);
+  const out: { module: string; keys: string[]; ref: "id" | "context" }[] = [];
+  for (const [module, schema] of MODULE_CONFIG_SCHEMAS) {
+    if (schema === null) continue;
+    for (const f of placeFields(schema)) {
+      if (f.scope === "space" && f.channel !== null) {
+        out.push({ module, keys: f.keys, ref: f.channel.ref });
+      }
+    }
+  }
+  return out;
+}
+
+function sample(lines: readonly string[]): void {
+  for (const line of lines.slice(0, IMPORT_SAMPLE)) println(`  ${line}`);
+  if (lines.length > IMPORT_SAMPLE) println(dim(`  …還有 ${lines.length - IMPORT_SAMPLE} 項`));
+}
+
+/** `miyoria config import [--replace] [--dry-run]`. */
+export async function importConfig(
+  configPath: string,
+  options: ImportCommandOptions,
+  p: Prompter | null,
+): Promise<void> {
+  const ws = Workspace.open(configPath);
+  const text = readFileSync(configPath, "utf8");
+  const dbPath = await configuredDatabase(workspaceConfig(ws), configPath);
+  if (!existsSync(dbPath)) {
+    throw new ConfigCommandError(`找不到資料庫 ${dbPath}:先啟動一次 Core 讓它建立資料庫,再匯入`);
+  }
+  const { ConfigImportError, SqliteStore } = await import("@miyoria/store");
+  const spaceChannels = await spaceChannelFields();
+  const run = async (dryRun: boolean) => {
+    const store = await SqliteStore.open(dbPath);
+    try {
+      return store.importConfig(text, { replace: options.replace, dryRun, spaceChannels });
+    } catch (error) {
+      if (error instanceof ConfigImportError && error.secrets.length > 0) {
+        throw new ConfigCommandError(
+          `miyoria.toml 有密碼類的值直接寫在檔案裡:${error.secrets.join("、")}。` +
+            "資料庫不收密碼:先把它們搬到 .env(`miyoria config set <key> <值>` 會自動搬)," +
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: the message names the ${NAME} syntax
+            "檔案裡改寫成 ${NAME},再匯入。沒有寫入任何東西。",
+        );
+      }
+      throw error;
+    } finally {
+      await store.close();
+    }
+  };
+
+  const plan = await run(true);
+  if (plan.plan === undefined) {
+    const at = plan.revision;
+    plainReporter.note(
+      `已經匯入過(第 ${at?.version ?? "?"} 版,${at ? when(at.created_at) : "?"}),這次沒有寫入。` +
+        "要用 miyoria.toml 蓋掉資料庫裡的設定,加 --replace(面板之後改的值會被拿掉,版本紀錄還留著)",
+    );
+    return;
+  }
+  const report = plan.plan;
+  const next = (report.base ?? 0) + 1;
+  println(
+    bold(`匯入 ${ws.shown(configPath)} → ${dbPath}${options.dryRun ? "(試跑,不會寫入)" : ""}`),
+  );
+  println(
+    report.changed.length === 0
+      ? "設定:和資料庫目前的一樣,不會多一版"
+      : `設定:寫成第 ${next} 版${options.replace ? "(--replace:檔案原樣蓋過)" : ""};和目前不同的有 ${report.changed.length} 項`,
+  );
+  sample(report.changed.map((path) => `~ ${path}`));
+  if (report.panel.length > 0) {
+    println("面板改過的值,保留(蓋過檔案的值):");
+    sample(report.panel);
+  }
+  const writes = report.places.filter((x) => x.action === "write");
+  const keeps = report.places.filter((x) => x.action === "keep");
+  const where = (x: (typeof report.places)[number]) =>
+    `${x.scope === "space" ? "伺服器" : "頻道"} ${x.place}${x.scope_id === null ? dim("(新建)") : ""}`;
+  if (writes.length > 0) {
+    println("寫進每個地方自己的設定:");
+    sample(
+      writes.map(
+        (x) =>
+          `${green("+")} ${where(x)}  ${x.plugin}.${x.key} = ${showValue(tomlOf(x.value))}  ${dim(`← ${x.from}`)}`,
+      ),
+    );
+  }
+  if (keeps.length > 0) {
+    println("這些地方已經有自己的值,保留(--replace 才會蓋掉):");
+    sample(
+      keeps.map((x) => `= ${where(x)}  ${x.plugin}.${x.key} = ${showValue(tomlOf(x.current))}`),
+    );
+  }
+  if (report.kept.length > 0 || report.unplaced.length > 0) {
+    println("留在全部伺服器那一層(說不出是哪個伺服器的):");
+    sample([...report.kept, ...report.unplaced]);
+  }
+  if (options.dryRun) {
+    plainReporter.note("試跑:沒有寫入。去掉 --dry-run 才會寫入。");
+    return;
+  }
+
+  let running = false;
+  try {
+    running = await isRunning(clientFor(workspaceConfig(ws)));
+  } catch {
+    running = false;
+  }
+  if (running) {
+    plainReporter.warn(
+      "Core 正在執行:建議先停掉 Core、備份資料庫再匯入(正在跑的模組不會變,下次啟動才照資料庫)",
+    );
+  }
+  if (!options.yes) {
+    if (p === null)
+      throw new ConfigCommandError("確認上面的內容後,加 --yes 寫入(或先用 --dry-run 看)");
+    if (!(await p.confirm("寫入資料庫?", false))) {
+      plainReporter.warn("沒有寫入任何東西");
+      return;
+    }
+  }
+  const done = await run(false);
+  if (!done.imported) {
+    plainReporter.note("沒有寫入(資料庫在這期間已經匯入過)");
+    return;
+  }
+  plainReporter.ok(
+    `已寫入第 ${done.revision?.version ?? next} 版(作者 import),每個地方的設定 ${done.places.length} 項`,
+  );
+  plainReporter.note(
+    "之後模組的設定以資料庫為準:miyoria.toml 再改的值會被資料庫的蓋過(`miyoria config get` 會說)。" +
+      "要讓檔案再成為唯一的來源,用 `miyoria config bake`",
+  );
 }
 
 /** `.env` variable name for a new secret key: `stage.obs.password` → `STAGE_OBS_PASSWORD`. */

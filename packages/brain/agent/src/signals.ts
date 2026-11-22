@@ -11,6 +11,14 @@ import { ParseError } from "./config.js";
 export const EXHAUSTED_LINE = "今天的能量用完了……伺服器繁忙,明天再陪你們聊。";
 
 /**
+ * What she says to someone waiting when the conversation's hourly cap is reached
+ * (`[modules.agent]` `session_usd_per_hour`): once per capped stretch, with the whole minutes until
+ * she is under it again. Constant but for the minutes: no model is involved.
+ */
+export const HOUR_CAP_LINE = (minutes: number): string =>
+  `這一個小時話講太多了,先休息一下……大概 ${minutes} 分鐘後回來。`;
+
+/**
  * State of the LLM budget as reported on `llm.budget`.
  * `degraded`: save tokens (ambient channels act like mention-only, no initiative).
  * `exhausted`: no generation at all; a canned line now and then instead.

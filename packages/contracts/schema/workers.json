@@ -2211,6 +2211,34 @@
             }
           ]
         },
+        "source": {
+          "default": null,
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "default": "",
+                  "type": "string"
+                },
+                "url": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "url"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "backing": {
           "type": "string"
         },

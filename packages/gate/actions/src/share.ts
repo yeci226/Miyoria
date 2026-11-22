@@ -1,6 +1,10 @@
 // `share`: she hands a file she made to the person who asked for it, as an attachment of a
-// message in the place of the turn (v5-architecture §11.2, v5-brain B9). No link is made in this
-// phase (owner decision Q9): nothing here creates a share token.
+// message in the place of the turn (v5-architecture §11.2, v5-brain B9), and, while a file origin
+// is configured (`FileLinksKey`), with a link `https://<file origin>/f/<token>` for as long as
+// she says (`hours`, default 7 days). The link opens for the person who asked (`to` speaker) or,
+// in a server, for its members (`to` here), never wider than where the thing was made; where the
+// platform takes no attachment, the link alone goes. Without a file origin nothing here creates a
+// share token, and the attachment works as before.
 //
 // The rules, each checked here before anything is sent:
 //
@@ -20,9 +24,10 @@
 //    value such as the admin token) or any other moderation block refuses the share.
 // 9. A limit per person and for everyone, per rolling 24 hours.
 //
-// Images are sent as stored: no image encoder is among this package's dependencies, so metadata
-// (EXIF, text chunks) is not stripped. The result and the audit event say so
-// (`metadata_stripped: false`).
+// Images go out as their cleaned copy (`ArtifactCleanerKey`, provided by the `api` module: decoded
+// and encoded again, so EXIF, text chunks and anything else hidden in the file are gone). Without
+// that service an image is sent as stored, and the result and the audit event say so
+// (`metadata_stripped`).
 //
 // The platform sink resolves the id again when it sends and checks visibility for the destination
 // once more (`AttachmentSource`), so a change between this check and the upload still stops it.
@@ -35,8 +40,12 @@ import { getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import {
   type Artifact,
   ArtifactBlobMissingError,
+  ArtifactCleanerKey,
+  type ArtifactSite,
   type ArtifactStore,
   ArtifactStoreKey,
+  type FileLinkResult,
+  FileLinksKey,
   SNIFF_BYTES,
   sniff,
   TextCheck,
@@ -55,6 +64,7 @@ import {
   type ModerationService,
   MouthKey,
   maskSecrets,
+  type PersonId,
   PlatformSinksKey,
   type Publish,
   sameAccount,
@@ -92,6 +102,8 @@ export type ShareRefusalCode =
 const ShareArgs = z.object({
   artifact: z.string().trim().min(1).max(64),
   to: z.string().nullish(),
+  /** How long the link works, in hours (1 to 720); default 7 days. Only with a file origin. */
+  hours: z.number().int().min(1).max(720).nullish(),
 });
 type ShareArgs = z.output<typeof ShareArgs>;
 
@@ -202,6 +214,7 @@ export function shareCapability(options: ShareOptions): Capability<ShareArgs> {
     who: AccountRef,
     reply: MessageRef | null,
     signal: AbortSignal,
+    text = "",
   ): Promise<ActionResult | MessageRef> => {
     const sink = services.get(PlatformSinksKey)?.get(where.platform);
     const platformLimit = sink?.attachmentLimit?.(where) ?? null;
@@ -275,7 +288,7 @@ export function shareCapability(options: ShareOptions): Capability<ShareArgs> {
     try {
       const sent = await sink.send(
         where,
-        { text: "", reply_to: reply, attachments: [{ artifact_id: artifact.id }] },
+        { text, reply_to: reply, attachments: [{ artifact_id: artifact.id }] },
         signal,
       );
       limiter.record(SHARE, person, clock.now());
@@ -310,6 +323,68 @@ export function shareCapability(options: ShareOptions): Capability<ShareArgs> {
     }
   };
 
+  /** A link on the file origin, when one is configured and the audience can be opened there. */
+  const issueLink = async (
+    artifact: Artifact,
+    here: boolean,
+    site: ArtifactSite,
+    turn: string | null,
+    hours: number | null,
+  ): Promise<Extract<FileLinkResult, { ok: true }> | null> => {
+    const links = services.get(FileLinksKey);
+    const audience = here ? "space" : "person";
+    if (links === undefined || !links.available(audience) || site.person_id === null) return null;
+    try {
+      const result = await links.issue({
+        artifact_id: artifact.id,
+        audience,
+        person_id: here ? null : site.person_id,
+        space_id: here ? site.place.space_id : null,
+        ...(hours === null ? {} : { ttlMs: hours * 3_600_000 }),
+        requested_by: site.person_id,
+        turn,
+      });
+      if (result.ok) return result;
+      log.info({ artifact: artifact.id, refused: result.refused }, "no link for a share");
+    } catch (error) {
+      log.warn({ err: String(error), artifact: artifact.id }, "cannot issue a share link");
+    }
+    return null;
+  };
+
+  const revokeLink = (store: ArtifactStore, shareId: string, by: string | null) => {
+    try {
+      store.shares.revoke(shareId, "the hand-over did not go out", by as PersonId | null);
+    } catch (error) {
+      log.warn({ err: String(error) }, "cannot revoke an unused share link");
+    }
+  };
+
+  /** The link alone, as a message, where no attachment fits; `null` without a sink. */
+  const postLink = async (
+    where: ContextKey,
+    reply: MessageRef | null,
+    url: string,
+    signal: AbortSignal,
+  ): Promise<MessageRef | null> => {
+    const sink = services.get(PlatformSinksKey)?.get(where.platform);
+    if (!sink) return null;
+    const sent = await sink.send(where, { text: url, reply_to: reply, attachments: [] }, signal);
+    return { context: sent.context, id: sent.id };
+  };
+
+  const linkData = (artifact: Artifact, link: Extract<FileLinkResult, { ok: true }>) => ({
+    ok: true,
+    artifact_id: artifact.id,
+    filename: artifact.filename,
+    mime: artifact.mime,
+    size: artifact.size,
+    message_id: null,
+    metadata_stripped: link.metadata_stripped,
+    url: link.url,
+    link_expires_at: link.expires_at,
+  });
+
   return defineCapability<ShareArgs>({
     name: SHARE,
     summary: "把她做出來的檔案當附件傳給開口要的人",
@@ -323,10 +398,15 @@ export function shareCapability(options: ShareOptions): Capability<ShareArgs> {
         "把你做出來的檔案(產物)當附件傳給開口要的那個人,就傳在現在這個頻道或私訊裡。" +
         "artifact 填產物的 id(workspace_export 或生圖回給你的那個 id,不是檔名也不是路徑)。" +
         "只能傳給現在跟你要的人:to 省略或填 speaker。私訊裡做的東西不能傳到頻道,幫別人做的不能給另一個人;" +
-        "翻唱的成品不能傳;只收圖片、音訊、影片、PDF、純文字。不行的時候會告訴你原因,照原因跟對方說就好。",
+        "翻唱的成品不能傳;只收圖片、音訊、影片、PDF、純文字。不行的時候會告訴你原因,照原因跟對方說就好。" +
+        "有檔案網域時也會附一條下載連結(結果裡的 url):to 是 speaker 時只有對方登入後打得開,在伺服器裡填 here 就是這個伺服器的成員都打得開;hours 是連結幾小時後失效(預設 7 天)。",
       properties: {
         artifact: { type: "string", description: "產物的 id" },
-        to: { type: "string", description: "給誰:省略或 speaker(只能是開口要的人)" },
+        to: {
+          type: "string",
+          description: "給誰:省略或 speaker(開口要的人);here(這個伺服器的成員,只在伺服器裡)",
+        },
+        hours: { type: "integer", description: "連結幾小時後失效,1 到 720;省略是 7 天" },
       },
       required: ["artifact"],
     },
@@ -345,7 +425,8 @@ export function shareCapability(options: ShareOptions): Capability<ShareArgs> {
       if (!mouth?.owns(ctx.request.turn)) {
         return refused("unavailable", "現在不是你在說話的回合,所以不能傳檔案。");
       }
-      const to = recipient(args.to, ctx.principal, names);
+      const here = args.to?.trim().toLowerCase() === "here";
+      const to = here ? who : recipient(args.to, ctx.principal, names);
       if (to === null || !sameAccount(to, who)) {
         return refused("other_person", "現在只能把檔案傳給開口要的那個人,不能傳給別人。");
       }
@@ -378,10 +459,37 @@ export function shareCapability(options: ShareOptions): Capability<ShareArgs> {
       if (artifact.made_for !== null && artifact.made_for !== site.person_id) {
         return refused("not_for_them", "這個檔案是幫另一個人做的,現在不能給別人。");
       }
+      if (here && site.dm) {
+        return refused("wider_than_origin", "私訊裡沒有「這個伺服器的成員」,所以只能給對方本人。");
+      }
       const message = ctx.request.message ?? null;
       const reply = message !== null && contextKeyEquals(message.context, where) ? message : null;
-      const sent = await send(store, artifact, where, who, reply, ctx.signal);
-      if ("text" in sent) return sent;
+      // An image leaves as its cleaned copy, when the cleaner is there.
+      let handed: Artifact = artifact;
+      let stripped = false;
+      const cleaner = services.get(ArtifactCleanerKey);
+      if (cleaner !== undefined) {
+        try {
+          ({ artifact: handed, stripped } = await cleaner.handOut(artifact, ctx.signal));
+        } catch (error) {
+          log.warn({ err: String(error), artifact: artifact.id }, "cannot clean an image to share");
+          return refused("type_not_allowed", "這張圖沒辦法清掉藏在檔案裡的資料,所以不傳。");
+        }
+      }
+      const link = await issueLink(artifact, here, site, ctx.request.turn, args.hours ?? null);
+      let sent = await send(store, handed, where, who, reply, ctx.signal, link?.url ?? "");
+      if ("text" in sent) {
+        const code = (sent.data as { refused?: string }).refused;
+        // Where no attachment fits, the link alone goes; any other refusal stops the link too.
+        const linkOnly = link !== null && (code === "platform" || code === "too_large");
+        if (!linkOnly) {
+          if (link !== null) revokeLink(store, link.share_id, site.person_id);
+          return sent;
+        }
+        const posted = await postLink(where, reply, link.url, ctx.signal);
+        if (posted === null) return { text: `連結:${link.url}`, data: linkData(artifact, link) };
+        sent = posted;
+      }
       try {
         publish(
           Events.ArtifactShared,
@@ -397,15 +505,19 @@ export function shareCapability(options: ShareOptions): Capability<ShareArgs> {
             turn: ctx.request.turn,
             context: where,
             message_id: sent.id,
-            metadata_stripped: false,
+            metadata_stripped: stripped,
           },
           { turn: ctx.request.turn },
         );
       } catch (error) {
         log.warn({ err: String(error), artifact: artifact.id }, "cannot publish artifact.shared");
       }
+      const linkText =
+        link === null
+          ? ""
+          : ` 也附了一條連結(${link.audience === "space" ? "這個伺服器的成員" : "只有對方"}打得開):${link.url}`;
       return {
-        text: `已經把 ${escapeData(artifact.filename)} 當附件傳給對方了。`,
+        text: `已經把 ${escapeData(artifact.filename)} 傳給對方了。${linkText}`,
         data: {
           ok: true,
           artifact_id: artifact.id,
@@ -413,7 +525,8 @@ export function shareCapability(options: ShareOptions): Capability<ShareArgs> {
           mime: artifact.mime,
           size: artifact.size,
           message_id: sent.id,
-          metadata_stripped: false,
+          metadata_stripped: stripped,
+          ...(link === null ? {} : { url: link.url, link_expires_at: link.expires_at }),
         },
       };
     },

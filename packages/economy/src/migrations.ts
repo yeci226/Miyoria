@@ -3,8 +3,9 @@
 // Generated from the Drizzle tables in `schema.ts` with `pnpm --filter @miyoria/store schema:sql
 // economy` (drizzle-kit, plus `STRICT`) and never edited after they are released: the runner
 // refuses a database whose recorded checksum differs. The store's drift test proves the migrated
-// database and the Drizzle tables agree. Version 1 is that; the later ones are hand-written SQL
-// that retires a feature (phase 5): refunds what it held, then drops its tables.
+// database and the Drizzle tables agree. Version 1 is that; 2 to 5 are hand-written SQL that
+// retires a feature (phase 5): refunds what it held, then drops its tables; 6 is what drizzle-kit
+// generated for the Space columns, with the backfill after it.
 
 import type { PluginSchema } from "@miyoria/store";
 
@@ -218,6 +219,22 @@ const RETIRE_SONG_EXTRAS = refundHeld(
     AND json_extract(e.value, '$.state') IN ('preparing', 'ready', 'playing')`,
 );
 
+/**
+ * Phase 6, many servers (docs/design/v5-places.md): a bounty, a prediction and its bets belong to
+ * the Space they were opened in. What was there before belongs to the primary Space (identity v2
+ * chose it; a database without one keeps `null`, which means open to everyone she knows). Her
+ * room and the retired kinds belong to no Space. Columns only: no row moves or goes.
+ */
+const SPACES = `ALTER TABLE \`economy_bounties\` ADD \`space_id\` text REFERENCES spaces(id);
+ALTER TABLE \`economy_docs\` ADD \`space_id\` text REFERENCES spaces(id);
+CREATE INDEX \`economy_bounties_space_idx\` ON \`economy_bounties\` (\`space_id\`,\`status\`,\`created_at\`);
+CREATE INDEX \`economy_docs_space_idx\` ON \`economy_docs\` (\`kind\`,\`space_id\`,\`created_at\`);
+
+UPDATE economy_bounties SET space_id = (SELECT id FROM spaces WHERE is_primary = 1)
+WHERE space_id IS NULL;
+UPDATE economy_docs SET space_id = (SELECT id FROM spaces WHERE is_primary = 1)
+WHERE space_id IS NULL AND kind IN ('prediction', 'bet');`;
+
 /** The coin ledger, the wallets, fortune slips, bounties and the 2.0 documents. */
 export const economySchema: PluginSchema = {
   plugin: "economy",
@@ -228,5 +245,6 @@ export const economySchema: PluginSchema = {
     { version: 3, name: "retire_commissions", sql: RETIRE_COMMISSIONS },
     { version: 4, name: "retire_goals", sql: RETIRE_GOALS },
     { version: 5, name: "retire_song_extras", sql: RETIRE_SONG_EXTRAS },
+    { version: 6, name: "spaces", sql: SPACES },
   ],
 };

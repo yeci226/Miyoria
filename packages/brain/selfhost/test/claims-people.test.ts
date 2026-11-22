@@ -79,3 +79,27 @@ describe("the people an @name may tag", () => {
     expect(claims.people(line(false)).map((p) => p.name)).toEqual(["owen", "amy", "kai"]);
   });
 });
+
+describe("whom a line is said to", () => {
+  // Made-up names: amy woke her; 白雪1032號 is asked by name in the same turn.
+  const named = {
+    ...agent,
+    handleOf: (a: AccountRef, name: string) => (a.id === "snow" ? "白雪1032號" : name),
+    attitude: () => null,
+  } as unknown as Agent;
+  const claims = outletClaims(named, {
+    wakeOf: () => WAKE,
+    entries: () => [{ ...entry("amy", "amy"), message_id: "m1" }, entry("snow", "Snow")],
+  });
+  const say = (text: string): OutgoingLine => ({ ...line(true), text });
+
+  it("is whom it replies to", () => {
+    expect(claims.to?.(say("抱歉,補給你!"), { context: CTX, id: "m1" })).toEqual(["amy"]);
+  });
+
+  it("else whom it names, never the person of the turn only because the turn is theirs", () => {
+    const q = say("順便問一下,白雪 1032 號,你上次說要去逛市集;逛得怎麼樣?");
+    expect(claims.to?.(q, null)).toEqual(["白雪1032號"]);
+    expect(claims.to?.(say("大家晚餐都吃什麼?"), null)).toEqual([]);
+  });
+});

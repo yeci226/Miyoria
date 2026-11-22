@@ -10,6 +10,7 @@ import {
 } from "../../wire/src/index.js";
 import { ModuleStateKindSchema } from "./core.js";
 import { route } from "./route.js";
+import { SpaceQuery } from "./shared.js";
 
 // ---- extensions -------------------------------------------------------------------------
 
@@ -350,30 +351,43 @@ export const mcp = {
     .output(McpServerInfoSchema),
 };
 
+/**
+ * Each server has its own queue (phase 6): `?space=` picks it (`SpaceQuery`; default: the primary).
+ * Skipping or moving an item answers with the queue the item is in.
+ */
 export const queue = {
   list: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "GET", path: "/api/queue" })
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(QueueStateSchema),
   pause: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "POST", path: "/api/queue/pause" })
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(QueueStateSchema),
   resume: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "POST", path: "/api/queue/resume" })
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(QueueStateSchema),
   /** `404` for an item that is not there (or was skipped already). */
   skip: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "POST", path: "/api/queue/{id}/skip" })
-    .input(z.object({ params: ItemParams }))
+    .input(z.object({ params: ItemParams, query: SpaceQuery.optional() }))
     .output(QueueStateSchema),
   /** `404` for an item that is not there, `409` for one that is active. */
   move: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "POST", path: "/api/queue/{id}/move" })
-    .input(z.object({ params: ItemParams, body: MoveQueueItemRequestSchema }))
+    .input(
+      z.object({
+        params: ItemParams,
+        query: SpaceQuery.optional(),
+        body: MoveQueueItemRequestSchema,
+      }),
+    )
     .output(QueueStateSchema),
 };
 

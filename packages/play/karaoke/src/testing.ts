@@ -153,6 +153,8 @@ export class FakeKaraokeWorker implements KaraokeWorker {
   readonly references = new Map<string, WorkersKaraokeReference>();
   readonly asked: KaraokeQuery[] = [];
   readonly fetched: string[] = [];
+  /** How many of the next file transfers break (the link dropped). */
+  breakFiles = 0;
   /** `song/semitones` of every key asked for. */
   readonly keys: string[] = [];
   /** The next `key` fails. */
@@ -243,6 +245,10 @@ export class FakeKaraokeWorker implements KaraokeWorker {
     }
     if (name === "video.mp4" && !this.videos.has(song)) {
       throw Object.assign(new Error(`karaoke ${song} has no video`), { status: 404 });
+    }
+    if (this.breakFiles > 0) {
+      this.breakFiles--;
+      throw new Error("the link dropped");
     }
     this.fetched.push(`${song}/${name}`);
     await writeFile(

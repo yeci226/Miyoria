@@ -3,6 +3,7 @@ import { Pencil, Plus, Trash2, UserPlus, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { AuthScope, RoleAssignment, RoleDefinition, RoleMapping } from "@miyoria/contracts/api";
 import { useAccessMutations, useAssignments, useMappings, useRoles } from "@/app/queries";
+import { useAdminSpace } from "@/app/space";
 import { ConfirmDialog } from "@/components/confirm";
 import { RowActions } from "@/components/controls";
 import { DataTable } from "@/components/data-table";
@@ -12,11 +13,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardHeader, CardTitle } from "@/components/ui/card";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { accountString, contextShort, fmtDateTime, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
-import { AssignDialog, PLATFORMS } from "./AssignDialog";
+import { AssignDialog, GuildPicker, useAccessPlaces } from "./AssignDialog";
 import { MappingDialog, RoleDialog } from "./RoleDialogs";
 
 export function authScopeLabel(s: AuthScope): string {
@@ -234,8 +234,14 @@ function AssignmentsCard() {
 
 function MappingsCard() {
   const roles = useRoles();
-  const [platform, setPlatform] = useState<string>("discord");
-  const [guild, setGuild] = useState("");
+  const { platforms } = useAccessPlaces();
+  const here = useAdminSpace();
+  const current = here.spaces.find((s) => s.id === here.space) ?? null;
+  const [pickedPlatform, setPlatform] = useState<string | null>(null);
+  const platform = pickedPlatform ?? current?.platform ?? platforms[0] ?? "";
+  const [picked, setGuild] = useState<string | null>(null);
+  // The server picked in the header, until another one is chosen here.
+  const guild = picked ?? (current?.platform === platform ? current.external_id : "");
   const g = guild.trim();
   const mappings = useMappings(platform, g);
   const { removeMapping } = useAccessMutations();
@@ -268,26 +274,25 @@ function MappingsCard() {
       <CardHeader>
         <CardTitle>身分組對應</CardTitle>
         <CardAction className="flex-wrap">
-          <Select value={platform} onValueChange={setPlatform}>
+          <Select
+            value={platform}
+            onValueChange={(p) => {
+              setPlatform(p);
+              setGuild("");
+            }}
+          >
             <SelectTrigger aria-label="平台" size="sm" className="w-28">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {PLATFORMS.map((p) => (
+              {platforms.map((p) => (
                 <SelectItem key={p} value={p}>
                   {p}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <Input
-            aria-label="伺服器 id"
-            placeholder="伺服器 id"
-            value={guild}
-            onChange={(e) => setGuild(e.target.value)}
-            className="h-8 w-48 font-mono text-[13px]"
-            inputMode="numeric"
-          />
+          <GuildPicker platform={platform} value={guild} onChange={setGuild} allowAll={false} label="伺服器" className="h-8 w-48 text-[13px]" />
           <Button writes size="sm" variant="outline" disabled={!g || !roles.isSuccess} onClick={() => setAdding(true)}>
             <Plus />
             新增對應

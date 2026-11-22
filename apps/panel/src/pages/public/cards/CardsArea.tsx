@@ -9,6 +9,7 @@ import { EmptyLine, ErrorLine, SkeletonRows } from "@/components/query-state";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { readStorage, writeStorage } from "@/lib/storage";
+import { WORLD } from "@/lib/world";
 import { useWallet } from "../spend";
 import { catalogOf, useCatalogue, useDex, useMyCards, useOdds, usePity, useWishlist } from "./data";
 import { Dex } from "./Dex";
@@ -53,7 +54,7 @@ function WishTab() {
 
 export function CardsArea() {
   const mine = useMyCards();
-  const currency = useWallet().data?.currency ?? "魚幣";
+  const currency = useWallet().data?.currency ?? WORLD.currency;
   const [tab, setTab] = useState<Tab>(() => {
     const saved = readStorage(TAB_KEY);
     return TABS.includes(saved as Tab) ? (saved as Tab) : "mine";

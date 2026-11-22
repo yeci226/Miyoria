@@ -545,6 +545,14 @@ class Video(BaseModel):
     file: str
 
 
+class Source1(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+    )
+    kind: str
+    url: str | None
+
+
 class Beats(BaseModel):
     model_config = ConfigDict(
         extra="ignore",
@@ -568,6 +576,7 @@ class WorkersSingSongMeta(BaseModel):
     peak_vram_mb: float | None
     has_video: bool
     video: Video | None
+    source: Source1 | None = None
     backing: str | None = None
     beats: Beats | None = None
 

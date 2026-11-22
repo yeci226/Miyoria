@@ -17,7 +17,11 @@ import { cn } from "@/lib/utils";
 import { AFFINITY, FAMILIARITY, TRUST } from "./card";
 import { CardSection } from "./CardSection";
 import { Transfer } from "./Extras";
+import { GiftsCard } from "./Gifts";
+import { GitHubLinkCard } from "./GitHubLink";
 import { useAuction } from "./Market";
+import { SpacePicker, useMemberSpace } from "./member-space";
+import { QuestsCard } from "./Play";
 import { WalletCard } from "./Wallet";
 
 /** Her view of someone changes with a reflection, not by the second. */
@@ -264,17 +268,25 @@ function RequestSong() {
   const [priority, setPriority] = useState(false);
   const id = useId();
   const priorityId = useId();
+  // The server it is sung in (phase 6): their own; someone in several picks one.
+  const own = useMemberSpace();
+  const space = own.space;
   // The priority ticket is the market's: offered while the market answers. Its price and daily
   // limit are not sent, so the Core's sentence says them when it will not sell one.
-  const market = useAuction();
+  const market = useAuction(space, !own.loading);
   const canPriority = market.isSuccess;
   const request = useMutation({
     mutationFn: ({ text, first }: { text: string; first: boolean }) =>
-      api.rpc.member.requestSong({ body: first ? { query: text, priority: true } : { query: text } }),
-    onSuccess: () => {
+      api.rpc.member.requestSong({
+        query: space ? { space } : {},
+        body: first ? { query: text, priority: true } : { query: text },
+      }),
+    onSuccess: (r) => {
       setQuery("");
       setPriority(false);
-      notify.ok("已經交給她了,唱不唱由她決定");
+      // She is in voice in another server: it waits for her in this one, and they are told so.
+      if (r.waiting) notify.info(r.waiting);
+      else notify.ok("已經交給她了,唱不唱由她決定");
       void client.invalidateQueries({ queryKey: ME });
       void client.invalidateQueries({ queryKey: ["public", "songs"] });
     },
@@ -290,6 +302,7 @@ function RequestSong() {
       <CardHeader>
         <CardTitle>點歌</CardTitle>
       </CardHeader>
+      <SpacePicker value={space} spaces={own.spaces} onChange={own.setSpace} label="在哪個伺服器唱" />
       <form className="grid gap-2" onSubmit={submit}>
         <label htmlFor={id} className="sr-only">
           歌名或 YouTube / bilibili 連結
@@ -382,9 +395,12 @@ export function MemberActions() {
   return (
     <>
       <WalletCard />
+      <GiftsCard />
+      <QuestsCard />
       <CardSection />
       <Transfer />
       {me.data?.can_request_song && <RequestSong />}
+      <GitHubLinkCard />
       <YourData />
     </>
   );

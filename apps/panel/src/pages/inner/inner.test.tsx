@@ -210,6 +210,7 @@ function levels(mode: string, custom: boolean): ChannelLevelsView {
         default: "quiet",
       },
     ],
+    space: null,
   };
 }
 

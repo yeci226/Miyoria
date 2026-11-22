@@ -179,6 +179,11 @@ export const PersonThreadsKey = serviceKey<PersonThreads>("PersonThreads");
 export interface PersonProfile {
   person: PersonId;
   handle: Handle;
+  /**
+   * What their accounts are called now, when that is not the handle (a nickname changed since she
+   * first saw them), so a name in the chat maps to the handle. Absent: none, or an older producer.
+   */
+  shown_as?: readonly string[];
   /** Relationship label and level, `null` when she has no card. */
   label: string | null;
   /** Her 羈絆 level with them (-100..1000). */
@@ -218,6 +223,8 @@ export interface PersonProfile {
 export interface ProfileOptions {
   /** What retrieval already shows this turn (ids or contents): not repeated as points. */
   exclude?: readonly string[];
+  /** Names the place shows people under now, by person (beside what the handle table knows). */
+  shown?: Readonly<Record<string, readonly string[]>>;
 }
 
 /** Provided by the `memory` module. */

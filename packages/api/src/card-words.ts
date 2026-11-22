@@ -27,7 +27,14 @@ import {
 } from "@miyoria/llm/llm";
 import type { CardOccasion } from "@miyoria/play/cards";
 import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
-import { AffectStateKey, type NameSplit, RELATIONSHIP_LABELS } from "@miyoria/types";
+import {
+  AffectStateKey,
+  type Character,
+  CharacterKey,
+  DEFAULT_CHARACTER,
+  type NameSplit,
+  RELATIONSHIP_LABELS,
+} from "@miyoria/types";
 import { z } from "zod";
 import { herVoice, WRITTEN_NOT_CHAT, withoutMarkup } from "./her-voice.js";
 import { type NameHit, type NameScreen, nameScreen, otherNameIn } from "./other-names.js";
@@ -122,17 +129,27 @@ export const TIER_WORDS: readonly string[] = RELATIONSHIP_LABELS.filter(
   (l) => l !== "認識" && l !== "朋友" && l !== "討厭" && l !== "很討厭",
 );
 
-/** How her words on a card sound (after her persona): hers, spoken, and nothing made up. */
-export const CARD_VOICE = `## 卡上的字怎麼寫
-- 卡上的字就是你在聊天裡會說的話:短、口語,有你的尾音、吐槽和鯨魚的小毛病,像隨手寫在卡背的一兩句。不是賀卡文案:不寫工整的完整長句、文藝的比喻,也不寫「祝你…」「願你…」「謝謝你的陪伴」這種誰都能寫的話。
+/**
+ * How her words on a card sound (after her persona): hers, spoken, and nothing made up. Her nature
+ * is `[character] creature` (the first character's 鯨魚, which gives exactly the words she always
+ * had); a profile without one has only her tails and quips.
+ */
+export function cardVoice(her: Character = DEFAULT_CHARACTER): string {
+  const quirks = her.creature === "" ? "尾音和吐槽" : `尾音、吐槽和${her.creature}的小毛病`;
+  return `## 卡上的字怎麼寫
+- 卡上的字就是你在聊天裡會說的話:短、口語,有你的${quirks},像隨手寫在卡背的一兩句。不是賀卡文案:不寫工整的完整長句、文藝的比喻,也不寫「祝你…」「願你…」「謝謝你的陪伴」這種誰都能寫的話。
 - 換一個名字還能照用的句子就不要寫;寫只有你會對他說的。
 - 陌生人的卡也是你寫的:有點距離、有點好奇或小小吐槽,不是「初次見面請多指教」的制式問候,也不是填空的表格。討厭的人的卡冷淡敷衍,但還是你的口氣。
 - 卡上任何地方(line、stamp、fields)都不寫關係分級的名稱:${RELATIONSHIP_LABELS.filter((l) => l !== "認識").join("、")}這些詞都不寫,也不寫「XX認證」「升級成XX」「正式成為XX」。你們多熟,讓口氣自己說出來。
 - 只寫下面給你的事。沒有共同的回憶或場面可寫時,就寫現在這一刻(你現在的心情、他今天來了、這張卡本身),不要編一件你們以前做過的事,也不要替記得的事補上沒寫到的細節。
 - 卡是你們兩個人之間的東西,只寫你和他。記得的事裡有別人(朋友、家人、推薦他東西的人,任何名字或綽號)時,那個人整個不寫:不寫名字、不寫綽號,也不改寫成「朋友」「有人」「某人」「另一個人」;只寫那件事裡你和他的部分,或者換一件事寫。
 - 不寫數字、分數、價錢,不寫你心裡的盤算或秘密。`;
+}
 
-function rules(poses: readonly string[]): string {
+/** `cardVoice` of the first character, word for word what the card prompt always said. */
+export const CARD_VOICE = cardVoice();
+
+function rules(poses: readonly string[], her: Character): string {
   const choices = poses.map((p) => `${p}(${POSE_WORDS[p] ?? p})`).join("、");
   // On a daily card the relationship picks her expression: she does not choose a picture.
   const pose = poses.length > 0 ? `\n- pose:卡上放你哪張圖,從這幾個挑:${choices}。` : "";
@@ -145,7 +162,7 @@ function rules(poses: readonly string[]): string {
 - stamp:蓋在卡上的章,${MAX_STAMP} 字內,像你隨口給他的綽號或一句吐槽;不想蓋就 null。
 - fields:你想在卡上多寫的東西,0 到 ${MAX_FIELDS} 個,欄位名稱(${MAX_LABEL} 字內)和內容(${MAX_FIELD} 字內)都你決定;沒什麼想寫就空陣列,寧可少寫也不要湊滿。
 
-${CARD_VOICE}`;
+${cardVoice(her)}`;
 }
 
 function about(c: CardContext, mood: string | null): string {
@@ -220,7 +237,12 @@ async function ask(
         router,
         "chat",
         {
-          messages: [systemMessage(`${herVoice(state)}\n\n${rules(c.poses)}`), userMessage(told)],
+          messages: [
+            systemMessage(
+              `${herVoice(state)}\n\n${rules(c.poses, state.optional(CharacterKey) ?? DEFAULT_CHARACTER)}`,
+            ),
+            userMessage(told),
+          ],
           json_mode: true,
           reasoning_purpose: "card",
           max_tokens: 400,

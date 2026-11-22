@@ -12,6 +12,7 @@ import { Meter } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { fmtInt } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { WORLD } from "@/lib/world";
 import { verifyUrl } from "@/pages/public/card";
 import { CardThumb, KIND_LABEL, KINDS, kindOf, RarityBadge, shortDate } from "@/pages/public/cards/labels";
 import { Section } from "./PersonHeart";
@@ -37,7 +38,7 @@ function CardRow({ entry }: { entry: MyCard }) {
         </p>
       </div>
       <div className="grid justify-items-end gap-0.5 text-right">
-        <span className="font-mono text-xs tabular-nums">{entry.price > 0 ? `${fmtInt(entry.price)} 魚幣` : "不用錢"}</span>
+        <span className="font-mono text-xs tabular-nums">{entry.price > 0 ? `${fmtInt(entry.price)} ${WORLD.currency}` : "不用錢"}</span>
         <a
           href={verifyUrl(card.serial)}
           target="_blank"

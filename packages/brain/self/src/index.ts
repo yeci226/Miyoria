@@ -47,6 +47,8 @@ export {
 } from "./feel.js";
 export { composeGuards, permissiveGuard } from "./guard.js";
 export {
+  HOUR_TOKENS,
+  HOUR_USD,
   type LimitName,
   PREFIX_PROFILE,
   PROFILE_NAMES,
@@ -69,7 +71,13 @@ export {
   wakeLine,
 } from "./prompt.js";
 export * as rules from "./rules.js";
-export { DEFAULT_COMPACTION, type RunnerOptions, SelfRunner, STATE_VERSION } from "./run.js";
+export {
+  capMinutes,
+  DEFAULT_COMPACTION,
+  type RunnerOptions,
+  SelfRunner,
+  STATE_VERSION,
+} from "./run.js";
 export { SAY, type SayDeps, type Spoken, sayTool } from "./say.js";
 export {
   ALL_CHECKS,
@@ -80,7 +88,7 @@ export {
   type TextUnit,
 } from "./screens.js";
 export { floorKind, type ServiceGuardOptions, sayKind, serviceGuard } from "./service-guard.js";
-export { type HourSpend, SpendLedger, stepCost } from "./spend.js";
+export { type Capped, type HourCap, type HourSpend, SpendLedger, stepCost } from "./spend.js";
 export {
   CALLABLE_KINDS,
   fixedTools,

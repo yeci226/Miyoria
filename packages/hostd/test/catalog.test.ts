@@ -162,7 +162,109 @@ describe("placeholdersIn", () => {
   });
 });
 
+describe("[routing] (v5-hostd §15)", () => {
+  const nl = (...lines: string[]) => `${lines.join("\n")}\n`;
+
+  it("has no routing without the table: the old behaviour", () => {
+    const catalog = loadCatalog(workspace({ "workers/a/service.toml": valid("a") }));
+    expect(catalog.services.get("a")?.descriptor.routing).toBeUndefined();
+  });
+
+  it("reads the table from service.toml, with its defaults", () => {
+    const root = workspace({
+      "workers/a/service.toml": valid("a", nl("[routing]", 'class = "job"')),
+    });
+    const catalog = loadCatalog(root);
+    expect(catalog.problems).toEqual([]);
+    expect(catalog.services.get("a")?.descriptor.routing).toEqual({
+      class: "job",
+      latency: "interactive",
+      concurrency: 1,
+      queue: false,
+      needs: { files: [] },
+      yields_to: [],
+    });
+  });
+
+  it("reads routing.toml beside service.toml, which an older hostd never opens", () => {
+    const root = workspace({
+      "workers/a/service.toml": valid("a", nl("[run.health]", 'http = "/health"')),
+      "workers/a/routing.toml": nl(
+        'class = "job"',
+        "queue = true",
+        'yields_to = ["tts"]',
+        "[needs]",
+        "vram_gb = 8",
+        "[variant]",
+        'env = ["X"]',
+      ),
+    });
+    const catalog = loadCatalog(root);
+    expect(catalog.problems).toEqual([]);
+    const routing = catalog.services.get("a")?.descriptor.routing;
+    expect(routing?.queue).toBe(true);
+    expect(routing?.needs.vram_gb).toBe(8);
+    expect(routing?.variant).toEqual({ files: [], env: ["X"] });
+  });
+
+  it("refuses the table in both files, an unknown class, a typo and the rules it cannot type", () => {
+    const both = workspace({
+      "workers/a/service.toml": valid("a", nl("[routing]", 'class = "job"')),
+      "workers/a/routing.toml": nl('class = "job"'),
+    });
+    expect(loadCatalog(both).problems.map((p) => p.message)).toEqual([
+      "[routing] is in service.toml and in routing.toml; keep one",
+    ]);
+    const bad = (...lines: string[]) =>
+      loadCatalog(
+        workspace({ "workers/a/service.toml": valid("a"), "workers/a/routing.toml": nl(...lines) }),
+      ).problems.map((p) => p.message);
+    expect(bad('class = "pool"').join()).toMatch(/routing\.class/);
+    expect(bad('class = "job"', "concurency = 2").join()).toMatch(/concurency/);
+    expect(bad('class = "job"', 'latency = "realtime"')).toEqual([
+      'routing: a realtime service keeps its sessions on one host; use class = "session"',
+    ]);
+    expect(bad('class = "job"', "queue = true")).toEqual([
+      "routing.queue: the load is read from [run.health] http, which this service has none of",
+    ]);
+    expect(bad('class = "job"', "[needs]", 'files = ["{python}/x"]')).toEqual([
+      "routing.needs.files[0]: unknown placeholder {python}",
+    ]);
+    expect(bad('class = "job"', 'yields_to = ["a"]')).toEqual([
+      "routing.yields_to: a service does not yield to itself",
+    ]);
+    // A broken routing.toml disables the service like a broken descriptor.
+    expect(bad("class = = ").join()).toMatch(/TOML/);
+  });
+});
+
 describe("the descriptors of this repository", () => {
+  it("declare the routing class of each service", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const catalog = loadCatalog(root);
+    const classes = Object.fromEntries(
+      [...catalog.services.values()].map((e) => [e.name, e.descriptor.routing?.class]),
+    );
+    expect(classes).toEqual({
+      asr: "session",
+      comfyui: "job",
+      core: "single",
+      lyrics: "job",
+      mediamtx: "single",
+      obs: "single",
+      sing: "job",
+      stage: "single",
+      tts: "session",
+      turn: "session",
+      "vtube-studio": "single",
+      "voice-node": "single",
+    });
+    const sing = catalog.services.get("sing")?.descriptor.routing;
+    expect(sing?.yields_to).toEqual(["tts", "asr"]);
+    expect(sing?.queue).toBe(true);
+    expect(catalog.services.get("tts")?.descriptor.routing?.variant?.files.length).toBe(2);
+  });
+
   it("all load, and they are the twelve of the design", () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
     const catalog = loadCatalog(root);

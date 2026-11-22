@@ -3,17 +3,21 @@
 // registry with a link that is a table of connected hosts.
 
 import { request } from "node:http";
+import { builtinRoles, matches } from "@miyoria/auth";
 import {
+  type CheckoutSource,
   ClusterKey,
   type ClusterService,
+  clusterRouting,
   clusterTables,
   EndpointRegistry,
   type HostConnection,
+  RoutingConfigSchema,
 } from "@miyoria/cluster";
 import { contract, routeMeta } from "@miyoria/contracts/api";
 import { HOST_ERROR_CODE, type HostInfo } from "@miyoria/contracts/host";
 import { Supervisor } from "@miyoria/runtime/kernel";
-import { SqliteStore } from "@miyoria/store";
+import { AuditLogKey, SqliteStore } from "@miyoria/store";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActiveProfileKey, ApiModule } from "../src/index.js";
 import { raw } from "./support/http.js";
@@ -87,7 +91,9 @@ const INFO: HostInfo & { services: Array<Record<string, unknown>> } = {
   ],
 };
 
-async function harness(options: { cluster?: boolean; publicUrl?: string | null } = {}) {
+async function harness(
+  options: { cluster?: boolean; publicUrl?: string | null; checkout?: CheckoutSource | null } = {},
+) {
   const store = await SqliteStore.open(":memory:", { plugins: [clusterTables] });
   stores.push(store);
   const clock = { t: T0 };
@@ -99,11 +105,14 @@ async function harness(options: { cluster?: boolean; publicUrl?: string | null }
     clock: { now: () => clock.t },
     static: { friend: { provides: ["sing"], url: "http://f:8005", token: "static-secret" } },
   });
+  const routingConfig = RoutingConfigSchema.parse({ drain: ["old-pc"] });
   const cluster: ClusterService = {
     registry,
+    routing: clusterRouting(registry, tables, routingConfig),
     guards: undefined as never,
     address: { address: "127.0.0.1", family: "IPv4", port: 7880 },
     publicUrl: options.publicUrl ?? null,
+    checkout: options.checkout ?? null,
     hosts: {
       create: (o) => tables.hosts.create(o),
       approve: (n, c) => tables.hosts.approve(n, c),
@@ -131,6 +140,7 @@ async function harness(options: { cluster?: boolean; publicUrl?: string | null }
   const sup = new Supervisor();
   sups.push(sup);
   sup.services.provide("kernel", ActiveProfileKey, "p");
+  sup.services.provide("kernel", AuditLogKey, store.audit);
   if (options.cluster !== false) sup.services.provide("kernel", ClusterKey, cluster);
   const api = new ApiModule({ env: () => undefined });
   await sup.register(api, { bind: "127.0.0.1:0", token: TOKEN, panel_dir: "" }, true);
@@ -139,7 +149,7 @@ async function harness(options: { cluster?: boolean; publicUrl?: string | null }
   if (!base) throw new Error("api is not running");
   const admin = (method: string, path: string, json?: unknown) =>
     raw(base, method, path, { token: TOKEN, ...(json === undefined ? {} : { json }) });
-  const connect = (name: string) => {
+  const connect = (name: string, extra: Partial<HostConnection> = {}) => {
     const host = tables.hosts.byName(name);
     if (host === null) throw new Error(`no host ${name}`);
     connections.set(name, {
@@ -149,9 +159,10 @@ async function harness(options: { cluster?: boolean; publicUrl?: string | null }
       version: "0.1.0",
       approved: host.status === "approved",
       since: T0 + 5_000,
+      ...extra,
     });
   };
-  return { base, admin, tables, cluster, connect, answers, calls, clock, registry };
+  return { base, admin, tables, cluster, connect, answers, calls, clock, registry, store };
 }
 
 /** No key (and no hash of one) anywhere in a response text. */
@@ -583,5 +594,253 @@ describe("join", () => {
     const h = await harness();
     expect((await join(h, { name: "pc" })).status).toBe(422);
     expect((await join(h, { code: "", name: "pc" })).status).toBe(422);
+  });
+});
+
+describe("remote updates", () => {
+  const CORE_SHA = "c".repeat(40);
+  const HOST_SHA = "a".repeat(40);
+  const checkoutOf = (commit: string) => ({
+    commit,
+    branch: "main",
+    upstream: "origin/main",
+    ahead: 0,
+    behind: 0,
+    dirty: false,
+    fetched_at: null,
+    read_at: T0,
+  });
+  const source = (commit: string | null): CheckoutSource => ({
+    read: async () => (commit === null ? null : checkoutOf(commit)),
+    relation: async (c) => (c === commit ? { relation: "same" } : { relation: "behind", count: 3 }),
+  });
+  const job = (state: "running" | "waiting") => ({
+    id: "job-1",
+    target: CORE_SHA,
+    from: HOST_SHA,
+    state,
+    step: "fetch",
+    steps: [],
+    started_at: T0,
+  });
+
+  it("needs owner.cluster.update, which only the owner role holds by default", () => {
+    const node = "owner.cluster.update";
+    for (const name of ["upgrade", "upgradeCancel"]) {
+      expect(routeMeta(contract, ["cluster", name])?.permission, name).toBe(node);
+    }
+    const holds = (role: string) => {
+      const r = builtinRoles().find((x) => x.name === role);
+      if (r === undefined) throw new Error(`no role ${role}`);
+      return !r.denies.some((p) => matches(p, node)) && r.grants.some((p) => matches(p, node));
+    };
+    expect(holds("owner")).toBe(true);
+    expect(holds("admin")).toBe(false);
+    expect(holds("moderator")).toBe(false);
+    // A role made by the owner may hold it by name.
+    expect(matches(node, node)).toBe(true);
+    expect(routeMeta(contract, ["cluster", "checkout"])?.permission).toBeNull();
+  });
+
+  it("shows each host's version and how it stands to Core's, and none for an old hostd", async () => {
+    const h = await harness({ checkout: source(CORE_SHA) });
+    h.tables.hosts.create({ name: "new", approved: true, capabilities: ["sing"] });
+    h.tables.hosts.create({ name: "old", approved: true, capabilities: ["sing"] });
+    h.connect("new", {
+      checkout: checkoutOf(HOST_SHA),
+      remoteUpdate: { allowed: true },
+      upgrade: null,
+    });
+    h.connect("old");
+    const list = (await h.admin("GET", "/api/cluster/hosts")).body as Array<
+      Record<string, unknown>
+    >;
+    const byName = Object.fromEntries(list.map((v) => [v.name, v]));
+    expect(byName.new).toMatchObject({
+      checkout: { commit: HOST_SHA },
+      relation: { relation: "behind", count: 3 },
+      remote_update: { allowed: true },
+      upgrade: null,
+    });
+    expect(byName.old?.checkout).toBeUndefined();
+    expect(byName.old?.remote_update).toBeUndefined();
+    const core = await h.admin("GET", "/api/cluster/checkout");
+    expect(core.body).toMatchObject({ checkout: { commit: CORE_SHA } });
+  });
+
+  it("sends only Core's commit and who asked; refusals are results, all audited", async () => {
+    const h = await harness({ checkout: source(CORE_SHA) });
+    for (const name of ["ok", "off", "old", "gone"]) {
+      h.tables.hosts.create({ name, approved: true, capabilities: [] });
+    }
+    h.connect("ok", { checkout: checkoutOf(HOST_SHA), remoteUpdate: { allowed: true } });
+    h.connect("off", {
+      checkout: checkoutOf(HOST_SHA),
+      remoteUpdate: { allowed: false, reason: "這台沒有開放遠端更新" },
+    });
+    h.connect("old");
+    h.answers.set("host.upgrade", () => job("running"));
+    const answer = await h.admin("POST", "/api/cluster/upgrade", {
+      hosts: ["ok", "off", "old", "gone", "nobody"],
+      wait_s: 60,
+    });
+    expect(answer.status).toBe(200);
+    const body = answer.body as { commit: string; results: Array<Record<string, unknown>> };
+    expect(body.commit).toBe(CORE_SHA);
+    expect(body.results).toEqual([
+      { host: "ok", ok: true, job: expect.objectContaining({ id: "job-1" }) },
+      { host: "off", ok: false, error: "這台沒有開放遠端更新" },
+      { host: "old", ok: false, error: expect.stringContaining("比較舊") },
+      { host: "gone", ok: false, error: "這台沒有連線" },
+      { host: "nobody", ok: false, error: "沒有這台電腦" },
+    ]);
+    expect(h.calls).toEqual([
+      { name: "ok", method: "host.upgrade", params: { commit: CORE_SHA, by: "api", wait_s: 60 } },
+    ]);
+    const audit = await h.store.audit.recent(20, "api");
+    const upgrades = audit.filter((e) => e.action === "cluster.host.upgrade");
+    expect(upgrades).toHaveLength(5);
+    expect(upgrades.filter((e) => e.ok).map((e) => e.target)).toEqual(["ok"]);
+  });
+
+  it("passes a host's own refusal on, and is a 409 when Core has no checkout", async () => {
+    const h = await harness({ checkout: source(CORE_SHA) });
+    h.tables.hosts.create({ name: "pc", approved: true, capabilities: [] });
+    h.connect("pc", { checkout: checkoutOf(HOST_SHA), remoteUpdate: { allowed: true } });
+    h.answers.set("host.upgrade", () => {
+      throw rpcError(HOST_ERROR_CODE.NotAllowed, "這台有還沒提交的變更");
+    });
+    const refused = await h.admin("POST", "/api/cluster/upgrade", { hosts: ["pc"] });
+    expect((refused.body as { results: unknown[] }).results).toEqual([
+      { host: "pc", ok: false, error: "這台有還沒提交的變更" },
+    ]);
+
+    const none = await harness({ checkout: null });
+    const answer = await none.admin("POST", "/api/cluster/upgrade", { hosts: ["pc"] });
+    expect(answer.status).toBe(409);
+  });
+
+  it("cancels a waiting update on the host", async () => {
+    const h = await harness({ checkout: source(CORE_SHA) });
+    h.tables.hosts.create({ name: "pc", approved: true, capabilities: [] });
+    h.connect("pc");
+    h.answers.set("host.upgrade_cancel", () => ({ cancelled: true, job: job("waiting") }));
+    const answer = await h.admin("POST", "/api/cluster/hosts/pc/upgrade/cancel", {});
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({ cancelled: true, job: { id: "job-1" } });
+    const missing = await h.admin("POST", "/api/cluster/hosts/nope/upgrade/cancel", {});
+    expect(missing.status).toBe(404);
+  });
+});
+
+describe("job dispatch (v5-hostd §15)", () => {
+  const sing = (name: string, running: number) => ({
+    name: "sing",
+    kind: "worker" as const,
+    provides: ["sing"],
+    state: "running" as const,
+    since: 1,
+    healthy: true,
+    restarts: 0,
+    advertised: `http://${name}:8005`,
+    token: "service-secret-token",
+    routing: {
+      class: "job" as const,
+      latency: "batch" as const,
+      concurrency: 1,
+      queue: true,
+      yields_to: ["tts", "asr"],
+      ready: true,
+      variant: "v1",
+      accept: true,
+    },
+    load: { running, queued: 0, age_ms: 0 },
+  });
+
+  it("needs owner.cluster.route to change anything, which only the owner role holds", () => {
+    expect(routeMeta(contract, ["cluster", "routingControl"])?.permission).toBe(
+      "owner.cluster.route",
+    );
+    expect(routeMeta(contract, ["cluster", "routing"])?.permission).toBeNull();
+    const holds = (role: string) => {
+      const r = builtinRoles().find((x) => x.name === role);
+      if (r === undefined) throw new Error(`no role ${role}`);
+      const node = "owner.cluster.route";
+      return !r.denies.some((p) => matches(p, node)) && r.grants.some((p) => matches(p, node));
+    };
+    expect(holds("owner")).toBe(true);
+    expect(holds("admin")).toBe(false);
+    expect(holds("moderator")).toBe(false);
+  });
+
+  it("shows each capability's class, the scores and why a host takes nothing, never a token", async () => {
+    const h = await harness();
+    for (const name of ["a", "b"]) {
+      h.registry.setHost(name, ["sing"]);
+      h.registry.report(name, { ...INFO, name, services: [sing(name, name === "a" ? 1 : 0)] });
+    }
+    const ep = h.registry.pick("sing");
+    if (ep === null) throw new Error("no endpoint");
+    h.registry.reserve(ep, { what: "one song" });
+    const answer = await h.admin("GET", "/api/cluster/routing");
+    expect(answer.status).toBe(200);
+    expectNoSecrets(answer.text);
+    const body = answer.body as {
+      capabilities: Array<Record<string, unknown> & { endpoints: Array<Record<string, unknown>> }>;
+      config: Record<string, unknown>;
+      activity: Record<string, unknown>;
+    };
+    const singView = body.capabilities.find((c) => c.capability === "sing");
+    expect(singView).toMatchObject({ class: "job", variant: "v1", speech_mode: "never" });
+    // All three take work; after the reservation on b they tie at two units and go by name.
+    expect(singView?.endpoints.map((e) => [e.host, e.eligible, e.score_s])).toEqual([
+      ["a", true, 240],
+      ["b", true, 240],
+      ["friend", true, 240],
+    ]);
+    expect(singView?.decisions).toEqual([
+      expect.objectContaining({ host: "b", what: "one song", at: expect.any(String) }),
+    ]);
+    expect(body.config).toMatchObject({ allow_on_speech_host: "never", drain: ["old-pc"] });
+    expect(body.activity).toMatchObject({ in_voice: false, idle: true, last_spoke_at: null });
+  });
+
+  it("pins, drains and weighs from the panel, audits each, and refuses one without what it needs", async () => {
+    const h = await harness();
+    for (const name of ["a", "b"]) {
+      h.registry.setHost(name, ["sing"]);
+      h.registry.report(name, { ...INFO, name, services: [sing(name, 0)] });
+    }
+    const set = (body: Record<string, unknown>) =>
+      h.admin("POST", "/api/cluster/routing/controls", body);
+    const pinned = await set({ action: "set", kind: "pin", capability: "sing", host: "b" });
+    expect(pinned.status).toBe(200);
+    expect(h.registry.candidates("sing").map((e) => e.host)).toEqual(["b"]);
+    expect((pinned.body as { panel: unknown[] }).panel).toEqual([
+      expect.objectContaining({ kind: "pin", capability: "sing", host: "b", by: "api" }),
+    ]);
+    expect((await set({ action: "set", kind: "drain", host: "b" })).status).toBe(200);
+    expect(h.registry.candidates("sing")).toEqual([]);
+    expect((await set({ action: "clear", kind: "drain", host: "b" })).status).toBe(200);
+    expect(
+      (await set({ action: "clear", kind: "pin", capability: "sing", host: "b" })).status,
+    ).toBe(200);
+    expect((await set({ action: "set", kind: "weight", host: "a", value: 2 })).status).toBe(200);
+    expect(h.registry.hostRouting().find((x) => x.host === "a")?.weight).toBe(2);
+    expect((await set({ action: "set", kind: "pin", host: "a" })).status).toBe(400);
+    expect((await set({ action: "set", kind: "weight", host: "a" })).status).toBe(400);
+    const audit = await h.store.audit.recent(20, "api");
+    const routing = audit.filter((e) => e.action.startsWith("cluster.routing."));
+    expect(routing.map((e) => [e.action, e.target, e.ok])).toEqual(
+      [
+        ["cluster.routing.set.pin", "sing/b", true],
+        ["cluster.routing.set.drain", "b", true],
+        ["cluster.routing.clear.drain", "b", true],
+        ["cluster.routing.clear.pin", "sing/b", true],
+        ["cluster.routing.set.weight", "a", true],
+        ["cluster.routing.set.pin", "-/a", false],
+        ["cluster.routing.set.weight", "a", false],
+      ].reverse(),
+    );
   });
 });

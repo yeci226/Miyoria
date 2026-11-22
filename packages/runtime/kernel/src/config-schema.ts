@@ -13,7 +13,12 @@
 // section (refuse to start, skip one module, use the default), so a check classifies each problem
 // with a policy instead of making every one fatal.
 
-import type { JsonValue } from "@miyoria/types";
+import {
+  type Character,
+  DEFAULT_CHARACTER,
+  DEFAULT_CURRENCY,
+  type JsonValue,
+} from "@miyoria/types";
 import { z } from "zod";
 import { ConfigError } from "./config.js";
 
@@ -76,6 +81,52 @@ export const CoreSectionSchema = z.object({
   /** `info`, or a filter list like `info,miyoria=debug`. */
   log: z.string().optional(),
 });
+
+const word = (fallback: string, max = 32) => z.string().trim().min(1).max(max).default(fallback);
+
+/**
+ * `[character]`: who she is in this profile (docs/design/v5-profiles.md). Every default is
+ * `DEFAULT_CHARACTER`'s (a test keeps them equal), so a file without the section reads as before.
+ */
+export const CharacterSectionSchema = z.object({
+  /** Her own name. */
+  name: word(DEFAULT_CHARACTER.name),
+  /** The short name most people use; `""`: none. */
+  short_name: z.string().trim().max(32).default(DEFAULT_CHARACTER.short_name),
+  /** Other spellings of the short name. */
+  other_names: z
+    .array(z.string().trim().min(1).max(32))
+    .max(16)
+    .default([...DEFAULT_CHARACTER.other_names]),
+  /** How texts refer to her. */
+  pronoun: word(DEFAULT_CHARACTER.pronoun, 8),
+  /** The name of her stock exchange. */
+  exchange_name: word(DEFAULT_CHARACTER.exchange_name),
+  /** What she is, in a word (`鯨魚`); `""`: nothing in particular. */
+  creature: z.string().trim().max(16).default(DEFAULT_CHARACTER.creature),
+});
+
+/** `[character]` of a config tree; a missing or unreadable section is `DEFAULT_CHARACTER`. */
+export function characterOf(section: JsonValue | undefined): Character {
+  const parsed = CharacterSectionSchema.safeParse(section ?? {});
+  return parsed.success ? parsed.data : DEFAULT_CHARACTER;
+}
+
+/** `[modules.economy] currency`: shown everywhere the coins are named. */
+export const CurrencySchema = z.string().trim().min(1).max(16).default(DEFAULT_CURRENCY);
+
+/**
+ * The coins' name of a config tree: `[modules.economy] currency`, read as the economy reads it
+ * (trimmed, 1 to 16 characters); missing or unreadable is `DEFAULT_CURRENCY`.
+ */
+export function currencyOf(economy: JsonValue | undefined): string {
+  const raw =
+    economy !== null && typeof economy === "object" && !Array.isArray(economy)
+      ? economy.currency
+      : undefined;
+  const parsed = CurrencySchema.safeParse(raw);
+  return parsed.success ? parsed.data : DEFAULT_CURRENCY;
+}
 
 function sectionSchema(section: ConfigSection): z.ZodType {
   if (section instanceof z.ZodType) return section;

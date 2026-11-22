@@ -472,24 +472,35 @@ export class KaraokeStore {
   }
 
   /** The latest results, for the owner. */
-  latest(limit: number): (ResultRow & { name: string; title: string; track: TrackRow | null })[] {
+  /** The latest results, with who sang, the song, the track and the server of its room (if any). */
+  latest(limit: number): (ResultRow & {
+    name: string;
+    title: string;
+    track: TrackRow | null;
+    space: string | null;
+  })[] {
     const rows = this.#read()
       .select()
       .from(karaokeResults)
       .orderBy(desc(karaokeResults.created_at))
       .limit(limit)
       .all();
-    return rows.map((r) => ({
-      ...r,
-      name: this.session(r.session_id)?.name ?? "",
-      title: this.song(r.song_id)?.title ?? "",
-      track:
-        this.#read()
-          .select()
-          .from(karaokeTracks)
-          .where(eq(karaokeTracks.session_id, r.session_id))
-          .get() ?? null,
-    }));
+    return rows.map((r) => {
+      const session = this.session(r.session_id);
+      const room = session?.room_id == null ? null : this.room(session.room_id);
+      return {
+        ...r,
+        space: room?.space_id ?? null,
+        name: session?.name ?? "",
+        title: this.song(r.song_id)?.title ?? "",
+        track:
+          this.#read()
+            .select()
+            .from(karaokeTracks)
+            .where(eq(karaokeTracks.session_id, r.session_id))
+            .get() ?? null,
+      };
+    });
   }
 
   // ---- rooms (step 4) -------------------------------------------------------------------------

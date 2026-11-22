@@ -46,8 +46,20 @@ export type SettingKind = (typeof SETTING_KINDS)[number];
 
 /** `module`: saving restarts the module; `core`: it takes a restart of Core. */
 export type SettingApply = "module" | "core";
-/** `cluster`: one value; `space`: may differ per server (phase 6; written at cluster for now). */
-export type SettingScope = "cluster" | "space";
+/**
+ * `cluster`: one value. `space`: may differ per server. `room`: may differ per room (channel,
+ * thread, voice room), and a room without its own value takes its Space's. A place's value is a
+ * `place_settings` row; `placeConfig` resolves it (docs/design/v5-places.md).
+ */
+export type SettingScope = "cluster" | "space" | "room";
+/**
+ * How a place's value meets the ones above it. `replace` (default): the nearest one wins.
+ * `union`: a list field takes every layer's entries (cluster, Space, parent room, room), so a deny
+ * list set for the cluster cannot be lifted by a room.
+ */
+export type SettingMerge = "replace" | "union";
+/** The scopes, for checks. */
+export const SETTING_SCOPES: readonly SettingScope[] = ["cluster", "space", "room"];
 /** A `duration`'s unit: the unit the key's name says, never converted. */
 export type SettingUnit = "ms" | "s" | "min" | "h" | "day";
 /** The kind of room a `channel` field takes. */
@@ -74,6 +86,8 @@ export interface SettingMeta {
   secret?: boolean;
   /** Default `cluster`. */
   scope?: SettingScope;
+  /** Default `replace`; `union` only means something for a list. */
+  merge?: SettingMerge;
   unit?: SettingUnit;
   /** The step of a number. */
   step?: number;
@@ -122,6 +136,7 @@ export interface SettingField {
   danger: string | null;
   secret: boolean;
   scope: SettingScope;
+  merge: SettingMerge;
   unit: SettingUnit | null;
   labels: Record<string, string> | null;
   room: SettingRoom | null;
@@ -222,7 +237,8 @@ function fieldOf(root: Obj, raw: Obj, keys: string[], declared: number): Setting
     apply: oneOf(meta.apply, ["module", "core"] as const) ?? "module",
     danger: str(meta.danger),
     secret: meta.secret === true,
-    scope: oneOf(meta.scope, ["cluster", "space"] as const) ?? "cluster",
+    scope: oneOf(meta.scope, SETTING_SCOPES) ?? "cluster",
+    merge: (type === "array" && oneOf(meta.merge, ["replace", "union"] as const)) || "replace",
     unit: oneOf(meta.unit, ["ms", "s", "min", "h", "day"] as const),
     labels: stringMap(meta.labels),
     room: oneOf(meta.room, ["text", "voice", "thread"] as const),
@@ -285,8 +301,32 @@ export function settingFields(jsonSchema: JsonValue | null | undefined): Setting
 
 // ---- the service Core provides --------------------------------------------------------------
 
-/** Where a field's value comes from. */
-export type SettingSource = "default" | "file" | "panel";
+/**
+ * Where a field's value comes from: the schema `default`, the `file`, the cluster layer in the
+ * database (`panel`, only while it differs from the file), or a place's own value (`space`, `room`).
+ */
+export type SettingSource = "default" | "file" | "panel" | "space" | "room";
+
+/**
+ * A place a module's settings are read or written for (docs/design/v5-places.md): a Space by
+ * identity's id, and optionally one of its rooms by the platform's channel id.
+ */
+export interface SettingsPlace {
+  space: string;
+  /** The platform's channel id (what the channel picker lists); `null`: the whole Space. */
+  room?: string | null;
+}
+
+/** A field's value at a place, beside what it would be without the place's own value. */
+export interface SettingPlaceValue {
+  /** The place's own value (`place_settings`); `null` when it has none. */
+  own: JsonValue | null;
+  own_set: boolean;
+  /** What the field is at this place without its own value: what clearing it returns to. */
+  inherited: JsonValue | null;
+  /** Where `inherited` comes from. */
+  inherited_from: SettingSource;
+}
 
 /** A field's value as the panel shows it. */
 export interface SettingValue {
@@ -302,6 +342,15 @@ export interface SettingValue {
   env: string | null;
   /** The panel's value does not fit the schema any more: it is skipped, with why. */
   invalid: string | null;
+  /** Read for a place and the field may differ there: the place's own value and what it inherits. */
+  place?: SettingPlaceValue | null;
+}
+
+/** The place a view was read for. */
+export interface SettingsPlaceView {
+  space: { id: string; name: string };
+  /** The room asked for: the platform's channel id and the name identity knows. */
+  room: { id: string; name: string | null } | null;
 }
 
 /** One module's settings, for the form. */
@@ -320,24 +369,34 @@ export interface ModuleSettingsView {
   guard: string | null;
   /** A saved change waits for this guarded state before it is applied. */
   pending: string | null;
+  /** The place the values were read for; `null`: the cluster (no place asked). */
+  place?: SettingsPlaceView | null;
 }
 
 export interface SettingsSaveRequest {
-  /** The revision the form was loaded at; another write since is a conflict. */
+  /**
+   * The revision the form was loaded at; another write since is a conflict. Not checked for a
+   * place's save (place settings have no versions).
+   */
   expected: number;
   /** New values by field path. */
   set: Record<string, JsonValue>;
-  /** Field paths that go back to the file's value (the panel's value is removed). */
+  /**
+   * Field paths that go back to the file's value (the panel's value is removed); for a place, to
+   * what the place inherits (its own value is removed).
+   */
   reset: string[];
   note?: string | null;
+  /** Write the place's own values (`place_settings`) instead of the cluster layer. */
+  place?: SettingsPlace | null;
 }
 
 /**
  * `restarted`: the module was restarted with it. `deferred`: saved; the restart waits for a guarded
  * state to end. `stored`: saved; the module is off and reads it when it starts. `unchanged`: there
- * was nothing to write.
+ * was nothing to write. `immediate`: a place's values, in effect at once without a restart.
  */
-export type SettingsApplied = "restarted" | "deferred" | "stored" | "unchanged";
+export type SettingsApplied = "restarted" | "deferred" | "stored" | "unchanged" | "immediate";
 
 export interface SettingsSaveResult {
   revision: number;
@@ -359,6 +418,8 @@ export interface SettingsChange {
   by: string;
   note: string | null;
   changes: { path: string; label: string; before: JsonValue | null; after: JsonValue | null }[];
+  /** A place's change: the Space's own value, or a room's (its channel id and name). */
+  place?: { scope: "space" | "room"; room: string | null; name: string | null } | null;
 }
 
 /** One key of the panel's layer, for `miyoria config overrides` and `bake`. */
@@ -391,13 +452,29 @@ export class SettingsError extends Error {
 export interface ModuleSettingsService {
   /** Whether the module has fields the panel may change. */
   editable(module: ModuleId): boolean;
-  describe(module: ModuleId): ModuleSettingsView;
-  /** Writes the next revision and applies it (`SettingsError` for an unknown field, a bad value, a conflict). */
+  /**
+   * The fields and their values; with `place`, the values at that place (a field that may differ
+   * there carries `place`). `SettingsError("unknown")` for an unknown module, Space or room.
+   */
+  describe(module: ModuleId, place?: SettingsPlace | null): ModuleSettingsView;
+  /**
+   * Writes the next revision and applies it, or with `request.place` the place's own values
+   * (`SettingsError` for an unknown field, a bad value, a conflict).
+   */
   save(module: ModuleId, request: SettingsSaveRequest, by: string): Promise<SettingsSaveResult>;
   history(
     module: ModuleId,
     options?: { limit?: number; before?: number },
   ): { items: SettingsChange[]; next_before: number | null };
+  /**
+   * The changes of one place's own values for the module (the Space's and its rooms', or one
+   * room's), newest first; `version` is the change's position in the event log.
+   */
+  placeHistory(
+    module: ModuleId,
+    place: SettingsPlace,
+    options?: { limit?: number; before?: number },
+  ): Promise<{ items: SettingsChange[]; next_before: number | null }>;
   /** Makes the module's panel settings what they were at revision `version` (0: none). */
   revert(
     module: ModuleId,

@@ -22,8 +22,10 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
+      "@miyoria/card-face/market": ["../../packages/card-face/src/market.ts"],
       "@miyoria/card-face": ["../../packages/card-face/src/index.tsx"],
       "@miyoria/types/bond": ["../../packages/types/src/bond.ts"],
+      "@miyoria/types/exchange-amount": ["../../packages/types/src/exchange-amount.ts"],
       "@miyoria/contracts/wire/tiers": ["../../packages/contracts/wire/src/tiers.ts"],
       "@miyoria/contracts/api": ["../../packages/contracts/api/src/index.ts"],
       "@miyoria/contracts/events": ["../../packages/contracts/events/src/index.ts"],

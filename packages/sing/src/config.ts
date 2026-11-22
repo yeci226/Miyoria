@@ -161,6 +161,18 @@ export const SingConfigSchema = z
      * relative to the directory of `miyoria.toml`. Video paths outside it are never sent.
      */
     video_dir: z.string().default("data/songs"),
+    /**
+     * Where Core gets a song's video: `worker` = from the song worker that made it (over its link,
+     * slow when the worker is on another machine); `local` = Core downloads it from the song's
+     * link itself with yt-dlp (`ytdlp_path`), and asks the worker only when that fails. Either
+     * way only songs the worker found a video for get one (audio-only sources stay without).
+     */
+    video_source: z.enum(["worker", "local"]).default("worker"),
+    /** The yt-dlp executable for `video_source = "local"` (a name on PATH or a full path). */
+    ytdlp_path: z.string().min(1).default("yt-dlp"),
+    /** `video_source = "local"`: the tallest video taken, and no file over this many MB. */
+    video_max_height: z.number().int().positive().default(1080),
+    video_max_mb: z.number().int().positive().default(300),
     /** Her mouth follows the converted vocal stem instead of the whole mix. */
     lip_sync_vocals: z.boolean().default(true),
     /**

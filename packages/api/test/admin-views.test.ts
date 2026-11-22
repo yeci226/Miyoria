@@ -49,7 +49,8 @@ async function harness() {
   const base = api.url();
   if (!base) throw new Error("api is not running");
   const get = (path: string) => raw(base, "GET", path, { token: TOKEN });
-  return { sup, base, get };
+  const post = (path: string, json: unknown) => raw(base, "POST", path, { token: TOKEN, json });
+  return { sup, base, get, post };
 }
 
 const reminder = (key: string, over: Partial<Reminder> = {}): Reminder => ({
@@ -231,6 +232,8 @@ describe("economy 2.0", () => {
             closes_at: "2026-11-02T00:00:00.000Z",
             status: "open",
             winner: null,
+            settles: { kind: "goal", label: "照她的遊戲目標「蓋房子」的結果自動結算" },
+            settled_by: null,
             my_bet: null,
           },
         ];
@@ -256,6 +259,49 @@ describe("economy 2.0", () => {
       predictions: [{ id: "P1" }],
     });
     expect((await h.get("/api/economy/room")).body).toMatchObject({ room: [{ id: "sofa" }] });
+  });
+
+  it("lets the owner settle or call off a prediction by hand, kept with who did it", async () => {
+    const h = await harness();
+    const calls: unknown[][] = [];
+    const settled = {
+      id: "p1",
+      winner: "做到",
+      winners: 2,
+      pool: 50,
+      paid: 48,
+      rake: 2,
+      refunded: false,
+    };
+    h.sup.services.provide("economy", Economy2Key, {
+      currency: "魚幣",
+      health: async () => ({}),
+      resolvePredictionByAdmin: async (...args: unknown[]) => {
+        calls.push(["resolve", ...args]);
+        return settled;
+      },
+      cancelPredictionByAdmin: async (...args: unknown[]) => {
+        calls.push(["cancel", ...args]);
+        if (args[0] === "gone") throw Object.assign(new Error("沒有這個預測"), { status: 409 });
+        return { ...settled, winner: null, winners: 0, paid: 50, rake: 0, refunded: true };
+      },
+    } as never);
+    const resolved = await h.post("/api/economy/predictions/p1/resolve", { option: "做到" });
+    expect(resolved.status).toBe(200);
+    expect(resolved.body).toEqual({ currency: "魚幣", settled });
+    const cancelled = await h.post("/api/economy/predictions/p1/cancel", {});
+    expect(cancelled.body).toMatchObject({ settled: { refunded: true, rake: 0 } });
+    // The operator goes with the call, for the prediction's record.
+    expect(calls.map((c) => [c[0], c[1], typeof c.at(-1)])).toEqual([
+      ["resolve", "p1", "string"],
+      ["cancel", "p1", "string"],
+    ]);
+    const gone = await h.post("/api/economy/predictions/gone/cancel", {});
+    expect(gone.status).toBe(409);
+    expect(gone.body).toEqual({ error: "沒有這個預測" });
+    // A body without the option never reaches the economy.
+    expect((await h.post("/api/economy/predictions/p1/resolve", {})).status).toBe(422);
+    expect(calls).toHaveLength(3);
   });
 
   it("is a 503 when the economy has no 2.0", async () => {

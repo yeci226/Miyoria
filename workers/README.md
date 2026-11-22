@@ -638,6 +638,8 @@ curl -s http://127.0.0.1:8005/jobs/<id>          # state / stage / progress;done
 | `SING_RVC_SERVER` | 1 | RVC 用一個常駐的 Applio 程序轉(`rvcserve.py`),不再每次重開 `core.py infer`(每次約 8 秒啟動)。要下載的歌在下載時就先暖機;後面還有歌排隊時留著給下一首,排隊的歌被取消就放掉;0 = 每次重開(舊行為)。自動挑 key 時直接用 Applio 轉換時量的音高(`rvcserve.hook_pitch`,掛在 Applio 內部的 `Pipeline.get_f0` 上,測過的是 Applio `6d5d951`);別的版本掛不上時,改由 worker 自己量音高,程序照樣常駐 |
 | `SING_INFO_REUSE_S` | 3600 | 下載音訊和影片時沿用找歌那一次 yt-dlp 的結果(串流網址幾小時內有效),不再重讀網頁和播放器;超過這麼久就重讀 |
 | `SING_YTDLP_CACHE` | `<資料夾>/_ytdlp-cache` | yt-dlp 的快取。預設的 `~/.cache/yt-dlp` 寫不進去時,Windows 上找歌會永遠卡住 |
+| `SING_YTDLP_COOKIES` | 無 | yt-dlp 用的 cookies 檔(Netscape 格式)。YouTube 要求確認不是機器人時,用登入過的 cookies 才拿得到歌。沒設時用 `workers/sing/cookies.txt`(有的話;已列在 `.gitignore`,不要 commit) |
+| `SING_YTDLP_COOKIES_FROM_BROWSER` | 無 | 直接讀這個瀏覽器的 cookies(例如 `firefox`、`chrome`),跟上面的檔案可以一起用 |
 | `SING_TARGET_LUFS` | -16 | 混音響度 |
 | `SING_MAX_SECONDS` | 480 | 最長的歌 |
 | `SING_URL_HOSTS` | YouTube、SoundCloud、Bilibili、Niconico | 連結允許的網域(逗號分隔,子網域也算) |

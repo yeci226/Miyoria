@@ -58,7 +58,14 @@ export class FakeLog {
     text: string,
     when: Timestamp,
     context: ContextKey,
-    options: { addressed?: boolean; voice?: boolean } = {},
+    options: {
+      addressed?: boolean;
+      voice?: boolean;
+      /** A reply: to a line of hers (`self`), quoting `text` of it. */
+      reply?: { self: boolean; text: string | null };
+      /** The name they spoke under (default: the handle). */
+      name?: string;
+    } = {},
   ): LogEvent {
     const source = options.voice ? "voice.asr" : "platform.discord";
     const event: LogEvent = {
@@ -88,7 +95,20 @@ export class FakeLog {
           topic: "platform.message.created",
           event: {
             type: "platform_message_created",
-            data: { text, author: { display_name: handle } },
+            data: {
+              text,
+              author: { display_name: options.name ?? handle },
+              ...(options.reply === undefined
+                ? {}
+                : {
+                    reply_to: { context, id: "parent" },
+                    reply_to_self: options.reply.self,
+                    referenced:
+                      options.reply.text === null
+                        ? null
+                        : { author: null, author_name: "", text: options.reply.text },
+                  }),
+            },
           },
           turn: null,
         },
@@ -98,7 +118,13 @@ export class FakeLog {
     return event;
   }
 
-  her(said: string, when: Timestamp, context: ContextKey, audience: Handle[] = []): LogEvent {
+  her(
+    said: string,
+    when: Timestamp,
+    context: ContextKey,
+    audience: Handle[] = [],
+    to?: Handle[],
+  ): LogEvent {
     const event: LogEvent = {
       id: newId(),
       at: when,
@@ -115,6 +141,7 @@ export class FakeLog {
         said,
         delivered_at: when,
         audience,
+        ...(to === undefined ? {} : { to }),
         answered_by: [],
         line: newId(),
       }),

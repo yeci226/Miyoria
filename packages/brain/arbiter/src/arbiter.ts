@@ -126,6 +126,11 @@ interface Block {
   until: number;
   /** A hold: enforced on what she does on her own, not only shown to her. */
   hard?: boolean;
+  /**
+   * A task that failed after the gate let it run (`record`): what did not work, shown as a
+   * result (`LedgerLimits.failed`), never as something she may not do. When (clock ms).
+   */
+  failedAt?: number;
 }
 
 /** Sources the owner drives: only expiry applies. */
@@ -225,7 +230,7 @@ export class ArbiterCore implements Arbiter {
     const e = this.book.add(entry, isSelfInitiated(entry.source), this.#now());
     this.#publishEntry(e);
     if (entry.kind === "task" && entry.outcome === "failed" && entry.detail !== null) {
-      this.#block(entry.summary, entry.detail);
+      this.#block(entry.summary, entry.detail, true);
     }
     return e.id;
   }
@@ -243,9 +248,22 @@ export class ArbiterCore implements Arbiter {
     const cfg = this.#cfg;
     const place = context === null ? null : this.#placeOfContext(context);
     const facts = context === null ? NO_FACTS : this.#factsFor(context);
-    const blocked: LedgerLimits["blocked"] = this.#blocks
-      .filter((b) => b.until > now)
+    const live = this.#blocks.filter((b) => b.until > now);
+    const blocked: LedgerLimits["blocked"] = live
+      .filter((b) => b.failedAt === undefined)
       .map((b) => ({ capability: b.capability, reason: b.reason, until: toTimestamp(b.until) }));
+    const failed: NonNullable<LedgerLimits["failed"]> = live.flatMap((b) =>
+      b.failedAt === undefined
+        ? []
+        : [
+            {
+              capability: b.capability,
+              reason: b.reason,
+              at: toTimestamp(b.failedAt),
+              until: toTimestamp(b.until),
+            },
+          ],
+    );
     if (facts.mode === "off" || facts.mode === "mention-only") {
       // Until the owner changes the level.
       blocked.unshift({
@@ -278,6 +296,7 @@ export class ArbiterCore implements Arbiter {
       paused: this.#env.paused?.() ?? false,
       blocked,
       waiting_for_response: waiting,
+      ...(failed.length === 0 ? {} : { failed }),
     };
   }
 
@@ -807,13 +826,15 @@ export class ArbiterCore implements Arbiter {
     );
   }
 
-  #block(capability: string, reason: string): void {
-    const until = this.#now() + this.#cfg.blocked_mins * MINUTE_MS;
+  /** A refusal of hers (`failed`: a task that failed after it ran), shown for `blocked_mins`. */
+  #block(capability: string, reason: string, failed = false): void {
+    const now = this.#now();
+    const until = now + this.#cfg.blocked_mins * MINUTE_MS;
     // A hold outlives what a refusal would say.
     if (this.held(capability) !== null) return;
     this.#blocks = [
       ...this.#blocks.filter((b) => b.capability !== capability),
-      { capability, reason, until },
+      { capability, reason, until, ...(failed ? { failedAt: now } : {}) },
     ];
   }
 

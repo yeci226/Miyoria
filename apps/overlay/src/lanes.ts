@@ -36,23 +36,38 @@ export interface LaneSinger {
   color: number;
   /** Their running score on the board, or `null` (none yet, or no board). */
   total: number | null;
+  /** Their place on the board (`null`: none yet), and the cheers they got. */
+  rank: number | null;
+  cheers: number;
 }
 
 /**
- * The singers that get a lane: the members who sing, in the order they came (the lanes stay put
- * when ranks change), then anyone on the board who is not a member any more; at most `LANES_MAX`.
+ * The singers that get a lane: the round's singers (its board) in the order they came into the
+ * room (the lanes stay put when ranks change), then anyone on the board who is not a member any
+ * more; before there is a board, the members who chose to sing. At most `LANES_MAX`. A member who
+ * chose to sing but is not in the round (not ready when it started) has none.
  */
 export function laneSingers(members: readonly KaraokeMember[], board: readonly KaraokeLine[]): LaneSinger[] {
-  const totals = new Map(board.map((l) => [lineKey(l), l.total]));
+  const lines = new Map(board.map((l) => [lineKey(l), l]));
   const out: LaneSinger[] = [];
   const seen = new Set<string>();
   const add = (name: string, color: number): void => {
     const key = lineKey({ name, color });
     if (seen.has(key) || out.length >= LANES_MAX) return;
     seen.add(key);
-    out.push({ key, name, color, total: totals.get(key) ?? null });
+    const line = lines.get(key);
+    out.push({
+      key,
+      name,
+      color,
+      total: line?.total ?? null,
+      rank: line?.total == null ? null : (line.rank ?? null),
+      cheers: line?.cheers ?? 0,
+    });
   };
-  for (const m of members) if (m.role === "singer") add(m.name, m.color);
+  for (const m of members) {
+    if (m.role === "singer" && (board.length === 0 || lines.has(lineKey(m)))) add(m.name, m.color);
+  }
   for (const l of board) add(l.name, l.color);
   return out;
 }
@@ -137,10 +152,13 @@ export interface LanePoint {
   midi: number | null;
 }
 
-/** Each singer's pitch, put together from the boards' pieces. */
+/**
+ * Each singer's pitch, put together from the boards' pieces. A frame no piece has said anything
+ * about is unknown (`undefined`), not silent: the notes' judging leaves it out.
+ */
 export class LaneTracks {
   /** Per singer: the frame of `frames[0]` and the frames from there. */
-  readonly #tracks = new Map<string, { start: number; frames: (number | null)[] }>();
+  readonly #tracks = new Map<string, { start: number; frames: (number | null | undefined)[] }>();
 
   /** One board's lines: each piece replaces what was kept from its first frame on. */
   take(board: readonly KaraokeLine[]): void {
@@ -159,7 +177,7 @@ export class LaneTracks {
     }
     const at = piece.from - track.start;
     const frames = track.frames;
-    while (frames.length < at) frames.push(null);
+    while (frames.length < at) frames.push(undefined);
     frames.length = at;
     for (const m of piece.midi) frames.push(m);
     // Only the last few seconds are drawn.
@@ -193,6 +211,13 @@ export class LaneTracks {
       out.push({ t, midi: note === null ? m : foldOctave(m, note.midi) });
     }
     return out;
+  }
+
+  /** Frame `i` (50 Hz song time) of a singer: MIDI, `null` silent, `undefined` not known. */
+  frame(key: string, i: number): number | null | undefined {
+    const track = this.#tracks.get(key);
+    if (track === undefined) return undefined;
+    return track.frames[i - track.start];
   }
 
   /** The singers with any pitch kept. */

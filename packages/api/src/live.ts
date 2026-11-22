@@ -14,7 +14,7 @@ import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { type LiveEvent, type LiveFeed, LiveFeedKey } from "@miyoria/types";
 import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
-import { clientKey, tooMany } from "./public.js";
+import { tooMany } from "./public.js";
 import { param, type Route } from "./route.js";
 import type { ApiContext, ApiState } from "./state.js";
 
@@ -66,7 +66,7 @@ const STREAM_HEADERS = {
 /** `GET /api/public/live`. */
 function liveStream(state: ApiState, c: ApiContext): Response {
   const feed = feedOf(state);
-  const client = clientKey(c);
+  const client = state.publicSide.client(c);
   const wait = state.publicSide.admit(client);
   if (wait !== null) return tooMany(wait);
   if (c.req.method === "HEAD") return new Response(null, { status: 200, headers: STREAM_HEADERS });
@@ -183,7 +183,7 @@ async function video(state: ApiState, c: ApiContext): Promise<Response> {
   if (url === null) throw ApiError.notFound("no such file");
 
   const busy = busyOf(state);
-  const client = clientKey(c);
+  const client = state.publicSide.client(c);
   const mine = busy.clients.get(client) ?? 0;
   if (mine >= VIDEO_PER_CLIENT || busy.total >= info.max_viewers * VIDEO_PER_VIEWER) {
     return tooMany(1_000);

@@ -6,6 +6,8 @@
 // * She judges who did it and awards it to the person talking to her (`award_bounty`), never to
 //   herself, once per bounty. Cancelled or run out, the hold goes back to the purse.
 // * Bounties persist in `BountyStore`; a sweep ends what ran out.
+// * A bounty belongs to the server it was posted in (phase 6; with none, the primary): it is shown
+//   there, `bounties_open` counts per server, and only a member there can be paid it.
 
 import { errorMessage } from "@miyoria/runtime/kernel";
 import { type AccountRef, type ContextKey, newId, safeName, toTimestamp } from "@miyoria/types";
@@ -14,10 +16,13 @@ import { STRANGER } from "./economy.js";
 import { cleanTask, guardTask } from "./guard.js";
 import { PURSE_PLATFORM, pickById } from "./purse.js";
 import { type Bounty, BountyStoreKey } from "./records.js";
+import { mayTakePart, spaceName, spaceToOpen } from "./spaces.js";
 import { type BountyView, EconomyError } from "./types.js";
 
 export const NO_BOUNTY = "沒有這個懸賞";
 export const TOO_MANY = "同時開著的懸賞到上限了";
+/** Awarding a bounty to someone who is not in its server (`{server}`: its name). */
+export const NOT_THERE = "這個懸賞是{server}的,只能給那裡的成員";
 const DAY_MS = 86_400_000;
 const VIEW_LIMIT = 10;
 
@@ -36,8 +41,13 @@ export class BountyBoard {
     return store;
   }
 
-  async #open(): Promise<Bounty[]> {
-    return this.#store().list(this.e.profile, { statuses: ["open"], limit: 50 });
+  /** The open bounties; `spaces`: only those servers' (and the ones of none). */
+  async #open(spaces?: readonly string[]): Promise<Bounty[]> {
+    return this.#store().list(this.e.profile, {
+      statuses: ["open"],
+      limit: 50,
+      ...(spaces ? { spaces } : {}),
+    });
   }
 
   /** She posts a bounty, paid from her purse. Throws `EconomyError` / `TaskRefusal`. */
@@ -50,8 +60,9 @@ export class BountyBoard {
     }
     await guardTask(this.e, null, task, req.context, { noun: "懸賞", why: "她自己貼的懸賞" });
     const store = this.#store();
+    const space = spaceToOpen(this.e.places(), req.context);
     const bounty = await this.e.serial(async (): Promise<Bounty> => {
-      if ((await this.#open()).length >= c.bounties_open) {
+      if ((await this.#open(space === null ? undefined : [space])).length >= c.bounties_open) {
         throw new EconomyError(429, `${TOO_MANY}(${c.bounties_open} 個)`);
       }
       const id = newId();
@@ -68,6 +79,7 @@ export class BountyBoard {
         expires_at: toTimestamp(now + c.bounty_days * DAY_MS),
         closed_at: null,
         winner: null,
+        space,
       };
       try {
         await store.create(made);
@@ -77,7 +89,11 @@ export class BountyBoard {
       }
       return made;
     });
-    this.e.purse.audit("economy.bounty.post", { bounty: bounty.id, reward: bounty.reward });
+    this.e.purse.audit("economy.bounty.post", {
+      bounty: bounty.id,
+      reward: bounty.reward,
+      space: bounty.space,
+    });
     await this.e.purse.refresh();
     return bounty;
   }
@@ -100,6 +116,13 @@ export class BountyBoard {
     const store = this.#store();
     const bounty = await this.e.serial(async (): Promise<Bounty> => {
       const open = await this.#pick(ref);
+      const places = this.e.places();
+      if (!mayTakePart(places, who.person.id, open.space)) {
+        throw new EconomyError(
+          403,
+          NOT_THERE.replace("{server}", spaceName(places, open.space ?? "")),
+        );
+      }
       const closed = toTimestamp(this.e.now());
       const moved = await store.transition(open.id, ["open"], {
         status: "awarded",
@@ -171,11 +194,18 @@ export class BountyBoard {
     }
   }
 
-  /** The bounties she has open, newest first. */
-  async view(): Promise<BountyView[]> {
+  /**
+   * The bounties she has open, newest first; `spaces`: only those servers' (and the ones of none),
+   * every one without.
+   */
+  async view(spaces?: readonly string[]): Promise<BountyView[]> {
     const store = this.e.services.get(BountyStoreKey);
     if (!store) return [];
-    const rows = await store.list(this.e.profile, { statuses: ["open"], limit: VIEW_LIMIT });
+    const rows = await store.list(this.e.profile, {
+      statuses: ["open"],
+      limit: VIEW_LIMIT,
+      ...(spaces ? { spaces } : {}),
+    });
     return rows.map((b) => ({
       id: b.id,
       task: b.task,

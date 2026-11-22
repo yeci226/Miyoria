@@ -15,10 +15,14 @@
 import type { TranscriptEntry } from "@miyoria/memory/transcript";
 import {
   type AccountRef,
+  accountRefString,
   type ContextKey,
   DeliveryLedgerKey,
   type FloorClaimKind,
   type Handle,
+  type MessageRef,
+  namedIn,
+  type PersonCandidate,
   sameAccount,
   WishesKey,
 } from "@miyoria/types";
@@ -52,6 +56,21 @@ export interface ClaimsHost {
 
 /** The outlet's claims (`OutletClaims`) for the text runs of a host. */
 export function outletClaims(agent: Agent, host: ClaimsHost): OutletClaims {
+  const people = (line: OutgoingLine): { account: AccountRef; name: string }[] => {
+    // Who spoke there and whoever she answers, then who is in the voice channel there and
+    // whoever this run's prompt names (in the place she speaks in).
+    const out = knownPeople(host.entries(line.place), host.wakeOf(line.turn));
+    const more = [
+      ...(host.members?.(line.place) ?? []),
+      ...(line.focus ? (host.named?.(line.turn) ?? []) : []),
+    ];
+    for (const p of more) {
+      if (!out.some((o) => sameAccount(o.account, p.account))) {
+        out.push({ account: p.account, name: p.name });
+      }
+    }
+    return out.filter((p) => !agent.isBlocked(p.account) && !agent.isSelf(p.account));
+  };
   return {
     kind(line: OutgoingLine): FloorClaimKind | null {
       const wake = host.wakeOf(line.turn);
@@ -68,20 +87,33 @@ export function outletClaims(agent: Agent, host: ClaimsHost): OutletClaims {
       const handles = [...to, ...named].map((s) => agent.handleOf(s.account, s.name));
       return [...new Set(handles)];
     },
-    people(line: OutgoingLine): { account: AccountRef; name: string }[] {
-      // Who spoke there and whoever she answers, then who is in the voice channel there and
-      // whoever this run's prompt names (in the place she speaks in).
-      const out = knownPeople(host.entries(line.place), host.wakeOf(line.turn));
-      const more = [
-        ...(host.members?.(line.place) ?? []),
-        ...(line.focus ? (host.named?.(line.turn) ?? []) : []),
-      ];
-      for (const p of more) {
-        if (!out.some((o) => sameAccount(o.account, p.account))) {
-          out.push({ account: p.account, name: p.name });
-        }
+    people,
+    to(line: OutgoingLine, reply: MessageRef | null): Handle[] | null {
+      const wake = host.wakeOf(line.turn);
+      if (wake === null) return null;
+      if (reply !== null) {
+        // The author of the message it replies to: in the transcript, else whoever woke her.
+        const parent = host.entries(line.place).find((e) => e.message_id === reply.id);
+        const author =
+          parent?.account != null
+            ? { account: parent.account, name: parent.author ?? parent.account.id }
+            : wake.kind === "addressed" && wake.message.id === reply.id
+              ? wake.from
+              : null;
+        if (author !== null) return [agent.handleOf(author.account, author.name)];
       }
-      return out.filter((p) => !agent.isBlocked(p.account) && !agent.isSelf(p.account));
+      // Whom it names: never the person of the turn only because the turn is theirs (2026-11-22:
+      // a question to one person, sent after a reply to another, was taken as asked of the other).
+      const candidates: PersonCandidate[] = people(line).map((p) => ({
+        key: accountRefString(p.account),
+        handle: agent.handleOf(p.account, p.name),
+        person: null,
+        account: p.account,
+        shown: [p.name],
+        first: null,
+        call: agent.attitude(p.account)?.call_name ?? null,
+      }));
+      return namedIn(line.text, candidates).map((c) => c.handle);
     },
   };
 }

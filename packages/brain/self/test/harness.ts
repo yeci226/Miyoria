@@ -15,7 +15,7 @@ import {
   type TranscriptStore,
   transcriptTables,
 } from "@miyoria/memory/transcript";
-import { getLogger } from "@miyoria/runtime/kernel";
+import { getLogger, type Logger } from "@miyoria/runtime/kernel";
 import { SqliteStore } from "@miyoria/store";
 import { type ContextKey, dataBlock, type JsonValue } from "@miyoria/types";
 import { z } from "zod";
@@ -230,6 +230,7 @@ export interface RigOptions {
   store?: SqliteStore;
   tools?: ToolRegistry;
   beforeCompaction?: RunPorts["beforeCompaction"];
+  log?: Logger;
 }
 
 export const PROMPT: PromptSource = {
@@ -264,7 +265,7 @@ export async function rig(script: readonly ScriptStep[], options: RigOptions = {
       guard: options.guard ?? permissiveGuard,
       outlet,
       clock,
-      log: getLogger("brain.self.test"),
+      log: options.log ?? getLogger("brain.self.test"),
       onEvent: (e) => events.push(e),
       random: () => 0,
       ...(options.beforeCompaction ? { beforeCompaction: options.beforeCompaction } : {}),

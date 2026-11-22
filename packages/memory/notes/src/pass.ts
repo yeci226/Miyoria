@@ -63,6 +63,7 @@ import { type EvidenceConfig, EvidenceConfigSchema } from "../../memory/src/conf
 import { type EvidenceLine, nameWords, supporting } from "../../memory/src/evidence.js";
 import { isPresentState } from "../../memory/src/expiry.js";
 import { sameMatter } from "../../memory/src/followups.js";
+import { fromElsewhere } from "../../memory/src/places.js";
 import { textSimilarity } from "../../memory/src/tokenize.js";
 import type { TranscriptEntry } from "../../transcript/src/types.js";
 import type { EpisodeSink, OpenFollowup } from "./episodes.js";
@@ -663,7 +664,10 @@ export async function runSegmentPass(
   const now = deps.now();
   const names = nameWords(people.flatMap((p) => p.names));
   const others = spoken.filter((e) => e.kind === "other");
-  const tools = entries.filter((e) => e.kind === "tool_result" && e.redacted_at === null);
+  // What she read of another place backs nothing here (`fromElsewhere`).
+  const tools = entries.filter(
+    (e) => e.kind === "tool_result" && e.redacted_at === null && !fromElsewhere(e.content),
+  );
   const drop = (index: number, op: Edit["op"], reason: DropReason, detail: string) => {
     result.dropped.push({ index, op, reason, detail });
   };

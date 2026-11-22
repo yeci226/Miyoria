@@ -88,9 +88,11 @@ import {
   type Wake,
   type WakeAuthor,
   wakeAuthor,
+  withLimits,
 } from "../../self/src/index.js";
 import { answeredLine, applyFeel, feelDeps } from "./feel.js";
 import type { AdmittedInput } from "./lane.js";
+import { hourCap } from "./limits.js";
 import type { HostPrompt, SlowReads } from "./prompt.js";
 import { knownPeople } from "./repeat.js";
 import type { PromptKeeper } from "./saved.js";
@@ -908,7 +910,7 @@ export class VoiceHost implements VoiceRunner {
         this.#d.runner().run({
           session: { id: place.session, context },
           wake: run.wake,
-          profile: PROFILES.voice,
+          profile: withLimits(PROFILES.voice, hourCap(agent, context)),
           signal: run.controller.signal,
           turn,
         }),
@@ -1069,6 +1071,8 @@ export class VoiceHost implements VoiceRunner {
       const cancel = state.run.cancel;
       return { type: "cancelled", cause: cancel?.cause ?? "shutdown", by: cancel?.by ?? null };
     }
+    // The hourly cap stays visible as such, even when someone waiting was told when she is back.
+    if (result.outcome === "over_budget") return { type: "error", error: result.outcome };
     if (state.lines > 0 || result.outcome === "said") {
       return { type: "sent", parts: Math.max(state.lines, result.lines.length) };
     }

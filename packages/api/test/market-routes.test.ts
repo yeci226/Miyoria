@@ -5,7 +5,8 @@
 import { contract, routeMeta } from "@miyoria/contracts/api";
 import type { AuctionView, LotteryView, MarketService } from "@miyoria/play/market";
 import { MarketKey } from "@miyoria/play/market";
-import { AuthorizerKey } from "@miyoria/types";
+import { PeopleStoreKey } from "@miyoria/store";
+import { AuthorizerKey, type Places, PlacesKey, type SpaceRef } from "@miyoria/types";
 import type { AnyRouter } from "@orpc/server";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
@@ -86,12 +87,45 @@ function fakeMarket() {
   return { market: market as unknown as MarketService, calls };
 }
 
-function app(market: MarketService | null) {
+/** Two servers she is in, A (the primary) and B; the member is in A only, unless `inB`. */
+function twoSpaces(inB: boolean): Places {
+  const space = (id: string, primary: boolean): SpaceRef => ({
+    id,
+    platform: "discord",
+    external_id: `g${id}`,
+    name: id,
+    primary,
+    established: primary,
+  });
+  const spaces = [space("A", true), space("B", false)];
+  return {
+    primary: () => spaces[0] ?? null,
+    spaces: () => spaces,
+    space: (id: string) => spaces.find((s) => s.id === id) ?? null,
+    spacesOf: () => (inB ? spaces : [spaces[0] as SpaceRef]),
+    isMember: (_p: unknown, id: string) => id === "A" || inB,
+  } as unknown as Places;
+}
+
+function app(
+  market: MarketService | null,
+  options: { places?: Places; markets?: Record<string, MarketService> } = {},
+) {
+  const services = new Map<unknown, unknown>([
+    [AuthorizerKey, { allows: () => true }],
+    [PeopleStoreKey, { personByAccount: async () => ({ id: "p1" }) }],
+  ]);
+  if (options.places) services.set(PlacesKey, options.places);
+  const markets = {
+    of: (space: string | null) =>
+      options.markets === undefined ? market : (options.markets[space ?? "A"] ?? null),
+  };
   const state = {
     publicSide: { config: { enabled: true }, admitMember: () => null },
-    optional: (key: unknown) => (key === AuthorizerKey ? { allows: () => true } : undefined),
+    optional: (key: unknown) => services.get(key),
     service: (key: unknown, what: string) => {
-      if (key === MarketKey && market !== null) return market;
+      if (key === MarketKey && market !== null) return markets;
+      if (key === PlacesKey && options.places) return options.places;
       throw ApiError.unavailable(`${what} is not available`);
     },
   };
@@ -200,6 +234,27 @@ describe("the market's routes", () => {
       offered: ["frame"],
       next: { opens_at: "z", plan: "frame" },
     });
+  });
+
+  it("are about one server's market: the member's own by default, the asked one if theirs", async () => {
+    const a = fakeMarket();
+    const b = fakeMarket();
+    const markets = { A: a.market, B: b.market };
+    const hono = app(a.market, { places: twoSpaces(false), markets });
+    expect((await hono.request("/api/member/market/auction")).status).toBe(200);
+    expect(a.calls).toHaveLength(1);
+    const elsewhere = await hono.request("/api/member/market/auction?space=B");
+    expect(elsewhere.status).toBe(403);
+    expect(await elsewhere.json()).toMatchObject({ error: "你不在這個伺服器裡" });
+    expect((await hono.request("/api/member/market/lottery?space=Z")).status).toBe(404);
+    expect(b.calls).toEqual([]);
+    const member = app(a.market, { places: twoSpaces(true), markets });
+    await member.request("/api/member/market/bid?space=B", json({ amount: 60 }));
+    expect(b.calls).toEqual([["bid", MEMBER, 60]]);
+    // The owner's side: the primary by default, any server she is in when asked.
+    await member.request("/api/market/settle?space=B", json({ what: "lottery" }));
+    expect((await member.request("/api/market/history?space=Z")).status).toBe(404);
+    expect((await member.request("/api/market/history")).status).toBe(200);
   });
 
   it("is a 503 naming the module without it", async () => {

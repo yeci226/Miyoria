@@ -48,8 +48,37 @@ CREATE INDEX \`initiative_inbox_open_idx\` ON \`initiative_inbox\` (\`session\`)
 CREATE INDEX \`initiative_schedules_due_idx\` ON \`initiative_schedules\` (\`due\`) WHERE "initiative_schedules"."state" = 'open';
 `;
 
+/**
+ * Version 2 (phase 6, docs/design/v5-places.md): the Space each row came from. Filled from the
+ * row's own place (`context`'s platform and server, as identity knows them); a row without a
+ * place stays `NULL` (home). Additive.
+ */
+const SPACES = `ALTER TABLE \`initiative_inbox\` ADD \`space_id\` text;
+
+ALTER TABLE \`initiative_schedules\` ADD \`space_id\` text;
+
+UPDATE \`initiative_inbox\` SET \`space_id\` = (
+	SELECT s.\`id\` FROM \`spaces\` s
+	WHERE s.\`platform\` = json_extract(\`initiative_inbox\`.\`context\`, '$.platform')
+		AND s.\`external_id\` = json_extract(\`initiative_inbox\`.\`context\`, '$.scope')
+) WHERE \`context\` IS NOT NULL;
+
+UPDATE \`initiative_schedules\` SET \`space_id\` = (
+	SELECT s.\`id\` FROM \`spaces\` s
+	WHERE s.\`platform\` = json_extract(\`initiative_schedules\`.\`context\`, '$.platform')
+		AND s.\`external_id\` = json_extract(\`initiative_schedules\`.\`context\`, '$.scope')
+) WHERE \`context\` IS NOT NULL;
+
+CREATE INDEX \`initiative_inbox_space_idx\` ON \`initiative_inbox\` (\`space_id\`) WHERE "initiative_inbox"."seen_at" IS NULL;
+`;
+
 /** Her schedules and her inbox. */
 export const initiativeSchema: PluginSchema = {
   plugin: "initiative",
-  migrations: [{ version: 1, name: "init", sql: INIT }],
+  // Version 2 reads identity's `spaces`.
+  requires: ["identity"],
+  migrations: [
+    { version: 1, name: "init", sql: INIT },
+    { version: 2, name: "spaces", sql: SPACES },
+  ],
 };

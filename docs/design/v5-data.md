@@ -1,6 +1,8 @@
 # V5 資料層:階段 1 的設計
 
-> 2026-11-14。唯讀調查寫成的設計,還沒有實作。數字來自 2026-11-13 對 `data/miyoria.db` 的唯讀查詢。前半是結論和要 owner 決定的事;「Design detail」之後是實作用的細節(英文,含資料表草稿)。上層的規劃見 [v5-architecture.md](v5-architecture.md) §13。
+> 狀態(2026-11-21):**已實作**,在階段 1 合併(PR #53,2026-11-15),線上已經跑在新的資料庫上。§8 第 14 步只做了前半(見「第 14 步做完之後」):舊的 store 介面和只剩搬移在讀的舊表(`relationships`、`relationship_deltas`、`self:feeling:*`)還沒拿掉,列在 [backlog.md](backlog.md)。下面是 2026-11-14 寫的設計,實作時的出入以程式為準。
+>
+> 2026-11-14。唯讀調查寫成的設計,當時還沒有實作。數字來自 2026-11-13 對 `data/miyoria.db` 的唯讀查詢。前半是結論和要 owner 決定的事;「Design detail」之後是實作用的細節(英文,含資料表草稿)。上層的規劃見 [v5-architecture.md](v5-architecture.md) §13。
 
 ## 現在的資料庫長什麼樣
 

@@ -2,6 +2,9 @@
 // auction and the weekly lottery, over the market's tables (`store.ts`) and the economy's wallet
 // (`MarketWalletKey`, looked up at each use).
 //
+// * One service is one Space's market: its rows (`MarketStore.forSpace`) and its config, read at
+//   each use (a Space's settings apply without a restart); `markets.ts` keeps one per Space and one
+//   more for the song priority ticket, which is everyone's (`trades` / `songs` say which parts run).
 // * Everything that writes runs in turn (`#turns`): a bid, a purchase, a name and the periodic
 //   pass (`tick`). The times it acts on are derived from the config and the times kept in the
 //   tables, so a restart picks up where it was: a lot that should be open opens, one past its end
@@ -34,6 +37,7 @@ import { randomInt } from "node:crypto";
 import { errorMessage, type Logger, SerialQueue } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
+  DEFAULT_CURRENCY,
   MARKET_REASONS,
   type MarketCharge,
   type MarketWallet,
@@ -236,8 +240,21 @@ export interface CallNames {
 }
 
 export interface MarketDeps {
-  config: MarketConfig;
+  /** The config, or where to read it at each use (a Space's settings apply without a restart). */
+  config: MarketConfig | (() => MarketConfig);
+  /** The tables, as seen from the Space this market runs in (`MarketStore.forSpace`). */
   store: MarketStore;
+  /**
+   * Its lottery runs only with a channel of its own: every Space but the primary, and the primary
+   * too when the cluster names a lottery channel (it is then some server's, and runs there). So a
+   * server where nobody set the market up sells nothing, and the one lottery of before runs once
+   * (the primary without a channel only when none was ever set).
+   */
+  secondary?: boolean;
+  /** Whether this market runs the auction and the lottery (default true). */
+  trades?: boolean;
+  /** Whether this market sells and settles the song priority tickets (default true). */
+  songs?: boolean;
   /** The economy's wallet, looked up at each use (the economy may restart). */
   wallet: () => MarketWallet | null;
   now: () => number;
@@ -276,8 +293,20 @@ export class MarketService {
     this.#d = deps;
   }
 
+  /** The config in force now. */
   get config(): MarketConfig {
-    return this.#d.config;
+    return this.#c();
+  }
+
+  #c(): MarketConfig {
+    const c = this.#d.config;
+    return typeof c === "function" ? c() : c;
+  }
+
+  /** Whether the lottery sells tickets: on, and for a secondary Space with its own channel. */
+  lotteryRunning(): boolean {
+    const c = this.#c();
+    return c.lottery && (this.#d.secondary !== true || lotteryChannel(c) !== "");
   }
 
   #now(): number {
@@ -289,11 +318,11 @@ export class MarketService {
   }
 
   #currency(): string {
-    return this.#wallet()?.currency ?? "魚幣";
+    return this.#wallet()?.currency ?? DEFAULT_CURRENCY;
   }
 
   #offset(): number {
-    return this.#d.config.utc_offset_minutes;
+    return this.#c().utc_offset_minutes;
   }
 
   #refusal(charge: Exclude<MarketCharge, { ok: true }>, what: string): MarketRefusal {
@@ -314,7 +343,7 @@ export class MarketService {
   /** The port the singer asks (`SongPriorityKey`). */
   readonly songPriority: SongPriority = {
     terms: (): SongPriorityTerms | null => {
-      const c = this.#d.config;
+      const c = this.#c();
       if (c.song_priority_per_day === 0) return null;
       return {
         price: c.song_priority,
@@ -324,8 +353,10 @@ export class MarketService {
     },
     // The row goes in before the wallet is asked, so a charge that stopped half way (Core stopped,
     // the singer never listed the song) is found by the pass (`#songTicketPass`) and given back.
-    charge: async (account, key, ref) => {
-      const c = this.#d.config;
+    // The price and the day's limit are everyone's; the row records the Space whose queue the
+    // ticket is used in.
+    charge: async (account, key, ref, space) => {
+      const c = this.#c();
       if (c.song_priority_per_day === 0) return { ok: false, message: "現在沒有賣點歌優先券" };
       if (this.#d.isSelf(account)) return { ok: false, message: HER_OWN };
       const wallet = this.#wallet();
@@ -336,6 +367,7 @@ export class MarketService {
       this.#d.store.addSongTicket(
         { key, person: who.person, account, amount: c.song_priority },
         now,
+        space ?? null,
       );
       const since = toTimestamp(dayStartMs(localDay(now, this.#offset()), this.#offset()));
       const charge = await wallet.charge(
@@ -407,16 +439,16 @@ export class MarketService {
   // ---- times --------------------------------------------------------------------------------
 
   #auctionAt(): WeeklyAt {
-    return { weekday: this.#d.config.auction_weekday, time: this.#d.config.auction_time };
+    return { weekday: this.#c().auction_weekday, time: this.#c().auction_time };
   }
 
   #drawAt(): WeeklyAt {
-    return { weekday: this.#d.config.lottery_weekday, time: this.#d.config.lottery_time };
+    return { weekday: this.#c().lottery_weekday, time: this.#c().lottery_time };
   }
 
   /** Whether the auction runs: on, with a channel. */
   auctionRunning(): boolean {
-    return this.#d.config.auction && this.#d.config.auction_channel !== "";
+    return this.#c().auction && this.#c().auction_channel !== "";
   }
 
   /** The latest opening at or before `now`, its week and end. */
@@ -424,7 +456,7 @@ export class MarketService {
     const opens = lastSlot(this.#auctionAt(), now, this.#offset());
     return {
       opens,
-      ends: opens + this.#d.config.auction_hours * HOUR_MS,
+      ends: opens + this.#c().auction_hours * HOUR_MS,
       week: localDay(opens, this.#offset()),
     };
   }
@@ -453,7 +485,7 @@ export class MarketService {
       }
       const who = await wallet.member(account);
       if (who === null) return refuse(403, NOT_KNOWN);
-      const c = this.#d.config;
+      const c = this.#c();
       const leading = this.#d.store.leading(lot.id);
       const top = Math.max(0, ...leading.map((b) => b.amount));
       const mine = leading.length > 0 && leading[0]?.person === who.person;
@@ -502,7 +534,7 @@ export class MarketService {
    * `auction_extend_max_mins` after the scheduled end (the lot's opening plus `auction_hours`).
    */
   #extendedEnd(lot: Lot, now: number): number | null {
-    const c = this.#d.config;
+    const c = this.#c();
     const window = c.auction_extend_mins * MINUTE_MS;
     const ends = Date.parse(lot.ends_at);
     if (window <= 0 || ends - now >= window) return null;
@@ -552,7 +584,7 @@ export class MarketService {
       const why = await this.#d.screenName(name);
       if (why !== null) return refuse(409, `她不想這樣叫你:${why} 換一個,或選不要了退款。`);
       if (names.refuses(who.person)) return refuse(409, "她現在不想幫你換稱呼。可以選不要了退款。");
-      const until = this.#now() + this.#d.config.auction_call_days * DAY_MS;
+      const until = this.#now() + this.#c().auction_call_days * DAY_MS;
       // Taken: written before anything is burned, so a stop after this finishes applying it and
       // never refunds a price that was burned.
       const taken = {
@@ -565,7 +597,7 @@ export class MarketService {
       }
       const done = await this.#applyName({ ...found, ...taken });
       this.#d.tell(
-        nameNote(who.name, name, this.#d.config.auction_call_days),
+        nameNote(who.name, name, this.#c().auction_call_days),
         `market:name:${found.id}`,
         who.person,
       );
@@ -653,11 +685,11 @@ export class MarketService {
 
   /** `count` tickets of this week for `account`; `key` makes a retry the same purchase. */
   buyTickets(account: AccountRef, count: number, key: string): Promise<BuyResult> {
-    const c = this.#d.config;
+    const c = this.#c();
     if (!Number.isSafeInteger(count) || count < 1 || count > c.lottery_per_week) {
       return Promise.resolve(refuse(400, `一次可以買 1 到 ${c.lottery_per_week} 張`));
     }
-    if (!c.lottery) return Promise.resolve(refuse(409, "現在沒有樂透"));
+    if (!this.lotteryRunning()) return Promise.resolve(refuse(409, "現在沒有樂透"));
     if (this.#d.isSelf(account)) return Promise.resolve(refuse(403, HER_OWN));
     return this.#turns.run(async (): Promise<BuyResult> => {
       const wallet = this.#wallet();
@@ -723,7 +755,7 @@ export class MarketService {
 
   #lotView(lot: Lot): LotView | null {
     if (lot.kind === null) return null;
-    const c = this.#d.config;
+    const c = this.#c();
     const bids = this.#d.store
       .bids(lot.id)
       .filter((b) => b.status !== "pending" && b.status !== "void");
@@ -827,13 +859,13 @@ export class MarketService {
     return drawPicture(
       this.#d.pictures?.(),
       "auction",
-      auctionPictureData(view.lot, view, this.#d.config),
+      auctionPictureData(view.lot, view, this.#c()),
     );
   }
 
   /** The lottery week's picture for `view` (its `mine` included); `null` without a picture. */
   lotteryPicture(view: LotteryView): Promise<PictureFile | null> {
-    return drawPicture(this.#d.pictures?.(), "lottery", lotteryPictureData(view, this.#d.config));
+    return drawPicture(this.#d.pictures?.(), "lottery", lotteryPictureData(view, this.#c()));
   }
 
   /**
@@ -871,7 +903,7 @@ export class MarketService {
   }
 
   async lotteryView(account: AccountRef | null): Promise<LotteryView> {
-    const c = this.#d.config;
+    const c = this.#c();
     const now = this.#now();
     const { week, drawAt } = this.#lotteryWeek(now);
     const row = this.#d.store.week(week);
@@ -883,7 +915,7 @@ export class MarketService {
     }
     return {
       currency: this.#currency(),
-      running: c.lottery,
+      running: this.lotteryRunning(),
       price: c.lottery_price,
       per_person: c.lottery_per_week,
       min_buyers: c.lottery_min_buyers,
@@ -989,7 +1021,7 @@ export class MarketService {
   ): Promise<
     { ok: true; week: number; opens_at: Timestamp; plan: LotKind | "skip" } | MarketRefusal
   > {
-    if (choice !== "skip" && !this.#d.config.auction_lots.includes(choice)) {
+    if (choice !== "skip" && !this.#c().auction_lots.includes(choice)) {
       return Promise.resolve(
         refuse(409, `「${LOT_TITLE[choice].name}」現在沒有開放拍賣(auction_lots 裡沒有它)`),
       );
@@ -1002,7 +1034,7 @@ export class MarketService {
         now < slot.ends && (current === null || ["planned", "skipped"].includes(current.status));
       const opens = thisWeek ? slot.opens : slot.opens + 7 * DAY_MS;
       const week = localDay(opens, this.#offset());
-      const ends = opens + this.#d.config.auction_hours * HOUR_MS;
+      const ends = opens + this.#c().auction_hours * HOUR_MS;
       const put = this.#d.store.putLot({
         id: newId(),
         week,
@@ -1068,7 +1100,7 @@ export class MarketService {
         burned: w.burned,
         winner: w.winner?.name ?? null,
       }));
-    return { lots, weeks, offered: [...this.#d.config.auction_lots], next: this.#next() };
+    return { lots, weeks, offered: [...this.#c().auction_lots], next: this.#next() };
   }
 
   // ---- the pass -----------------------------------------------------------------------------
@@ -1076,11 +1108,17 @@ export class MarketService {
   /** Everything that is due now: the lottery's draw and notices, the auction's lots and holds. */
   tick(signal?: AbortSignal): Promise<void> {
     return this.#turns.run(async () => {
+      const trades = this.#d.trades !== false;
+      const songs = this.#d.songs !== false;
       for (const [name, step] of [
-        ["lottery", () => this.#lotteryPass(signal)],
-        ["auction", () => this.#auctionPass(signal)],
-        ["song tickets", () => this.#songTicketPass(signal)],
-      ] as const) {
+        ...(trades
+          ? ([
+              ["lottery", () => this.#lotteryPass(signal)],
+              ["auction", () => this.#auctionPass(signal)],
+            ] as const)
+          : []),
+        ...(songs ? ([["song tickets", () => this.#songTicketPass(signal)]] as const) : []),
+      ]) {
         try {
           await step();
         } catch (error) {
@@ -1096,12 +1134,11 @@ export class MarketService {
   // ---- the lottery's pass -------------------------------------------------------------------
 
   async #lotteryPass(signal?: AbortSignal): Promise<void> {
-    const c = this.#d.config;
     const store = this.#d.store;
     const now = this.#now();
     // A purchase that stopped between its row and its charge: paid if the charge stands.
     for (const t of store.staleTickets(now - STALE_MS)) await this.#settleTicket(t);
-    if (!c.lottery) {
+    if (!this.lotteryRunning()) {
       // Turned off: the weeks not drawn give every ticket back.
       for (const w of store.weeksIn(["open"])) {
         store.setWeek(w.week, ["open"], { status: "refunding" });
@@ -1116,7 +1153,7 @@ export class MarketService {
     for (const w of store.weeksIn(["drawn", "refunded"])) {
       if (w.announced_at === null) await this.#announceDraw(w);
     }
-    if (c.lottery) await this.#weekNotice(now);
+    if (this.lotteryRunning()) await this.#weekNotice(now);
   }
 
   /**
@@ -1139,7 +1176,7 @@ export class MarketService {
   }
 
   async #draw(w: LotteryWeek): Promise<void> {
-    const c = this.#d.config;
+    const c = this.#c();
     const store = this.#d.store;
     const wallet = this.#wallet();
     if (wallet === null) throw new Unsettled("no wallet");
@@ -1150,7 +1187,7 @@ export class MarketService {
       const tickets = paid.reduce((n, t) => n + t.count, 0);
       const pot = paid.reduce((n, t) => n + t.amount, 0);
       const buyers = new Set(paid.map((t) => t.person)).size;
-      if (buyers < c.lottery_min_buyers || !c.lottery) {
+      if (buyers < c.lottery_min_buyers || !this.lotteryRunning()) {
         store.setWeek(w.week, ["open"], { status: "refunding", tickets, buyers, pot });
       } else {
         const pick = (this.#d.randomInt ?? randomInt)(tickets);
@@ -1235,15 +1272,15 @@ export class MarketService {
 
   /** The draw's notice in the channel and her note, once. */
   async #announceDraw(w: LotteryWeek): Promise<void> {
-    const channel = lotteryChannel(this.#d.config);
+    const channel = lotteryChannel(this.#c());
     if (channel !== "") {
       const currency = this.#currency();
       const picture = await drawPicture(
         this.#d.pictures?.(),
         "lottery",
-        drawPictureData(w, this.#d.config, currency),
+        drawPictureData(w, this.#c(), currency),
       );
-      await this.#postNotice(channel, lotteryResultNotice(w, this.#d.config, currency), picture);
+      await this.#postNotice(channel, lotteryResultNotice(w, this.#c(), currency), picture);
     }
     this.#d.tell(
       lotteryNote(w, this.#currency()),
@@ -1255,7 +1292,7 @@ export class MarketService {
 
   /** The week's notice with its buy buttons, once a week, when there is a channel. */
   async #weekNotice(now: number): Promise<void> {
-    const channel = lotteryChannel(this.#d.config);
+    const channel = lotteryChannel(this.#c());
     if (channel === "") return;
     const { week, drawAt } = this.#lotteryWeek(now);
     const row = this.#d.store.ensureWeek(week, drawAt);
@@ -1265,7 +1302,7 @@ export class MarketService {
     const view = await this.lotteryViewUnlocked();
     const id = await this.#postNotice(
       channel,
-      lotteryNotice(view, this.#d.config),
+      lotteryNotice(view, this.#c()),
       await this.lotteryPicture(view),
     );
     if (id !== null) this.#d.store.setWeek(week, ["open"], { notice_message: id });
@@ -1321,7 +1358,7 @@ export class MarketService {
 
   /** Opens this week's lot when it is time and it is not there. */
   async #open(now: number, signal?: AbortSignal): Promise<void> {
-    const c = this.#d.config;
+    const c = this.#c();
     const slot = this.#slot(now);
     if (now >= slot.ends) return;
     const found = this.#d.store.lotOfWeek(slot.week);
@@ -1372,7 +1409,7 @@ export class MarketService {
     week: number,
     signal?: AbortSignal,
   ): Promise<{ kind: LotKind; by: "her" | "rotation"; why: string | null }> {
-    const kinds = this.#d.config.auction_lots;
+    const kinds = this.#c().auction_lots;
     if (this.#d.picker !== null && kinds.length > 1) {
       try {
         const pick = await this.#d.picker.pick(kinds, this.#d.store.recentKinds(4), signal);
@@ -1418,7 +1455,7 @@ export class MarketService {
       await this.#settleWin(lot, `frame:${lot.id}`);
       this.#d.store.setLot(lot.id, ["closing"], { status: "done", settled_at: toTimestamp(now) });
     } else {
-      const due = now + this.#d.config.auction_name_hours * HOUR_MS;
+      const due = now + this.#c().auction_name_hours * HOUR_MS;
       this.#d.store.setLot(lot.id, ["closing"], { status: "naming", name_due: toTimestamp(due) });
     }
     await this.#announceLot(this.#d.store.lot(lot.id) as Lot);
@@ -1428,7 +1465,7 @@ export class MarketService {
   async #announceLot(lot: Lot): Promise<void> {
     const view = this.#lotView(lot);
     if (view === null) return;
-    const channel = lot.channel ?? this.#d.config.auction_channel;
+    const channel = lot.channel ?? this.#c().auction_channel;
     if (channel !== "") {
       const currency = this.#currency();
       const picture = await drawPicture(
@@ -1437,7 +1474,7 @@ export class MarketService {
         auctionPictureData(
           view,
           { currency, mine: null, history: this.#bidHistory(lot.id) },
-          this.#d.config,
+          this.#c(),
         ),
       );
       await this.#postNotice(channel, lotResultNotice(view, currency), picture);

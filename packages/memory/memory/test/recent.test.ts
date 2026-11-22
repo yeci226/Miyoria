@@ -150,7 +150,9 @@ describe("the 2026-11-10 incident: asked and answered in a DM", () => {
       [12, 49],
     ] as const) {
       log.her("對了,面試結果怎麼樣?", at(h, m), guild("lobby"), [S]);
-      log.say(S, "你已經在私訊問過我了", at(h, m + 1), guild("lobby"));
+      log.say(S, "你已經在私訊問過我了", at(h, m + 1), guild("lobby"), {
+        reply: { self: true, text: "對了,面試結果怎麼樣?" },
+      });
     }
     const r = readers(log);
     const asked = await r.threads.asked(pS, "面試的結果怎麼樣?", at(12, 50));

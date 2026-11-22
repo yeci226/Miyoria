@@ -1,6 +1,10 @@
+> **歷史文件**:這一代的設計已被 V5([v5-architecture.md](v5-architecture.md))取代,不再更新。
+> 檔案保留是因為程式碼註解仍引用它的章節編號,而那些章節描述的模組現在還在;編號與位置都不要動。
+> 現況請看 V5 文件與 [backlog.md](backlog.md)。
+
 # V3 架構設計
 
-> 狀態:**階段 0 到 7 的程式已完成,尚未在真實環境驗收**(2026-11-07)。依據:[v3-research.md](v3-research.md)(各家 AI VTuber、開源專案、語音、agent harness、Discord 的調查)、2026-11-07 第一次在真實環境跑 V2 的紀錄。前一版見 [v2-architecture.md](v2-architecture.md)。
+> 狀態:**階段 0 到 7 的程式已完成,尚未在真實環境驗收**(2026-11-07)。依據:各家 AI VTuber、開源專案、語音、agent harness、Discord 的調查(原報告已移除)、2026-11-07 第一次在真實環境跑 V2 的紀錄。前一版見 [v2-architecture.md](v2-architecture.md)。
 
 ## 0. 一句話結論
 
@@ -34,7 +38,7 @@ V3 只做一件大事:**一條主線**。只有一個前景決策者能讓她開
 
 ## 2. 調查得到的結論
 
-完整內容與證據等級見 [v3-research.md](v3-research.md)。對設計有決定性影響的是這幾點。
+調查報告已移除,只留對設計有決定性影響的幾點。
 
 - **Neuro 的內部查不到,查得到的指向仲裁**。官方 SDK 的語音一輪是「秒級」,不是毫秒。真正可用的是它的介面:`context` 有 `silent` 欄位,把「她知道了」和「這可能值得反應」分開;`actions/force` 有四級 priority,在「繼續講」和「打斷」之間有「快講完」。
 - **粉絲看重的是互動、驚喜和穩定人格**,不是速度。小社群給不了源源不絕的 prompt,所以她要有事可做、偶爾開口,並記得每個人。
@@ -789,5 +793,4 @@ Owner 決定全部做完再一起實測,所以下表的驗收都還沒做。`[co
 
 ## 22. 參考
 
-- 調查報告與來源:[v3-research.md](v3-research.md)
-- 前一版:[v2-architecture.md](v2-architecture.md)、[v2-implementation.md](v2-implementation.md)
+- 前一版:[v2-architecture.md](v2-architecture.md)

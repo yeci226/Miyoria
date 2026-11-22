@@ -576,6 +576,7 @@ describe("Live", () => {
           default: "quiet",
         },
       ],
+      space: null,
     };
     const puts: unknown[] = [];
     mockFetch((method, url, body) => {

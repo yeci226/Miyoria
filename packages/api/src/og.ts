@@ -17,11 +17,13 @@ import { CARD_FONT_FAMILY, cardFontOptions } from "@miyoria/card-face/fonts";
 import { renderCardSvg } from "@miyoria/card-face/render";
 import type { IssuedCard } from "@miyoria/contracts/api";
 import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
+import { CharacterKey, DEFAULT_CHARACTER } from "@miyoria/types";
 import { Resvg } from "@resvg/resvg-js";
 import sharp from "sharp";
 import { publicCard } from "./card.js";
 import { type CardArt, cardArt } from "./card-art.js";
 import { ApiError } from "./errors.js";
+import { worldOf } from "./landing.js";
 import {
   CARD_IMAGE_WIDTH,
   cardMeta,
@@ -29,9 +31,10 @@ import {
   OG_HEIGHT,
   OG_WIDTH,
   originOf,
+  type PageMeta,
   pageMeta,
 } from "./meta.js";
-import { clientKey, tooMany } from "./public.js";
+import { tooMany } from "./public.js";
 import { param, type Route } from "./route.js";
 import type { ApiContext, ApiState } from "./state.js";
 
@@ -197,12 +200,54 @@ async function hazeArt(
   }
 }
 
+const escapeXml = (t: string): string =>
+  t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** Who the site is named after: the running profile's character (Miyoria without one). */
+function herOf(state: ApiState) {
+  return state.optional(CharacterKey) ?? DEFAULT_CHARACTER;
+}
+
 /** The panel's 暮色 gradient, for a machine without her pictures. */
 const DUSK = `<defs><linearGradient id="og-dusk" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1b1b33"/><stop offset="0.55" stop-color="#2a2140"/><stop offset="1" stop-color="#3a2438"/></linearGradient></defs>
 <rect width="${OG_WIDTH}" height="${OG_HEIGHT}" fill="url(#og-dusk)"/>`;
 
+/** Her name on the site's picture: its size, and where it may reach (the glass, with a margin). */
+const NAME_SIZE = 128;
+const NAME_MIN_SIZE = 56;
+const NAME_LEFT = 70;
+const NAME_RIGHT = GLASS_W - 36;
+
+/** How wide `name` draws at `size` in the bundled font (resvg's own measure of the text). */
+function nameWidth(name: string, size: number): number {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${OG_WIDTH}" height="${OG_HEIGHT}"><text x="0" y="${size}" font-family="${LATIN}" font-size="${size}" font-weight="600" letter-spacing="-3" fill="#000">${escapeXml(name)}</text></svg>`;
+  const box = new Resvg(svg, { font: cardFontOptions() }).getBBox();
+  return box ? box.x + box.width : 0;
+}
+
+/**
+ * Her name as it fits on the glass: at full size when it fits (Miyoria does, so her picture is
+ * as it always was), else smaller down to `NAME_MIN_SIZE`, and past that cut with 「…」.
+ */
+export function fitName(name: string): { text: string; size: number } {
+  const room = NAME_RIGHT - NAME_LEFT;
+  const full = nameWidth(name, NAME_SIZE);
+  if (full <= room) return { text: name, size: NAME_SIZE };
+  const size = Math.max(NAME_MIN_SIZE, Math.floor((NAME_SIZE * room) / full));
+  if (nameWidth(name, size) <= room) return { text: name, size };
+  const chars = [...name];
+  for (let n = chars.length - 1; n > 0; n -= 1) {
+    const text = `${chars.slice(0, n).join("").trimEnd()}…`;
+    if (nameWidth(text, size) <= room) return { text, size };
+  }
+  return { text: "…", size };
+}
+
 /** The site's own picture: her name on the glass, and her standing over its edge. */
-export async function renderDefaultImage(panelDir: string | null): Promise<Buffer> {
+export async function renderDefaultImage(
+  panelDir: string | null,
+  name: string = DEFAULT_CHARACTER.name,
+): Promise<Buffer> {
   const pose = "smile";
   const [art, back, frost] = await Promise.all([
     poseArt(panelDir, pose, 760, true),
@@ -215,6 +260,7 @@ export async function renderDefaultImage(panelDir: string | null): Promise<Buffe
   const artX = W - artW + 70;
   const artY = 18;
   const x = 76;
+  const fitted = fitName(name);
   const glass = `<defs><clipPath id="og-glass"><rect width="${GLASS_W}" height="${H}"/></clipPath>
 <linearGradient id="og-wash" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#090a10" stop-opacity="0.5"/><stop offset="1" stop-color="#090a10" stop-opacity="0.22"/></linearGradient>
 <linearGradient id="og-lip" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity="0.09"/><stop offset="1" stop-color="#ffffff" stop-opacity="0.03"/></linearGradient></defs>
@@ -235,7 +281,7 @@ ${her}
 <g transform="translate(${x - 4} 70) scale(2.25)" fill="none">
 <path d="M15.5 3.5a8 8 0 1 0 5 14.2A6.5 6.5 0 0 1 15.5 3.5Z" fill="${COLORS.primary}"/>
 </g>
-<text x="${x - 6}" y="388" font-family="${LATIN}" font-size="128" font-weight="600" letter-spacing="-3" fill="${TEXT}">Miyoria</text>
+<text x="${NAME_LEFT}" y="388" font-family="${LATIN}" font-size="${fitted.size}" font-weight="600" letter-spacing="-3" fill="${TEXT}">${escapeXml(fitted.text)}</text>
 <text x="${x}" y="452" font-family="${FONT_FAMILY}" font-size="34" fill="${MUTED}">住在 Discord 和直播裡的 AI VTuber</text>
 <rect x="${x}" y="514" width="40" height="3" rx="1.5" fill="${COLORS.primary}"/>
 <text x="${x + 56}" y="524" font-family="${FONT_FAMILY}" font-size="24" fill="${MUTED}" fill-opacity="0.8">聊天・唱歌・直播</text>
@@ -340,10 +386,11 @@ function image(png: Buffer, cacheControl: string): Response {
 
 async function defaultImage(state: ApiState, cacheControl = SITE_CACHE): Promise<Response> {
   const cache = cacheOf(state);
-  const key = `default:${RENDER_VERSION}`;
+  const name = herOf(state).name;
+  const key = `default:${RENDER_VERSION}:${name}`;
   let png = cache.get(key);
   if (!png) {
-    png = await oneAtATime(state, () => renderDefaultImage(state.panelDir));
+    png = await oneAtATime(state, () => renderDefaultImage(state.panelDir, name));
     cache.set(key, png);
   }
   return image(png, cacheControl);
@@ -382,7 +429,7 @@ async function cardImage(state: ApiState, c: ApiContext): Promise<Response> {
   if (card === null) return defaultImage(state, SHORT_CACHE);
   const version = cardVersion(card);
   if (!cacheOf(state).get(`${card.serial}:${version}`)) {
-    const wait = state.publicSide.admitCardCheck(clientKey(c));
+    const wait = state.publicSide.admitCardCheck(state.publicSide.client(c));
     if (wait !== null) return tooMany(wait);
   }
   let png: Buffer;
@@ -412,7 +459,7 @@ async function artImage(state: ApiState, c: ApiContext): Promise<Response> {
   if (card === null) return missing();
   let art = artCacheOf(state).get(card.serial) ?? null;
   if (art === null) {
-    const wait = state.publicSide.admitCardCheck(clientKey(c));
+    const wait = state.publicSide.admitCardCheck(state.publicSide.client(c));
     if (wait !== null) return tooMany(wait);
     try {
       art = await oneAtATime(state, () => artOf(state, card));
@@ -473,9 +520,16 @@ export async function rewriteHtml(
   const path = new URL(request.url).pathname;
   const origin = originOf(request);
   const serial = cardSerialIn(path);
+  const world = worldOf(state);
+  const withWorld = (meta: PageMeta): PageMeta => (world === null ? meta : { ...meta, world });
   if (serial !== null && state.publicSide.config.enabled) {
     const card = await publicCard(state, serial);
-    if (card) return injectMeta(html, cardMeta(card, origin, `${origin}${cardImagePath(card)}`));
+    if (card) {
+      return injectMeta(
+        html,
+        withWorld(cardMeta(card, origin, `${origin}${cardImagePath(card)}`, herOf(state))),
+      );
+    }
   }
-  return injectMeta(html, pageMeta(path, origin));
+  return injectMeta(html, withWorld(pageMeta(path, origin, herOf(state))));
 }

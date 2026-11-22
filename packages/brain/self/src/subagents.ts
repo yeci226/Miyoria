@@ -81,7 +81,7 @@ export const KINDS: Readonly<Record<SubagentKind, KindSpec>> = {
     kind: "curator",
     callable: true,
     system: CURATOR_SYSTEM,
-    tools: ["notebook_read", "notebook_write", "recall"],
+    tools: ["notebook_read", "notebook_write", "notebook_delete", "recall"],
     effects: ["read", "act"],
     limits: {
       rounds: 20,

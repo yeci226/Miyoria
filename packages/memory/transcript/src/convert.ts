@@ -15,6 +15,12 @@
 // Everything from outside is data: names go through `safeName`, other people's text, notes and
 // tool results through `neutralize` (`@miyoria/types`). Her own text is hers and is left as it is.
 //
+// A line opens with the speaker's handle when `names` knows it (the one name she has for them,
+// the one her tools take); when the name they went by then is another, it follows once, the first
+// time that handle shows that name in what is rendered: `Nobu(顯示名「Model-9 Lumen」): …`, then
+// `Nobu: …`. Each line depends only on the lines before it and on handles, which never change, so
+// a transcript that grew still renders its old lines the same.
+//
 // The line format (`name(tags): text`, the `(bot)` / `(語音)` / `(回覆 X)` tags, the interruption
 // mark, the flagged placeholder, the time-gap line) is the one `packages/brain/agent/src/prompt.ts`
 // writes today (`otherLine`, `ownLine`, `replyTag`, `gapLine`, `FLAGGED_LINE`). Those helpers are
@@ -29,13 +35,16 @@ import {
   userMessage,
 } from "@miyoria/llm/llm";
 import {
+  type AccountRef,
   DATA_CLOSE,
   DATA_OPEN,
   dataBlock,
   escapeData,
+  type Handle,
   type IncomingMessage,
   imageType,
   incomingText,
+  nameKey,
   neutralize,
   type PersonId,
   safeName,
@@ -68,11 +77,77 @@ const MAX_REPLY_EXCERPT = 24;
 /** Longest quoted parent line (characters of its text). */
 const MAX_PARENT_CHARS = 300;
 
+/** After a handle, the name its account went by then when that is another: `(顯示名「…」)`. */
+export const SHOWN_AS = (name: string): string => `(顯示名「${name}」)`;
+
+/**
+ * Her handle for the speaker of an entry (`null`: not known, the name it was shown under stands).
+ * Called for other people's lines and the lines they reply to; it must answer the same for the
+ * same account every time (a handle never follows a rename).
+ */
+export type SpeakerNames = (who: {
+  account: AccountRef | null;
+  author: string | null;
+  bot: boolean;
+}) => Handle | null;
+
+const NAMES = new WeakMap<object, SpeakerNames>();
+
+/**
+ * How the speakers of `store`'s entries are named in what is made of them (the summary of a
+ * compaction, `compactIfNeeded`, `compactIdle`). Set by whoever renders its prompts; unset: by
+ * the name they were shown under.
+ */
+export function nameSpeakers(store: object, names: SpeakerNames | null): void {
+  if (names === null) NAMES.delete(store);
+  else NAMES.set(store, names);
+}
+
+/** What `nameSpeakers` set for `store`, or `null`. */
+export function speakerNamesOf(store: object): SpeakerNames | null {
+  return NAMES.get(store) ?? null;
+}
+
+/** Speaker labels within one rendering: the name each handle was last shown with. */
+class Labels {
+  readonly #names: SpeakerNames | null;
+  readonly #shown = new Map<string, string>();
+
+  constructor(names: SpeakerNames | null) {
+    this.#names = names;
+  }
+
+  /** The handle of `entry`'s speaker, made inert, or `null`. */
+  handle(entry: TranscriptEntry): string | null {
+    if (this.#names === null || entry.account === null) return null;
+    const handle = this.#names({ account: entry.account, author: entry.author, bot: entry.bot });
+    return handle === null || handle.trim() === "" ? null : safeName(handle);
+  }
+
+  /** What a line of `entry` opens with: the handle, and the name shown then the first time. */
+  speaker(entry: TranscriptEntry): string {
+    const author = safeName(entry.author ?? "");
+    const handle = this.handle(entry);
+    if (handle === null) return author;
+    if (entry.author === null || nameKey(entry.author) === nameKey(handle)) return handle;
+    if (this.#shown.get(handle) === author) return handle;
+    this.#shown.set(handle, author);
+    return `${handle}${SHOWN_AS(author)}`;
+  }
+
+  /** How a quoted speaker is named (a reply's parent): the handle alone when known. */
+  quoted(entry: TranscriptEntry): string {
+    return this.handle(entry) ?? safeName(entry.author ?? "");
+  }
+}
+
 export interface RenderOptions {
   /** A time-gap line is written between entries further apart than this. Default 30 minutes; 0: never. */
   gapMs?: number;
   /** One entry's text is cut to this many characters. Default 0: no limit. */
   maxEntryChars?: number;
+  /** Her handles for the speakers (`SpeakerNames`); unset: the names they were shown under. */
+  names?: SpeakerNames | null;
 }
 
 function cut(text: string, max: number): string {
@@ -114,30 +189,39 @@ function shownText(entry: TranscriptEntry): string {
 }
 
 /** `(回覆 X「…」)`: the entry replies to a line that is in the transcript. */
-function replyTag(entry: TranscriptEntry, byMessage: ReadonlyMap<string, TranscriptEntry>): string {
+function replyTag(
+  entry: TranscriptEntry,
+  byMessage: ReadonlyMap<string, TranscriptEntry>,
+  labels: Labels,
+): string {
   if (entry.reply_to === null) return "";
   const parent = byMessage.get(entry.reply_to);
   if (parent === undefined) return "";
   const own = parent.kind === "self" || parent.kind === "tool_calls";
-  const name = own ? SELF_QUOTE_NAME : safeName(parent.author ?? "");
+  const name = own ? SELF_QUOTE_NAME : labels.quoted(parent);
   const text = own ? parent.content : shownText(parent);
   const quote = cut(text.replace(/\s+/g, " ").trim(), MAX_REPLY_EXCERPT);
   return quote === "" ? `(回覆 ${name})` : `(回覆 ${name}「${quote}」)`;
 }
 
-function otherLine(entry: TranscriptEntry, reply: string, maxChars: number): string {
+function otherLine(
+  entry: TranscriptEntry,
+  reply: string,
+  maxChars: number,
+  labels: Labels,
+): string {
   let tags = "";
   if (entry.bot) tags += BOT_TAG;
   if (entry.spoken) tags += SPOKEN_TAG;
   tags += reply;
-  return `${safeName(entry.author ?? "")}${tags}: ${cut(shownText(entry), maxChars)}`;
+  return `${labels.speaker(entry)}${tags}: ${cut(shownText(entry), maxChars)}`;
 }
 
 /** A note as the model reads it: a quoted reply parent, or a data block named by its label. */
-function noteLine(entry: TranscriptEntry, maxChars: number): string {
+function noteLine(entry: TranscriptEntry, maxChars: number, labels: Labels): string {
   if (entry.label === REPLY_PARENT_LABEL) {
     const text = cut(shownText(entry).replace(/\s+/g, " ").trim(), MAX_PARENT_CHARS);
-    return `> (被回覆) ${safeName(entry.author ?? "")}: ${text}`;
+    return `> (被回覆) ${labels.speaker(entry)}: ${text}`;
   }
   const attrs = xmlAttrs({ source: safeName(entry.label ?? "note", 40) });
   return `${DATA_OPEN}${attrs}>\n${cut(escapeData(entry.content), maxChars).trim()}\n${DATA_CLOSE}`;
@@ -171,6 +255,7 @@ function assistant(content: string, calls: ToolCall[], reasoning: string | null)
 export function toMessages(tail: TranscriptTail, options: RenderOptions = {}): ChatMessage[] {
   const gapMs = options.gapMs ?? 30 * 60 * 1000;
   const maxChars = options.maxEntryChars ?? 0;
+  const labels = new Labels(options.names ?? null);
   const out: ChatMessage[] = [];
   const summary = tail.summary?.summary.trim() ?? "";
   if (summary !== "") out.push(userMessage(dataBlock("transcript", SUMMARY_TITLE, summary)));
@@ -208,8 +293,8 @@ export function toMessages(tail: TranscriptTail, options: RenderOptions = {}): C
         gap(entry);
         lines.push(
           entry.kind === "note"
-            ? noteLine(entry, maxChars)
-            : otherLine(entry, replyTag(entry, byMessage), maxChars),
+            ? noteLine(entry, maxChars, labels)
+            : otherLine(entry, replyTag(entry, byMessage, labels), maxChars, labels),
         );
         break;
       }
@@ -259,10 +344,14 @@ export function toMessages(tail: TranscriptTail, options: RenderOptions = {}): C
 }
 
 /** The flagged messages of `entries`, each with what the input defence noticed: a data block's body. */
-export function flaggedBody(entries: readonly TranscriptEntry[]): string {
+export function flaggedBody(
+  entries: readonly TranscriptEntry[],
+  names: SpeakerNames | null = null,
+): string {
+  const labels = new Labels(names);
   return entries
     .filter((e) => e.flagged !== null && e.redacted_at === null)
-    .map((e) => `${safeName(e.author ?? "")}:${neutralize(e.content)}\n${e.flagged}`)
+    .map((e) => `${labels.speaker(e)}:${neutralize(e.content)}\n${e.flagged}`)
     .join("\n");
 }
 

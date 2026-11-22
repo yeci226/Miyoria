@@ -209,7 +209,7 @@ enabled = false
         scope: "room",
         scope_id: text.id,
         plugin: "agent",
-        key: "activeness",
+        key: "activeness_level",
         value: "high",
       },
     ]);
@@ -232,7 +232,7 @@ enabled = false
     ).toEqual([
       ["space", space, "agent", "mode", "mention-only", "import"],
       ...[
-        [text.id, "activeness", "high"],
+        [text.id, "activeness_level", "high"],
         [text.id, "mode", "lively"],
         [voice.id, "voice.mode", "normal"],
       ]
@@ -271,6 +271,136 @@ enabled = false
     expect((error as Error).message).not.toContain("password");
     expect(store.config.revisions.current()).toBeNull();
     expect(() => store.importConfig("not = [toml")).toThrow(/invalid TOML/);
+  });
+
+  it("keeps what the panel set over the file's values, and imports again only with replace", async () => {
+    const store = await open();
+    // The panel's layer before the import: a changed key, and a module turned off.
+    store.config.revisions.write(
+      { modules: { market: { auction_hours: 48, enabled: false }, party: { song_rounds: 9 } } },
+      "panel:discord:1",
+    );
+    const toml = `[modules.market]\nauction_hours = 12\nauction_step = 5\n[modules.api]\ntoken = "\${MIYORIA_API_TOKEN:-}"\n`;
+    const result = store.importConfig(toml);
+    expect(result.imported).toBe(true);
+    expect(result.revision?.doc).toEqual({
+      modules: {
+        market: { auction_hours: 48, auction_step: 5, enabled: false },
+        party: { song_rounds: 9 },
+        api: { token: "${MIYORIA_API_TOKEN:-}" },
+      },
+    });
+    expect(result.plan?.panel).toEqual([
+      "modules.market.auction_hours",
+      "modules.party.song_rounds",
+    ]);
+
+    // Once imported, another run writes nothing; `replace` writes the file as it is.
+    expect(store.importConfig(toml).imported).toBe(false);
+    const replaced = store.importConfig(toml, { replace: true });
+    expect(replaced.imported).toBe(true);
+    expect(replaced.revision?.doc).toEqual({
+      modules: {
+        market: { auction_hours: 12, auction_step: 5, enabled: false },
+        api: { token: "${MIYORIA_API_TOKEN:-}" },
+      },
+    });
+    expect(store.config.revisions.history()).toHaveLength(3);
+  });
+
+  it("works it out without writing in a dry run", async () => {
+    const store = await open();
+    const toml = `[modules.agent]\nchannels = { "discord:111:222" = "lively" }\n[modules.market]\nauction_hours = 12\n`;
+    const dry = store.importConfig(toml, { dryRun: true });
+    expect(dry.imported).toBe(false);
+    expect(dry.plan).toMatchObject({
+      dry_run: true,
+      base: null,
+      changed: ["modules"],
+      places: [
+        {
+          from: 'modules.agent.channels."discord:111:222"',
+          scope: "room",
+          place: "discord:111:222",
+          scope_id: null,
+          plugin: "agent",
+          key: "mode",
+          value: "lively",
+          current: null,
+          action: "write",
+        },
+      ],
+    });
+    expect(store.config.revisions.current()).toBeNull();
+    expect(store.config.places.list()).toEqual([]);
+    expect(store.places.spaces()).toEqual([]);
+  });
+
+  it("copies a server's channel into that server's place setting, and keeps a place's own value", async () => {
+    const store = await open();
+    const a = store.places.seen("discord", "111", "一號");
+    const b = store.places.seen("discord", "222", "二號");
+    store.persons.ensureRoom("discord", "111", "5001", "text");
+    store.persons.ensureRoom("discord", "222", "6001", "text");
+    // Server B already set its own lottery channel.
+    store.config.places.set("space", b, "market", "lottery_channel", "6009", "panel:discord:1");
+    const toml = [
+      "[modules.market]",
+      'auction_channel = "5001"',
+      'lottery_channel = "6001"',
+      "[modules.cards]",
+      'drop_channels = ["5001", "6001", "7777"]',
+      "[modules.karaoke]",
+      'comment_channel = "discord:222:6002"',
+    ].join("\n");
+    const spaceChannels = [
+      { module: "market", keys: ["auction_channel"], ref: "id" as const },
+      { module: "market", keys: ["lottery_channel"], ref: "id" as const },
+      { module: "cards", keys: ["drop_channels"], ref: "id" as const },
+      { module: "karaoke", keys: ["comment_channel"], ref: "context" as const },
+    ];
+    const result = store.importConfig(toml, { spaceChannels });
+    const rows = (space: string) =>
+      store.config.places
+        .list({ scope: "space", scope_id: space })
+        .map((r) => [r.plugin, r.key, r.value, r.updated_by]);
+    expect(rows(a)).toEqual([
+      ["cards", "drop_channels", ["5001"], "import"],
+      ["market", "auction_channel", "5001", "import"],
+    ]);
+    expect(rows(b)).toEqual([
+      ["cards", "drop_channels", ["6001"], "import"],
+      ["karaoke", "comment_channel", "discord:222:6002", "import"],
+      ["market", "lottery_channel", "6009", "panel:discord:1"],
+    ]);
+    // A channel no one knows stays at cluster level only; so does the cluster value itself.
+    expect(result.plan?.unplaced).toEqual(['modules.cards.drop_channels = "7777"']);
+    expect(result.revision?.doc).toMatchObject({
+      modules: {
+        market: { auction_channel: "5001" },
+        cards: { drop_channels: ["5001", "6001", "7777"] },
+      },
+    });
+    expect(result.plan?.places.filter((p) => p.action === "keep")).toEqual([
+      expect.objectContaining({
+        plugin: "market",
+        key: "lottery_channel",
+        place: "discord:222",
+        value: "6001",
+        current: "6009",
+      }),
+    ]);
+  });
+
+  it("names the secrets it refuses", async () => {
+    const store = await open();
+    try {
+      store.importConfig('[modules.api]\ntoken = "abc"\n');
+      throw new Error("not refused");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigImportError);
+      expect((error as ConfigImportError).secrets).toEqual(["modules.api.token"]);
+    }
   });
 
   it("writes all of it or nothing", async () => {

@@ -141,8 +141,8 @@ export class Scheduler implements ActionSink {
   readonly #config: SchedulerConfig;
   /** A lane is present exactly while its worker is alive. */
   readonly #lanes = new Map<LaneKey, Lane>();
-  /** What runs right now, by turn: what `interruptTurn` stops. */
-  readonly #running = new Map<TurnId, AbortController>();
+  /** What runs right now, by turn (one per lane at most): what `interruptTurn` stops. */
+  readonly #running = new Map<TurnId, Set<AbortController>>();
   /** Everything running that is hers to say or show: what `silence` stops. */
   readonly #going = new Set<AbortController>();
   #seq = 0;
@@ -214,7 +214,7 @@ export class Scheduler implements ActionSink {
   }
 
   async interruptTurn(turn: TurnId): Promise<void> {
-    this.#running.get(turn)?.abort();
+    for (const stop of [...(this.#running.get(turn) ?? [])]) stop.abort();
   }
 
   async silence(): Promise<number> {
@@ -301,7 +301,11 @@ export class Scheduler implements ActionSink {
     let completion: Completion;
     const stop = new AbortController();
     const turn = action.turn;
-    if (turn !== null) this.#running.set(turn, stop);
+    if (turn !== null) {
+      const running = this.#running.get(turn) ?? new Set();
+      running.add(stop);
+      this.#running.set(turn, running);
+    }
     const hers = action.payload.type !== "actuate";
     if (hers) this.#going.add(stop);
     try {
@@ -326,7 +330,11 @@ export class Scheduler implements ActionSink {
     } catch (error) {
       completion = { ok: false, error: errorMessage(error) };
     }
-    if (turn !== null && this.#running.get(turn) === stop) this.#running.delete(turn);
+    if (turn !== null) {
+      const running = this.#running.get(turn);
+      running?.delete(stop);
+      if (running?.size === 0) this.#running.delete(turn);
+    }
     if (hers) this.#going.delete(stop);
     this.#complete(action, completion);
   }

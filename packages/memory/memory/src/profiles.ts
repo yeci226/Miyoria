@@ -26,6 +26,7 @@ import {
   type ProfileOptions,
   relationshipLabel,
   safeName,
+  shownNames,
   type Timestamp,
   timestampMs,
   toTimestamp,
@@ -185,9 +186,15 @@ export class Profiles implements PersonProfiles {
     const said = (text: string | null | undefined) =>
       text === null || text === undefined || text.trim() === "" ? null : text;
     const words = view === null ? null : heartWords(view);
+    // What their accounts are called now, when not the handle: a name in the chat maps to it.
+    const shown = shownNames(handle, [
+      ...(this.#src.handles()?.resolve(handle)?.names ?? []),
+      ...(options.shown?.[person] ?? []),
+    ]);
     return {
       person,
       handle,
+      ...(shown.length === 0 ? {} : { shown_as: shown }),
       label: view === null ? null : relationshipLabel({ affinity: view.bond }),
       level: view === null ? null : affinityLevel(view.bond),
       owner: view?.owner ?? false,
@@ -369,6 +376,11 @@ export function profileLine(
   asked: readonly string[] = [],
 ): string {
   const attrs: [string, string | number | null][] = [
+    // First, so it is the last to go when the tag is cut: how a name in the chat maps to them.
+    [
+      "shown_as",
+      p.shown_as === undefined || p.shown_as.length === 0 ? null : p.shown_as.join("、"),
+    ],
     ["relation", p.label],
     ["level", p.label === null || p.level === null ? null : `${p.level}/${AFFINITY_LEVEL_MAX}`],
     ["owner", p.owner === true ? "主人" : null],
@@ -398,7 +410,7 @@ export function profileLine(
     ["notes", p.points.length === 0 ? null : p.points.map((x) => pointText(x, p.handle)).join(";")],
     ["asked", asked.length === 0 ? null : asked.join(";")],
   ];
-  if (attrs.every(([, v]) => v === null || String(v).trim() === "")) {
+  if (attrs.every(([k, v]) => k === "shown_as" || v === null || String(v).trim() === "")) {
     attrs.push(["note", "還不太認識"]);
   }
   const name = safeName(p.handle);

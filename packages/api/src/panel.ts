@@ -245,6 +245,75 @@ async function readSlice(path: string, start: number, end: number): Promise<Buff
   }
 }
 
+// ---- the allow-list ----------------------------------------------------------------------------
+
+/**
+ * Who may get a static file (v5-architecture §11.1: 靜態檔用允許清單): `public` for anyone, `private`
+ * only off the public side (`servePanel`'s caller decides who that is), `deny` for nobody.
+ *
+ * * The page itself (`/`, `index.html`) and every address without an extension (the page's own
+ *   routes, answered with `index.html`).
+ * * A few top-level files a site has (`favicon.svg`, `robots.txt`, a manifest).
+ * * The built bundle under `assets/`, by extension: scripts, styles, fonts, pictures, sound and
+ *   video. Never a source map or an HTML file there.
+ * * `*.local.*` pictures at the top (the owner's game art, kept out of git): `public`. The public
+ *   pages draw with them (backdrop, card poses), and the owner kept them readable (2026-11-14).
+ * * Anything else, a dot file included: `deny`.
+ */
+export type StaticAccess = "public" | "private" | "deny";
+
+const TOP_FILES = new Set([
+  "index.html",
+  "favicon.svg",
+  "favicon.ico",
+  "robots.txt",
+  "manifest.webmanifest",
+  "site.webmanifest",
+  "apple-touch-icon.png",
+]);
+const ASSET_EXTS = new Set([
+  ".js",
+  ".mjs",
+  ".css",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".avif",
+  ".svg",
+  ".ico",
+  ".webm",
+  ".mp4",
+  ".mp3",
+  ".ogg",
+  ".wav",
+  ".json",
+  ".wasm",
+]);
+const LOCAL_ART = /^[a-z0-9][a-z0-9-]*\.local\.(?:jpe?g|png|webp|avif)$/i;
+
+/** Who may get the static file at `pathname` (see `StaticAccess`). */
+export function staticAccess(pathname: string): StaticAccess {
+  const parts = segments(pathname);
+  if (parts === null) return "deny";
+  if (parts.some((p) => p.startsWith("."))) return "deny";
+  if (parts.length === 0) return "public";
+  const last = parts[parts.length - 1] as string;
+  if (!last.includes(".")) return "public";
+  if (parts.length === 1) {
+    if (TOP_FILES.has(last)) return "public";
+    if (LOCAL_ART.test(last)) return "public";
+    return "deny";
+  }
+  if (parts[0] === "assets" && ASSET_EXTS.has(extname(last).toLowerCase())) return "public";
+  return "deny";
+}
+
 /** Rewrites a page of HTML for the request that asked for it (the tags of a link preview). */
 export type HtmlRewrite = (html: string, request: Request) => Promise<string>;
 

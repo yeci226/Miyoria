@@ -10,6 +10,9 @@ import {
   type AnyComponentRoute,
   ArgKind,
   argSpec,
+  BOARD_SCOPE_ARG,
+  boardScope,
+  boardScopeArg,
   type CardBlock,
   type CardButton,
   type CommandRegistry,
@@ -24,9 +27,15 @@ import {
   pictureParts,
 } from "@miyoria/commands";
 import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
-import { type KeepsakeFortune, KeepsakesKey, newId, PicturesKey } from "@miyoria/types";
+import { type KeepsakeFortune, KeepsakesKey, newId, PicturesKey, PlacesKey } from "@miyoria/types";
 import { registerV2, unregisterV2 } from "./commands-v2.js";
 import { STRANGER, WALLET_NODE } from "./economy.js";
+import {
+  askGift,
+  giftRoutes,
+  registerGiftCommands,
+  unregisterGiftCommands,
+} from "./gift-commands.js";
 import { mutedText, unlockLines } from "./notices.js";
 import { NO_RECEIVER } from "./transfer.js";
 import {
@@ -38,6 +47,13 @@ import {
   type Hunger,
   type WalletView,
 } from "./types.js";
+import { coinName, pronounOf, transferSmallPrint } from "./words.js";
+
+/**
+ * Under every transfer, with the default coin name (`transferSmallPrint` of `words.ts`). Discord
+ * draws a line that starts with `-# ` as small print.
+ */
+export const TRANSFER_SMALL_PRINT = transferSmallPrint();
 
 const log = getLogger("economy.commands");
 
@@ -69,6 +85,12 @@ function when(iso: string): string {
 
 /** Places `/me board` lists. */
 const BOARD_PLACES = 10;
+
+/**
+ * A fresh idempotency key for a press, on the invoker's platform (`discord:<ulid>` on Discord, as
+ * before): the platform does not hand a command its interaction id, so a press is its own key.
+ */
+const pressKey = (inv: Invocation): string => `${inv.context.platform}:${newId()}`;
 
 const HUNGER_WORD: Readonly<Record<Hunger, string>> = {
   full: "吃飽了",
@@ -213,7 +235,7 @@ class Handler {
       const r = slipOnly ? null : await economy.checkin(inv.invoker);
       const head = r
         ? `簽到了，+${r.gained} ${view.currency}。連續 ${r.streak} 天，現在有 ${r.balance} ${view.currency}。`
-        : "今天已經簽到過了，這次只買籤詩，沒有再領魚幣。";
+        : `今天已經簽到過了，這次只買籤詩，沒有再領${view.currency}。`;
       const unlocked = mutedText(unlockLines(r?.unlocked));
       if (!fortune) return result(head, unlocked);
       const blocks: CardBlock[] = [{ type: "text", text: head }];
@@ -234,7 +256,7 @@ class Handler {
     try {
       const drawn = await keepsakes.drawFortune(
         { account: inv.invoker, name: inv.invoker_display_name, avatar_url: null },
-        `discord:${newId()}`,
+        pressKey(inv),
       );
       if (!drawn.ok) return { public: [drawn.message] };
       const left = drawn.balance === null ? "" : `，剩 ${drawn.balance}`;
@@ -261,8 +283,7 @@ class Handler {
 
   feed(inv: Invocation, item: FeedItem): Promise<CommandReply> {
     return this.#guard(async (economy) => {
-      // The platform does not hand a command its interaction id, so a press is its own key.
-      const r = await economy.feed(inv.invoker, item, 1, `discord:${newId()}`);
+      const r = await economy.feed(inv.invoker, item, 1, pressKey(inv));
       if (!r.accepted) return result(r.message);
       const view = await economy.wallet(inv.invoker);
       return result(
@@ -280,30 +301,38 @@ class Handler {
       if (to === null || amount === null) return notice("warn", "要轉給誰、轉多少?");
       // The option is a Discord user; another platform's account is not someone one can reach.
       if (to.platform !== inv.invoker.platform) return notice("info", NO_RECEIVER);
-      const r = await economy.transfer(inv.invoker, to, amount, `discord:${newId()}`);
+      const r = await economy.transfer(inv.invoker, to, amount, pressKey(inv));
       const view = await economy.wallet(inv.invoker);
       return result(
-        `轉了 ${r.sent} ${view.currency}給 ${r.to}，另付手續費 ${r.fee}（燒掉），剩 ${r.balance}。`,
+        `轉了 ${r.sent} ${view.currency}給 ${r.to}，另付手續費 ${r.fee}（燒掉），剩 ${r.balance}。
+-# ${transferSmallPrint(view.currency)}`,
       );
     });
   }
 
-  /** `/me board`: the sponsor board; `on` joins or leaves it first. */
-  board(inv: Invocation, on: boolean | null): Promise<CommandReply> {
+  /**
+   * `/me board`: the sponsor board; `on` joins or leaves it first. `scope` is the `範圍` option
+   * (in a server that server's members by default, in a DM everyone; `board-scope.ts`).
+   */
+  board(inv: Invocation, on: boolean | null, scope: string | null): Promise<CommandReply> {
     return this.#guard(async (economy) => {
       if (on !== null && !(await economy.setOnBoard(inv.invoker, on))) {
         return notice("info", STRANGER);
       }
+      const where = boardScope(this.services.get(PlacesKey), inv.context, scope);
       const [lines, view] = await Promise.all([
-        economy.board(BOARD_PLACES),
+        economy.board(BOARD_PLACES, where.members ?? undefined),
         economy.wallet(inv.invoker),
       ]);
+      // The join / leave button shows the same list again after the press.
+      const all = scope === "全部" ? ["all"] : [];
       const text =
         lines.length === 0
           ? "還沒有人上榜"
           : lines.map((l) => `${l.rank}. ${l.name}　${l.spent}`).join("\n");
       const blocks: CardBlock[] = [
         { type: "text", text },
+        ...(where.label === "" ? [] : [{ type: "muted" as const, text: where.label }]),
         {
           type: "muted",
           text: `最近花在她身上的${view.currency}（餵食、信、表情、商店買的東西、獻詞、目標等等），花過就預設在榜上，不想上榜可以退出；不顯示餘額。`,
@@ -314,8 +343,8 @@ class Handler {
           type: "buttons",
           buttons: [
             view.on_board
-              ? { id: componentId(R.board, "off"), label: "退出排行榜" }
-              : { id: componentId(R.board, "on"), label: "加入排行榜", style: "primary" },
+              ? { id: componentId(R.board, "off", ...all), label: "退出排行榜" }
+              : { id: componentId(R.board, "on", ...all), label: "加入排行榜", style: "primary" },
           ],
         });
         blocks.push({
@@ -332,7 +361,7 @@ class Handler {
     return this.#guard(async (economy) => {
       const text = inv.str("text")?.trim() ?? "";
       if (text === "") return notice("warn", "要寫什麼?");
-      const r = await economy.screenMessage(inv.invoker, text, `discord:${newId()}`);
+      const r = await economy.screenMessage(inv.invoker, text, pressKey(inv));
       if (!r.accepted) return result(r.message);
       const view = await economy.wallet(inv.invoker);
       return result(`${r.message}，花了 ${r.charged} ${view.currency}，剩 ${r.balance}。`);
@@ -347,17 +376,21 @@ class Handler {
     return this.#guard(async (economy) => {
       const text = inv.str("text")?.trim() ?? "";
       if (text === "") return notice("warn", "要寫什麼?");
-      const r = await economy.danmaku(inv.invoker, text, `discord:${newId()}`);
+      const r = await economy.danmaku(inv.invoker, text, pressKey(inv));
       if (!r.accepted) return result(r.message);
       const view = await economy.wallet(inv.invoker);
       return result(`${r.message}。花了 ${r.charged} ${view.currency}，剩 ${r.balance}。`);
     });
   }
 
-  /** `/me bounties`: what she has posted. */
-  bounties(): Promise<CommandReply> {
+  /**
+   * `/me bounties`: what she has posted in this server (in a DM: in the servers the invoker is
+   * in). Only a member of a bounty's server can be paid it.
+   */
+  bounties(inv: Invocation): Promise<CommandReply> {
     return this.#guard(async (economy) => {
-      const list = (await economy.bounties()).slice(0, BOUNTY_PLACES);
+      const spaces = await economy.spacesFor(inv.context, inv.invoker);
+      const list = (await economy.bounties(spaces)).slice(0, BOUNTY_PLACES);
       if (list.length === 0) return result("她現在沒有貼懸賞");
       const lines = list.map((b) => `・${b.task}　${b.reward}　到 ${when(b.expires_at)}`);
       return cardReply(
@@ -374,9 +407,12 @@ class Handler {
 function unregister(registry: CommandRegistry): void {
   for (const path of PATHS) registry.unregister(path);
   unregisterV2(registry);
+  unregisterGiftCommands(registry);
 }
 
 function register(registry: CommandRegistry, handler: Handler): void {
+  const coin = coinName(handler.services);
+  const her = pronounOf(handler.services);
   const routes: AnyComponentRoute[] = [
     {
       route: R.checkin,
@@ -389,14 +425,18 @@ function register(registry: CommandRegistry, handler: Handler): void {
     }),
   ];
   const boardRoutes: AnyComponentRoute[] = [
-    defineRoute<boolean>({
+    defineRoute<{ on: boolean; scope: string | null }>({
       route: R.board,
-      parse: (p) => (p[0] === "on" ? true : p[0] === "off" ? false : null),
-      handle: async (inv, on) => ComponentResult.reply(await handler.board(inv, on)),
+      parse: (p) => {
+        const on = p[0] === "on" ? true : p[0] === "off" ? false : null;
+        return on === null ? null : { on, scope: p[1] === "all" ? "全部" : null };
+      },
+      handle: async (inv, { on, scope }) =>
+        ComponentResult.reply(await handler.board(inv, on, scope)),
     }),
   ];
   registry.register(
-    commandSpec("me wallet", "你的魚幣：餘額、今天還能賺多少，可以簽到和餵她", {
+    commandSpec("me wallet", `你的${coin}：餘額、今天還能賺多少，可以簽到和餵${her}`, {
       args: [
         argSpec("picture", "附上這一週收支的圖（預設附上；false 只要文字）", ArgKind.boolean, {
           required: false,
@@ -408,11 +448,11 @@ function register(registry: CommandRegistry, handler: Handler): void {
     { components: routes },
   );
   registry.register(
-    commandSpec("me checkin", "每日簽到，領魚幣（可以加買今天的籤詩）", {
+    commandSpec("me checkin", `每日簽到，領${coin}（可以加買今天的籤詩）`, {
       args: [
         argSpec(
           "fortune",
-          "順便抽今天的籤詩（要花魚幣；已經簽到過也能只買籤詩）",
+          `順便抽今天的籤詩（要花${coin}；已經簽到過也能只買籤詩）`,
           ArgKind.boolean,
           {
             required: false,
@@ -424,22 +464,40 @@ function register(registry: CommandRegistry, handler: Handler): void {
     (inv) => handler.checkin(inv, inv.bool("fortune") === true),
   );
   registry.register(
-    commandSpec("me feed", "用魚幣餵她一碗飯", {
-      args: [argSpec("item", "要餵什麼", ArgKind.choice(FEED_ITEMS))],
+    commandSpec("me feed", `用${coin}餵${her}一碗飯，或自己取名送${her}一樣東西`, {
+      args: [
+        argSpec("item", "要餵什麼（白飯、鋼盆、甜點）", ArgKind.choice(FEED_ITEMS), {
+          required: false,
+        }),
+        argSpec(
+          "thing",
+          "或自己寫要送她什麼，例如「一杯珍奶」（先報價，你確認了才扣）",
+          ArgKind.string,
+          {
+            required: false,
+          },
+        ),
+      ],
       permission: WALLET_NODE,
     }),
     (inv) => {
+      // A gift named in words (gift-commands.ts): a quote to confirm, or a fixed food fed at once.
+      const thing = inv.str("thing")?.trim() ?? "";
+      if (thing !== "")
+        return askGift(handler.services, inv, thing, (food) => handler.feed(inv, food));
       const item = inv.str("item");
       return isFeedItem(item)
         ? handler.feed(inv, item)
-        : Promise.resolve(notice("warn", "沒有這種食物"));
+        : Promise.resolve(notice("warn", "要餵什麼?選一樣,或在 thing 寫要送她的東西"));
     },
+    { components: giftRoutes(handler.services) },
   );
+  registerGiftCommands(registry, handler.services);
   registry.register(
-    commandSpec("me give", "把魚幣轉給她認識的另一個人（另收手續費，會燒掉）", {
+    commandSpec("me give", `把${coin}轉給${her}認識的另一個人（另收手續費，會燒掉）`, {
       args: [
         argSpec("user", "要轉給誰", ArgKind.user),
-        argSpec("amount", "對方收到多少魚幣（手續費你另付）", ArgKind.integer),
+        argSpec("amount", `對方收到多少${coin}（手續費你另付）`, ArgKind.integer),
       ],
       permission: WALLET_NODE,
       ephemeral: true,
@@ -452,31 +510,37 @@ function register(registry: CommandRegistry, handler: Handler): void {
         argSpec("join", "加入（回到榜上）或退出排行榜（選填）", ArgKind.choice(["on", "off"]), {
           required: false,
         }),
+        boardScopeArg(),
       ],
       permission: WALLET_NODE,
     }),
     (inv) => {
       const join = inv.str("join");
-      return handler.board(inv, join === "on" ? true : join === "off" ? false : null);
+      return handler.board(
+        inv,
+        join === "on" ? true : join === "off" ? false : null,
+        inv.str(BOARD_SCOPE_ARG),
+      );
     },
     { components: boardRoutes },
   );
   registry.register(
-    commandSpec("me screen", "花魚幣在直播大螢幕上留一則短留言（60 字內）", {
+    commandSpec("me screen", `花${coin}在直播大螢幕上留一則短留言（60 字內）`, {
       args: [argSpec("text", "留言", ArgKind.string)],
       permission: WALLET_NODE,
     }),
     (inv) => handler.screen(inv),
   );
   registry.register(
-    commandSpec("me danmaku", "花魚幣在她直播的畫面上發一則彈幕（從右邊飄過的短句）", {
+    commandSpec("me danmaku", `花${coin}在${her}直播的畫面上發一則彈幕（從右邊飄過的短句）`, {
       args: [argSpec("text", "彈幕", ArgKind.string)],
       permission: WALLET_NODE,
     }),
     (inv) => handler.danmaku(inv),
   );
-  registry.register(commandSpec("me bounties", "她貼著的懸賞", { permission: WALLET_NODE }), () =>
-    handler.bounties(),
+  registry.register(
+    commandSpec("me bounties", "她貼著的懸賞", { permission: WALLET_NODE }),
+    (inv) => handler.bounties(inv),
   );
 }
 

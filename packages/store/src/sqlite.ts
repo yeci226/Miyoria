@@ -74,6 +74,7 @@ import {
 } from "./identity/adapters.js";
 import { Identity } from "./identity/identity.js";
 import { identitySchema } from "./identity/migrations.js";
+import { SpacePlaces } from "./identity/places.js";
 import { legacySchema } from "./legacy-schema/index.js";
 import {
   checkDatabaseFile,
@@ -487,6 +488,8 @@ export class SqliteStore implements Store {
   readonly cards: MemberCardStore;
   /** Persons, accounts and places (the `identity` plugin's tables). */
   readonly persons: Identity;
+  /** Spaces, Rooms and members over `persons` (Core's `PlacesKey`). */
+  readonly places: SpacePlaces;
   /** Config revisions, per-place settings and plugin state (the `config` plugin's tables). */
   readonly config: {
     readonly revisions: ConfigRevisions;
@@ -518,6 +521,7 @@ export class SqliteStore implements Store {
     this.#location = location;
     this.#schemas = [...schemas];
     this.persons = new Identity(db);
+    this.places = new SpacePlaces(db, this.persons);
     this.events = new EventStore(db, { identity: this.persons });
     this.artifacts =
       artifactRoot === null ? null : new ArtifactStore(db, this.events, { root: artifactRoot });
@@ -684,8 +688,9 @@ export class SqliteStore implements Store {
   }
 
   /**
-   * Imports the text of `miyoria.toml` as config revision 1, its per-channel levels as place
-   * settings (`config/import.ts`). For the cut-over's first start; once only.
+   * Imports the text of `miyoria.toml` as the next config revision, merged with the panel's keys,
+   * its per-channel levels and per-server channels as place settings (`config/import.ts`). For
+   * `miyoria config import`, by hand; again only with `replace`.
    */
   importConfig(text: string, options: ConfigImportOptions = {}): ConfigImportResult {
     const { revisions, places } = this.config;

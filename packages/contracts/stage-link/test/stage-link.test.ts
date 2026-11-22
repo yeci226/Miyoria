@@ -104,6 +104,7 @@ const coreMessages: CoreMessageIn[] = [
         on_air: true,
         parts: null,
         pitch: { from: 100, track: "PD0+" },
+        cheers: 2,
       },
     ],
     note: null,
@@ -117,6 +118,9 @@ const coreMessages: CoreMessageIn[] = [
       duck_gain: 0.35,
     },
     settling: null,
+    cheers: [
+      { id: "c1-1", kind: "wow", to: { name: "小明", color: 0 }, by: { name: "小華", color: 2 } },
+    ],
   },
   {
     type: "karaoke_lyrics",

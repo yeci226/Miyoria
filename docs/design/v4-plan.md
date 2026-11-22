@@ -1,3 +1,7 @@
+> **歷史文件**:這一代的設計已被 V5([v5-architecture.md](v5-architecture.md))取代,不再更新。
+> 檔案保留是因為程式碼註解仍引用它的章節編號,而那些章節描述的模組現在還在;編號與位置都不要動。
+> 現況請看 V5 文件與 [backlog.md](backlog.md)。
+
 # V4 規劃:從「管住她」到「讓她有能力」
 
 > 狀態:**階段 0 到 7 的程式都在整合分支 `v4-int` 上**(2026-11-10,owner 要求整份實作;階段 0 另外已在 `main`)。只有測試和重播驗證過,沒有上線;進度和沒驗證的事見 §14 最後,§16 的決定照建議值做、會改變公開行為的預設關閉。依據:2026-11-07 到 11-10 的 `data/miyoria.db` 實測、這次對照程式碼的六份調查(開口時機、記憶、工具與自主、經濟與互動、Minecraft 與 PR、外部對標)。前一版見 [v3-architecture.md](v3-architecture.md)。
@@ -555,6 +559,6 @@ PR 7 的方向(顯示規則改寫成行為、去掉公式、情緒帶程度)和�
 
 ## 18. 參考
 
-- 前幾版:[v2-architecture.md](v2-architecture.md)、[v3-architecture.md](v3-architecture.md)、[v3-research.md](v3-research.md)
+- 前幾版:[v2-architecture.md](v2-architecture.md)、[v3-architecture.md](v3-architecture.md)
 - 相關設計:[autonomy.md](autonomy.md)、[economy.md](economy.md)、[cards.md](cards.md)、[minecraft-findings.md](minecraft-findings.md)、[backlog.md](backlog.md)
 - 外部(2026-11-10 查):[Neuro Game SDK](https://github.com/VedalAI/neuro-game-sdk)、[moeru-ai/airi](https://github.com/moeru-ai/airi)(v0.15 的觸碰反應)、[萌娘百科 DeepSeek娘](https://zh.moegirl.org.cn/DeepSeek%E5%A8%98)、[Cloudflare Stream WebRTC](https://developers.cloudflare.com/stream/webrtc/)

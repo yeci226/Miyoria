@@ -6,6 +6,8 @@
 // the same clock. The song's files come from the room: a spectator of a running round gets signed
 // links of their own to watch with (`me.session` while `me.singing` is false), never submitted.
 // Once the song is over and Core waits for the last results, a plate says 結算中 and for whom.
+// The singers' lines come from the boards and, a few times a second, from `live`. Under the
+// controls, the watcher cheers a singer (RoomCheers.tsx) and sees the latest cheers.
 
 import { ArrowLeft, LogOut, Maximize, Minimize, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -29,9 +31,12 @@ import { HeardBadge, Lyrics, ReadingToggle } from "./Lyrics";
 import { loadReading, type ReadingMode, saveReading } from "./lyric-text";
 import { clock, score1 } from "./result-text";
 import { contextTimeFor, secondsLeft, songTimeByCore } from "./room-clock";
+import { CheerBar, CheerList } from "./RoomCheers";
 import {
   type BoardEvent,
   type BoardLines,
+  type CheerEvent,
+  cheerTargets,
   MOVE_MARK,
   MOVE_WORD,
   memberColor,
@@ -42,7 +47,10 @@ import { EDGE, LAYOUT, PLATE, SAFE, STAGE_BOX } from "./Singing";
 import { StageBackground } from "./StageBackground";
 import { referenceCurve } from "./take";
 
-/** The view runs this far behind Core's clock (s): the singers' pitch arrives about once a second. */
+/**
+ * The view runs this far behind Core's clock (s), as her stream does: the singers' pitch arrives a
+ * few times a second, a moment after they sang it.
+ */
 export const VIEW_DELAY_S = 2;
 const TICK_MS = 100;
 /** The ranking plate's width on wide screens. */
@@ -126,6 +134,7 @@ export function SpectatorStage({
   room,
   board,
   lines,
+  cheers = [],
   offset,
   engine,
   onLeave,
@@ -133,6 +142,8 @@ export function SpectatorStage({
   room: KaraokeRoomView;
   board: BoardEvent | null;
   lines: BoardLines;
+  /** The round's latest cheers (with when they came). */
+  cheers?: readonly (CheerEvent & { at: number })[];
   /** Core's clock less this browser's (ms), or `null` until it is known. */
   offset: () => number | null;
   engine: () => KaraokeEngine;
@@ -317,6 +328,7 @@ export function SpectatorStage({
   // The song is over and Core waits for the last results.
   const settle = room.settling === null ? null : settlingView(room.settling);
   const boardLines = board?.lines ?? [];
+  const targets = cheerTargets(boardLines, room.members);
   const canFull = typeof document !== "undefined" && document.fullscreenEnabled === true;
   const toggleFull = () => {
     const req = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
@@ -414,11 +426,18 @@ export function SpectatorStage({
           ) : (
             <Leaderboard lines={boardLines} compact={compact} onAir={room.air.relay.member} />
           )}
+          <CheerList cheers={cheers} singers={targets} />
         </div>
       </div>
 
       <div className="absolute flex justify-center" style={LAYOUT.bar}>
         <div role="toolbar" aria-label="觀看的控制" className={cn(PLATE, "flex max-w-full flex-wrap items-center justify-center gap-1 px-2 py-1.5 [text-shadow:none]")}>
+          {settle === null && (
+            <>
+              <CheerBar code={room.code} singers={targets} />
+              <span aria-hidden className="mx-1 h-4 w-px bg-border max-sm:hidden" />
+            </>
+          )}
           <Button
             variant={listen ? "outline" : "ghost"}
             size="sm"

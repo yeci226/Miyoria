@@ -3,6 +3,7 @@ import { type ReactNode, useState } from "react";
 import type { MemberSession, PublicDay, PublicSong } from "@miyoria/contracts/api";
 import { ChartBlock, ChartEmpty, ColumnChart } from "@/components/charts/charts";
 import { Logo } from "@/components/logo";
+import { SITE_NAME } from "@/lib/site-name";
 import { Page } from "@/components/page";
 import { EmptyLine, QueryView, SkeletonRows } from "@/components/query-state";
 import { Dot, type Tone } from "@/components/status";
@@ -11,10 +12,14 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Segmented } from "@/components/ui/segmented";
 import { fmtInt } from "@/lib/format";
 import { CardsArea } from "./cards/CardsArea";
+import { Exchange } from "./Exchange";
+import { GiftsReceived } from "./Gifts";
+import { MadeForMe } from "./MadeForMe";
 import { KaraokeLink } from "./karaoke/link";
 import { LiveStage } from "./live/LiveStage";
 import { Market } from "./Market";
 import { DAY_MS, localMidnight, MemberActions, MemberActivity, MemberLists, MemberProfile } from "./Member";
+import { Predictions } from "./Play";
 import { STATE, stateLabel, usePublicSongs, usePublicStatus } from "./status";
 import { WalletMain } from "./Wallet";
 
@@ -183,7 +188,7 @@ function Header({ member, onLogout, onBack }: { member: MemberSession; onLogout:
   return (
     <header className="glass-dock sticky top-0 z-30 flex min-h-13 items-center gap-2.5 border-b px-4 py-2 sm:px-7">
       <Logo className="size-5 shrink-0 text-primary" />
-      <h1 className="text-[15px] font-semibold">Miyoria</h1>
+      <h1 className="text-[15px] font-semibold">{SITE_NAME}</h1>
       {now && (
         <p className="flex min-w-0 items-center gap-1.5 text-[13px] text-muted-foreground">
           <Dot tone={STATE[now.state].tone} pulse={STATE[now.state].pulse} />
@@ -247,7 +252,11 @@ export function PublicSite({
           <MemberLists />
           <CardsArea />
           <Market />
+          <Exchange />
+          <Predictions />
           <WalletMain />
+          <GiftsReceived />
+          <MadeForMe />
           <Songs />
         </Page>
       </main>

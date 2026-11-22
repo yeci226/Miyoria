@@ -47,9 +47,10 @@ describe("the notebook on the notes", () => {
       path: "人/Owen",
       chars: 4,
       created: true,
+      elsewhere: 0,
     });
     const more = await b.notebook.write(" 人 / Owen ", "下週三考試", "append", inGuild);
-    expect(more).toEqual({ path: "人/Owen", chars: 9, created: false });
+    expect(more).toEqual({ path: "人/Owen", chars: 9, created: false, elsewhere: 0 });
     const page = b.notebook.read("人/Owen", inGuild);
     expect(page?.body).toContain("喜歡拉麵");
     expect(page?.body).toContain("下週三考試");
@@ -137,6 +138,66 @@ describe("the notebook on the notes", () => {
     await expect(b.notebook.write("主題/c", "短", "append", inGuild)).rejects.toThrow(
       "筆記本滿了(2 頁),先刪掉或合併幾頁",
     );
+  });
+
+  it("counts only the pages she wrote, and only when a write starts a page", async () => {
+    const b = await book({ max_pages: 2 });
+    // What the segment pass and the import made does not fill her notebook.
+    for (const name of ["x", "y", "z"]) {
+      b.notes.apply(
+        `topic:${name}`,
+        [
+          {
+            op: "add",
+            section: "misc",
+            text: "聽來的",
+            provenance: "observed",
+            scope: { type: "self" },
+            confidence: 0.5,
+          },
+        ],
+        { author: "segment", reason: "pass", lenient: false },
+        name,
+      );
+    }
+    await b.notebook.write("主題/a", "一", "append", inGuild);
+    await b.notebook.write("主題/b", "二", "append", inGuild);
+    await expect(b.notebook.write("主題/c", "三", "append", inGuild)).rejects.toThrow(
+      "筆記本滿了(2 頁),先刪掉或合併幾頁",
+    );
+    // A full notebook can still be tidied: a page that exists is rewritten from anywhere,
+    // also one this place has no lines in.
+    await b.notebook.write("主題/a", "整理過", "replace", inGuild);
+    expect(await b.notebook.write("主題/a", "私訊補的", "append", inDm)).toMatchObject({
+      created: true,
+      elsewhere: 1,
+    });
+    // Deleting a page makes room for a new one.
+    expect(await b.notebook.remove("主題/b", inGuild)).toBe(true);
+    await b.notebook.write("主題/c", "三", "append", inGuild);
+    // A page the segment pass made takes her lines too, and keeps its own.
+    expect(await b.notebook.write("主題/x", "補一句", "replace", inGuild)).toMatchObject({
+      elsewhere: 1,
+    });
+  });
+
+  it("says what a rewrite or a delete from this place could not reach", async () => {
+    const b = await book();
+    const write = new NotebookWriteTool(b.notebook);
+    const del = new NotebookDeleteTool(b.notebook);
+    await b.notebook.write("主題/a", "伺服器寫的", "append", inGuild);
+    const ctx = (where: NotebookWhere) =>
+      ({ context: where.context, account: OWEN_ACCOUNT }) as never;
+    expect(
+      await write.call(ctx(inDm), { path: "主題/a", content: "私訊版", mode: "replace" }),
+    ).toContain("另外還有 1 行是在別的地方寫的");
+    expect(await del.call(ctx(inDm), { path: "主題/a" })).toBe(
+      "刪掉了「主題/a」在這裡寫的部分;另外還有 1 行是在別的地方寫的,這裡刪不到。",
+    );
+    expect(await del.call(ctx(inDm), { path: "主題/a" })).toBe(
+      "「主題/a」的 1 行都是在別的地方寫的,這裡刪不到。",
+    );
+    expect(await del.call(ctx(inGuild), { path: "主題/a" })).toBe("刪掉了「主題/a」。");
   });
 
   it("allows only so many writes an hour", async () => {

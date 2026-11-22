@@ -18,7 +18,7 @@ import {
   statSync,
   unlinkSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { HOST_ERROR_CODE, type HostServiceList } from "@miyoria/contracts/host";
 import {
   type CatalogEntry,
@@ -26,6 +26,7 @@ import {
   HostRpcError,
   inspectService,
   loadCatalog,
+  servicesChangedBy,
 } from "@miyoria/hostd";
 import type { Config } from "@miyoria/runtime/kernel";
 import {
@@ -175,22 +176,9 @@ async function changedFiles(
 
 /**
  * The services a change set touches: those whose folder holds a changed file, and every Python
- * service when a file directly under `workers/` (the modules the workers share) changed.
+ * service when a file directly under `workers/` changed. hostd's, which a remote update uses too.
  */
-export function servicesChangedBy(
-  files: readonly string[],
-  entries: readonly CatalogEntry[],
-  root: string,
-): Set<string> {
-  const shared = files.some((f) => /^workers\/[^/]+\.py$/.test(f));
-  const out = new Set<string>();
-  for (const entry of entries) {
-    const folder = relative(root, entry.dir).replaceAll("\\", "/");
-    if (files.some((f) => f === folder || f.startsWith(`${folder}/`))) out.add(entry.name);
-    else if (shared && entry.descriptor.install.runtime === "python") out.add(entry.name);
-  }
-  return out;
-}
+export { servicesChangedBy };
 
 export interface ServicePlanInput {
   /** Enabled services in start order, with what is true of each. */

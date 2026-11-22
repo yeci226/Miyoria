@@ -40,6 +40,7 @@ export {
   processEnv,
 } from "./config.js";
 export {
+  CharacterSectionSchema,
   type ConfigCheckOptions,
   type ConfigPolicy,
   type ConfigProblem,
@@ -48,11 +49,14 @@ export {
   type ConfigSection,
   type ConfigSeverity,
   CoreSectionSchema,
+  CurrencySchema,
+  characterOf,
   checkConfig,
   composeConfigSchema,
   configJsonSchema,
   configPath,
   configProblemsError,
+  currencyOf,
   describeProblem,
   moduleSectionSchema,
   schemaAt,
@@ -63,6 +67,7 @@ export {
   type EndpointQuery,
   type EndpointSource,
   type EndpointsOption,
+  type EndpointUnit,
   firstEndpoint,
 } from "./endpoints.js";
 export {
@@ -111,6 +116,7 @@ export {
   type ModuleManifestJson,
   manifestJson,
 } from "./module.js";
+export { fixedPlaceConfig, placeConfig, placeFields } from "./place-config.js";
 export { type ServiceLookup, ServiceRegistry, ServiceUnavailableError } from "./services.js";
 export {
   jsonAt,
@@ -119,14 +125,17 @@ export {
   type ModuleSettingsView,
   SETTING_KEY,
   SETTING_KINDS,
+  SETTING_SCOPES,
   type SectionIssue,
   type SettingApply,
   type SettingDescriptor,
   type SettingField,
   type SettingGroup,
   type SettingKind,
+  type SettingMerge,
   type SettingMeta,
   type SettingOverride,
+  type SettingPlaceValue,
   type SettingProblem,
   type SettingRef,
   type SettingRoom,
@@ -136,6 +145,8 @@ export {
   type SettingsChange,
   SettingsError,
   type SettingsErrorKind,
+  type SettingsPlace,
+  type SettingsPlaceView,
   type SettingsSaveRequest,
   type SettingsSaveResult,
   type SettingUnit,

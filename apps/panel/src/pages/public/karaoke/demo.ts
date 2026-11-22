@@ -29,6 +29,13 @@
 // singers, then one, then no one) before the results, which have a winner, a 預估 line, a check and
 // a note. The stream and pitch posts are
 // answered `live` and 204; a room singer's result needs no recording upload (the stream held).
+// Spectating: the spectator's scene gets each singer's latest pitch four times a second (`live`)
+// between the boards, made-up watchers cheer the singers every couple of seconds, and the cheer
+// buttons work (Core's wait is 1.5 s; the cheer comes back on the stream). The singer's scene gets
+// a cheer for them now and then. `?karaoke-demo=novoice` opens the list while she is not in a voice
+// channel: 開一間房 is off and says why, and she "joins" after six seconds (the button turns on by
+// itself, the way the page follows Core).
+//
 // A room opens without a song; its queue (kept in memory) starts with a ready song, one being
 // prepared (its progress moves until it is ready) and one that failed. Adding (from the list, or a
 // link or words, which becomes a song being prepared; words with `limit` are refused as the day's
@@ -551,9 +558,39 @@ function boardNow(r: DemoRoom, previous: Map<string, number>): KaraokeBoardLine[
       source: row.source,
       move: before === undefined || before === rank ? ("same" as const) : before > rank ? ("up" as const) : ("down" as const),
       pitch: nowFrame > from ? { from, track: toBase64(encodeTrack(row.frames)) } : null,
+      cheers: cheersFor.get(row.member) ?? 0,
     };
   });
 }
+
+/** Cheers each made-up singer got this round, and the room's cheer count (for their ids). */
+const cheersFor = new Map<string, number>();
+let cheerCount = 0;
+
+/** A cheer on the room's stream (to everyone watching, and to the singer it is for). */
+function demoCheer(member: string, by: { name: string; color: number }, kind: "cheer" | "nice" | "wow" | "encore"): void {
+  const r = demoRoom;
+  if (!r) return;
+  cheerCount++;
+  cheersFor.set(member, (cheersFor.get(member) ?? 0) + 1);
+  emit({ type: "cheer", round: r.round, id: `demo-${r.round}-${cheerCount}`, member, by, kind });
+}
+
+/** The singers' last second of pitch, as Core sends it between boards. */
+function liveNow(r: DemoRoom): KaraokeRoomEvent {
+  const t = r.start_at_ms === null ? 0 : (coreNow() - r.start_at_ms) / 1000;
+  const nowFrame = Math.max(0, Math.floor(t * HZ));
+  const from = Math.max(0, nowFrame - HZ);
+  const lines = BOARD_SINGERS.map((s, k) => {
+    const frames: (number | null)[] = [];
+    for (let i = from; i < nowFrame; i++) frames.push(fakePitch(k, i));
+    return { member: s.member, pitch: { from, track: toBase64(encodeTrack(frames)) } };
+  });
+  return { type: "live", round: r.round, at_ms: coreNow(), lines: nowFrame > from ? lines : [] };
+}
+
+/** `?karaoke-demo=novoice`: she is not in a voice channel until this moment. */
+let voiceAt = 0;
 
 function demoResult(r: DemoRoom): KaraokeRoomResult {
   const place = (o: Partial<KaraokeRoomResult["places"][number]> & { member: string; name: string; color: number }) => ({
@@ -623,12 +660,24 @@ function startRound(r: DemoRoom, opts: { startIn: number; scene: "singer" | "spe
       const t = r.start_at_ms === null ? 0 : (coreNow() - r.start_at_ms) / 1000;
       const total = n === 1 ? null : Math.round((72 + 6 * Math.sin(t / 5)) * 10) / 10;
       emit({ type: "trend", round: r.round, trend: c.trend, source: c.source, total });
+      // Now and then someone watching cheers them.
+      if (n % 2 === 0) demoCheer(ME, { name: "路過的人", color: 4 }, n % 4 === 0 ? "encore" : "cheer");
     });
   } else {
     const ranks = new Map<string, number>();
-    every(1_000, () => {
+    cheersFor.clear();
+    let ticks = 0;
+    every(250, () => {
       if (r.state !== "singing" && r.state !== "countdown") return;
-      emit({ type: "board", round: r.round, at_ms: coreNow(), lines: boardNow(r, ranks) });
+      ticks++;
+      if (ticks % 4 === 0) emit({ type: "board", round: r.round, at_ms: coreNow(), lines: boardNow(r, ranks) });
+      else if (r.state === "singing") emit(liveNow(r));
+      // Made-up watchers cheer every couple of seconds.
+      if (r.state === "singing" && ticks % 9 === 0) {
+        const to = BOARD_SINGERS[(ticks / 9) % BOARD_SINGERS.length] as (typeof BOARD_SINGERS)[number];
+        const kinds = ["cheer", "nice", "wow", "encore"] as const;
+        demoCheer(to.member, ticks % 2 ? { name: "路過的人", color: 4 } : { name: "Kai", color: 6 }, kinds[(ticks / 9) % 4] ?? "cheer");
+      }
     });
   }
   // The song ends for everyone: 結算中 (two results waited for, then one, then none), the ranking.
@@ -728,7 +777,9 @@ function roomScene(scene: string): void {
 }
 
 function rooms(): KaraokeRooms {
-  return { available: true, reason: null, terms: TERMS, balance: 128, mine: demoRoom?.me && demoRoom.state !== "closed" ? ROOM : null };
+  const mine = demoRoom?.me && demoRoom.state !== "closed" ? ROOM : null;
+  if (Date.now() < voiceAt) return { available: false, reason: "她要在語音頻道裡才能開房間", terms: TERMS, balance: 128, mine };
+  return { available: true, reason: null, terms: TERMS, balance: 128, mine };
 }
 
 /** The room's queue: add (a song on the list, or a link or words), remove, move. */
@@ -800,6 +851,12 @@ function roomAnswer(method: string, path: string, body: unknown): Response | nul
   if (what === "clock") return json({ t0: (body as { t0: number }).t0, server_ms: coreNow() });
   if (what === "audio") return json({ stream: "live", relay: false });
   if (what === "pitch") return new Response(null, { status: 204 });
+  if (what === "cheer") {
+    const b = body as { member: string; kind: "cheer" | "nice" | "wow" | "encore" };
+    const me = r.members.find((x) => x.id === ME);
+    demoCheer(b.member, { name: me?.name ?? "小魚乾", color: me?.color ?? 0 }, b.kind);
+    return json({ wait_ms: 1_500 });
+  }
   const me = r.members.find((x) => x.id === ME);
   if (what === "join") {
     const as = (body as { as?: "singer" | "spectator" }).as ?? "singer";
@@ -1225,6 +1282,7 @@ export function installDemo(): void {
     asAdmin = true;
     window.history.replaceState(null, "", `/karaoke?karaoke-demo=editor&edit=${REFERENCE.id}`);
   }
+  if (scene === "novoice") voiceAt = Date.now() + 6_000;
   if (["lobby", "singer", "solo", "spectator", "results"].includes(scene)) {
     roomScene(scene);
     window.history.replaceState(null, "", `/karaoke/room/${ROOM}?karaoke-demo=${scene}`);

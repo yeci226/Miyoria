@@ -339,6 +339,13 @@ describe("text", () => {
     expect(stripEmoji("👨‍👩‍👧")).toBe("");
     expect(stripEmoji("現在 12:30:45")).toBe("現在 12:30:45");
   });
+
+  it("strips_sticker_tokens", () => {
+    expect(stripEmoji("謝啦 [貼圖: 貓咪鞠躬] 掰")).toBe("謝啦 掰");
+    expect(stripEmoji("[貼圖：spin]")).toBe("");
+    expect(stripEmoji("[sticker: Wave] ok")).toBe("ok");
+    expect(stripEmoji("[圖片: a.png] 看")).toBe("[圖片: a.png] 看");
+  });
 });
 
 // ------------------------------------------------------------------ consent

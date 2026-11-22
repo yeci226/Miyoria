@@ -175,6 +175,82 @@ describe("config", () => {
     await after.close();
   });
 
+  it("imports_the_file_into_the_database_by_hand_with_a_dry_run_first", async () => {
+    writeFileSync(
+      path,
+      [
+        "[core]",
+        'database_url = "sqlite:data/test.db"',
+        "",
+        "[modules.market]",
+        "auction_hours = 12",
+        'auction_channel = "5001"',
+        "",
+        "[modules.api]",
+        'token = "${MIYORIA_API_TOKEN:-}"',
+        "",
+      ].join("\n"),
+    );
+    const store = await SqliteStore.open(join(dir, "data", "test.db"));
+    store.places.seen("discord", "111", "一號");
+    store.persons.ensureRoom("discord", "111", "5001", "text");
+    store.config.revisions.write({ modules: { market: { auction_step: 7 } } }, "panel:discord:1");
+    await store.close();
+
+    await config.importConfig(path, { replace: false, dryRun: true, yes: false }, null);
+    expect(text()).toContain("試跑");
+    expect(text()).toContain("寫成第 2 版");
+    expect(text()).toContain("modules.market.auction_step");
+    expect(text()).toContain('伺服器 discord:111  market.auction_channel = "5001"');
+    const before = await SqliteStore.open(join(dir, "data", "test.db"));
+    expect(before.config.revisions.current()?.version).toBe(1);
+    await before.close();
+    out.length = 0;
+
+    // Not in a terminal and without --yes: nothing is written.
+    await expect(
+      config.importConfig(path, { replace: false, dryRun: false, yes: false }, null),
+    ).rejects.toThrow(/--yes/);
+    await config.importConfig(path, { replace: false, dryRun: false, yes: true }, null);
+    expect(text()).toContain("已寫入第 2 版");
+    const after = await SqliteStore.open(join(dir, "data", "test.db"));
+    expect(after.config.revisions.current()).toMatchObject({ version: 2, created_by: "import" });
+    expect(after.config.revisions.current()?.doc).toMatchObject({
+      modules: {
+        market: { auction_hours: 12, auction_step: 7, auction_channel: "5001" },
+        api: { token: "${MIYORIA_API_TOKEN:-}" },
+      },
+    });
+    await after.close();
+    out.length = 0;
+
+    // `get` says where a value comes from, and each server's own value.
+    await config.get(path, "modules.market.auction_hours", undefined, false);
+    expect(text()).toContain("12\n");
+    expect(text()).toContain("來源:資料庫第 2 版(import");
+    expect(text()).toContain("和 miyoria.toml 一樣");
+    out.length = 0;
+    await config.get(path, "modules.market.auction_channel", undefined, false);
+    expect(text()).toContain('伺服器 一號:"5001"');
+    out.length = 0;
+
+    // Once imported, again only with --replace.
+    await config.importConfig(path, { replace: false, dryRun: true, yes: false }, null);
+    expect(text()).toContain("已經匯入過");
+  });
+
+  it("refuses_to_import_a_file_with_a_secret_as_text", async () => {
+    writeFileSync(
+      path,
+      `[core]\ndatabase_url = "sqlite:data/test.db"\n\n[modules.api]\ntoken = "abc123"\n`,
+    );
+    const store = await SqliteStore.open(join(dir, "data", "test.db"));
+    await store.close();
+    await expect(
+      config.importConfig(path, { replace: false, dryRun: true, yes: true }, null),
+    ).rejects.toThrow(/modules\.api\.token.*\.env/);
+  });
+
   it("editor_command_parses_arguments", () => {
     expect(config.editorCommand({ EDITOR: "code -w" })).toEqual(["code", ["-w"]]);
     expect(config.editorCommand({ VISUAL: "nvim", EDITOR: "code" })[0]).toBe("nvim");

@@ -1,0 +1,6 @@
+# [routing] of the ASR worker (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# session: what people say in voice is recognised where the call's speech runs; another host is only
+# a failover between sessions. Realtime: the host nearest Core first.
+class = "session"
+latency = "realtime"

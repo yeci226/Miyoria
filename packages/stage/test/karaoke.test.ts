@@ -82,6 +82,7 @@ function scene(extra: Partial<KaraokeStageScene> = {}): KaraokeStageScene {
         on_air: true,
         parts: null,
         pitch: { from: 550, track: Buffer.from([0, 100, 101, 102]).toString("base64") },
+        cheers: 2,
       },
     ],
     note: null,
@@ -101,6 +102,9 @@ function scene(extra: Partial<KaraokeStageScene> = {}): KaraokeStageScene {
     join_url: "https://example.test/karaoke/room/K7PQ2M",
     qr_while_singing: false,
     settling: null,
+    cheers: [
+      { id: "c2-1", kind: "wow", to: { name: "Mia", color: 0 }, by: { name: "小明", color: 1 } },
+    ],
     ...extra,
   };
 }
@@ -146,6 +150,7 @@ const END: KaraokeStageScene = {
   currency: "",
   air: { backing: false, relay: null, delay_ms: 0, backing_gain: 0, voice_gain: 0, duck_gain: 0 },
   settling: null,
+  cheers: [],
 };
 
 describe("karaoke on the stage link", () => {

@@ -1,0 +1,5 @@
+# [routing] of the voice node (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# single: it logs in as her self account; two at once would log the account in twice.
+class = "single"
+latency = "realtime"

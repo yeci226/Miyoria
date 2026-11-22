@@ -38,6 +38,7 @@ export {
   LINKS_CHANGED_REASON,
   type LinkHandle,
   readHostKey,
+  type UpgradeOptions,
 } from "./daemon.js";
 export {
   type InstallFile,
@@ -50,6 +51,13 @@ export {
   sourceUrl,
 } from "./descriptor.js";
 export { matchesPassEnv, mergeEnv, passEnv, workerBaseEnv } from "./env.js";
+export {
+  createGateway,
+  type GatewayHost,
+  type GatewayLogger,
+  type GatewayOptions,
+  gatewayTarget,
+} from "./gateway.js";
 export {
   CardReader,
   type CardReaderOptions,
@@ -115,6 +123,18 @@ export {
   type UsedLinks,
 } from "./resolve.js";
 export {
+  type GatewayPlan,
+  gatewayProblem,
+  type LoadedRoutes,
+  loadRoutes,
+  type RouteContext,
+  type RoutePlan,
+  reachOf,
+  reportRoutes,
+  routesFile,
+  withLocal,
+} from "./routes.js";
+export {
   pidAlive,
   RUN_FILE,
   type RunInfo,
@@ -123,3 +143,29 @@ export {
 } from "./run-file.js";
 export { JSON_RPC } from "./server.js";
 export { DEFAULT_TIMING, type Timing } from "./service.js";
+export {
+  type ChangedByOptions,
+  needsPnpmInstall,
+  servicesChangedBy,
+  upgradeNotes,
+} from "./upgrade/changes.js";
+export {
+  changedFiles,
+  type GitOptions,
+  type GitResult,
+  git,
+  gitEnv,
+  hasCommit,
+  headOf,
+  isAncestor,
+  looksLikeCheckout,
+  readCheckout,
+  trackedChanges,
+  trackingOf,
+} from "./upgrade/git.js";
+export {
+  type UpgradeHost,
+  Upgrader,
+  type UpgraderOptions,
+  type UpgradeService,
+} from "./upgrade/upgrader.js";

@@ -60,3 +60,11 @@ export const PREDICTION_STATUS_LABEL = {
   resolved: "已結算",
   cancelled: "取消,已退還",
 } as const;
+
+/** Who settled a prediction. */
+export const SETTLED_BY_LABEL: Record<string, string> = {
+  auto: "自動結算",
+  her: "她結算",
+  admin: "管理員結算",
+  expired: "到期退回",
+};

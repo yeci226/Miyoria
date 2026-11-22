@@ -35,6 +35,8 @@ export interface OpenLine {
   attention_key: string;
   revision: number;
   audience: readonly Handle[];
+  /** Whom it is said to (`Delivery.to`); unset: not known. */
+  to?: readonly Handle[] | undefined;
   cause: string | null;
   /** It is the filtered line: moderation stopped what she meant (the rule). */
   blocked?: string | null;
@@ -78,6 +80,7 @@ export class LineBook {
       context: input.context,
       said: input.said,
       audience: input.audience,
+      ...(input.to === undefined ? {} : { to: input.to }),
       turn: input.turn,
       cause: input.cause,
       source: "mainline",

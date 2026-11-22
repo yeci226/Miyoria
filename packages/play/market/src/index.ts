@@ -4,8 +4,10 @@
 // - `time.ts`: her local days and weeks, when a lot opens and the lottery is drawn.
 // - `lots.ts`: what the auction sells, the rotation, and her pick of the week's lot.
 // - `schema.ts`, `migrations.ts`, `store.ts`: the `market` store plugin (`market_lots`,
-//   `market_bids`, `market_lottery_weeks`, `market_lottery_tickets`) and its events
-//   (`events.ts`); `retireMarketSql` gives every hold and open ticket back when it is removed.
+//   `market_bids`, `market_lottery_draws`, `market_lottery_tickets`, `market_song_tickets`; the
+//   legacy `market_lottery_weeks`), each Space's rows, and its events (`events.ts`);
+//   `retireMarketSql` gives every hold and open ticket back when it is removed.
+// - `markets.ts`: `Markets` (`MarketKey`): one market per Space, and the song priority ticket.
 // - `service.ts`: `MarketService`: bids and holds, a won lot burned, the name lot, lottery tickets
 //   and the draw, the song priority ticket (`SongPriorityKey`), the views and the owner's controls.
 // - `notices.ts`, `commands.ts`: the neutral cards it posts and `/me auction`, `/me lottery`.
@@ -32,6 +34,12 @@ export {
   parsePick,
   rotationKind,
 } from "./lots.js";
+export {
+  MarketRegistry,
+  type MarketRegistryOptions,
+  type Markets,
+  type SharedMarketDeps,
+} from "./markets.js";
 export { marketSchema, retireMarketSql } from "./migrations.js";
 export { MarketKey, MarketModule, type MarketModuleOptions, TICK_MS } from "./module.js";
 export {

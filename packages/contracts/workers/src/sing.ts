@@ -81,8 +81,8 @@ export type WorkersSingLyricLine = z.output<typeof WorkersSingLyricLineSchema>;
 
 /**
  * A finished song (`meta.json` of the song). Everything about it (title, artist, lyrics) comes
- * from YouTube or lrclib and is untrusted. The worker also sends `source`, `lead_split`, `mix`,
- * `engine`, `gpu`, `lyrics_input`, `created_at` and more in the song and in `lyrics` (`provider`,
+ * from YouTube or lrclib and is untrusted. The worker also sends `lead_split`, `mix`, `engine`,
+ * `gpu`, `lyrics_input`, `created_at` and more in the song and in `lyrics` (`provider`,
  * `how`, `confidence`, `checks`, `plain`, ...); nothing reads them here.
  */
 export const WorkersSingSongMetaSchema = z
@@ -110,6 +110,16 @@ export const WorkersSingSongMetaSchema = z
     /** Its original video sits in the song's cache dir as `video.file` (older workers: none). */
     has_video: z.boolean().catch(false),
     video: z.object({ file: z.string() }).nullable().catch(null),
+    /**
+     * What the song was made from: `kind` (`youtube`, `url`, `library`, `mock`) and its link (`null`
+     * for a library file). Untrusted like the rest; older Cores dropped it, so a stored song may
+     * have none.
+     */
+    source: z
+      .object({ kind: z.string().catch(""), url: z.string().nullable().catch(null) })
+      .nullable()
+      .catch(null)
+      .optional(),
     /**
      * What became of the song's backing voices: the request's `backing`, or `in_vocal` when
      * there was no lead split, so they stay in the converted vocal (`acapella` has no instrumental).

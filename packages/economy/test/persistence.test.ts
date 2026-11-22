@@ -6,15 +6,19 @@ import { Supervisor } from "@miyoria/runtime/kernel";
 import { PeopleStoreKey, SqliteStore } from "@miyoria/store";
 import {
   AuthorizerKey,
+  Events,
   type JsonValue,
+  ModerationKey,
   ParticipationKey,
+  PartyOutcomesKey,
   PartyRewardsKey,
   SocialSignalsKey,
 } from "@miyoria/types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EconomyModule } from "../src/module.js";
 import { CoinLedgerStoreKey, EconomyDocsKey, LedgerStatsKey } from "../src/records.js";
 import { EconomyKey } from "../src/types.js";
+import { Economy2Key } from "../src/v2-types.js";
 import { economyOf, ledgerOf, walletOf } from "./ledger.js";
 import { ALICE, BOB, balance, rig as baseRig, CAROL, DAVE, DAY, fund, TEXT } from "./rig.js";
 
@@ -88,6 +92,10 @@ describe("a restart", () => {
       s.provide("kernel", AuthorizerKey, { allows: () => true } as never);
       s.provide("kernel", EconomyDocsKey, economyOf(store).docs);
       s.provide("kernel", LedgerStatsKey, ledgerOf(store));
+      s.provide("kernel", ModerationKey, {
+        screen: () => ({ ok: true }),
+        inspect: () => ({ action: "pass" }),
+      } as never);
       s.provide("app", ActuatorRegistryKey, new ActuatorRegistry({ services: s, builtins: false }));
       await sup.register(new EconomyModule("p"), {}, true);
       await sup.startAll();
@@ -95,6 +103,47 @@ describe("a restart", () => {
         const economy = s.require(EconomyKey) as unknown as { docsAreDurable: boolean };
         expect(economy.docsAreDurable).toBe(true);
         expect(s.require(PartyRewardsKey)).toBeDefined();
+        // How a party game came out reaches the predictions bound to it.
+        expect(s.require(PartyOutcomesKey)).toBeDefined();
+        // Her game goals on the bus reach them too: one is bound, then settled by its end.
+        const context = { platform: "discord", scope: "g", channel: "v", kind: "voice" } as const;
+        sup.bus.publish("game", Events.GameDirectorSession, {
+          state: "started",
+          game: "minecraft",
+          game_name: "Minecraft",
+          context,
+        });
+        sup.bus.publish("game", Events.GameDirectorDecision, {
+          game: "minecraft",
+          trigger: [],
+          goal: "蓋房子",
+          action: null,
+          verdict: null,
+          commentary: null,
+          busy: null,
+          observation: "",
+          want: null,
+          held: [],
+        });
+        const v2 = s.require(Economy2Key);
+        const opened = await vi.waitFor(() =>
+          v2.openPrediction({ question: "蓋得好嗎", options: [], minutes: 3, settle_by: "goal" }),
+        );
+        sup.bus.publish("game", Events.GameDirectorGoal, {
+          game: "minecraft",
+          goal: "蓋房子",
+          source: "director",
+          status: "done",
+          code: "done",
+          task: null,
+          detail: "",
+          at: new Date().toISOString(),
+          attention_key: "蓋房子",
+        });
+        await vi.waitFor(async () => {
+          const [p] = await v2.predictions(null);
+          expect(p).toMatchObject({ id: opened.id, status: "resolved", winner: "做到" });
+        });
         expect(s.require(ParticipationKey)).toBeDefined();
       } finally {
         await sup.stopAll();
@@ -176,11 +225,24 @@ describe("party rewards", () => {
     expect(await balance(r, ALICE)).toBe(6);
   });
 
-  it("is played-a-game for the daily quest even when the coins are capped", async () => {
+  it("is played-with-others for the daily quest even when the coins are capped", async () => {
     const r = await rig({ play_cap: 5, quest_reward: 10 });
-    await r.economy.v2.party.award(request("party:q", [{ account: ALICE, coins: 5 }]));
+    await r.economy.v2.party.award(
+      request("party:q", [
+        { account: ALICE, coins: 5 },
+        { account: BOB, coins: 5 },
+      ]),
+    );
     const quests = await r.economy.v2.quests(ALICE);
-    expect(quests.quests.find((q) => q.id === "play_game")?.done).toBe(true);
+    expect(quests.quests.find((q) => q.id === "together")?.done).toBe(true);
+  });
+
+  it("is not played-with-others when they played alone with her", async () => {
+    const r = await rig({ quest_reward: 10 });
+    await r.economy.v2.party.award(request("party:solo", [{ account: ALICE, coins: 5 }]));
+    const quests = await r.economy.v2.quests(ALICE);
+    expect(quests.quests.find((q) => q.id === "together")?.done).toBe(false);
+    expect(await balance(r, ALICE)).toBe(5);
   });
 });
 

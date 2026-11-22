@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { KaraokeSongView } from "@miyoria/contracts/api";
 import { isApiError, isNotProvided } from "@/api/http";
 import { useApi } from "@/app/connection";
+import { usePushed } from "@/app/push";
 
 export const KARAOKE = ["member", "karaoke"] as const;
 export const OVERVIEW = [...KARAOKE, "overview"] as const;
@@ -53,13 +54,32 @@ export function usePreparing(song: KaraokeSongView) {
 
 export const ROOMS = [...KARAOKE, "rooms"] as const;
 
-/** Whether a room can be opened now, its price, the balance and the room they are in. */
-export function useRooms(enabled = true) {
+/**
+ * How often whether a room can be opened is asked again: often while it cannot (she joining a
+ * voice channel must enable 開一間房 within a second or two, not on the next reload), seldom
+ * while it can (she leaving is said by Core when someone tries). Only while the page is in view.
+ */
+export const ROOMS_WAIT_POLL_MS = 1_500;
+export const ROOMS_POLL_MS = 15_000;
+
+/**
+ * Whether a room can be opened now, its price, the balance and the room they are in. `space`: the
+ * server it is about (phase 6, `useMemberSpace`); `null`: the Core's default (their own). Under a
+ * `PushProvider` it comes by push (her joining a voice channel shows at once) and is polled only
+ * while the stream is not there.
+ */
+export function useRooms(enabled = true, space: string | null = null) {
   const api = useApi();
+  const key = [...ROOMS, space] as const;
+  const pushed = usePushed("rooms", space, key, enabled);
   return useQuery({
-    queryKey: ROOMS,
-    queryFn: ({ signal }) => api.rpc.karaokeRooms.overview(undefined, { signal }),
+    queryKey: key,
+    queryFn: ({ signal }) =>
+      api.rpc.karaokeRooms.overview(space ? { query: { space } } : undefined, { signal }),
     retry: retryUnlessOff,
     enabled,
+    staleTime: 0,
+    refetchInterval: (q) =>
+      pushed || q.state.error ? false : q.state.data && !q.state.data.available ? ROOMS_WAIT_POLL_MS : ROOMS_POLL_MS,
   });
 }

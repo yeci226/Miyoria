@@ -1424,15 +1424,19 @@ export class ActivityService implements ActivityManager, ActivityRouter, TaskSte
       this.#goliveSeen = true;
       // Go Live came up without a task (the node's own controls): OBS follows it. With
       // `obs_hub` OBS normally streams already (the node pulls from it): nothing to adopt.
+      // The platform of her voice room there, else the one the Go Live event named; never a
+      // default one (v5-architecture §6).
+      const platform =
+        this.facts.voice.get(guild)?.platform ?? this.facts.golive.get(guild)?.platform ?? null;
       if (
         !busy &&
         !this.#adopted &&
+        platform !== null &&
         this.#obsWanted() &&
         this.facts.stage.obs &&
         !this.facts.stage.streaming
       ) {
         this.#adopted = true;
-        const platform = this.facts.voice.get(guild)?.platform ?? "discord";
         this.submit(
           {
             request: { type: "ensure_live", platform, guild, source: null },

@@ -1049,9 +1049,10 @@ describe("her stream (step 5)", () => {
     rig.clock.t = startAt;
     await rig.desk.tick();
     await rig.desk.idle();
-    // The round's words and backing went to the stream once, the backing as PCM.
-    expect(rig.staged.lyrics).toHaveLength(1);
-    expect(rig.staged.lyrics[0]?.backing).toMatchObject({ format: "pcm", rate: 48_000 });
+    // The round's words went to the stream at once, then again with the backing (as PCM).
+    expect(rig.staged.lyrics).toHaveLength(2);
+    expect(rig.staged.lyrics[0]?.backing).toBeNull();
+    expect(rig.staged.lyrics[1]?.backing).toMatchObject({ format: "pcm", rate: 48_000 });
     const post = async (fromMs: number, toMs: number) => {
       const replies: boolean[] = [];
       for (let ms = fromMs; ms < toMs; ms += 500) {

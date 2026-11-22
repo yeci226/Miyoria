@@ -35,6 +35,9 @@ coverage/
 
 # 本機執行資料與 Python 虛擬環境
 /data/
+# 自己有設定的 profile(`miyoria profile new`):她的設定和資料只放本機
+profiles/*/miyoria.toml
+profiles/*/data/
 workers/.venv-*/
 # TMP / TEMP for Python and pip when the system temp folder is not writable
 /workers/.tmp/
@@ -64,3 +67,6 @@ workers/mediamtx/mediamtx.exe
 workers/mediamtx/LICENSE
 workers/mediamtx/mediamtx.log
 .tmp-test
+
+# yt-dlp login cookies for the song worker (account session, never commit)
+workers/sing/cookies.txt

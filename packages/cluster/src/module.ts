@@ -32,20 +32,25 @@ import {
 import { StoreKey } from "@miyoria/store";
 import { Events, type Publish, serviceKey } from "@miyoria/types";
 import { WebSocketServer } from "ws";
+import { ACTIVITY_EVENTS, ActivityTracker } from "./activity.js";
 import {
   ClusterCalls,
   type ClusterCompletion,
   type ClusterRateLimit,
   type ClusterUses,
 } from "./calls.js";
-import { ClusterConfigSchema } from "./config.js";
+import type { CheckoutSource } from "./checkout.js";
+import { ClusterConfigSchema, type RoutingConfig } from "./config.js";
+import type { EstimateRow } from "./estimates.js";
 import { GuardRegistry, type GuardSourceFn } from "./guards.js";
 import { ClusterLink, type HostConnection } from "./link.js";
-import { EndpointRegistry } from "./registry.js";
+import { type CapabilityRouting, type ClusterActivity, EndpointRegistry } from "./registry.js";
 import { ClusterRelay, type RelayOptions } from "./relay.js";
+import { RouteProber } from "./route-probe.js";
 import {
   ClusterError,
   type ClusterTables,
+  type ControlRecord,
   clusterTables,
   type HostRecord,
   type NewHost,
@@ -76,6 +81,33 @@ export interface ClusterHosts {
   call(name: string, method: string, params: unknown, signal?: AbortSignal): Promise<unknown>;
 }
 
+/** A routing control the owner sets from the panel (v5-hostd §15.6). */
+export type RoutingControlInput =
+  | { kind: "pin" | "exclude"; capability: string; host: string }
+  | { kind: "weight"; host: string; value: number }
+  | { kind: "drain"; host: string };
+
+/** Everything the machines page shows of routing (v5-hostd §15.7). */
+export interface RoutingSnapshot {
+  capabilities: CapabilityRouting[];
+  hosts: ReturnType<EndpointRegistry["hostRouting"]>;
+  estimates: EstimateRow[];
+  activity: ClusterActivity & { idle: boolean };
+  /** `[modules.cluster.routing]` as Core read it. */
+  config: RoutingConfig;
+  /** The owner's controls from the panel. */
+  panel: ControlRecord[];
+}
+
+/** Job dispatch as the owner sees and steers it. */
+export interface ClusterRouting {
+  view(): RoutingSnapshot;
+  /** Sets a pin, an exclusion, a weight or a drain; throws `ClusterError` for a bad one. */
+  set(control: RoutingControlInput, by: string): ControlRecord;
+  /** Takes one away (`capability` for a pin or an exclusion); whether it was there. */
+  clear(control: { kind: RoutingControlInput["kind"]; host: string; capability?: string }): boolean;
+}
+
 /** What `cluster` offers other modules (`ClusterKey`). */
 export interface ClusterService {
   /** Where each capability can be used now. */
@@ -94,6 +126,13 @@ export interface ClusterService {
    * before H7 leave it out.
    */
   context?(context: HostClusterContext): void;
+  /**
+   * Core's own checkout: the commit a remote update names, and how a host's commit stands to it
+   * (v5-hostd §14). `null` or absent when Core does not run from a git checkout.
+   */
+  readonly checkout?: CheckoutSource | null;
+  /** Job dispatch: the routing of each capability and the owner's controls. Absent in stand-ins. */
+  readonly routing?: ClusterRouting;
 }
 
 export const ClusterKey = serviceKey<ClusterService>("Cluster");
@@ -124,8 +163,9 @@ export interface ClusterModuleOptions {
   /** Runs `cluster.llm` completions; without it they fail with `Unavailable`. */
   complete?: ClusterComplete;
   /**
-   * By the capability a service provides: what it may use through `cluster.llm` and
-   * `cluster.fetch`. Default `DEFAULT_CLUSTER_USES` (`sing` and `lyrics`: LLM `fast`, fetch `asr`).
+   * By the capability a service provides: what it may use through `cluster.llm`,
+   * `cluster.fetch` and `cluster.resolve`. Default `DEFAULT_CLUSTER_USES` (`sing` and `lyrics`:
+   * LLM `fast`, fetch `asr`; nothing may resolve).
    */
   uses?: ClusterUses;
   /** The LLM purposes any service may ask for at all. Default `["fast"]`. */
@@ -137,6 +177,73 @@ export interface ClusterModuleOptions {
    * connects or is approved, and on `refreshLinks`. Without it hosts are told nothing.
    */
   links?: ClusterLinksSource;
+  /** Core's own checkout, for remote updates of the hosts. Without it hosts cannot be updated. */
+  checkout?: CheckoutSource | null;
+  /**
+   * The machines' tables (the hosts, their keys' hashes, invites, estimates, routing controls):
+   * Core's wiring gives the install's machine database's (docs/design/v5-profiles.md §7), which
+   * stays open across restarts of the module. Default: the store's (`store.plugin(clusterTables)`).
+   */
+  machines?: ClusterTables;
+}
+
+/** How often the `live` guard state is read for the speech-host rule. */
+const LIVE_POLL_MS = 5_000;
+/** How often the route prober looks for probes that are due (each route has its own interval). */
+const ROUTE_TICK_MS = 5_000;
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", done);
+      resolve();
+    }, ms);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** The routing service over the registry and the controls table (stand-ins use it too). */
+export function clusterRouting(
+  registry: EndpointRegistry,
+  tables: ClusterTables,
+  config: RoutingConfig,
+): ClusterRouting {
+  const refresh = () => registry.setPanelControls(tables.controls.view());
+  return {
+    view: () => ({
+      capabilities: registry.routingView(),
+      hosts: registry.hostRouting(),
+      estimates: registry.estimates(),
+      activity: registry.activity(),
+      config,
+      panel: tables.controls.list(),
+    }),
+    set: (control, by) => {
+      const row = tables.controls.set({
+        kind: control.kind,
+        host: control.host,
+        ...("capability" in control ? { capability: control.capability } : {}),
+        ...("value" in control ? { value: control.value } : {}),
+        by,
+      });
+      refresh();
+      return row;
+    },
+    clear: (control) => {
+      const removed = tables.controls.clear({
+        kind: control.kind,
+        host: control.host,
+        ...(control.capability !== undefined ? { capability: control.capability } : {}),
+      });
+      refresh();
+      return removed;
+    },
+  };
 }
 
 /** `host:port` / `[v6]:port`. */
@@ -254,17 +361,26 @@ export class ClusterModule implements Module {
     const config = ctx.config(ClusterConfigSchema);
     const bind = parseBind(config.bind);
     if (!bind) throw new ClusterError(`cannot bind the cluster link to \`${config.bind}\``);
-    const store = ctx.services.get(StoreKey);
-    if (store === undefined) throw new ClusterError("the cluster module needs the store");
-    const tables = store.plugin(clusterTables).withClock(ctx.clock);
+    const tables = this.#machines(ctx).withClock(ctx.clock);
     this.#services = ctx.services;
 
+    const activity = new ActivityTracker();
     const registry = new EndpointRegistry({
       order: config.order,
       static: config.static,
       retrySecs: config.retry_secs,
       clock: ctx.clock,
+      routing: config.routing,
+      estimates: tables.estimates,
+      activity: () => activity.snapshot(),
+      log: ctx.log,
+      routes: config.routes,
     });
+    try {
+      registry.setPanelControls(tables.controls.view());
+    } catch (error) {
+      ctx.log.warn({ err: errorMessage(error) }, "cannot read the routing controls");
+    }
     const link = new ClusterLink({
       config,
       tables,
@@ -297,7 +413,9 @@ export class ClusterModule implements Module {
         socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
         return;
       }
-      wss.handleUpgrade(req, socket, head, (ws) => link.serve(ws));
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        link.serve(ws, { remote: req.socket.remoteAddress }),
+      );
     });
     try {
       await listen(server, bind.host, bind.port);
@@ -325,6 +443,36 @@ export class ClusterModule implements Module {
       address: addr,
       publicUrl: config.public_url ?? null,
       context: (context) => link.sendContext(context),
+      checkout: this.#options.checkout ?? null,
+      routing: clusterRouting(registry, tables, config.routing),
+    });
+
+    // Where her voice is, for the speech-host rule (v5-hostd §15.5).
+    const voice = ctx.subscribe([...ACTIVITY_EVENTS]);
+    ctx.spawn("activity", async () => {
+      for await (const env of voice) activity.onEvent(env, ctx.clock.now());
+    });
+    ctx.spawn("live", async (signal) => {
+      while (!signal.aborted) {
+        try {
+          const states = await this.guards.active(() => undefined);
+          activity.setLive(states.includes("live"));
+        } catch {
+          // Unknown: what was read last stays.
+        }
+        await sleep(LIVE_POLL_MS, signal);
+      }
+    });
+
+    // The hosts' routes (v5-hostd §16): only hosts with `routes.toml` are probed.
+    const prober = new RouteProber({ table: registry.routes, clock: ctx.clock, log: ctx.log });
+    ctx.spawn("routes", async (signal) => {
+      while (!signal.aborted) {
+        await prober
+          .tick()
+          .catch((error) => ctx.log.warn({ err: errorMessage(error) }, "route probing failed"));
+        await sleep(ROUTE_TICK_MS, signal);
+      }
     });
 
     ctx.spawn("server", async (signal) => {
@@ -353,7 +501,15 @@ export class ClusterModule implements Module {
     this.#link?.refreshLinks();
   }
 
-  /** What serves `cluster.llm` and `cluster.fetch` for this run of the module. */
+  /** The machines' tables: the option's, else the store's. */
+  #machines(ctx: ModuleContext): ClusterTables {
+    if (this.#options.machines !== undefined) return this.#options.machines;
+    const store = ctx.services.get(StoreKey);
+    if (store === undefined) throw new ClusterError("the cluster module needs the store");
+    return store.plugin(clusterTables);
+  }
+
+  /** What serves `cluster.resolve`, `cluster.llm` and `cluster.fetch` for this run of the module. */
   #calls(ctx: ModuleContext, registry: EndpointRegistry): ClusterCalls {
     const o = this.#options;
     const complete = o.complete;

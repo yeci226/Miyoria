@@ -67,24 +67,39 @@ function requireGuild(args: GuildArgs, principal: Principal): string {
   return guild;
 }
 
-function lane(args: GuildArgs, principal: Principal): string | null {
-  const guild = guildOf(args, principal);
-  const platform = principal.context?.platform ?? "discord";
-  return guild === null ? null : actLane(`voice:${platform}:${guild}`);
+/**
+ * The platform a call is on: where it was asked, else whose account asked; `null` when neither
+ * says (a panel or director call), and the capabilities then ask the voice node's own account.
+ * Never a default platform (v5-architecture §6).
+ */
+export function platformOf(principal: Principal): string | null {
+  return principal.context?.platform ?? principal.requester?.platform ?? null;
 }
 
-function platformOf(principal: Principal): string {
-  return principal.context?.platform ?? "discord";
+/** The platform of a call, the voice node's account answering when the call does not say. */
+type PlatformOf = (principal: Principal) => string | null;
+
+function laneOf(platform: PlatformOf) {
+  return (args: GuildArgs, principal: Principal): string | null => {
+    const guild = guildOf(args, principal);
+    const on = platform(principal);
+    return guild === null || on === null ? null : actLane(`voice:${on}:${guild}`);
+  };
 }
 
-/** The ActivityManager request of a guild-scoped call (`null`: no guild, the executor refuses). */
+/**
+ * The ActivityManager request of a guild-scoped call (`null`: no guild or no platform, the
+ * executor refuses).
+ */
 function inGuild(
   args: GuildArgs,
   principal: Principal,
+  platform: PlatformOf,
   request: (guild: string, platform: string) => ActivityRequest,
 ): ActivityRequest[] | null {
   const guild = guildOf(args, principal);
-  return guild === null ? null : [request(guild, platformOf(principal))];
+  const on = platform(principal);
+  return guild === null || on === null ? null : [request(guild, on)];
 }
 
 function requireNode(link: VoiceLink): void {
@@ -131,6 +146,7 @@ export function wantedChannel(
   guild: string,
   principal: Principal,
   world: WorldState | undefined,
+  platform: string | null = platformOf(principal),
 ): { channel: string | null; unknown: string | null } {
   if (raw == null) return { channel: null, unknown: null };
   const voices = (world?.snapshot().voice_channels ?? []).filter((c) => c.guild === guild);
@@ -146,7 +162,7 @@ export function wantedChannel(
       [...named].sort((a, b) => people(b) - people(a))[0];
     if (best) return { channel: best.channel, unknown: null };
   }
-  if (platformOf(principal) === "discord" && !/^\d+$/.test(raw)) {
+  if (platform === "discord" && !/^\d+$/.test(raw)) {
     return { channel: null, unknown: raw };
   }
   return { channel: raw, unknown: null };
@@ -197,6 +213,9 @@ export function voiceCapabilities(
 ): Capability[] {
   /** When someone (not she herself) last brought her into voice, per guild. */
   const invitedAt = new Map<string, number>();
+  const platform: PlatformOf = (principal) =>
+    platformOf(principal) ?? link.selfAccount()?.platform ?? null;
+  const lane = laneOf(platform);
 
   /** Why she may not leave `guild` on her own now, or `null`. */
   function stay(guild: string): string | null {
@@ -234,19 +253,25 @@ export function voiceCapabilities(
     scope: guildOf,
     lane,
     activity: (args, principal) =>
-      inGuild(args, principal, (guild, platform) => ({
+      inGuild(args, principal, platform, (guild, on) => ({
         type: "ensure_voice",
-        platform,
+        platform: on,
         guild,
         // A name that fits no channel counts as no channel: the manager then leaves her where
         // she is, or joins the person asking.
-        channel: wantedChannel(args.channel, guild, principal, world()).channel,
+        channel: wantedChannel(args.channel, guild, principal, world(), on).channel,
         follow: principal.requester,
       })),
     async execute(args, ctx) {
       const guild = requireGuild(args, ctx.principal);
       requireNode(link);
-      const wanted = wantedChannel(args.channel, guild, ctx.principal, world());
+      const wanted = wantedChannel(
+        args.channel,
+        guild,
+        ctx.principal,
+        world(),
+        platform(ctx.principal),
+      );
       const current = link.channel(guild);
       if (current !== null && (wanted.channel === null || wanted.channel === current)) {
         // Idempotent: already in voice here; asking again never moves her to another channel.
@@ -302,7 +327,8 @@ export function voiceCapabilities(
     },
     scope: guildOf,
     lane,
-    activity: (args, principal) => inGuild(args, principal, () => ({ type: "leave_voice" })),
+    activity: (args, principal) =>
+      inGuild(args, principal, platform, () => ({ type: "leave_voice" })),
     check(args, principal) {
       if (principal.kind !== "self") return null;
       const guild = guildOf(args, principal);
@@ -340,9 +366,9 @@ export function voiceCapabilities(
     scope: guildOf,
     lane,
     activity: (args, principal) =>
-      inGuild(args, principal, (guild, platform) => ({
+      inGuild(args, principal, platform, (guild, on) => ({
         type: "ensure_live",
-        platform,
+        platform: on,
         guild,
         source: args.source ?? null,
       })),
@@ -390,7 +416,8 @@ export function voiceCapabilities(
     },
     scope: guildOf,
     lane,
-    activity: (args, principal) => inGuild(args, principal, () => ({ type: "stop_live" })),
+    activity: (args, principal) =>
+      inGuild(args, principal, platform, () => ({ type: "stop_live" })),
     async execute(args, ctx) {
       const guild = requireGuild(args, ctx.principal);
       if (!link.isStreaming(guild)) return { text: "not live", data: { stopped: false } };
@@ -426,10 +453,11 @@ export function voiceCapabilities(
       const guild = requireGuild(args, ctx.principal);
       const channel = link.channel(guild);
       if (channel === null) throw new CapabilityError("she is not in a voice channel there");
-      const platform = ctx.principal.context?.platform ?? "discord";
-      const sink = ctx.services.get(PlatformSinksKey)?.get(platform);
+      const on = platform(ctx.principal);
+      if (on === null) throw new CapabilityError("which platform is not known");
+      const sink = ctx.services.get(PlatformSinksKey)?.get(on);
       if (!sink?.setVoiceStatus) throw new CapabilityError("this platform has no voice status");
-      await sink.setVoiceStatus(voiceContext(platform, guild, channel), args.status, ctx.signal);
+      await sink.setVoiceStatus(voiceContext(on, guild, channel), args.status, ctx.signal);
       return {
         text: args.status === "" ? "voice status cleared" : "voice status set",
         data: { channel, status: args.status },

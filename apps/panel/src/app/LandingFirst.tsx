@@ -1,13 +1,11 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { FrontPage } from "@/pages/public/landing/front";
 import { Backdrop } from "./Backdrop";
 import { ConnectionProvider, useConnection } from "./connection";
 import { createQueryClient } from "./query-client";
 import { isSameOrigin } from "./session";
 import { checkVisitor, type Visitor } from "./visitor";
-
-/** Her tank: the landing for someone not logged in. Split out with its fonts and water. */
-const Landing = lazy(() => import("@/pages/public/landing/Landing"));
 
 /** While the landing loads. */
 export function LandingFallback() {
@@ -49,7 +47,7 @@ function Front({ onHandOff }: { onHandOff: (visitor: Visitor) => void }) {
   return (
     <QueryClientProvider client={queryClient}>
       <Suspense fallback={<LandingFallback />}>
-        <Landing discord={discord} notice={null} />
+        <FrontPage discord={discord} notice={null} />
       </Suspense>
     </QueryClientProvider>
   );

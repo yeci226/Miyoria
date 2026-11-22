@@ -36,7 +36,7 @@ import {
   parseModelRef,
 } from "@miyoria/llm/llm";
 import { type Config, configureLogging, parseSection } from "@miyoria/runtime/kernel";
-import { toTimestamp } from "@miyoria/types";
+import { type ReasoningLevel, toTimestamp } from "@miyoria/types";
 import { bold, dim, note, ok, println, section, warn } from "../ui.js";
 import { configuredDatabase } from "./db.js";
 import { loadConfig } from "./node.js";
@@ -58,6 +58,8 @@ export interface RebuildModel {
   price: Pricing | null;
   /** The first model of the chain, as `provider:model`; empty without a chain. */
   label: string;
+  /** How deeply the pass's model reasons (its thinking is billed as output); absent: `off`. */
+  reasoning?: ReasoningLevel;
 }
 
 export interface RebuildCommandOptions {
@@ -151,7 +153,12 @@ export async function modelOfConfig(
   const first = router.chain(purpose)[0];
   const label = first === undefined ? "" : modelRefString(first);
   const price = pricing.get(label);
-  return { router, price: price === undefined ? null : PricingSchema.parse(price), label };
+  return {
+    router,
+    price: price === undefined ? null : PricingSchema.parse(price),
+    label,
+    reasoning: router.reasoningFor(purpose, { messages: [] }),
+  };
 }
 
 function parseSince(text: string | undefined, fallback: ReturnType<typeof toTimestamp>) {
@@ -224,7 +231,8 @@ export async function rebuildCommand(
     const cursors = store_.cursors();
     if (cursors === null) throw new MemoryCommandError("這個資料庫沒有事件紀錄,沒有東西可以重建");
     const plan = await notes.planRebuild(store.events, cursors, { since });
-    const estimate = notes.estimateRebuild(plan, model.price);
+    const reasoning = model.reasoning ?? "off";
+    const estimate = notes.estimateRebuild(plan, model.price, reasoning);
 
     section(`重建記憶:${path}`);
     note(`從 ${plan.since} 起的聊天事件;${options.apply ? "會呼叫模型" : "預覽,沒有呼叫模型"}`);
@@ -236,7 +244,7 @@ export async function rebuildCommand(
     const skipped = plan.sessions.filter((s) => s.unplaced);
     if (skipped.length > 0) println(dim(`  不知道在哪裡的對話 ${skipped.length} 個,略過`));
     println(
-      `  預估:輸入 ${count(estimate.prompt_tokens)} tokens、輸出 ${count(estimate.completion_tokens)} tokens`,
+      `  預估:輸入 ${count(estimate.prompt_tokens)} tokens、輸出 ${count(estimate.completion_tokens)} tokens${reasoning === "off" ? "" : dim(`(含思考,推理 ${reasoning})`)}`,
     );
     println(
       `  預估費用:${estimate.usd === null ? "價格未知" : usd(estimate.usd)}${model.label === "" ? "" : dim(`(${model.label})`)}`,

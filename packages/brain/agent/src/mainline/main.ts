@@ -14,7 +14,6 @@ import {
   type ActionSettled,
   type ActionSink,
   ActionSinkKey,
-  ArbiterKey,
   type ContextKey,
   contextKeyEquals,
   DeliveryLedgerKey,
@@ -79,6 +78,8 @@ export function heardShare(text: string, heardMs: number, totalMs: number): stri
 interface LineInfo {
   attention(said: string): { key: string; revision: number };
   audience(): readonly Handle[];
+  /** Whom the line is said to (`FixedLine.to`); `undefined`: not known. */
+  to?(): readonly Handle[] | undefined;
   cause(): string | null;
 }
 
@@ -196,6 +197,7 @@ export class MainLine implements Mouth {
           attention_key: key,
           revision,
           audience: info.audience(),
+          to: info.to?.(),
           cause: info.cause(),
           blocked: action.blocked ?? null,
         });
@@ -277,6 +279,7 @@ export class MainLine implements Mouth {
       const mouth = this.#mouth(sink, {
         attention: (said) => about ?? { key: topicKey(said), revision: 1 },
         audience: () => line.audience ?? agent.audience(context),
+        to: () => line.to,
         cause: () => null,
       });
       const priority = "request" as const;
@@ -316,12 +319,14 @@ export class MainLine implements Mouth {
     return false;
   }
 
-  /** What she must keep to, all of it, every run: the owner's rules and what is on hold. */
+  /**
+   * The owner's rules (his directives), all of them, every run. Nothing else: what is on hold and
+   * what did not work lately are her state (the ledger block, `ledgerBlock`), never rules. A tool
+   * that failed once was shown here as a rule she had to obey (2026-11-22: 「送魚幣給一個人:不知道
+   * 「…」是誰,沒有送出」 under 主人規則).
+   */
   ownerRules(context: ContextKey): string[] {
-    const services = this.#agent.ctx.services;
-    const rules = services.get(DirectivesKey)?.inject(context) ?? [];
-    const limits = services.get(ArbiterKey)?.ledger(context).limits;
-    return [...rules, ...(limits?.blocked ?? []).map((b) => `${b.capability}:${b.reason}`)];
+    return this.#agent.ctx.services.get(DirectivesKey)?.inject(context) ?? [];
   }
 
   /** Tasks in flight, from what the executors say about themselves. */

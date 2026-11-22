@@ -8,6 +8,8 @@ import { EconomyKey, type LedgerLine } from "@miyoria/economy";
 import { publicBond } from "@miyoria/heart/person";
 import { CardsKey } from "@miyoria/play/cards";
 import {
+  CurrencyKey,
+  DEFAULT_CURRENCY,
   type DexPictureData,
   KeepsakesKey,
   type MemberPictureKind,
@@ -28,7 +30,6 @@ export const WEEK_DAYS = 7;
 const RARITIES = ["N", "R", "SR", "SSR"] as const;
 /** Cards read for the counts at most. */
 const MAX_CARDS = 500;
-const COINS = "魚幣";
 
 /** The local day numbers of the week ending today. */
 function weekOf(state: ApiState): { first: number; today: number; offset: number } {
@@ -83,7 +84,10 @@ function byRarity(rarities: readonly (string | null)[]): { rarity: string; count
 async function odds(state: ApiState, who: PictureWho): Promise<MemberPicture<"odds"> | null> {
   const table = await state.optional(KeepsakesKey)?.cardOdds();
   if (!table) return null;
-  const currency = (await state.optional(EconomyKey)?.wallet(who.account))?.currency ?? COINS;
+  const currency =
+    (await state.optional(EconomyKey)?.wallet(who.account))?.currency ??
+    state.optional(CurrencyKey) ??
+    DEFAULT_CURRENCY;
   const data: OddsPictureData = {
     currency,
     price: table.price,

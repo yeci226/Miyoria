@@ -31,7 +31,8 @@ RUN if [ "$BACKEND" = "qwen3" ]; then \
     fi
 
 # Non-root user (uid 10001; Ubuntu 24.04's default `ubuntu` is uid 1000)
-RUN useradd --create-home --uid 10001 worker && mkdir -p /models /home/worker/.cache/huggingface \n    && chown -R worker /models /home/worker/.cache
+RUN useradd --create-home --uid 10001 worker && mkdir -p /models /home/worker/.cache/huggingface \
+    && chown -R worker /models /home/worker/.cache
 USER worker
 ENV HF_HOME=/home/worker/.cache/huggingface \
     ASR_BACKEND=${BACKEND} \

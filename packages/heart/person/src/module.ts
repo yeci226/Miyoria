@@ -38,8 +38,12 @@ import {
   type AccountRef,
   AuthorizerKey,
   type BusEvent,
+  CharacterKey,
   type Clock,
+  CurrencyKey,
   contextKeyString,
+  DEFAULT_CHARACTER,
+  DEFAULT_CURRENCY,
   Events,
   type FeelProposal,
   type HeartActivity,
@@ -561,6 +565,10 @@ export class HeartModule implements Module {
           screen,
           () => ctx.services.get(BondRingImagesKey),
           () => ctx.services.get(PicturesKey),
+          {
+            coin: ctx.services.get(CurrencyKey) ?? DEFAULT_CURRENCY,
+            her: (ctx.services.get(CharacterKey) ?? DEFAULT_CHARACTER).pronoun,
+          },
         ),
       unregisterCommands,
     );

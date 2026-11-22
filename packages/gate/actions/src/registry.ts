@@ -32,6 +32,7 @@ import {
   AuthorizerKey,
   accountRefString,
   type Clock,
+  type ContextKey,
   DirectivesKey,
   type DirectiveVerdict,
   Events,
@@ -41,6 +42,7 @@ import {
   type LaneKey,
   newAction,
   newId,
+  type PlaceConfig,
   type Priority,
   type Publish,
   principalActor,
@@ -258,6 +260,8 @@ export class ActuatorRegistry implements ActuatorExecutor {
   readonly #tickets = new Map<string, Ticket>();
   readonly #status = new Map<string, StatusProvider>();
   #config: ActionsConfig = defaultActionsConfig();
+  /** The section per place, for the forbidden lists of Spaces and rooms; `null`: the cluster's. */
+  #places: PlaceConfig<ActionsConfig> | null = null;
   #router: ActivityRouter | null = null;
   #paused = false;
   #name = "她";
@@ -302,10 +306,34 @@ export class ActuatorRegistry implements ActuatorExecutor {
     return this.#config;
   }
 
-  /** Applies `[modules.actions]` (and her name for the review prompt). */
-  configure(config: ActionsConfig, name: string | null = null): void {
+  /**
+   * Applies `[modules.actions]` (and her name for the review prompt). `places`: the section per
+   * place (`placeConfig`), for what is forbidden in one Space or room.
+   */
+  configure(
+    config: ActionsConfig,
+    name: string | null = null,
+    places: PlaceConfig<ActionsConfig> | null = null,
+  ): void {
     this.#config = config;
+    this.#places = places;
     if (name !== null && name.trim() !== "") this.#name = name.trim();
+  }
+
+  /**
+   * What is forbidden where a request comes from: the cluster's list and its Space's and room's
+   * (a union, so a room never lifts what the cluster forbids).
+   */
+  forbiddenAt(context: ContextKey | null): readonly string[] {
+    const cluster = this.#config.forbidden;
+    if (this.#places === null || context === null) return cluster;
+    try {
+      const here = this.#places.for(context).forbidden;
+      return [...new Set([...cluster, ...here])];
+    } catch (error) {
+      log.warn({ err: errorMessage(error) }, "cannot read a place's forbidden list");
+      return cluster;
+    }
   }
 
   get paused(): boolean {
@@ -837,7 +865,8 @@ export class ActuatorRegistry implements ActuatorExecutor {
     }
 
     // 2. Hard prohibitions.
-    if (cfg.forbidden.some((pattern) => capabilityMatches(pattern, capability.name))) {
+    const forbidden = this.forbiddenAt(p.context ?? null);
+    if (forbidden.some((pattern) => capabilityMatches(pattern, capability.name))) {
       return deny("prohibition", "this capability is forbidden by configuration");
     }
     if (!cfg.cross_guild && (p.kind === "user" || p.kind === "self" || p.kind === "director")) {

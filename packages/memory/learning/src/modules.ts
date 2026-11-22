@@ -70,6 +70,7 @@ import { KnowledgeStore } from "./knowledge.js";
 import { LessonStore } from "./lessons.js";
 import { recapAgeNote } from "./recap-age.js";
 import { Reflector } from "./reflect.js";
+import { NightlyTidy } from "./tidy.js";
 import { KNOWLEDGE_TOOL, KnowledgeTool } from "./tool.js";
 
 const STORE_TIMEOUT_MS = 5_000;
@@ -535,6 +536,16 @@ export class ReflectModule implements Module {
     await loadWithTimeout(ctx, "feedback", () => feedback.load());
     await loadWithTimeout(ctx, "lessons", () => lessons.load());
     await loadWithTimeout(ctx, "reflections", () => reflector.load());
+    const tidy = new NightlyTidy({
+      config: config.tidy,
+      purpose: config.purpose,
+      utcOffsetMinutes: config.utc_offset_minutes,
+      profile: this.profile,
+      store: settings,
+      clock,
+      log: ctx.log,
+    });
+    await loadWithTimeout(ctx, "the notes tidy", () => tidy.load());
     const idle = (): string | null => {
       if (s.get(ActuatorRegistryKey)?.paused) return "paused";
       if (config.max_calls_per_day === 0) return "max_calls_per_day is 0";
@@ -697,6 +708,7 @@ export class ReflectModule implements Module {
       name: this.options.name ?? "她",
       store: settings,
       profile: this.profile,
+      conversations: () => s.get(ConversationStatesKey)?.list() ?? [],
     });
     await loadWithTimeout(ctx, "diary", () => diary.load());
     // With a channel, writing it is hers to choose too (the "diary" row of her activity table);
@@ -741,6 +753,14 @@ export class ReflectModule implements Module {
           // After the daily reflection, one call per person (under the same nightly figure).
           if (reflector.peopleDue(clock.now(), budgetOf(s))) {
             await reflectOnPeople(ctx, reflector, signal);
+          } else if (tidy.due(clock.now(), reflector.nightOver(clock.now(), budgetOf(s)))) {
+            // Then the tidy of her notes, within one scope at a time (same nightly figure).
+            await tidy.run(
+              s,
+              s.get(StoreKey)?.plugin(notesTables) ?? null,
+              s.get(LlmRouterKey),
+              signal,
+            );
           }
           continue;
         }

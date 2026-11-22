@@ -96,3 +96,54 @@ describe("Profile", () => {
     }
   });
 });
+
+describe("ownIdentity and the character", () => {
+  // The line she has always had, word for word: no profile configured changes nothing.
+  const MIYORIA_AS_DEEPSEEK =
+    "你的本名是 Miyoria,大家也叫你 Miyo(米優、みよ)。「DeepSeek-chan」也是你,是大家在這裡認識的你;有人叫 Miyoria、Miyo 或 DeepSeek-chan 都是在叫你。問你叫什麼,你知道自己叫 Miyoria。";
+  const MIYORIA_AS_HERSELF =
+    "你的本名是 Miyoria,大家也叫你 Miyo(米優、みよ)。有人叫 Miyoria 或 Miyo 都是在叫你。問你叫什麼,你知道自己叫 Miyoria。";
+
+  it("is today's text with the default character", () => {
+    expect(ownIdentity("DeepSeek-chan")).toBe(MIYORIA_AS_DEEPSEEK);
+    expect(ownIdentity("miyoria")).toBe(MIYORIA_AS_HERSELF);
+    expect(OWN_NAMES).toEqual(["Miyoria", "Miyo", "米優", "みよ"]);
+  });
+
+  it("names another character everywhere it named Miyoria", () => {
+    const kuro = {
+      name: "Kuro",
+      short_name: "Ku",
+      other_names: ["庫"],
+      pronoun: "她",
+      exchange_name: "黑市",
+      creature: "貓",
+    };
+    expect(ownIdentity("黑貓", kuro)).toBe(
+      "你的本名是 Kuro,大家也叫你 Ku(庫)。「黑貓」也是你,是大家在這裡認識的你;有人叫 Kuro、Ku 或 黑貓 都是在叫你。問你叫什麼,你知道自己叫 Kuro。",
+    );
+    const plain = { ...kuro, short_name: "", other_names: [] };
+    expect(ownIdentity("Kuro", plain)).toBe(
+      "你的本名是 Kuro,有人叫 Kuro 都是在叫你。問你叫什麼,你知道自己叫 Kuro。",
+    );
+    expect(ownIdentity("Kuro", plain)).not.toMatch(/Miyo|米優/);
+  });
+
+  it("comes with the loaded profile", async () => {
+    const kuro = {
+      name: "Kuro",
+      short_name: "Ku",
+      other_names: [],
+      pronoun: "她",
+      exchange_name: "黑市",
+      creature: "貓",
+    };
+    const p = await Profile.load(PROFILES, "deepseek-chan", kuro);
+    expect(p.character).toEqual(kuro);
+    expect(p.names()).toContain("Kuro");
+    expect(p.names()).not.toContain("みよ"); // 米優 is also one of this persona's nicknames
+    expect(p.personaPrompt().startsWith("你的本名是 Kuro,")).toBe(true);
+    const miyoria = await Profile.load(PROFILES, "deepseek-chan");
+    expect(miyoria.personaPrompt().startsWith(MIYORIA_AS_DEEPSEEK)).toBe(true);
+  });
+});

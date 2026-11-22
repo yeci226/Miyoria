@@ -13,7 +13,7 @@ import { type Capability, defineCapability } from "@miyoria/gate/actions";
 import { type JsonObject, type Principal, safeName } from "@miyoria/types";
 import { z } from "zod";
 import type { SingPermissions } from "./config.js";
-import { BACKING_MODES, songLabel } from "./setlist.js";
+import { BACKING_MODES, songGuild, songLabel } from "./setlist.js";
 import type { Singer } from "./singer.js";
 
 const RequestArgs = z.object({
@@ -32,6 +32,11 @@ const RequestArgs = z.object({
    * Not in her tool: coins move on a person's own request, never on her call.
    */
   priority: z.boolean().nullish(),
+  /**
+   * A person's own request made outside a server (the member page): the server (guild id) it is
+   * sung in, which they picked. Not in her tool; ignored for a request made in a server.
+   */
+  guild: z.string().trim().min(1).max(64).nullish(),
 });
 // Song numbers start at 1; a model that fills the optional field with 0 means "the first ready".
 const PlayArgs = z.object({
@@ -111,6 +116,8 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
       // A song already on the list is not requested again, so no ticket is taken for it.
       const listed = singer.list.findOpen(args.query, args.key ?? 0, args.backing ?? "keep");
       const priority = args.priority === true && own && !practice && listed === null;
+      // Outside a server, a person's own request names the server it is for.
+      const guild = own && p.context?.scope == null ? (args.guild ?? null) : null;
       const entry = await singer.request(
         {
           query: args.query,
@@ -119,6 +126,7 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
           requester: p.requester,
           requester_name: byOf(p, args.by),
           context: p.context,
+          ...(guild === null ? {} : { guild }),
           forced: !practice && forced(p),
           practice,
           ...(priority ? { priority: true } : {}),
@@ -139,9 +147,13 @@ export function singCapabilities(singer: Singer, perms: SingPermissions): Capabi
             : singer.fetching(entry.no)
               ? `${label} 已經做好了(#${entry.no}),正在把歌傳過來,${entry.forced ? "傳完她就會唱" : "傳完會告訴你"}。`
               : `開始準備 ${label}(#${entry.no},大約一到兩分鐘)。${entry.forced ? "好了她就會唱。" : practice ? "好了會告訴你,不會自己開唱。" : "好了會告訴你。"}`;
+      // She is in voice in another server: it waits for her to be in voice in its own.
+      const waits = singer.waitsElsewhere(songGuild(entry))
+        ? "她現在在別的伺服器的語音,這首會等她下次到這首的伺服器的語音再唱。"
+        : "";
       return {
-        text: `${text}${ticket}`,
-        data: { song: entry.no, state: entry.state, priority },
+        text: `${text}${ticket}${waits}`,
+        data: { song: entry.no, state: entry.state, priority, waits: waits !== "" },
       };
     },
   });

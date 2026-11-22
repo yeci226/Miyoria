@@ -1,5 +1,6 @@
 // `contextKeyString` is the text form of a `ContextKey` (`<platform>:<scope or dm>:<channel>`,
 // voice contexts with a `voice:` infix), as used for config keys, settings keys and lanes.
+import { setting, settingGroups } from "@miyoria/runtime/kernel";
 import { type ContextKey, contextKeyString as contextDisplay } from "@miyoria/types";
 import { z } from "zod";
 
@@ -96,6 +97,31 @@ export const ChannelModeSchema = z.enum([
 ]) satisfies z.ZodType<ChannelMode>;
 export const ActivenessSchema = z.enum(["low", "medium", "high"]);
 
+/** The levels in words, for the settings form. */
+const MODE_WORDS: Record<ChannelMode, string> = {
+  off: "關閉",
+  "mention-only": "只回提及",
+  quiet: "安靜",
+  normal: "一般",
+  lively: "活躍",
+  always: "每則都回",
+};
+const ACTIVENESS_WORDS: Record<Activeness, string> = { low: "低", medium: "普通", high: "高" };
+
+/**
+ * The place keys of the levels (`place_settings`, plugin `agent`; docs/design/v5-places.md): set
+ * per Room or per Space by `/channel mode`, `/channel activeness`, `/voice mode` and the panel. A
+ * room without its own value takes its channel's (a thread), then its Space's.
+ */
+export const LEVEL_KEYS = {
+  mode: "mode",
+  activeness: "activeness_level",
+  voiceMode: "voice.mode",
+  voiceActiveness: "voice.activeness_level",
+  language: "language",
+} as const;
+export type LevelKey = (typeof LEVEL_KEYS)[keyof typeof LEVEL_KEYS];
+
 /**
  * `[modules.agent.voice]`: conversation in voice channels. Voice attention is more
  * conservative than text: she mostly listens and only sometimes chimes in.
@@ -117,6 +143,35 @@ export const VoiceConfigSchema = z.object({
    * act like `normal` in voice.
    */
   default_mode: ChannelModeSchema.default("normal"),
+  /**
+   * The voice mode of one place (`voice.mode` in `place_settings`, by `/voice mode`): a voice
+   * room's own, or a Space's for all its voice rooms. Left unset in the file (`default_mode` is
+   * the cluster's); a value there acts like `default_mode`.
+   */
+  mode: ChannelModeSchema.nullable()
+    .default(null)
+    .meta(
+      setting({
+        kind: "select",
+        scope: "room",
+        label: "語音模式",
+        help: "這個語音頻道（或整個伺服器）的語音聊天模式；沒設的照預設",
+        labels: MODE_WORDS,
+        group: "levels",
+      }),
+    ),
+  /** The activeness of one voice place (`voice.activeness_level`), like `mode`. */
+  activeness_level: ActivenessSchema.nullable()
+    .default(null)
+    .meta(
+      setting({
+        kind: "select",
+        scope: "room",
+        label: "語音的主動程度",
+        labels: ACTIVENESS_WORDS,
+        group: "levels",
+      }),
+    ),
   /** A question this soon after she spoke counts as addressed to her. */
   question_window_ms: z.number().int().nonnegative().default(8000),
   /** Sentences that have not started playing within this time are dropped. */
@@ -327,7 +382,8 @@ export const MainLineConfigSchema = z.object({
   notebook_chars: z.number().int().nonnegative().default(600),
   /**
    * The server's custom emoji and their meanings (contributor `server_emoji`, Discord), before
-   * the history: they change when someone adds or renames one, not every turn.
+   * the history: they change when someone adds or renames one, not every turn. The server's
+   * stickers (`server_stickers`) are a block of their own with the same limit.
    */
   emoji_chars: z.number().int().nonnegative().default(1200),
   /** What she did just now, across every place (contributor `just_now`), after the history. */
@@ -415,76 +471,183 @@ export const CorrectionsConfigSchema = z.object({
 export type CorrectionsConfig = z.output<typeof CorrectionsConfigSchema>;
 
 /** `[modules.agent]` config section. */
-export const AgentConfigSchema = z.object({
-  /** Quiet time after the last message before a turn starts. */
-  debounce_ms: z.number().int().nonnegative().default(800),
-  /** A typing notification pushes the turn start to at least this far out. */
-  typing_extend_ms: z.number().int().nonnegative().default(2500),
-  /** Upper bound on the total debounce of one turn. */
-  max_debounce_ms: z.number().int().nonnegative().default(4000),
-  /** Messages kept per conversation context. */
-  history_limit: z.number().int().nonnegative().default(240),
-  /** Messages of history included in the prompt. */
-  prompt_history: z.number().int().nonnegative().default(30),
-  /**
-   * `@name` of someone in the conversation in her text replies becomes a real mention (on
-   * platforms that have them). Role, `@everyone` and `@here` mentions are always removed.
-   */
-  mention_users: z.boolean().default(true),
-  /** Overrides the profile's `behavior.default_channel_mode`. */
-  default_mode: ChannelModeSchema.nullable().default(null),
-  /**
-   * Per-context modes. Keys are matched against the full context key
-   * (`discord:<guild>:<channel>`), then `<platform>:<guild>`, then the bare channel id.
-   */
-  channels: z.record(z.string(), ChannelModeSchema).default({}),
-  /** Overrides the profile's `behavior.initiative`. */
-  default_activeness: ActivenessSchema.nullable().default(null),
-  /** Per-context activeness, keyed like `channels`. */
-  activeness: z.record(z.string(), ActivenessSchema).default({}),
-  /** Treat messages from other bots as input (they are always recorded). */
-  respond_to_bots: z.boolean().default(false),
-  /** Reply messages are dropped if not sent within this time. */
-  reply_ttl_ms: z.number().int().nonnegative().default(120_000),
-  /** Longer replies are split into several messages. */
-  max_message_chars: z.number().int().nonnegative().default(1900),
-  /**
-   * Send replies to someone who called her as platform replies quoting the first message she
-   * answers (the turn's focus).
-   */
-  reply_reference: z.boolean().default(true),
-  /**
-   * Text: several people calling her at once get a turn each, in the order they called, instead
-   * of one turn answering them all (where the answers mixed and read as said to the first).
-   */
-  one_caller_per_turn: z.boolean().default(true),
-  /** The typing indicator is resubmitted this often while generating. */
-  typing_refresh_ms: z.number().int().nonnegative().default(8000),
-  /** The main line. */
-  mainline: MainLineConfigSchema.prefault({}),
-  /** The work lane (v4 §4.3). */
-  work: WorkConfigSchema.prefault({}),
-  /** The sub-agents. */
-  delegate: DelegateConfigSchema.prefault({}),
-  /** The after-the-fact corrections that may be switched off once measured (v4 §4.5). */
-  corrections: CorrectionsConfigSchema.prefault({}),
-  temperature: z.number().nullable().default(null),
-  max_tokens: z.number().int().nonnegative().nullable().default(null),
-  /** A context with no activity for this long forgets its session. */
-  session_idle_ms: z
-    .number()
-    .int()
-    .nonnegative()
-    .default(6 * 3600 * 1000),
-  /** Time limit for each prompt contributor; slower ones are skipped. */
-  contributor_timeout_ms: z.number().int().nonnegative().default(800),
-  voice: VoiceConfigSchema.prefault({}),
-  history: HistoryConfigSchema.prefault({}),
-  vision: VisionConfigSchema.prefault({}),
-  files: FilesConfigSchema.prefault({}),
-  prompt: PromptConfigSchema.prefault({}),
-});
+export const AgentConfigSchema = z
+  .object({
+    /** Quiet time after the last message before a turn starts. */
+    debounce_ms: z.number().int().nonnegative().default(800),
+    /** A typing notification pushes the turn start to at least this far out. */
+    typing_extend_ms: z.number().int().nonnegative().default(2500),
+    /** Upper bound on the total debounce of one turn. */
+    max_debounce_ms: z.number().int().nonnegative().default(4000),
+    /** Messages kept per conversation context. */
+    history_limit: z.number().int().nonnegative().default(240),
+    /** Messages of history included in the prompt. */
+    prompt_history: z.number().int().nonnegative().default(30),
+    /**
+     * `@name` of someone in the conversation in her text replies becomes a real mention (on
+     * platforms that have them). Role, `@everyone` and `@here` mentions are always removed.
+     */
+    mention_users: z.boolean().default(true),
+    /** Overrides the profile's `behavior.default_channel_mode`. */
+    default_mode: ChannelModeSchema.nullable().default(null),
+    /**
+     * Per-context modes. Keys are matched against the full context key
+     * (`discord:<guild>:<channel>`), then `<platform>:<guild>`, then the bare channel id.
+     */
+    channels: z.record(z.string(), ChannelModeSchema).default({}),
+    /** Overrides the profile's `behavior.initiative`. */
+    default_activeness: ActivenessSchema.nullable().default(null),
+    /** Per-context activeness, keyed like `channels`. */
+    activeness: z.record(z.string(), ActivenessSchema).default({}),
+    /**
+     * The level of one place (`mode` in `place_settings`, by `/channel mode` and the panel): a
+     * room's own, its channel's for a thread, or a Space's for all its rooms. Wins over `channels`.
+     * Left unset in the file (`default_mode` is the cluster's); a value there acts like
+     * `default_mode`.
+     */
+    mode: ChannelModeSchema.nullable()
+      .default(null)
+      .meta(
+        setting({
+          kind: "select",
+          scope: "room",
+          label: "聊天等級",
+          help: "這個頻道（或整個伺服器）她多話的上限；沒設的照預設",
+          labels: MODE_WORDS,
+          group: "levels",
+        }),
+      ),
+    /**
+     * The activeness of one place (`activeness_level` in `place_settings`, by `/channel
+     * activeness`), like `mode`. Not `activeness`: that key is the file's per-context map.
+     */
+    activeness_level: ActivenessSchema.nullable()
+      .default(null)
+      .meta(
+        setting({
+          kind: "select",
+          scope: "room",
+          label: "主動程度",
+          help: "這個頻道（或整個伺服器）她主動發話的程度；不超過聊天等級",
+          labels: ACTIVENESS_WORDS,
+          group: "levels",
+        }),
+      ),
+    /**
+     * The language she talks in at one place (`language` in `place_settings`), in words she reads
+     * (`日本語`, `English`). Unset: as she always does.
+     */
+    language: z
+      .string()
+      .trim()
+      .max(40)
+      .nullable()
+      .default(null)
+      .meta(
+        setting({
+          kind: "text",
+          scope: "room",
+          label: "說話的語言",
+          help: "例如「日本語」「English」；沒設的照她平常的",
+          group: "levels",
+        }),
+      ),
+    /**
+     * What one conversation (a session: a channel, thread, DM or voice room) may spend on models
+     * in a rolling hour, in USD from `[llm.pricing]` (the runner's `sessionUsdPerHour`). At the cap
+     * she does not answer there until enough of the hour has aged out; someone waiting is told
+     * once when she is back. `0`: no hourly cap per conversation (the daily `[llm.budget]` still
+     * applies). May differ per Space or room.
+     */
+    session_usd_per_hour: z
+      .number()
+      .nonnegative()
+      .default(1)
+      .meta(
+        setting({
+          kind: "number",
+          scope: "room",
+          label: "每個對話每小時花費上限（美元）",
+          help: "一個頻道、討論串、私訊或語音頻道一小時內最多花多少；到了她會說大概幾分鐘後回來。0 = 不限（每天的預算照算）",
+          step: 0.1,
+          group: "spend",
+        }),
+      ),
+    /**
+     * The same cap in prompt and completion tokens, for an hour in which a model without a price
+     * was used (its cost cannot be counted). `0`: no such cap.
+     */
+    session_tokens_per_hour: z
+      .number()
+      .int()
+      .nonnegative()
+      .default(3_000_000)
+      .meta(
+        setting({
+          kind: "number",
+          scope: "room",
+          label: "每個對話每小時 token 上限",
+          help: "模型沒有價格時改用 token 算的同一個上限。0 = 不限",
+          step: 100_000,
+          group: "spend",
+        }),
+      ),
+    /** Treat messages from other bots as input (they are always recorded). */
+    respond_to_bots: z.boolean().default(false),
+    /** Reply messages are dropped if not sent within this time. */
+    reply_ttl_ms: z.number().int().nonnegative().default(120_000),
+    /** Longer replies are split into several messages. */
+    max_message_chars: z.number().int().nonnegative().default(1900),
+    /**
+     * Send replies to someone who called her as platform replies quoting the first message she
+     * answers (the turn's focus).
+     */
+    reply_reference: z.boolean().default(true),
+    /**
+     * Text: several people calling her at once get a turn each, in the order they called, instead
+     * of one turn answering them all (where the answers mixed and read as said to the first).
+     */
+    one_caller_per_turn: z.boolean().default(true),
+    /** The typing indicator is resubmitted this often while generating. */
+    typing_refresh_ms: z.number().int().nonnegative().default(8000),
+    /** The main line. */
+    mainline: MainLineConfigSchema.prefault({}),
+    /** The work lane (v4 §4.3). */
+    work: WorkConfigSchema.prefault({}),
+    /** The sub-agents. */
+    delegate: DelegateConfigSchema.prefault({}),
+    /** The after-the-fact corrections that may be switched off once measured (v4 §4.5). */
+    corrections: CorrectionsConfigSchema.prefault({}),
+    temperature: z.number().nullable().default(null),
+    max_tokens: z.number().int().nonnegative().nullable().default(null),
+    /** A context with no activity for this long forgets its session. */
+    session_idle_ms: z
+      .number()
+      .int()
+      .nonnegative()
+      .default(6 * 3600 * 1000),
+    /** Time limit for each prompt contributor; slower ones are skipped. */
+    contributor_timeout_ms: z.number().int().nonnegative().default(800),
+    voice: VoiceConfigSchema.prefault({}),
+    history: HistoryConfigSchema.prefault({}),
+    vision: VisionConfigSchema.prefault({}),
+    files: FilesConfigSchema.prefault({}),
+    prompt: PromptConfigSchema.prefault({}),
+  })
+  .meta(
+    settingGroups([
+      { id: "levels", label: "每個地方的聊天等級" },
+      { id: "spend", label: "每個對話的花費上限" },
+    ]),
+  );
 export type AgentConfig = z.output<typeof AgentConfigSchema>;
+
+/**
+ * The level of a room in a new server (not established), while nothing was set for it (owner decision 2026-11-22, Q5): she answers who calls her and nothing else.
+ */
+export const NEW_SPACE_MODE: ChannelMode = "mention-only";
+/** The activeness there in the same case. */
+export const NEW_SPACE_ACTIVENESS: Activeness = "low";
 
 /** The defaults: the schema parsed from an empty config. */
 export function defaultAgentConfig(): AgentConfig {
@@ -511,10 +674,14 @@ export function modeFor(
   config: AgentConfig,
   context: ContextKey,
   profileDefault: ChannelMode,
+  options: { newSpace?: boolean } = {},
 ): ChannelMode {
   const configured = lookup(config.channels, context);
-  if (context.kind === "voice") return configured ?? config.voice.default_mode;
-  return configured ?? config.default_mode ?? profileDefault;
+  if (configured !== undefined) return configured;
+  // A server joined later starts quiet: only what is set for it there (or above) counts.
+  if (options.newSpace === true) return NEW_SPACE_MODE;
+  if (context.kind === "voice") return config.voice.mode ?? config.voice.default_mode;
+  return config.mode ?? config.default_mode ?? profileDefault;
 }
 
 /** Activeness for `context`, falling back to `default_activeness`, then `profileDefault`. */
@@ -522,8 +689,13 @@ export function activenessFor(
   config: AgentConfig,
   context: ContextKey,
   profileDefault: Activeness,
+  options: { newSpace?: boolean } = {},
 ): Activeness {
-  return lookup(config.activeness, context) ?? config.default_activeness ?? profileDefault;
+  const configured = lookup(config.activeness, context);
+  if (configured !== undefined) return configured;
+  if (options.newSpace === true) return NEW_SPACE_ACTIVENESS;
+  const own = context.kind === "voice" ? config.voice.activeness_level : null;
+  return own ?? config.activeness_level ?? config.default_activeness ?? profileDefault;
 }
 
 function own<T>(map: Readonly<Record<string, T>>, key: string): T | undefined {

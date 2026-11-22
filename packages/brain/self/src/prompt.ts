@@ -25,7 +25,7 @@ import {
   userMessage,
 } from "@miyoria/llm/llm";
 import type { ToolEntry } from "@miyoria/llm/tools";
-import { type TranscriptTail, toMessages } from "@miyoria/memory/transcript";
+import { type SpeakerNames, type TranscriptTail, toMessages } from "@miyoria/memory/transcript";
 import { dataBlock, isJsonObject } from "@miyoria/types";
 import { FOR_ARG, FOR_PROPERTY, slimTool } from "../../agent/src/index.js";
 import { PREFIX_PROFILE, type ProfileName } from "./profiles.js";
@@ -50,16 +50,27 @@ export interface PromptBlocks {
   style?: string | null;
   /** Block 6's files and images (`PromptSource.attachments`); empty: none. */
   attached?: readonly ContentPart[];
+  /** Her handles for the transcript's speakers (`SpeakerNaming.names`); unset: the names shown. */
+  names?: SpeakerNames | null;
 }
 
-type TextBlock = Exclude<keyof PromptBlocks, "attached" | "style">;
+/**
+ * A prompt source that names the people of the transcript (block 5) and of the wake line by her
+ * handles for them, the names the rest of the prompt and her tools use. Unset: by the names they
+ * were shown under.
+ */
+export interface SpeakerNaming {
+  names?(input: PromptInput): SpeakerNames | null;
+}
+
+type TextBlock = Exclude<keyof PromptBlocks, "attached" | "style" | "names">;
 
 const blank = (text: string | null): string | null =>
   text === null || text.trim() === "" ? null : text.trim();
 
 /** Asks `source` for every block at once. A block that fails is left out and reported. */
 export async function gatherBlocks(
-  source: PromptSource,
+  source: PromptSource & SpeakerNaming,
   input: PromptInput,
   onError: (block: keyof PromptBlocks, error: unknown) => void = () => undefined,
 ): Promise<PromptBlocks> {
@@ -87,6 +98,12 @@ export async function gatherBlocks(
       return null;
     }
   };
+  let names: SpeakerNames | null = null;
+  try {
+    names = source.names?.(input) ?? null;
+  } catch (error) {
+    onError("names", error);
+  }
   const [fixed, pinned, place, recalled, now, style, attached] = await Promise.all([
     ask("fixed"),
     ask("pinned"),
@@ -96,14 +113,17 @@ export async function gatherBlocks(
     styled(),
     attach(),
   ]);
-  return { fixed, pinned, place, recalled, now, style, attached };
+  return { fixed, pinned, place, recalled, now, style, attached, names };
 }
 
-/** Block 7's last part: what this run is. */
-export function wakeLine(wake: Wake): string {
+/** Block 7's last part: what this run is (whoever woke her by her handle for them, when known). */
+export function wakeLine(wake: Wake, names: SpeakerNames | null = null): string {
   switch (wake.kind) {
-    case "addressed":
-      return wake.line ?? WAKE_LINES[wake.reason](wake.from.name);
+    case "addressed": {
+      const from = wake.from;
+      const who = names?.({ account: from.account, author: from.name, bot: false }) ?? from.name;
+      return wake.line ?? WAKE_LINES[wake.reason](who);
+    }
     case "result":
       return WAKE_LINES.result(wake.tool, wake.job, wake.ok);
     case "timer":
@@ -168,9 +188,10 @@ export function runMessages(
     ? `
 ${FEEL_REMINDER}`
     : "";
-  tail.push(systemMessage(`${now}${style}${own}<turn>${wakeLine(wake)}${feel}</turn>`));
+  const names = blocks.names ?? null;
+  tail.push(systemMessage(`${now}${style}${own}<turn>${wakeLine(wake, names)}${feel}</turn>`));
 
-  return { head, history: toMessages(transcript), tail };
+  return { head, history: toMessages(transcript, { names }), tail };
 }
 
 /**

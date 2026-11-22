@@ -16,9 +16,16 @@
 //   a server, the partner of a DM), so a DM's lines are read only in that DM as before. Reading a
 //   path shows every line of the document the place may see, with the ids and dates the document
 //   view has, so lines the segment pass wrote show up too.
-// - The limits are the notebook's (`NotebookConfig`) with their texts: characters of a page, pages
-//   (documents), writes per hour. The lines of a document and of her self document are limited by
-//   the notes themselves (`NotesLimits`).
+// - The limits are the notebook's (`NotebookConfig`) with their texts: characters of a page, pages,
+//   writes per hour. The lines of a document and of her self document are limited by the notes
+//   themselves (`NotesLimits`).
+// - The page limit is on what she wrote down herself: the documents with a line in use written
+//   through these tools. The documents the segment pass, the reflection and the import made are
+//   not hers to tidy from here, so they do not fill her notebook. Only a write that starts a
+//   document (one with no line in use anywhere) is counted, so a full notebook can still be
+//   rewritten, shortened and added to: tidying never needs room first.
+// - A rewrite or a delete takes out the lines of this place only. When the page has lines written
+//   elsewhere, the answer says how many stay, so the one tidying knows what it could not reach.
 
 import {
   type Clock,
@@ -272,10 +279,8 @@ export class NotesNotebook implements Notebook {
         `這頁會超過 ${cfg.page_chars} 字(現在 ${before} 字),先整理或改寫成精簡版`,
       );
     }
-    if (
-      here.length === 0 &&
-      this.#notes.list("owner").filter((e) => e.lines > 0).length >= cfg.max_pages
-    ) {
+    const all = this.#notes.lines(target.subject, "owner");
+    if (all.length === 0 && this.#notes.writtenBy("tool") >= cfg.max_pages) {
       throw new NotebookError(`筆記本滿了(${cfg.max_pages} 頁),先刪掉或合併幾頁`);
     }
     const ops: NoteOp[] = [
@@ -309,7 +314,38 @@ export class NotesNotebook implements Notebook {
       );
     }
     this.#writes.push(now);
-    return { path: clean, chars: next, created: here.length === 0 };
+    return {
+      path: clean,
+      chars: next,
+      created: here.length === 0,
+      elsewhere: this.#elsewhere(target, all, here),
+    };
+  }
+
+  /** The lines in use of the page that a rewrite or a delete from this place does not reach. */
+  #elsewhere(
+    target: Target,
+    all: readonly { id: string; section: string }[],
+    here: readonly { id: string }[],
+  ): number {
+    const mine = new Set(here.map((l) => l.id));
+    return all.filter(
+      (l) => !mine.has(l.id) && (target.section === null || l.section === target.section),
+    ).length;
+  }
+
+  /** How many lines in use of the page at `path` were written somewhere else than `where`. */
+  elsewhere(path: string, where: NotebookWhere): number {
+    let clean: string;
+    try {
+      clean = cleanPath(path, this.#config().path_chars);
+    } catch {
+      return 0;
+    }
+    const scope = this.#scopeOf(where);
+    const target = this.#target(clean);
+    const all = this.#notes.lines(target.subject, "owner");
+    return this.#elsewhere(target, all, scope === null ? [] : this.#here(target, scope));
   }
 
   /** Marks the lines of this place's page at `path` outdated (nothing is deleted). */

@@ -4,8 +4,8 @@
 // * `voice`: per 10-minute window in her voice channel, when they spoke in it and are still
 //   there when it ends (sitting in silence earns nothing).
 // * `song`: a song they requested that she sang to the end.
-// * the daily quest "hear a song" (quests.ts): whoever was in her voice channel when a song
-//   started and still is when she sang it to the end.
+// * the daily quest "with others" (quests.ts): whoever was in her voice channel when a song
+//   started and still is when she sang it to the end, when enough people she knows were.
 //
 // A song sung to the end gets one card in her voice channel's text chat (notices.ts): the
 // requester's coins, who finished the quest by listening, and what that unlocked. Without a voice
@@ -180,14 +180,22 @@ export class Earnings {
     }
   }
 
-  /** The song was sung to the end: whoever sat through it ticks the daily quest. */
+  /**
+   * The song was sung to the end: whoever sat through it ticks the "with others" quest, when at
+   * least `quest_together_min_people` people she knows did (someone alone with her does not).
+   */
   async #heard(): Promise<QuestDone[]> {
     const stayed = [...this.#listening].filter(([key]) => this.#voice?.present.has(key));
     this.#listening = new Map();
-    const done: QuestDone[] = [];
+    const known = [];
     for (const [, account] of stayed) {
       const who = await this.#economy.member(account);
-      const result = who ? await this.#economy.v2.questDone(who, "listen_song") : null;
+      if (who) known.push({ account, who });
+    }
+    const done: QuestDone[] = [];
+    if (known.length < this.#config.quest_together_min_people) return done;
+    for (const { account, who } of known) {
+      const result = await this.#economy.v2.questDone(who, "together");
       if (result?.status === "paid") done.push({ account, result });
     }
     return done;

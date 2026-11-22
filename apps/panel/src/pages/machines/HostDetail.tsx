@@ -20,6 +20,7 @@ import {
   type ServiceAction,
   type ServiceStatus,
   serviceActions,
+  serviceRoutingLines,
   serviceView,
 } from "./labels";
 
@@ -72,9 +73,23 @@ interface Forced extends Pending {
   message: string;
 }
 
+/** Its class, readiness, its owner's limits and its load, as the host reports them. */
+function RoutingLines({ lines, className }: { lines: ReturnType<typeof serviceRoutingLines>; className?: string }) {
+  return (
+    <span className={cn("grid gap-0.5 text-xs tabular-nums", className)}>
+      {lines.map((l) => (
+        <span key={l.text} className={cn("max-w-72 break-words", l.alert ? "text-primary" : "text-muted-foreground")}>
+          {l.text}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function ServiceRow({ s, now, onAction }: { s: ServiceStatus; now: number; onAction: (s: ServiceStatus, a: ServiceAction) => void }) {
   const view = serviceView(s);
   const actions = serviceActions(s);
+  const routing = serviceRoutingLines(s);
   return (
     <TableRow data-service={s.name}>
       <TableCell className="min-w-0 py-2.5 pr-3 align-top">
@@ -97,6 +112,7 @@ function ServiceRow({ s, now, onAction }: { s: ServiceStatus; now: number; onAct
                 </span>
               ))}
           </span>
+          {routing.length > 0 && <RoutingLines lines={routing} className="xl:hidden" />}
         </div>
       </TableCell>
       <TableCell className="py-2.5 pr-3 align-top">
@@ -129,6 +145,9 @@ function ServiceRow({ s, now, onAction }: { s: ServiceStatus; now: number; onAct
         ) : (
           "—"
         )}
+      </TableCell>
+      <TableCell className="hidden py-2.5 pr-3 align-top xl:table-cell" data-cell="routing">
+        {routing.length > 0 ? <RoutingLines lines={routing} /> : <span className="text-xs text-muted-foreground">—</span>}
       </TableCell>
       <TableCell className="py-2.5 align-top">
         <div className="flex justify-end gap-1">
@@ -190,6 +209,7 @@ function ServicesTable({ host, services, now }: { host: ClusterHostView; service
             <TableHead className="hidden text-right lg:table-cell">重啟</TableHead>
             <TableHead className="hidden text-right md:table-cell">持續</TableHead>
             <TableHead className="hidden xl:table-cell">GPU</TableHead>
+            <TableHead className="hidden xl:table-cell">分派</TableHead>
             <TableHead className="text-right">
               <span className="sr-only">動作</span>
             </TableHead>

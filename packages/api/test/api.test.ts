@@ -16,7 +16,7 @@ import {
   type PersonaOverride,
   PersonaOverrideStoreKey,
 } from "@miyoria/store";
-import { type ContextKey, newId, toTimestamp } from "@miyoria/types";
+import { type ContextKey, newId, RunningProfileKey, toTimestamp } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import { ActiveProfileKey, ApiModule } from "../src/index.js";
 import { adminCalls } from "./support/admin.js";
@@ -183,6 +183,21 @@ describe("api", () => {
   function context(channel: string): ContextKey {
     return { platform: "discord", scope: "guild", channel, kind: "channel" };
   }
+
+  it("the_running_profile_for_the_panel", async () => {
+    const h = await harness();
+    // Without Core's service: the profile id, Miyoria, the persona's name.
+    expect(await call(h.base, TOKEN, "GET", "/api/profile")).toEqual({
+      id: PROFILE,
+      own: false,
+      character: "Miyoria",
+      persona: "Test",
+    });
+    const kuro = { id: "kuro", own: true, character: "Kuro", persona: "黑貓" };
+    h.sup.services.provide("kernel", RunningProfileKey, kuro);
+    expect(await call(h.base, TOKEN, "GET", "/api/profile")).toEqual(kuro);
+    expect(await statusOf(call(h.base, "wrong", "GET", "/api/profile"))).toBe(401);
+  });
 
   it("decisions_newest_first", async () => {
     const h = await harness();

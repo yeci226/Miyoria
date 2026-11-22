@@ -12,10 +12,16 @@
 //    failing.
 // 3. Invite the bot with the `bot` and `applications.commands` scopes and the permissions View
 //    Channels, Send Messages, Send Messages in Threads, Read Message History and Add Reactions.
-// 4. For instant command updates during development, list your server ids in `command_guilds`;
-//    otherwise commands are registered globally. The first sync of every run clears the scope
-//    not in use, so switching modes leaves no duplicates; `miyoria discord commands reset`
-//    clears everything by hand.
+// 4. For instant command updates, list your server ids in `command_guilds` (`["*"]`: every
+//    server she is in, and each one she joins); otherwise commands are registered globally. The
+//    first sync of every run clears the global set in guild mode (and every guild's in global
+//    mode), so switching modes leaves no duplicates; `miyoria discord commands reset` clears
+//    everything by hand.
+//
+// Servers she is in are recorded as she sees them (`Places.seen` on connecting and on joining,
+// `Places.left` when she is removed); members who leave reach `Places.memberLeft` through Core.
+// A person who acts in a server without writing (a command, a control, a modal, being in one of
+// its voice channels) becomes a member there through `Places.memberSeen` (`handler.ts`).
 
 import { CommandRegistryKey, CommandsModule } from "@miyoria/commands";
 import { LlmRouterKey, userMessage, withLlmTag } from "@miyoria/llm/llm";
@@ -27,11 +33,13 @@ import {
   type Module,
   type ModuleContext,
   type ModuleManifest,
+  placeConfig,
   withTimeout,
 } from "@miyoria/runtime/kernel";
-import { SettingsStoreKey } from "@miyoria/store";
+import { SettingsStoreKey, StoreKey } from "@miyoria/store";
 import {
   PlaceDirectoryKey,
+  PlacesKey,
   PlatformHistoriesKey,
   PlatformSinksKey,
   ProfileIdKey,
@@ -44,12 +52,20 @@ import {
   DESCRIBE_PROMPT,
   DESCRIPTION_PREFIX,
   type Describe,
+  DescribeQueue,
   type DescriptionStore,
   EmojiDescriber,
 } from "./emoji-describe.js";
+import { type AmbientPlaces, perGuild } from "./gate.js";
 import { GatewayBridge, Shared } from "./handler.js";
 import { PLATFORM, parseUserIds } from "./mapping.js";
 import { DiscordPlaces } from "./places.js";
+import {
+  STICKER_DESCRIBE_PROMPT,
+  STICKER_DESCRIPTION_PREFIX,
+  StickerDescriber,
+  stickerContributor,
+} from "./stickers.js";
 
 /** How long to wait for the gateway to close after a shutdown request. */
 export const SHUTDOWN_GRACE_MS = 3_000;
@@ -132,40 +148,98 @@ export class DiscordBotModule implements Module {
       ctx.log.warn("PlatformSinks service missing; output actions cannot reach Discord");
     }
     const histories = ctx.services.get(PlatformHistoriesKey) ?? null;
-    const shared = new Shared(config, selfIds, registry, sinks, histories);
+    const places = this.#places(ctx);
+    const shared = new Shared(config, selfIds, registry, sinks, histories, places);
     this.#running = shared;
     const client = createClient({ presence: config.presence_intents });
     new GatewayBridge(ctx, shared).attach(client);
     // The servers and channels for the panel's pickers, from the connected guild cache.
     ctx.provide(PlaceDirectoryKey, new DiscordPlaces(client, () => shared.ready));
-    this.#startEmoji(ctx, shared);
+    // Emoji and stickers are looked at one picture at a time, on one queue.
+    const describing = new DescribeQueue();
+    this.#startEmoji(ctx, shared, describing);
+    this.#startStickers(ctx, shared, describing);
     // The token stays in this closure; it is never logged or put in an error message.
     const token = config.token;
     ctx.spawn("gateway", (signal) => runGateway(client, token, shared, ctx, signal));
   }
 
+  /** The module's config per server and room, when Core has the places (docs/design/v5-places.md). */
+  #places(ctx: ModuleContext): AmbientPlaces | null {
+    const places = ctx.services.get(PlacesKey);
+    if (places === undefined) return null;
+    const settings = ctx.services.get(StoreKey)?.config?.places;
+    return {
+      config: placeConfig(ctx, DiscordConfigSchema),
+      places,
+      own: (space, key) => settings?.get("space", space, DiscordBotModule.ID, key) != null,
+    };
+  }
+
   /** The server emoji block, and meanings written for new emoji in the background. */
-  #startEmoji(ctx: ModuleContext, shared: Shared): void {
+  #startEmoji(ctx: ModuleContext, shared: Shared, queue: DescribeQueue): void {
     const config = shared.config.emoji;
-    const describer = new EmojiDescriber(descriptionStore(ctx), describeWithModel(ctx));
-    const owner = (name: string): string | undefined =>
-      config.descriptions[name]?.trim() || undefined;
+    const describer = new EmojiDescriber(
+      descriptionStore(ctx, DESCRIPTION_PREFIX),
+      describeWithModel(ctx, "emoji", DESCRIBE_PROMPT),
+      undefined,
+      queue,
+    );
+    const per = perGuild(shared, (c) => c.emoji);
+    const owner = (name: string, guild: string | null): string | undefined =>
+      per.descriptions(guild)[name]?.trim() || undefined;
     const contributors = ctx.services.get(PromptContributorsKey);
     const contributor = emojiContributor(
       shared.emoji,
       { owner, described: (id) => describer.get(id) },
-      { max_listed: config.max_listed, enabled: () => config.enabled },
+      { max_listed: config.max_listed, enabled: (guild) => per.enabled(guild) },
     );
     contributors?.register(contributor);
     this.#unregister.push(() => contributors?.unregister(contributor.key));
     void describer.load();
-    if (!config.enabled || !config.auto_describe) return;
+    if (!config.auto_describe) return;
     const controller = new AbortController();
     this.#unregister.push(() => controller.abort());
-    const off = shared.emoji.onChange(() => {
+    const off = shared.emoji.onChange((guild) => {
+      if (!per.enabled(guild)) return;
       void describer.describeMissing(
-        shared.emoji.all().filter((e) => e.available),
-        (e) => owner(e.name) !== undefined,
+        shared.emoji.list(guild),
+        (e) => owner(e.name, guild) !== undefined,
+        controller.signal,
+      );
+    });
+    this.#unregister.push(off);
+  }
+
+  /** The server sticker block, and meanings written for new stickers in the background. */
+  #startStickers(ctx: ModuleContext, shared: Shared, queue: DescribeQueue): void {
+    const config = shared.config.stickers;
+    const describer = new StickerDescriber(
+      descriptionStore(ctx, STICKER_DESCRIPTION_PREFIX),
+      describeWithModel(ctx, "sticker", STICKER_DESCRIBE_PROMPT),
+      undefined,
+      queue,
+    );
+    const per = perGuild(shared, (c) => c.stickers);
+    const owner = (name: string, guild: string | null): string | undefined =>
+      per.descriptions(guild)[name]?.trim() || undefined;
+    const contributors = ctx.services.get(PromptContributorsKey);
+    const contributor = stickerContributor(
+      shared.stickers,
+      { owner, described: (id) => describer.get(id) },
+      { max_listed: config.max_listed, enabled: (guild) => per.enabled(guild) },
+    );
+    contributors?.register(contributor);
+    this.#unregister.push(() => contributors?.unregister(contributor.key));
+    void describer.load();
+    if (!config.auto_describe) return;
+    const controller = new AbortController();
+    this.#unregister.push(() => controller.abort());
+    const off = shared.stickers.onChange((guild) => {
+      if (!per.enabled(guild)) return;
+      void describer.describeMissing(
+        shared.stickers.list(guild),
+        (s) => owner(s.name, guild) !== undefined,
         controller.signal,
       );
     });
@@ -191,35 +265,39 @@ export class DiscordBotModule implements Module {
   }
 }
 
-/** Written emoji meanings in the settings store; `null` without one. */
-function descriptionStore(ctx: ModuleContext): DescriptionStore | null {
+/** Written meanings under `prefix` in the settings store; `null` without one. */
+function descriptionStore(ctx: ModuleContext, prefix: string): DescriptionStore | null {
   const store = ctx.services.get(SettingsStoreKey);
   const profile = ctx.services.get(ProfileIdKey);
   if (!store || profile === undefined) return null;
   return {
     async load() {
       const out = new Map<string, string>();
-      for (const [key, value] of await store.list(profile, DESCRIPTION_PREFIX)) {
-        if (typeof value === "string") out.set(key.slice(DESCRIPTION_PREFIX.length), value);
+      for (const [key, value] of await store.list(profile, prefix)) {
+        if (typeof value === "string") out.set(key.slice(prefix.length), value);
       }
       return out;
     },
-    save: (id, line) => store.set(profile, `${DESCRIPTION_PREFIX}${id}`, line),
+    save: (id, line) => store.set(profile, `${prefix}${id}`, line),
   };
 }
 
-/** The chat model looks at an emoji, when it takes images; `null` otherwise. */
-function describeWithModel(ctx: ModuleContext): Describe | null {
+/** The chat model looks at an emoji or a sticker, when it takes images; `null` otherwise. */
+function describeWithModel(
+  ctx: ModuleContext,
+  label: "emoji" | "sticker",
+  prompt: (name: string) => string,
+): Describe | null {
   return async (dataUrl, name, signal) => {
     const router = ctx.services.get(LlmRouterKey);
     if (router?.takesImages("chat") !== true) return null;
-    const response = await withLlmTag({ module: "discord", label: "emoji" }, () =>
+    const response = await withLlmTag({ module: "discord", label }, () =>
       router.complete(
         "chat",
         {
           messages: [
             userMessage([
-              { type: "text", text: DESCRIBE_PROMPT(name) },
+              { type: "text", text: prompt(name) },
               { type: "image_url", image_url: { url: dataUrl, detail: "low" } },
             ]),
           ],

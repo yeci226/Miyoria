@@ -281,6 +281,9 @@ bind = "127.0.0.1"               # the address services listen on
 [gpu]
 reserve_mb = 2500                # left for OBS, VTube Studio and the desktop
 
+[update]
+allow_remote = true              # the default, also without this table; false: Core's owner may not update it (§14)
+
 [services.asr]                   # one table per installed service
 enabled = true
 python = "workers/.venv-asr-qwen"     # use this existing environment; hostd will not manage it
@@ -289,6 +292,8 @@ env = { HF_HUB_CACHE = "C:/.../data/models/hf", HF_HUB_OFFLINE = "1" }
 [services.sing]
 enabled = true
 python = "workers/.venv-sing"
+# accept = false                 # it runs, but Core sends it no work (§15.6); Core cannot change it
+# concurrency = 1                # at most this many units at once from Core
 ```
 
 Without `advertise`, no service of this machine is called directly from outside: Core reaches
@@ -359,7 +364,7 @@ Three kinds of caller reach hostd, all with the same method table (the daemon im
 | Caller | Transport | Authenticated by | May call |
 |---|---|---|---|
 | CLI on this machine | HTTP `POST /rpc` on the local API; `GET /logs/<service>` streams log lines | the token in `run/hostd.json` | everything |
-| A service on this machine | HTTP `POST /rpc` on the local API | its `MIYORIA_SERVICE_TOKEN` | the forwarded `cluster.resolve`, `cluster.llm` and `cluster.fetch`. `gpu.*` comes with H7; hostd does not serve it to a service yet |
+| A service on this machine | HTTP `POST /rpc` on the local API | its `MIYORIA_SERVICE_TOKEN` | the forwarded `cluster.resolve`, `cluster.llm` and `cluster.fetch` (Core then checks the `uses` table, below). `gpu.*` comes with H7; hostd does not serve it to a service yet |
 | Core | the control link (hostd dialled it) | the host key, in `hello` | `host.*`, `service.*` |
 
 Methods hostd serves:
@@ -368,12 +373,15 @@ Methods hostd serves:
   `service.logs` (last N lines; with `follow`, lines arrive as `service.log` notifications until
   cancelled).
 - `service.install`, `service.remove`, `host.update` (H6).
+- `host.upgrade { commit, wait_s?, by? }`, `host.upgrade_cancel` (§14): Core only, to a host that
+  has not opted out.
 - `gpu.acquire`, `gpu.renew`, `gpu.release`, `gpu.busy`, `gpu.state` (H7).
 - `cluster.resolve`, `cluster.llm`, `cluster.fetch`: forwarded to Core over the link (H5, H8). hostd adds the name of the service that asked (`service`); a service cannot set it itself.
 
 Methods Core serves on the control link:
 - `cluster.guard` → the active guarded states.
-- `cluster.resolve { capability }` → endpoints with the headers to send.
+- `cluster.resolve { capability }` → endpoints with the headers to send (bearer tokens included),
+  for a service the `uses` table lets resolve that capability; refused otherwise (see below).
 - `cluster.llm { purpose, messages, max_tokens, temperature, json }` → text. One completion
   through Core's own model and key; counted in the daily budget and written to the call log like
   any other call. The key never leaves Core.
@@ -382,14 +390,30 @@ Methods Core serves on the control link:
   (body base64, each body at most `HOST_FETCH_LIMITS.MAX_BODY_BYTES`, 8 MiB; the response head must
   arrive within `HEAD_TIMEOUT_MS`, 60 s). For small calls such as the ASR spot check.
 
-Who may use `cluster.llm` and `cluster.fetch`: Core decides, never the caller
-(`packages/cluster/src/calls.ts`). It checks that the host is approved, that the host's last
-report lists the service that asked, that the service provides a capability the host is approved
-for, and that the `provides` → `uses` table lets that capability use what is asked for (an LLM
-purpose, a capability to fetch from; a purpose must also be on Core's list, default `fast`). The
-table `DEFAULT_CLUSTER_USES` is in code and has no config key yet: `sing` and `lyrics` may use the
-LLM purpose `fast` and fetch from `asr`; nothing else may use anything. `cluster.llm` is rate
-limited per host (30 calls per 60 s by default). The errors are the codes of `HOST_ERROR_CODE`
+Who may use `cluster.llm`, `cluster.fetch` and `cluster.resolve`: Core decides, never the caller
+(`packages/cluster/src/calls.ts`). It checks that the host is approved, that the request names
+the service that asked (hostd adds it), that the host's last report lists that service, that the
+service provides a capability the host is approved for, and that the `provides` → `uses` table
+lets that capability use what is asked for (an LLM purpose, a capability to fetch from, a
+capability to resolve; a purpose must also be on Core's list, default `fast`). The table
+`DEFAULT_CLUSTER_USES` is in code and has no config key yet: `sing` and `lyrics` may use the LLM
+purpose `fast` and fetch from `asr`; nothing may resolve; nothing else may use anything.
+`cluster.llm` is rate limited per host (30 calls per 60 s by default).
+
+`cluster.resolve` has its own list (`resolve`), separate from `fetch`: `fetch` sends one request
+through Core and the token stays in Core, `resolve` hands the endpoint's headers to the service so
+it calls the capability itself, and the token leaves Core. Before 2026-11-22 any approved host
+could resolve any capability and got every endpoint's token; now a request that fails any check
+is refused with `NotAllowed` before the registry is read, so no endpoint, address or token of a
+capability the service was not granted is in the answer or the error. No service resolves today
+(the song worker and the lyrics service go through `cluster.fetch`; `workers/hostd_client.py`
+only passes the call on), so the empty default breaks nothing that runs. The operator's own call
+through hostd names no service and is refused as well; to debug, it names the service it asks
+for, as with `cluster.llm`. A service that needs to call a capability directly (for example a
+large upload past `cluster.fetch`'s 8 MiB) gets an entry in `uses`, such as
+`sing: { resolve: ["asr"] }`, in code for now.
+
+The errors are the codes of `HOST_ERROR_CODE`
 (`packages/contracts/host/src/protocol.ts`): `NotAllowed` (-32014) for any failed check,
 `NotLinked` (-32015) when hostd has no link to Core, `Unavailable` (-32016) when there is no usable
 endpoint or no LLM or the call failed, `TooLarge` (-32017) for a body over the limit,
@@ -445,8 +469,8 @@ interface Endpoint {
   healthy: boolean;
   version: string | null;
 }
-pick(capability: string): Endpoint | null;        // the first healthy one in order
-candidates(capability: string): Endpoint[];       // all, in order, for callers with their own failover
+pick(capability: string): Endpoint | null;        // the first healthy one in order (for `job`: by score, §15.3)
+candidates(capability: string): Endpoint[];       // all that take new work, in order, for callers with their own failover
 request(endpoint: Endpoint, path: string, init?: RequestInit): Promise<Response>;  // direct fetch, or through the link
 failed(endpoint: Endpoint, error: unknown): void; // rests it for a retry period
 watch(capability: string, onChange: () => void): Disposable;
@@ -772,3 +796,457 @@ in the backlog as untested).
 - H5: join with a used, expired or wrong code; revoked key; a worker with and without a token
   (`workers/tests`).
 - H7: the decision table.
+
+## 14. Updating a host from the panel (2026-11-21)
+
+面板的「電腦」頁顯示每台的版本(分支、提交、和 Core 那台比是落後、相同、比較新還是分岔、有沒有沒提交的變更),擁有者勾選幾台按「更新」,那幾台自己快轉到 Core 那台的提交、裝套件、重啟有變動的服務,每一步回報到面板。The rest is the implementation.
+
+**On by default; a host opts out** (owner, 2026-11-21). `host.toml` `[update] allow_remote` is
+`true` by default, also when the table is not there, so no one writes anything to be updatable.
+**Connecting a worker host to a Core lets that Core's owner update the host's checkout** to commits
+of the branch the checkout tracks (fast-forward only, never with uncommitted changes, never a
+download). To refuse, write `[update]` and `allow_remote = false` in `host.toml` (a new
+`host.toml` from `miyoria init` ends with those two lines commented out). A host that opted out
+still reports its checkout; it refuses `host.upgrade` with the reason, and the panel shows that
+reason under the host. The file is read again at each `host.upgrade` and every minute for the
+report, so turning it on or off needs no restart. Core's own machine (a host whose `host.toml`
+enables `core`) always refuses: updating it restarts Core and rebuilds the panel under the request
+that asked for it, so it stays `miyoria update` by hand on that machine.
+
+**What Core sends.** `host.upgrade { commit, wait_s?, by? }`: a full 40-character commit, Core's own
+`HEAD` (read from Core's checkout with git, never fetched; `packages/cluster/src/checkout.ts`), how
+long the host may wait for her, and who asked. Never a command, a remote or a branch. Only Core may
+call it (the operator on the machine has `miyoria update`). It answers at once with the job; the
+job's steps travel in `host.report` (`upgrade`), so the panel watches them through the hosts list,
+which polls every 2 s while a job runs.
+
+**The host's sequence** (`packages/hostd/src/upgrade/upgrader.ts`), each step in the job:
+
+| Step | Does | Refuses or fails with nothing changed |
+|---|---|---|
+| check | not opted out, a git checkout at the catalog root (a `.git` right there), on a branch with `branch.<b>.remote` and `.merge`, no change to a tracked file (untracked files do not count; git itself refuses a merge that would overwrite one) | any of these; HEAD already the commit is `done` |
+| fetch | `git fetch --no-tags <that remote>` with `GIT_TERMINAL_PROMPT=0` | the commit is not there, not on the tracked upstream, older than HEAD, or HEAD has diverged |
+| wait | while she is busy: a GPU lease, a guard state (`singing`, `live`) of a service that guards it, Core cannot be asked, or a running service whose `/health` says `busy: true` or `queued > 0` (the song worker's). The job is `waiting` with the reason; it can be cancelled. Core drains the host while the job runs (§15.6), so its queue empties instead of growing | still busy after `wait_s` (default 1800) |
+| merge | HEAD and the tree checked again, then `git merge --ff-only --no-edit <commit>`; HEAD must be the commit | HEAD moved or the tree changed while it waited |
+| install | `pnpm install --frozen-lockfile` when `pnpm-lock.yaml`, `pnpm-workspace.yaml` or a `package.json` changed; the Node services that will restart are stopped first (Windows keeps their native modules locked) | |
+| sync | `uv sync` of each managed Python environment that is stale now, each stopped first when it runs (`python = ...` environments are never touched) | |
+| restart | the stopped ones are started again; the running services whose code changed (their folder, a `workers/*.py`, and for Node services anything under `packages/` or `apps/`) restart one at a time once she is idle again | still busy at the deadline: they keep running the old code and are listed as not restarted |
+| verify | the restarted services must come back healthy (10 minutes); what the enabled services lack that an update never fetches (`install.files`, `install.models`, `install.manual`) is listed | |
+
+A failure in merge, install or sync goes back: `git reset --keep <from>`, only while HEAD is still
+the commit this job moved to (`--keep` refuses rather than touch a changed file, and the tree was
+clean), then `pnpm install` for the old lockfile, the environments synced again, the stopped
+services started. A service that does not come back after the restart is reported, not rolled
+back. Nothing in the sequence downloads a model, resets a tree it did not move, or discards a
+change.
+
+What a remote update does not do, and says in the job's `notes`: it does not rebuild the panel,
+the overlay, the SDK or the extensions (only `miyoria update` builds); and hostd itself keeps
+running the code it started with until `miyoria down` and `miyoria up` on that machine.
+
+**Core and the panel.** `GET /api/cluster/hosts` adds each connected host's `checkout`,
+`remote_update`, `upgrade` and `relation` (to Core's commit); `GET /api/cluster/checkout` is Core's
+own. `POST /api/cluster/upgrade { hosts, wait_s? }` and
+`POST /api/cluster/hosts/{name}/upgrade/cancel` need the node `owner.cluster.update`. It is an
+`owner.*` node, like `owner.data.manage`: the `owner` role (and every account in
+`[modules.commands] owners`) holds it through `*`, the `admin` role's `admin.*` does not cover it
+and `moderator` has nothing of it, so with updates on by default only the owner can start one. The
+owner may give it to someone by naming the node in a role of their own; the bearer token holds every
+node. Each host asked is one audit entry
+(`cluster.host.upgrade`, ok or not, with the reason). A finished job is logged by Core's cluster
+module when the report carrying it arrives.
+
+**Old and new.** Every new field of `host.report` and of the API's host view is optional, and the
+protocol version stays 1. An old hostd reports no `checkout` and no `remote_update`: the panel
+shows 「版本不明」 and offers no update, and Core never sends it `host.upgrade`. A new hostd's extra
+fields are dropped by an old Core's schema. `[update]` in `host.toml` is a table an old hostd does not
+know (its schema is strict), which is why the default needs no table. An old hostd takes no remote
+update anyway, so there is nothing to opt out of before it is updated; write `allow_remote = false`
+only on a machine whose hostd is new enough.
+
+## 15. Routing classes and job dispatch (2026-11-21)
+
+每個服務在描述檔宣告它能怎麼分派:`single`(整個叢集只能有一個)、`session`(一次對話或串流留在開始的那台)、`job`(一個一個獨立的工作,哪台都可以做)。`job` 的工作由 Core 算每台「這個工作做完並傳回 Core 要多久」,送到最快的那台;同時送出的兩個工作會分到兩台閒著的電腦。她的語音所在的電腦預設不接會搶顯卡的工作(翻唱),和之前的決定一樣。擁有者可以在面板釘選、排除、加權、清空一台電腦;那台電腦的主人可以在自己的 `host.toml` 限制它接什麼,Core 改不了。The rest is the implementation.
+
+### 15.1 The `[routing]` table
+
+```toml
+# workers/sing/routing.toml: the table's contents, without the [routing] header
+class = "job"                 # single | session | job (required)
+latency = "batch"             # realtime | interactive | batch (default interactive)
+concurrency = 1               # units one instance takes at once (default 1)
+queue = true                  # its [run.health] answer reports `running` (or `busy`) and `queued`
+yields_to = ["tts", "asr"]    # services of the same host its work disturbs (by name or capability)
+unit_s = 300                  # a unit's usual time until Core has measured one on a host
+result_mb = 90                # a unit's results, for the transfer estimate
+
+[needs]                       # the host checks these and reports ready, or not with the reason
+files = ["workers/models/seed-vc", "workers/voices/deepseek-chan/ref.wav"]
+vram_gb = 7.5                 # the card's total memory at least
+
+[variant]                     # what makes results differ between hosts: hashed, reported
+files = ["workers/models/applio/logs/miyoria-deepseek-48k/miyoria-deepseek-48k_40e_11000s.pth",
+         "workers/voices/deepseek-chan/ref.wav"]
+env = ["SING_VOICE", "SING_RVC_MODEL", "SING_RVC_INDEX", "SING_REF"]
+```
+
+- Schema `HostRoutingSchema` (`packages/contracts/host/src/routing.ts`), strict. A descriptor may
+  carry it as `[routing]` in `service.toml` (validated there by a new hostd) or as the whole of a
+  `routing.toml` beside it; both at once is a catalog problem. **The repository uses
+  `routing.toml`**: an older hostd's descriptor schema is strict, so a `[routing]` table in
+  `service.toml` would disable the service on that host after a `git pull` or a remote update,
+  while an older hostd never opens `routing.toml`. Fold it into `service.toml` once every host runs
+  a hostd that knows it. The CLI package copies `routing.toml` with the descriptors.
+- The catalog also refuses `class = "job"` with `latency = "realtime"` (that is a session),
+  `queue = true` without `[run.health] http` or on an external service, unknown placeholders in the
+  paths (allowed: `{voice}`, `{state}`, `{models}`, `{workspace}`, `{service}`, resolved as
+  `install.manual` paths) and a service that yields to itself.
+- Without the table nothing is reported and Core routes the service as before (§15.3).
+- **Readiness** (`hostd/src/routing.ts`): every `needs.files` path exists, and the card reads at
+  least `vram_gb` (a card not read yet, or one that cannot be read, does not hold the service
+  back: the worker falls back as before; the first reading is a change of the report). Evaluated on
+  every report and looked at again every 30 s, so a file that appears makes the service ready
+  without a restart.
+- **Variant**: a 16-hex hash of the listed environment values (the `host.toml` env, then the
+  descriptor's, then the daemon's; placeholders are hashed unexpanded) and of each listed file:
+  its relative name, size and the SHA-256 of its first and last MiB (a folder: its files, the first
+  64 sampled, at most 4096 listed). Samples are cached by size and modification time, so a model of
+  several GB is read once. Two hosts with the same model files and settings report the same hash; a
+  model kept at another path through an environment variable counts as another variant.
+- **Load**: for `queue = true` hostd reads `running` (a number), else `busy` (`true` = 1), and
+  `queued` from every health probe of the running service (every `interval_s`) and reports
+  `{ running, queued, age_ms, outside? }`. `age_ms` is the reading's age when the report is made,
+  so Core places it on its own clock without comparing clocks. `outside` says the card is lent to
+  another service of the host (an active GPU lease of another holder, `host.toml [gpu] arbiter =
+  "hostd"` only). A worker whose health says neither field reports no load. **No Python worker
+  changed**: the song worker's `/health` already says `busy` and `queued`.
+
+### 15.2 Choosing a class
+
+Ask, in order: *Can there be two of it at once in the cluster?* No: `single`. *Does a piece of
+work depend on what came before on the same instance* (a stream, a call, a room whose state lives
+in the worker)? Yes: `session`. Otherwise: `job`. Then the latency: `realtime` for anything a
+person hears or sees as it happens, `interactive` for an answer someone is waiting on, `batch`
+for work that may take minutes. `yields_to` names the services of the same host the work evicts
+or starves (through the GPU lease or otherwise); `variant` lists what makes two instances'
+results differ for a listener.
+
+| Service | Class | Latency | Why | Also |
+|---|---|---|---|---|
+| `core` | single | (interactive) | there is one Core | |
+| `voice-node` | single | realtime | it logs in as her self account; two would log it in twice | |
+| `stage` | single | realtime | drives her one VTube Studio and OBS | |
+| `mediamtx` | single | realtime | relays her one stream | |
+| `obs`, `vtube-studio` | single | realtime | her one stream's programs; provide nothing Core calls | |
+| `tts` | session | realtime | her speech is a stream of sentences on one worker | needs and variant: `workers/voices/{voice}/ref.wav`, `ref.txt`; variant env `TTS_DEFAULT_VOICE`, `TTS_MODEL`, `TTS_BACKEND`, `TTS_MODE`, `TTS_CLONE_MODE` |
+| `asr` | session | realtime | a call's speech is recognised where it runs | |
+| `turn` (`turn`, `vad`) | session | realtime | the VAD is a WebSocket stream per call | |
+| `sing` | job | batch | each cover and karaoke song is its own unit | concurrency 1, queue, yields_to `tts`, `asr`, unit 300 s, 90 MB, needs and variant as above |
+| `lyrics` | job | batch | each lookup stands alone | concurrency 2 |
+| `comfyui` (`imagegen`) | job | interactive | each picture stands alone | concurrency 1, 60 s, 4 MB; no queue (external, not probed for load), no `yields_to` (it takes no lease; the imagegen module frees it while she sings, as before) |
+
+Karaoke live scoring is a session on the `sing` capability: a room's streams start where
+`openSession` places them and stay on that worker (as before); preparation is `job` work.
+
+### 15.3 How Core routes (`packages/cluster/src/registry.ts`)
+
+The class of a capability is what its approved hosts report for it; when they disagree the
+strictest wins (single, then session, then job) and the machines page shows the disagreement.
+`yields_to` is the union, `unit_s` and `result_mb` the first reported.
+
+- **No class reported** (descriptors without the table, older hostds, static entries only): exactly
+  the order of §6.3, unchanged.
+- **`single`**: only the instance Core saw serving first (then `order`, then names) is returned;
+  every other is a conflict, logged once per change and shown on the machines page, never used.
+  When the first goes, the next is the one.
+- **`session`**: `pick` and `candidates` keep the order of §6.3, so callers that resolve per
+  request (speech today) behave as before. `openSession(capability, key)` chooses among the
+  endpoints that take new work: healthy and not resting first, then for `realtime` the distance to
+  Core (Core's own machine 0, else the last ping's round trip, unknown 1000 ms) before `order`, for
+  the other latencies `order` before the distance, then names. `session(capability, key)` returns
+  the endpoint while it is there; when it goes the session is over and the next one starts
+  elsewhere (`closeSession` ends one; 256 are kept at most).
+- **`job`**: `candidates` is in score order, healthy before unhealthy, ties to `order` then names.
+
+The **score** of an endpoint for a new unit, in seconds, lowest first:
+
+```
+ahead    = running + queued (its last reading) + pending        (unknown load: pending + unknown_load_units)
+wait     = ahead × unit / concurrency
+transfer = result size ÷ transfer rate
+score    = (wait + unit + transfer + penalties) ÷ weight
+```
+
+- `unit`: the decayed average measured on that host for that capability, else
+  `[modules.cluster.routing.capabilities.<c>] unit_secs`, else the descriptor's `unit_s`, else
+  `default_unit_secs` (120).
+- `concurrency`: the host's report (the descriptor's, lowered by the host owner's `host.toml`).
+- `pending`: units Core reserved on that endpoint (`reserve`) that its load reading does not show
+  yet: a reservation counts while no reading taken after the unit was accepted has arrived, for at
+  most `reserve_secs` (60); on a host that reports no load it counts until the unit is done, for at
+  most `max_unit_secs` (3600). This is what spreads two units sent together over two idle hosts.
+- result size: the capability's `result_mb` in the config, else the measured average, else the
+  descriptor's `result_mb`, else 0. Transfer rate: measured for that host, else
+  `transfer_mb_s` = 500 (Core's own machine), 20 (direct), 8 (through the link) MB/s.
+- penalties: resting after a failure `resting_penalty_secs` (3600; not with `ignoreResting`, which
+  failover callers use), a card lent to another service `outside_busy_penalty_secs` (120), her voice
+  on that host while she is active with `always` `speech_penalty_secs` (900), each place further
+  down `order` `order_step_secs` (30; hosts `order` does not name count as the place after the last).
+  `order` is thus an explicit preference that a queue can overcome, and the tie-break.
+- `weight`: the panel's, else `[modules.cluster.routing.weights]`, else 1.
+
+An endpoint takes **no new work** (left out of `pick` and `candidates`, listed last with
+`all: true` for callers that look for what an endpoint already holds) when: its host's owner set
+`accept = false`; it is not ready; it reports another variant than the capability's (the config's
+`variant`, else the one most of the instances report that would take work for every other reason,
+a tie to `order` then names; endpoints that report none are not judged); a pin names another host; it is excluded; its host is drained (by the panel,
+by `[modules.cluster.routing] drain`, or while its remote update runs, §14); or the speech-host rule
+says so (§15.5). For `session` and the old order these apply too (a session capability's endpoint
+that is not ready or has another variant is not used); `single` uses only its first instance.
+
+`reserve(endpoint, { what?, sizeBytes? })` records the decision (the chosen endpoint and every
+endpoint's score or why it was out; the last 10 per capability) and returns
+`{ accepted(), done({ ok?, run_ms?, bytes? }) }`. `done` teaches the estimates (§15.4); `ok: false`
+teaches nothing.
+
+**Sing.** `FailoverSingWorker` keeps all its rules (a song stays with the worker that made it,
+resume of a broken download, a timed-out submit is not sent twice, a job left behind is cancelled
+when its worker is back, a room's streams stay on one worker) and takes its list from
+`candidates("sing", { ignoreResting: true, all: true })`, marking the endpoints that take no new work
+(`takesWork: false`). New songs and recordings go only to the ones that take work, in score order;
+lookups of songs, jobs and karaoke files still ask every listed worker, so a song made on a host that
+is now drained or excluded is still played from there. Each new song is reserved before its request
+goes out, accepted when the worker answers, and done when a poll sees its job end; its run time is
+from the first poll that saw it `running` (to a poll's interval). A cached song, a cancel, a lost job
+and a recording's pitch teach nothing. Karaoke preparation goes through the same worker
+(`KaraokeWorkerKey`), so it is spread the same way. A host that goes away mid-job hands the song to
+the next choice through the failover that was there.
+
+### 15.4 Estimates
+
+Per host and capability: the unit time (from `done({ run_ms })`, else, when the host was known to be
+idle when the unit was sent, the time from `reserve` to `done`) and the transfer rate (every answer
+of 1 MiB or more read through `registry.request` for a `job` capability, direct or relayed: bytes
+over the time from the response head to the body's end). Per capability (host `*`): a unit's result
+bytes (`done({ bytes })`). Each is a decayed average, the newest sample weighing 0.3. Kept in
+`cluster_estimates` (cluster migration 2), written on every sample and read when the module starts.
+
+### 15.5 Core's speech host
+
+The owner decided earlier that the song worker must not fall back to the Core machine: it would
+evict her TTS and ASR while she talks. That is now a general rule. For a `job` capability whose
+`yields_to` names services, a host **carries her voice** when it runs such a service (by name or
+capability) whose capability's session is placed there, or, with no session, that a new request of
+that capability would go to now. `[modules.cluster.routing] allow_on_speech_host` (or per
+capability under `capabilities.<c>`) decides what happens to such a host:
+
+| Mode | The speech host |
+|---|---|
+| `never` (default) | takes no such job |
+| `when_idle` | takes them only while she is not in voice, not live and nobody spoke (people, or her) for `idle_minutes` (10) |
+| `always` | takes them, with `speech_penalty_secs` while she is in voice or live |
+
+Where her voice is comes from the bus: `voice.joined` and `voice.left` (in voice), `voice.speaking`,
+`voice.utterance` and `voice.playback` (someone spoke), and the `live` guard state, read every 5 s.
+
+### 15.6 Who controls what
+
+**Core's owner**, in `miyoria.toml`:
+
+```toml
+[modules.cluster.routing]
+allow_on_speech_host = "never"          # never | when_idle | always
+idle_minutes = 10
+drain = ["old-pc"]                      # finish what they have, take nothing new
+[modules.cluster.routing.weights]
+friend-pc = 2                           # its score is halved: about twice the work
+[modules.cluster.routing.capabilities.sing]
+pin = "friend-pc"                       # only this host takes new songs
+exclude = ["laptop"]
+variant = "0123456789abcdef"            # the variant every instance must have
+allow_on_speech_host = "when_idle"
+unit_secs = 240
+result_mb = 120
+```
+
+and the penalties and defaults of §15.3 (`speech_penalty_secs`, `resting_penalty_secs`,
+`outside_busy_penalty_secs`, `unknown_load_units`, `order_step_secs`, `reserve_secs`,
+`max_unit_secs`, `default_unit_secs`, `transfer_mb_s.{local,direct,link}`). On the machines page:
+pin a capability to a host, exclude a host from a capability, a host's weight, drain a host. Those
+are rows of `cluster_controls` (a pin replaces the capability's other pin), applied over the
+config's (a panel pin over the config's, exclusions and drains added, a panel weight over the
+config's), through `POST /api/cluster/routing/controls`, which needs the node `owner.cluster.route`
+(an `owner.*` node like `owner.cluster.update`: the owner role holds it, `admin` and `moderator` do
+not) and writes one audit entry per call (`cluster.routing.<set|clear>.<kind>`, ok or not).
+
+**Drain and the remote update.** While a host's update job runs (its report carries an `upgrade`
+without `finished_at`), Core drains it: it gets no new job and no new session, so the update's
+`wait` step, which waits while a service's health says `busy` or `queued > 0`, ends when its queue
+is done instead of waiting for a queue Core keeps filling. The host's sequence itself is unchanged.
+
+**The host's owner**, in that machine's `host.toml`, which Core cannot change:
+
+```toml
+[services.sing]
+accept = false        # it runs here, but Core sends it no work (old Core: see 15.8)
+concurrency = 1       # at most this many units at once, below the descriptor's
+```
+
+### 15.7 What the machines page shows
+
+`GET /api/cluster/routing` (admin): per capability its class and latency, `yields_to`, the variant,
+the speech-host mode, a `single` conflict, a class disagreement, every endpoint in order (takes new
+work or why not, score and its parts, load, units sent and not reported, whether its host carries
+her voice, the measured unit time and transfer rate with their sample counts, its `[routing]`), the
+last decisions, the open sessions and the result size reckoned with; per host Core's own machine,
+round trip, drained and why, weight; her activity; the config's controls; the panel's controls with
+who set them and when. The page's services table shows per service its class, readiness and the
+reason, `accept = false`, the owner's limit and running/queued (nothing for an older hostd).
+
+### 15.8 Old and new
+
+- Protocol version stays 1. Every new field of `host.report` (`routing`, `load` per service) is
+  optional; an old Core's schema drops them. A new Core treats an old hostd's endpoint as unknown
+  load (ranked after hosts known to be idle) with no readiness, variant or `yields_to` of its own (the
+  capability's `yields_to` from the other hosts still applies to it).
+- `host.toml`'s `accept` and `concurrency` are keys an older hostd rejects (its schema is strict):
+  update a host before writing them. Nothing requires them.
+- `[routing]` lives in `routing.toml` for the reason in §15.1.
+- `accept = false` is honoured by a new Core. An older Core does not know it and would still send
+  work; to refuse an older Core too, disable the service (`enabled = false`) or ask Core's owner to
+  remove the capability from the host's approval.
+- The kernel's `EndpointSource` gets optional `reserve`, `openSession`, `closeSession` and the `all`
+  query; a source without them (a test's, Core's own registry when the cluster module is not
+  running) still works, without dispatch accounting.
+
+### 15.9 Not done here
+
+- Speech (`packages/voice`) still resolves per request with `firstEndpoint`; it does not open
+  sessions yet, so the realtime "nearest host" choice and session stickiness apply to TTS, ASR and
+  turn only once it calls `openSession` at the start of a call. Until then the speech host is where
+  a new request would go (§15.5), which is today's choice.
+- Image generation keeps `pick` (scored, since `comfyui` is `job`); ComfyUI's own queue is not read.
+- Nothing of this ran on real hosts: the scores, the drain during an update and the variant hashes
+  were checked with fake hosts and an injected clock only.
+
+## 16. 一台電腦的幾條連線路徑(2026-11-22)
+
+朋友那台經 Tailscale 傳大檔案(卡拉 OK 的影片、翻唱的結果)不穩,之後還要接更多朋友的電腦。所以一台電腦可以宣告好幾條「路徑」,Core 量每一條,照工作挑最適合的,一條失敗就換下一條。owner 同意的方向(2026-11-22)。
+
+### 16.1 四種路徑
+
+| 種類 | 怎麼連 | 適合 | 限制 |
+|---|---|---|---|
+| `tailnet` | 每個服務自己的埠,在 tailnet(或區網、這台本機)的位址上 | 即時語音、WebSocket、大檔案 | Tailscale 有時自己繞中繼,變慢 |
+| `direct` | hostd 的閘道,在公開的位址加轉發的埠 | 大檔案、最低延遲、即時語音 | 要有人在路由器上轉發埠(那台的主人做,不是我們);沒有 tailnet 保護,所以一定要 TLS 和 token |
+| `tunnel` | hostd 的閘道,在 tunnel 的主機名稱後面(Cloudflare) | 不用轉發埠,最簡單 | 每個請求的內容有上限(當成 100 MB),大檔案分段傳;延遲較高,不給即時語音 |
+| `relay` | 控制連線本身(§7.1) | 一定連得上 | 最慢;最後的退路 |
+
+`direct` 和 `tunnel` 都經過 hostd 的**閘道**:這台一個 HTTP(S) 入口,`<路徑的網址>/svc/<服務>/<路徑>` 轉給這台的服務,`/_miyoria/probe` 回 Core 的量測。所以不管這台跑幾個服務,只要轉發一個埠、或開一個 tunnel 主機名稱。
+
+### 16.2 怎麼宣告:`routes.toml`
+
+那台電腦的主人才知道自己的位址,所以寫在那台的 `routes.toml`,放在 `host.toml` 旁邊。Core 改不了它。另外一個檔案而不是 `host.toml` 的一張表,理由和 §15.1 的 `routing.toml` 一樣:舊的 hostd 讀 `host.toml` 很嚴格,遠端更新之後舊的 hostd 會讀到它不認得的表;舊的 hostd 根本不會打開 `routes.toml`。hostd 啟動時讀一次,改了要 `miyoria down` 再 `up`。
+
+```toml
+# routes.toml(完整的例子在 repo 根目錄的 routes.example.toml)
+[gateway]                     # 有 direct 或 tunnel 路徑時才需要
+bind = "127.0.0.1"            # 預設;聽 127.0.0.1 以外的位址一定要有下面兩個
+port = 7890
+# tls_cert = "certs/fullchain.pem"   # 相對於 host.toml 的資料夾
+# tls_key = "certs/privkey.pem"
+
+[[route]]
+kind = "tailnet"
+address = "friend-pc.tail1234.ts.net"   # 沒寫就用 host.toml 的 [network] advertise
+
+[[route]]
+kind = "direct"
+url = "https://friend.example.net:7890"
+
+[[route]]
+kind = "tunnel"
+url = "https://miyoria-friend.example.com"
+# max_body_mb = 100                     # tunnel 的預設
+```
+
+- 名字預設是種類(第二條同種類的是 `tunnel-2`),也可以自己寫 `name`。
+- 沒宣告也會有的:`[network] advertise`(檔案裡沒有 `tailnet` 路徑時,叫 `advertise`)、`local`(Core 就在這台時,服務本機的位址)、`relay`。
+- 檔案讀不進來(TOML 錯、不認得的鍵)是整個檔案一個問題:這台只回報沒宣告也會有的路徑,寫進 hostd 的日誌。
+- 一條路徑有問題(`direct` 用 http、閘道聽不了那個埠、讀不到憑證)會帶著原因回報,Core 不會用它,面板顯示原因。
+
+**沒有 `routes.toml` 的電腦和今天完全一樣**:回報裡沒有任何新欄位,Core 照舊用 `advertised`(沒有就經控制連線),一次、不換路徑,也不量測。
+
+### 16.3 回報
+
+`host.report` 多三個可省略的欄位:`routes`(每條路徑的名字、種類、網址、內容上限、為什麼不能用)、每個服務的 `reach`(路徑名字 → 這個服務在那條路徑上的網址)、`route_token`(Core 量測閘道時帶的 token,hostd 每次啟動重新產生,和服務 token 一樣只在控制連線上送)。協定版本照舊是 1;舊的 Core 會把這些欄位丟掉。
+
+### 16.4 量測
+
+Core 的 `RouteProber` 每 5 秒看一次哪些量測到期了,一次最多 4 個:
+
+- **延遲和連不連得上**:每條路徑每 `probe_secs`(300 秒)一個小 `GET`。閘道路徑是 `/_miyoria/probe`(帶 `route_token`);`tailnet` 是那條路徑上一個在跑的服務的 `/health`(帶它的 token);`relay` 用控制連線本來就有的 ping。
+- **流量**:閘道路徑每 `sample_secs`(1800 秒)抓一次 `sample_kib`(256 KiB)的隨機位元組。所有路徑在真的傳輸 1 MiB 以上時也會各記一筆(衰減平均,新的一筆佔 0.3)。
+- **花費**:一台大約每五分鐘每條路徑一個小請求,每半小時四分之一 MB。只量有 `routes.toml` 的電腦。
+- 閘道路徑的回應要有 `x-miyoria-route: gateway` 才算:Cloudflare 在 tunnel 斷掉時自己回的 502、530 算失敗。401 的原因是「閘道不認得這台的 token」,通常是網址指到別台。
+
+### 16.5 怎麼挑
+
+每個請求在送出時挑,照工作分三種:
+
+| 工作 | 什麼時候 | 能用的路徑 | 先後 |
+|---|---|---|---|
+| 即時 | `direct: true` 查到的端點(語音辨識、語音合成、VAD) | 只有 `tailnet`、`direct` | 延遲低的先 |
+| 一般 | 其他 | 全部 | 延遲低的先,`relay` 最後 |
+| 大檔 | `job` 或 `batch` 的能力(翻唱、歌詞、生圖) | 全部 | 流量大的先 |
+
+每一種裡面都是「通的」先於「還沒量過」先於「失敗過、休息完了」先於「還在休息」。還沒量過的照種類的預設值排(延遲 tailnet、direct 40 ms,tunnel 150 ms,relay 300 ms;流量 20、20、10、8 MB/s;本機的位址 1 ms、500 MB/s)。上傳的內容超過路徑上限的(或長度不知道的串流)不走那條。只有 `tunnel` 或 `relay` 的電腦,不會出現在即時的查詢裡。
+
+### 16.6 換路徑
+
+- 一條路徑失敗就休息 `rest_secs`(30、120、600 秒,連續失敗越多越久),排到最後;休息完先量一次。
+- **什麼時候可以換下一條重送**:請求根本沒送出去(連線被拒、名字查不到、relay 還沒送就拒絕、tunnel 的邊緣替斷掉的閘道回話),或方法是 `GET`、`HEAD`、`OPTIONS`、`PUT`、`DELETE`;而且內容可以送兩次(不是串流)。其他情況照原本的錯誤丟回去,呼叫的人自己的換台規則照舊(翻唱的送出不會送兩次)。
+- **下載會接續**:`GET` 的回應有 ETag(或 Last-Modified)、長度、支援 range 時,傳到一半斷了就從斷掉的那個位元組,用 `range` 和 `if-range` 從下一條路徑要剩下的,呼叫的人讀到的是一個沒斷過的內容。檔案在中間變了(if-range 對不上)就失敗,不會拼錯。最多試 5 次。
+- **tunnel 分段**:有上限的路徑一開始就分段要,每段 `chunk_mb`(64 MB),最多上限減 64 KiB。這用的就是唱歌 worker 本來就支援的 range(`#save` 的續傳也是靠它),worker 不用改。
+
+### 16.7 安全
+
+- `direct`、`tunnel` 一定要 `https`。只有指到這台本機(`127.x`、`localhost`、`::1`)的 `http` 可以:測試,和閘道前面放 TLS 反向代理的情況。hostd 檢查一次,Core 再自己檢查一次(不管 hostd 說什麼),網址裡有帳號密碼、`?`、`#` 都不用。服務在閘道路徑上的網址一定要在那條路徑的網址底下。
+- 閘道聽 `127.0.0.1` 以外的位址一定要有自己的憑證(`tls_cert`、`tls_key`)。Core 照一般方式驗證憑證,不會關掉驗證,所以 `direct` 要用 Core 信任的憑證(例如 Caddy 或 Let's Encrypt 配 DDNS 的名稱)。
+- 閘道收的 token:服務自己的 token 只能進那個服務,`route_token` 只能用量測。token 錯、沒帶、服務不存在,一律同樣的 401,外面的人看不出這台跑什麼。閘道只轉 worker:Core 自己和節點(語音節點、舞台)永遠不在閘道後面,所以沒有任何路徑能碰到 Core 的 API。
+- 轉給服務時拿掉 hop-by-hop 標頭,換成服務自己的 authorization;不跟隨轉址;路徑裡的 `..`、`%2e`、`%2f`、反斜線一律拒絕。
+- token 不寫進日誌;面板和管理 API 只看得到路徑的名字、種類、網址和量到的數字。
+
+### 16.8 那台電腦的主人要自己做的事
+
+- **direct**:路由器把一個外部埠轉到這台的閘道埠;一個 Core 信任的憑證(公開的名稱,例如 DDNS 加 Let's Encrypt,或 Caddy 自動申請);憑證放在閘道自己(`bind = "0.0.0.0"` 加 `tls_cert`、`tls_key`),或閘道聽 `127.0.0.1`、前面放 Caddy 之類的 TLS 反向代理。防火牆只開那一個埠。
+- **tunnel**:在那台裝 `cloudflared`,開一個 tunnel,一個主機名稱指到 `http://127.0.0.1:<閘道的埠>`。TLS 在 Cloudflare 那邊。免費方案的上傳上限是 100 MB,所以預設 `max_body_mb = 100`。
+- **tailnet**:和今天一樣,`host.toml` 的 `[network] bind` 要是 tailnet 的位址(或 `0.0.0.0`)。
+
+### 16.9 面板
+
+「電腦」頁的「每台電腦」底下列出每條路徑:種類、通不通、現在拿來做什麼(即時、一般、大檔)、量到的延遲和流量、上限、上次量的時間、失敗或不能用的原因。`GET /api/cluster/routing` 每台多一個 `routes`。
+
+### 16.10 Core 的設定
+
+```toml
+[modules.cluster.routes]   # 全部是預設值
+probe_secs = 300
+sample_secs = 1800         # 0:不主動測流量
+sample_kib = 256
+timeout_ms = 5000
+rest_secs = [30, 120, 600]
+chunk_mb = 64
+```
+
+### 16.11 程式在哪
+
+hostd:`src/routes.ts`(讀檔和檢查)、`src/gateway.ts`(閘道)、`daemon.ts` 的 `#routesReport`、`#startGateway`。Core:`packages/cluster/src/routes.ts`(`RouteTable`:路徑、健康、挑選)、`route-probe.ts`(`RouteProber`)、`routed.ts`(換路徑、續傳、分段)、`registry.ts` 的 `request` 和 `#all`。形狀在 `packages/contracts/host/src/routes.ts`。
+
+### 16.12 還沒做的、沒驗證的
+
+- **語音沒有改**:即時語音照舊每個請求用 `firstEndpoint(..., { direct: true })` 找端點、經 `registry.request` 送,所以有 `routes.toml` 的電腦,語音辨識和語音合成會走路徑表(只有 `tailnet`、`direct`,失敗了換另一條)。VAD 的 WebSocket 直接用端點的 `url`(查的那一刻最好的即時路徑),連上之後不換路徑,也不會因為斷線把那條路徑標成失敗。語音沒有開工作階段(§15.9),所以也沒有「一通電話黏在同一條路徑」。
+- 沒有在真的電腦上跑過:Cloudflare tunnel、轉發的埠、真的憑證、Tailscale 自己繞中繼時的量測,都只用本機的假服務和假時鐘測過。閘道自己的 HTTPS 模式沒有測試(要產生憑證)。
+- 上傳不分段:worker 的協定沒有分段上傳,超過上限的上傳就不走那條路徑。現在的上傳(卡拉 OK 的錄音、ASR 抽查)都遠小於 100 MB。
+- `cluster.resolve` 給 hostd 的端點是 Core 挑的那一刻的網址;服務拿去自己連時不會換路徑。
+- `routes.toml` 只在 hostd 啟動時讀。

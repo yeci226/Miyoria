@@ -8,10 +8,11 @@
 // yet would wipe the commands).
 //
 // Commands live in one scope at a time: globally when `command_guilds` is empty, otherwise in
-// each listed guild. Whatever the other scope still holds (from an earlier run in the other
-// mode) shows up as duplicates in Discord's command list, so the first sync of a run also
-// clears it: in guild mode the global set and the sets of other guilds the bot is in, in
-// global mode the guild sets of every guild the bot is in.
+// each listed guild (`["*"]`: every guild the bot is in, and each guild it joins as it joins).
+// Whatever the global scope still holds (from an earlier run in the other mode) shows up as
+// duplicates in Discord's command list, so the first sync of a run in guild mode clears it; in
+// global mode the first sync clears the guild sets of every guild the bot is in. Guild mode
+// never clears another guild's set: before phase 6 it did, and a second server had no commands.
 
 import type { CommandRegistry } from "@miyoria/commands";
 import { errorMessage, getLogger, sleep } from "@miyoria/runtime/kernel";
@@ -46,10 +47,20 @@ export function currentCommands(registry: CommandSource): SlashCommandJson[] {
 export interface SyncOptions {
   signal?: AbortSignal;
   /**
-   * Clear the scope not in use: the global set (guild mode) and the guild sets of `guilds` that
-   * are not command guilds. Done once per run.
+   * Clear the scope not in use, once per run: the global set in guild mode; in global mode the
+   * guild sets of `guilds`.
    */
   cleanup?: { guilds: readonly string[] } | null;
+  /**
+   * `guilds`: the commands go to `commandGuilds` even when it is empty (`["*"]` while the bot is in
+   * no guild yet). Default: global when `commandGuilds` is empty.
+   */
+  mode?: "global" | "guilds";
+}
+
+/** What a sync did: the scopes (`global`, guild ids) that got the current set. */
+export interface SyncReport {
+  synced: string[];
 }
 
 /**
@@ -63,16 +74,19 @@ export async function syncCommands(
   registry: CommandSource,
   commandGuilds: readonly string[],
   options: SyncOptions | AbortSignal = {},
-): Promise<void> {
-  const { signal, cleanup } = options instanceof AbortSignal ? { signal: options } : options;
+): Promise<SyncReport> {
+  const { signal, cleanup, mode } = options instanceof AbortSignal ? { signal: options } : options;
+  const global = mode === undefined ? commandGuilds.length === 0 : mode === "global";
+  const report: SyncReport = { synced: [] };
   const body = currentCommands(registry);
   const count = body.length;
   if (count === 0) {
     log.warn("no slash commands to register yet, the current set is left as it is");
-  } else if (commandGuilds.length === 0) {
+  } else if (global) {
     try {
       await rest.put(Routes.applicationCommands(applicationId), { body, signal });
       log.info({ count }, "synced global slash commands");
+      report.synced.push("global");
     } catch (error) {
       log.warn({ error: errorMessage(error) }, "cannot sync global slash commands");
     }
@@ -81,20 +95,21 @@ export async function syncCommands(
       try {
         await rest.put(Routes.applicationGuildCommands(applicationId, guild), { body, signal });
         log.info({ guild, count }, "synced guild slash commands");
+        report.synced.push(guild);
       } catch (error) {
         log.warn({ guild, error: errorMessage(error) }, "cannot sync guild slash commands");
       }
     }
   }
-  if (!cleanup) return;
-  if (commandGuilds.length > 0) {
+  if (!cleanup) return report;
+  if (!global) {
     await clear(rest, Routes.applicationCommands(applicationId), "global", signal);
+    return report;
   }
-  const keep = new Set(commandGuilds);
   for (const guild of cleanup.guilds) {
-    if (keep.has(guild)) continue;
     await clear(rest, Routes.applicationGuildCommands(applicationId, guild), guild, signal);
   }
+  return report;
 }
 
 async function clear(
@@ -152,32 +167,60 @@ export interface SyncRunnerOptions {
   rest: SyncRest;
   applicationId: string;
   registry: CommandSource;
+  /** `command_guilds`: guild ids, `["*"]` (every guild the bot is in), or empty (global). */
   commandGuilds: readonly string[];
-  /** Guilds the bot is in, read when the first sync clears the scope not in use. */
+  /**
+   * Guilds the bot is in: the targets of `["*"]`, read at every sync, and the guilds whose sets
+   * the first sync in global mode clears.
+   */
   guilds: () => readonly string[];
   signal?: AbortSignal;
 }
 
 /**
- * The `sync` of `runSyncLoop`. Modules register commands all the time and a bulk overwrite is
- * rate limited, so a sync whose slash set is the one sent last is skipped. The first sync of a run always goes out and clears the scope not in use.
+ * The `sync` of `runSyncLoop`, and of a guild she joined (`["*"]`). Modules register commands all
+ * the time and a bulk overwrite is rate limited, so a scope that already has the slash set sent
+ * last is skipped: a sync after a join reaches only the new guild. The first sync of a run always
+ * goes out everywhere and clears the scope not in use. Syncs run one at a time.
  */
 export function syncRunner(options: SyncRunnerOptions): (first: boolean) => Promise<void> {
+  const every = options.commandGuilds.includes("*");
+  const listed = options.commandGuilds.filter((g) => g !== "*");
   let sent: string | null = null;
-  return async (first) => {
+  /** Scopes that have `sent`. */
+  const done = new Set<string>();
+  let queue: Promise<void> = Promise.resolve();
+  const once = async (first: boolean) => {
     const now = JSON.stringify(currentCommands(options.registry));
-    if (!first && now === sent) return;
-    sent = now;
-    await syncCommands(
+    if (first || now !== sent) {
+      sent = now;
+      done.clear();
+    }
+    const targets = every ? [...new Set([...listed, ...options.guilds()])] : listed;
+    const global = !every && targets.length === 0;
+    const todo = global
+      ? done.has("global")
+        ? []
+        : ["global"]
+      : targets.filter((g) => !done.has(g));
+    if (!first && todo.length === 0) return;
+    const report = await syncCommands(
       options.rest,
       options.applicationId,
       options.registry,
-      options.commandGuilds,
+      global ? [] : todo,
       {
         ...(options.signal ? { signal: options.signal } : {}),
+        mode: global ? "global" : "guilds",
         cleanup: first ? { guilds: [...options.guilds()] } : null,
       },
     );
+    for (const scope of report.synced) done.add(scope);
+  };
+  return (first) => {
+    const next = queue.then(() => once(first));
+    queue = next.catch(() => undefined);
+    return next;
   };
 }
 

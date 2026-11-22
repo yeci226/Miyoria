@@ -127,12 +127,77 @@ const SONG_TICKETS = `CREATE TABLE \`market_song_tickets\` (
 CREATE INDEX \`market_song_tickets_status_idx\` ON \`market_song_tickets\` (\`status\`,\`created_at\`);
 `;
 
-/** The lots, bids, lottery weeks and tickets; the song priority tickets. */
+/**
+ * Version 3 (docs/design/v5-places.md, phase 6): the market runs per Space. Every lot, purchase and
+ * song priority ticket gets its Space: a lot that was posted in a channel the Space of that
+ * channel's room, everything else the primary Space (`spaces.is_primary`, identity version 2, which
+ * runs first). A lot is unique per Space and week instead of per week. The lottery's draws move to
+ * `market_lottery_draws`, keyed by Space and week, as copies under the primary Space; the old
+ * `market_lottery_weeks` stays as it was and is no longer written. Nothing is dropped. With no
+ * Space at all the rows keep a `NULL` Space (a draw `''`) and the module gives them to the primary
+ * Space once there is one.
+ */
+const SPACES = `ALTER TABLE \`market_lots\` ADD \`space_id\` text;
+ALTER TABLE \`market_lottery_tickets\` ADD \`space_id\` text;
+ALTER TABLE \`market_song_tickets\` ADD \`space_id\` text;
+
+UPDATE \`market_lots\` SET \`space_id\` = COALESCE(
+	(SELECT r.space_id FROM rooms r
+		WHERE r.external_id = market_lots.channel AND r.space_id IS NOT NULL
+		ORDER BY r.created_at, r.id LIMIT 1),
+	(SELECT s.id FROM spaces s WHERE s.is_primary = 1));
+UPDATE \`market_lottery_tickets\` SET \`space_id\` = (SELECT s.id FROM spaces s WHERE s.is_primary = 1);
+UPDATE \`market_song_tickets\` SET \`space_id\` = (SELECT s.id FROM spaces s WHERE s.is_primary = 1);
+
+DROP INDEX \`market_lots_week_idx\`;
+CREATE UNIQUE INDEX \`market_lots_space_week_idx\` ON \`market_lots\` (\`space_id\`,\`week\`);
+
+CREATE TABLE \`market_lottery_draws\` (
+	\`space_id\` text NOT NULL,
+	\`week\` integer NOT NULL,
+	\`status\` text NOT NULL,
+	\`draw_at\` integer NOT NULL,
+	\`tickets\` integer DEFAULT 0 NOT NULL,
+	\`buyers\` integer DEFAULT 0 NOT NULL,
+	\`pot\` integer DEFAULT 0 NOT NULL,
+	\`prize\` integer DEFAULT 0 NOT NULL,
+	\`burned\` integer DEFAULT 0 NOT NULL,
+	\`winner_person\` text,
+	\`winner_platform\` text,
+	\`winner_account_id\` text,
+	\`winner_name\` text,
+	\`winner_tickets\` integer,
+	\`pick\` integer,
+	\`drawn_at\` integer,
+	\`paid_at\` integer,
+	\`announced_at\` integer,
+	\`notice_message\` text,
+	\`notice_at\` integer,
+	CONSTRAINT \`market_lottery_draws_pk\` PRIMARY KEY(\`space_id\`, \`week\`),
+	CONSTRAINT "market_lottery_draws_status_check" CHECK("status" IN ('open', 'drawing', 'drawn', 'refunding', 'refunded'))
+) STRICT;
+
+CREATE INDEX \`market_lottery_draws_status_idx\` ON \`market_lottery_draws\` (\`status\`,\`draw_at\`);
+
+INSERT INTO \`market_lottery_draws\` (space_id, week, status, draw_at, tickets, buyers, pot, prize,
+	burned, winner_person, winner_platform, winner_account_id, winner_name, winner_tickets, pick,
+	drawn_at, paid_at, announced_at, notice_message, notice_at)
+SELECT COALESCE((SELECT s.id FROM spaces s WHERE s.is_primary = 1), ''), w.week, w.status,
+	w.draw_at, w.tickets, w.buyers, w.pot, w.prize, w.burned, w.winner_person, w.winner_platform,
+	w.winner_account_id, w.winner_name, w.winner_tickets, w.pick, w.drawn_at, w.paid_at,
+	w.announced_at, w.notice_message, w.notice_at
+FROM \`market_lottery_weeks\` w;
+`;
+
+/** The lots, bids, lottery weeks and tickets; the song priority tickets; their Spaces. */
 export const marketSchema: PluginSchema = {
   plugin: "market",
+  // Version 3 reads identity's rooms and Spaces to give the rows of before it their Space.
+  requires: ["identity"],
   migrations: [
     { version: 1, name: "init", sql: INIT },
     { version: 2, name: "song_tickets", sql: SONG_TICKETS },
+    { version: 3, name: "spaces", sql: SPACES },
   ],
 };
 
@@ -155,7 +220,7 @@ WHERE e.delta < 0
       AND NOT EXISTS (SELECT 1 FROM economy_ledger r WHERE r.ref = e.id AND r.reason = 'auction_release'))
     OR (e.reason = 'lottery_ticket'
       AND e.idem_key IN (SELECT 'lottery_ticket:' || t.id FROM market_lottery_tickets t
-        JOIN market_lottery_weeks w ON w.week = t.week
+        JOIN market_lottery_draws w ON w.week = t.week AND w.space_id = COALESCE(t.space_id, '')
         WHERE t.status = 'paid' AND w.status IN ('open', 'refunding')))
     OR (e.reason = 'song_priority'
       AND e.idem_key IN (SELECT 'song_priority:' || s.key FROM market_song_tickets s
@@ -179,5 +244,6 @@ WHERE l.reason = 'refund_removed'
 DROP TABLE market_bids;
 DROP TABLE market_lots;
 DROP TABLE market_lottery_tickets;
+DROP TABLE market_lottery_draws;
 DROP TABLE market_lottery_weeks;
 DROP TABLE market_song_tickets;`;

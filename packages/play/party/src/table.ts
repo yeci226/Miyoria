@@ -14,6 +14,8 @@ import {
   type Clock,
   type ContextKey,
   contextKeyString,
+  DEFAULT_CURRENCY,
+  matchPersonName,
   newId,
   PARTY_RECENT_MAX,
   type PartyPlayerView,
@@ -73,6 +75,8 @@ export interface PartyEnded {
   title: string;
   context: ContextKey;
   reason: EndReason;
+  /** Turtle soup: whether the bottom was guessed; `null` for a game without one. */
+  solved: boolean | null;
   /** The people who played (made a move or scored); never her. */
   players: { account: AccountRef; name: string }[];
 }
@@ -99,6 +103,8 @@ export interface TableDeps {
   timers?: Timers;
   output: PartyOutput;
   rewards?: () => PartyRewards | null;
+  /** The coins' name of the running profile (default 魚幣). */
+  currency?: () => string;
   clips?: () => SongClips | null;
   judge?: () => SoupJudge | null;
   warn?: (message: string, detail?: unknown) => void;
@@ -217,8 +223,21 @@ export class Session implements Host {
     const all = this.humans();
     const exact = all.find((p) => p.name === wanted || safeName(p.name, 24) === wanted);
     if (exact) return exact;
-    const partial = all.filter((p) => p.name.includes(wanted) || wanted.includes(p.name));
-    return partial.length === 1 ? (partial[0] ?? null) : null;
+    // Whole names only, the way every tool finds a person (`matchPersonName`): part of a name
+    // may be someone else.
+    const match = matchPersonName(
+      wanted,
+      all.map((p) => ({
+        key: p.key,
+        handle: p.name,
+        person: null,
+        account: p.account,
+        shown: [],
+        first: null,
+        call: null,
+      })),
+    );
+    return match.kind === "one" ? (all.find((p) => p.key === match.candidate.key) ?? null) : null;
   }
 
   /** The player of `account`, when they are in the game (a person her turn is about). */
@@ -373,6 +392,7 @@ export class Table {
   readonly timers: Timers;
   readonly output: PartyOutput;
   readonly #rewards: () => PartyRewards | null;
+  readonly #currency: () => string;
   readonly #clips: () => SongClips | null;
   readonly #judge: () => SoupJudge | null;
   readonly #warn: (message: string, detail?: unknown) => void;
@@ -390,6 +410,7 @@ export class Table {
     this.timers = deps.timers ?? realTimers;
     this.output = deps.output;
     this.#rewards = deps.rewards ?? (() => null);
+    this.#currency = deps.currency ?? (() => DEFAULT_CURRENCY);
     this.#clips = deps.clips ?? (() => null);
     this.#judge = deps.judge ?? (() => null);
     this.#warn = deps.warn ?? (() => {});
@@ -601,6 +622,7 @@ export class Table {
       title: session.game.title,
       context: session.context,
       reason,
+      solved: session.game.solved?.() ?? null,
       players: session
         .humans()
         .filter((p) => p.active || p.score > 0)
@@ -638,7 +660,7 @@ export class Table {
           key: `party:${session.id}:rewards`,
           answers: null,
           revision: 1,
-          summary: `「${session.game.title}」的魚幣發好了:${paid}。`,
+          summary: `「${session.game.title}」的${this.#currency()}發好了:${paid}。`,
           speak: false,
           untrusted: false,
           person: null,

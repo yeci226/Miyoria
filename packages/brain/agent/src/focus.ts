@@ -9,12 +9,16 @@
 
 import {
   type AccountRef,
+  accountRefString,
   type ContextKey,
   type Handle,
   type IncomingMessage,
   type MessageRef,
+  matchPersonName,
+  type PersonCandidate,
   safeName,
   sameAccount,
+  shownNames,
   type TurnFocus,
   type TurnFocusView,
   type TurnId,
@@ -121,7 +125,8 @@ export const FOR_ARG = "for_whom";
 /** The schema of `FOR_ARG`, offered to tools that act for someone (`Tool.actsFor`) then. */
 export const FOR_PROPERTY = {
   type: "string",
-  description: "這件事是幫誰做的:要回的訊息(<reply_to>)裡那個人的編號(例如 1)或名字。",
+  description:
+    "這件事是幫誰做的:要回的訊息(<reply_to>)裡那個人的編號(例如 1)或名字(對話紀錄每行開頭那個,或他現在的顯示名,要寫完整)。",
 } as const;
 
 /** What a tool call acts for: the message of the person it is for, or why it cannot tell. */
@@ -134,7 +139,8 @@ export type CallFor =
  * her about something else two seconds later, both landed in one turn and the latest speaker paid).
  *
  * One person in the focus: theirs (`fallback`), whatever `pick` says. Several: `pick` (the call's
- * `for_whom`) names one, by the number of the focus block (`targets`, as numbered there) or by name,
+ * `for_whom`) names one, by the number of the focus block (`targets`, as numbered there) or by name
+ * (`matchPersonName`: their handle when `names` knows it, the name they go by, her call name),
  * and the call is for that person's latest message that asks her (`asks`), else their latest. A
  * tool that acts for someone (`actsFor`) and does not say whom, or names nobody in the focus, is
  * refused with the choices, so she can call again; any other tool goes on with `fallback`.
@@ -146,6 +152,7 @@ export function callFor(
   actsFor: boolean,
   asks: (m: IncomingMessage) => boolean,
   fallback: () => IncomingMessage | undefined,
+  names: FocusNames | null = null,
 ): CallFor {
   const people: IncomingMessage["author"][] = [];
   for (const m of focus) {
@@ -153,12 +160,15 @@ export function callFor(
   }
   if (people.length <= 1) return { ok: true, message: fallback() };
   const said = typeof pick === "number" ? String(pick) : typeof pick === "string" ? pick : "";
-  const who = said.trim() === "" ? null : pickPerson(people, targets, said);
+  const who = said.trim() === "" ? null : pickPerson(people, targets, said, names);
   if (who === null) {
     if (!actsFor && said.trim() === "") return { ok: true, message: fallback() };
     const choices = people.map((p) => {
       const n = targets.findIndex((t) => sameAccount(t.account, p.account));
-      return `${n < 0 ? "" : `[${n + 1}] `}${safeName(p.display_name)}`;
+      const handle = names?.(p.account)?.handle ?? null;
+      const shown = handle === null ? [] : shownNames(handle, [p.display_name]);
+      const name = `${safeName(handle ?? p.display_name)}${shown.length > 0 ? `(${shown[0]})` : ""}`;
+      return `${n < 0 ? "" : `[${n + 1}] `}${name}`;
     });
     const why = said.trim() === "" ? "好幾個人同時叫你" : `${FOR_ARG} 「${safeName(said)}」 對不上`;
     return {
@@ -170,11 +180,15 @@ export function callFor(
   return { ok: true, message: theirs.findLast(asks) ?? theirs.at(-1) };
 }
 
+/** Her handle for an account and what she calls them, when known (`null`: neither). */
+export type FocusNames = (account: AccountRef) => { handle: string; call: string | null } | null;
+
 /** The person `said` names: a number of the focus block (`2`, `[2]`) or a name (`@` optional). */
 function pickPerson(
   people: readonly IncomingMessage["author"][],
   targets: readonly { id: string | null; account: AccountRef }[],
   said: string,
+  names: FocusNames | null,
 ): AccountRef | null {
   const n = /^\s*[[［(（]?\s*(\d{1,2})\s*[\]］)）]?\s*$/.exec(said)?.[1];
   if (n !== undefined) {
@@ -183,14 +197,20 @@ function pickPerson(
       ? account
       : null;
   }
-  const squash = (s: string) =>
-    s
-      .normalize("NFKC")
-      .toLowerCase()
-      .replace(/[\s@＠]/g, "");
-  const want = squash(said);
-  const found = people.filter((p) => squash(p.display_name) === want);
-  return found.length === 1 ? (found[0]?.account ?? null) : null;
+  const candidates: PersonCandidate[] = people.map((p) => {
+    const known = names?.(p.account) ?? null;
+    return {
+      key: accountRefString(p.account),
+      handle: known?.handle ?? p.display_name,
+      person: null,
+      account: p.account,
+      shown: [p.display_name],
+      first: null,
+      call: known?.call ?? null,
+    };
+  });
+  const match = matchPersonName(said, candidates);
+  return match.kind === "one" ? match.candidate.account : null;
 }
 
 export interface TurnFocusInit {

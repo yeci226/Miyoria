@@ -487,8 +487,9 @@ describe("RequestQueue persistence", () => {
     q.next();
     await q.persist();
     const stored = (await store.get(STATE_PROFILE, STATE_KEY)) as Record<string, JsonValue>;
+    // The Rust shape, the default Space's partition at the top, and every Space's (phase 6).
     expect(Object.keys(stored).sort()).toEqual(
-      ["history", "items", "last_vote", "next_id", "paused", "served", "vote"].sort(),
+      ["history", "items", "last_vote", "next_id", "paused", "served", "spaces", "vote"].sort(),
     );
     expect(stored.served).toEqual([[{ platform: "discord", id: "a" }, 1]]);
     expect(stored.vote).toBeNull();

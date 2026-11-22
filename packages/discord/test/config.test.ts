@@ -1,5 +1,6 @@
+import { configJsonSchema, placeFields, settingFields } from "@miyoria/runtime/kernel";
 import { describe, expect, test } from "vitest";
-import { DiscordConfigSchema, validateDiscordConfig } from "../src/config.js";
+import { allGuilds, DiscordConfigSchema, validateDiscordConfig } from "../src/config.js";
 
 describe("DiscordConfig", () => {
   test("token_is_required", () => {
@@ -56,5 +57,26 @@ describe("DiscordConfig", () => {
     } catch (error) {
       expect(String(error)).not.toContain("SECRET-TOKEN");
     }
+  });
+
+  test("a_star_means_every_server", () => {
+    const cfg = DiscordConfigSchema.parse({ token: "t", command_guilds: ["*"] });
+    expect(cfg.command_guilds).toEqual(["*"]);
+    expect(allGuilds(cfg)).toBe(true);
+    expect(() => validateDiscordConfig(cfg)).not.toThrow();
+    expect(allGuilds(DiscordConfigSchema.parse({ token: "t", command_guilds: [1] }))).toBe(false);
+  });
+
+  test("the_fields_that_differ_per_server_and_room", () => {
+    expect(settingFields(configJsonSchema(DiscordConfigSchema)).skipped).toEqual([]);
+    expect(placeFields(DiscordConfigSchema).map((f) => [f.keys.join("."), f.scope])).toEqual([
+      ["ambient_text", "space"],
+      ["ambient_channels", "space"],
+      ["ambient_follow", "room"],
+      ["emoji.enabled", "space"],
+      ["emoji.descriptions", "space"],
+      ["stickers.enabled", "space"],
+      ["stickers.descriptions", "space"],
+    ]);
   });
 });

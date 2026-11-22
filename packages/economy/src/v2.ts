@@ -2,7 +2,7 @@
 // the service's ledger, its turns and its caps. Nothing here changes a balance without a ledger row.
 
 import { errorMessage } from "@miyoria/runtime/kernel";
-import type { AccountRef } from "@miyoria/types";
+import type { AccountRef, ContextKey } from "@miyoria/types";
 import { AchievementDesk } from "./achievements.js";
 import type { EconomyConfig } from "./config.js";
 import type { EconomyService, Member } from "./economy.js";
@@ -19,6 +19,7 @@ import type {
   BetResult,
   Economy2,
   HealthView,
+  PredictionSourceKind,
   PredictionView,
   QuestId,
   QuestResult,
@@ -95,9 +96,17 @@ export class V2 implements Economy2 {
     }
   }
 
-  /** Settles what ran out: predictions nobody called, stakes a crash left halfway. */
+  /**
+   * Settles what ran out: predictions nobody called, stakes a crash left halfway; and deletes the
+   * quest picks of days long gone.
+   */
   async sweep(): Promise<void> {
     await this.prediction.sweep();
+    try {
+      await this.quest.prune();
+    } catch (error) {
+      this.e.log.warn({ err: errorMessage(error) }, "cannot prune the old quest picks");
+    }
   }
 
   /**
@@ -113,8 +122,8 @@ export class V2 implements Economy2 {
     }
   }
 
-  quests(account: AccountRef): Promise<QuestsView> {
-    return this.quest.view(account);
+  quests(account: AccountRef, opts: { pick?: boolean } = {}): Promise<QuestsView> {
+    return this.quest.view(account, opts);
   }
 
   completeQuest(account: AccountRef, quest: QuestId, topic?: string): Promise<QuestResult> {
@@ -125,14 +134,16 @@ export class V2 implements Economy2 {
     return this.achievement.view(account);
   }
 
-  predictions(account: AccountRef | null): Promise<PredictionView[]> {
-    return this.prediction.view(account);
+  predictions(account: AccountRef | null, spaces?: readonly string[]): Promise<PredictionView[]> {
+    return this.prediction.view(account, spaces);
   }
 
   openPrediction(req: {
     question: string;
     options: readonly string[];
     minutes: number;
+    settle_by?: PredictionSourceKind | null;
+    context?: ContextKey | null;
   }): Promise<PredictionView> {
     return this.prediction.open(req);
   }
@@ -153,6 +164,18 @@ export class V2 implements Economy2 {
 
   cancelPrediction(ref: string): Promise<ResolveResult> {
     return this.prediction.cancel(ref);
+  }
+
+  resolvePredictionByAdmin(
+    ref: string,
+    option: string | number,
+    who: string,
+  ): Promise<ResolveResult> {
+    return this.prediction.resolveByAdmin(ref, option, who);
+  }
+
+  cancelPredictionByAdmin(ref: string, who: string): Promise<ResolveResult> {
+    return this.prediction.cancelByAdmin(ref, who);
   }
 
   room(): Promise<RoomView[]> {

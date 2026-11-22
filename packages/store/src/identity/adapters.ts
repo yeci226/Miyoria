@@ -115,12 +115,15 @@ export class IdentityHandles implements PersonHandleDirectory {
   constructor(private readonly identity: Identity) {}
 
   #entry(row: PersonRow): HandleEntry {
-    const first = this.identity.accountsOf(row.id)[0];
+    const accounts = this.identity.accountsOf(row.id);
+    const first = accounts[0];
     return {
       handle: row.handle,
       person: row.id,
       account: first === undefined ? null : { platform: first.platform, id: first.external_id },
       display_name: row.name,
+      // The names they go by now: an account's name follows every message, the person's does not.
+      names: accounts.map((a) => a.display_name),
       created_at: row.created_at,
     };
   }

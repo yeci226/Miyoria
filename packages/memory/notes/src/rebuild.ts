@@ -33,6 +33,7 @@ import {
   type ContextKey,
   type PersonId,
   type ProfileId,
+  type ReasoningLevel,
   type Timestamp,
   timestampMs,
   toTimestamp,
@@ -68,8 +69,14 @@ export const REBUILD_SINCE: Timestamp = toTimestamp(Date.UTC(2026, 10, 15));
 
 /** Tokens the documents shown to the model add to a segment's prompt, on average. */
 const DOCUMENT_TOKENS = 600;
-/** Tokens of a reply on average: an episode, a few edits. */
+/** Tokens of a reply on average without thinking: an episode, a few edits. */
 const REPLY_TOKENS = 350;
+/**
+ * Tokens of a reply on average when the model thinks first: the thinking is billed as output.
+ * Measured on the first live rebuild (2026-11-17, `summarizer` at `medium`: 3,000 to 3,700 a
+ * segment, where 350 had been estimated). `low` and `high` were not measured and use the same.
+ */
+export const THINKING_REPLY_TOKENS = 3_300;
 const PAGE = 2000;
 
 /** Tokens of `text`: a character of Chinese is about 0.7, anything else a quarter. */
@@ -326,8 +333,15 @@ export interface RebuildEstimate {
   usd: number | null;
 }
 
-/** The estimate for what `plan` still has to do, at `price`. */
-export function estimateRebuild(plan: RebuildPlan, price: Pricing | null): RebuildEstimate {
+/**
+ * The estimate for what `plan` still has to do, at `price`, the pass's model reasoning at
+ * `reasoning` (its thinking is output too).
+ */
+export function estimateRebuild(
+  plan: RebuildPlan,
+  price: Pricing | null,
+  reasoning: ReasoningLevel = "off",
+): RebuildEstimate {
   const system = estimateTokens(segmentPassPrompt());
   let prompt = 0;
   let lines = 0;
@@ -348,7 +362,8 @@ export function estimateRebuild(plan: RebuildPlan, price: Pricing | null): Rebui
     prompt += system + estimateTokens(message) + DOCUMENT_TOKENS;
     lines += s.lines;
   }
-  const completion = plan.segments.length * REPLY_TOKENS;
+  const completion =
+    plan.segments.length * (reasoning === "off" ? REPLY_TOKENS : THINKING_REPLY_TOKENS);
   return {
     segments: plan.segments.length,
     lines,

@@ -16,7 +16,15 @@ import type { IssuedFortune } from "@miyoria/contracts/api";
 import { EconomyError, EconomyKey, FortuneStoreKey, STRANGER } from "@miyoria/economy";
 import { LlmRouterKey } from "@miyoria/llm/llm";
 import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
-import { type AccountRef, accountRefString, newId } from "@miyoria/types";
+import {
+  type AccountRef,
+  accountRefString,
+  CharacterKey,
+  CurrencyKey,
+  DEFAULT_CHARACTER,
+  DEFAULT_CURRENCY,
+  newId,
+} from "@miyoria/types";
 import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
 import { type FortuneHolder, fortuneOfDay, keepFortune, writeFortune } from "./fortune.js";
@@ -36,9 +44,10 @@ import type { ApiContext, ApiState } from "./state.js";
 const log = getLogger("api.fortune");
 
 const NO_FORTUNE = "現在抽不了籤";
-const WRITE_FAILED = "她現在寫不出來,魚幣已經退回";
+/** The slip was not written: the coins (`coin`) went back. */
+const writeFailed = (coin: string, her: string) => `${her}現在寫不出來,${coin}已經退回`;
 const TOO_OFTEN = "太頻繁了,請稍後再試";
-const UNFINISHED = "上次抽籤沒有完成,魚幣已經退回,請再抽一次";
+const unfinished = (coin: string) => `上次抽籤沒有完成,${coin}已經退回,請再抽一次`;
 /** Memories she is shown for a slip at most. */
 const MEMORIES_SHOWN = 5;
 
@@ -86,6 +95,8 @@ export async function drawFortune(
   const who = await loadMemberOf(state, account);
   if (who.hidden || who.person === null) throw new ApiError(403, STRANGER);
   const holder = holderOf(account, who);
+  const coin = state.optional(CurrencyKey) ?? DEFAULT_CURRENCY;
+  const her = (state.optional(CharacterKey) ?? DEFAULT_CHARACTER).pronoun;
   const day = today(state);
 
   const had = await fortuneOfDay(state, holder, day);
@@ -102,7 +113,7 @@ export async function drawFortune(
   }
   if (bought.duplicate) {
     await economy.refund(account, bought.entry_id).catch(() => false);
-    throw new ApiError(409, UNFINISHED);
+    throw new ApiError(409, unfinished(coin));
   }
 
   const give = async (): Promise<never> => {
@@ -110,7 +121,7 @@ export async function drawFortune(
       log.warn({ error: errorMessage(error) }, "cannot give a fortune's payment back");
       return false;
     });
-    throw ApiError.unavailable(WRITE_FAILED);
+    throw ApiError.unavailable(writeFailed(coin, her));
   };
 
   const names = await namesFor(state, who);

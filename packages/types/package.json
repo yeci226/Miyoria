@@ -16,6 +16,11 @@
       "@miyoria/source": "./src/bond.ts",
       "types": "./dist/bond.d.ts",
       "default": "./dist/bond.js"
+    },
+    "./exchange-amount": {
+      "@miyoria/source": "./src/exchange-amount.ts",
+      "types": "./dist/exchange-amount.d.ts",
+      "default": "./dist/exchange-amount.js"
     }
   },
   "files": [

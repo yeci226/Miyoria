@@ -154,6 +154,10 @@ export class CoreEndpoints {
       failed: (endpoint: Endpoint, error?: unknown) => current().failed(endpoint, error),
       request: (endpoint: Endpoint, path: string, init?: RequestInit) =>
         current().request(endpoint, path, init),
+      reserve: (endpoint: Endpoint, unit?: { what?: string; sizeBytes?: number }) =>
+        current().reserve(endpoint, unit),
+      openSession: (capability: string, key: string) => current().openSession(capability, key),
+      closeSession: (capability: string, key: string) => current().closeSession(capability, key),
       watch: (capability: string, onChange: () => void) => {
         const registry = current();
         // Each call is its own watch, even for the same function.

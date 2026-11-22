@@ -9,6 +9,9 @@
 // The day's drops and their times are in the table, so a restart does not reset the limits; the
 // lines seen are only in memory (a restart starts the window again). Nothing here is a command:
 // the card is posted through the platform's `ReplySink` with one button, which `/me card` routes.
+//
+// Which channels drop is read per place (`placeConfig`, phase 6): a channel in its own server's
+// `drop_channels` with `drops` on for it; a change applies at the next line, without a restart.
 
 import {
   CARD_DROP_ROUTE,
@@ -18,7 +21,7 @@ import {
   ReplySinkKey,
 } from "@miyoria/commands";
 import { PeopleDirectoryKey } from "@miyoria/heart/person";
-import { errorMessage, type ModuleContext, sleep } from "@miyoria/runtime/kernel";
+import { errorMessage, type ModuleContext, placeConfig, sleep } from "@miyoria/runtime/kernel";
 import {
   accountRefString,
   type ContextKey,
@@ -26,8 +29,9 @@ import {
   Events,
   is,
   newId,
+  PlacesKey,
 } from "@miyoria/types";
-import type { CardsConfig } from "./config.js";
+import { type CardsConfig, CardsConfigSchema } from "./config.js";
 import type { Random } from "./draw.js";
 import { dayStart } from "./service.js";
 import type { CardStore } from "./store.js";
@@ -63,6 +67,8 @@ export interface ChannelLine {
 
 export interface DropWatchOptions {
   config: CardsConfig;
+  /** The config of a place (its server's channels, its own switch); default: `config` everywhere. */
+  at?: (context: ContextKey) => CardsConfig;
   store: CardStore;
   random: Random;
   /** Runs `fn` after `ms` (the module's spawn, so a stop cancels it). */
@@ -83,22 +89,26 @@ interface Channel {
 export class DropWatch {
   readonly #o: DropWatchOptions;
   readonly #channels = new Map<string, Channel>();
-  readonly #open: ReadonlySet<string>;
 
   constructor(options: DropWatchOptions) {
     this.#o = options;
-    this.#open = new Set(options.config.drop_channels);
   }
 
-  /** Whether drops are on in `context` (a channel of a server that opted in, never a DM). */
+  #at(context: ContextKey): CardsConfig {
+    return this.#o.at?.(context) ?? this.#o.config;
+  }
+
+  /** Whether drops are on in `context` (a channel its server opted in, never a DM). */
   open(context: ContextKey): boolean {
-    return this.#o.config.drops && context.scope !== null && this.#open.has(context.channel);
+    if (context.scope === null) return false;
+    const config = this.#at(context);
+    return config.drops && config.drop_channels.includes(context.channel);
   }
 
   /** Counts `line`; a lively channel may get a drop. */
   heard(line: ChannelLine): void {
     if (!this.open(line.context)) return;
-    const { config } = this.#o;
+    const config = this.#at(line.context);
     const key = contextKeyString(line.context);
     const channel = this.#channels.get(key) ?? { lines: [], rolled: 0, waiting: false };
     this.#channels.set(key, channel);
@@ -108,7 +118,7 @@ export class DropWatch {
     if (channel.waiting || line.at - channel.rolled < window) return;
     const people = new Set(channel.lines.map((l) => l.who)).size;
     if (people < config.drop_min_people || channel.lines.length < config.drop_min_lines) return;
-    if (!this.#allowed(key, line.at)) return;
+    if (!this.#allowed(config, key, line.at)) return;
     channel.rolled = line.at;
     if (this.#o.random() >= config.drop_chance) return;
     channel.waiting = true;
@@ -125,8 +135,8 @@ export class DropWatch {
   }
 
   /** Under the channel's day and gap, at `now`. */
-  #allowed(key: string, now: number): boolean {
-    const { config, store } = this.#o;
+  #allowed(config: CardsConfig, key: string, now: number): boolean {
+    const { store } = this.#o;
     const since = dayStart(now, config.utc_offset_minutes);
     const { count, last } = store.dropsSince(key, since);
     if (count >= config.drops_per_channel_day) return false;
@@ -135,10 +145,12 @@ export class DropWatch {
 
   /** Drops a card in `context` now, if the channel's limits still allow it. */
   async #drop(context: ContextKey, key: string): Promise<void> {
-    const { config, store } = this.#o;
+    const { store } = this.#o;
+    const config = this.#at(context);
     const now = this.#o.now();
-    // The limits again: the delay may have let another drop in, or the day turn.
-    if (!this.#allowed(key, now)) return;
+    // The limits again (and the channel still open): the delay may have let another drop in, the
+    // day turn, or the channel be turned off.
+    if (!this.open(context) || !this.#allowed(config, key, now)) return;
     const id = newId();
     store.addDrop(id, key, now, now + config.drop_expire_mins * MINUTE_MS);
     let posted = false;
@@ -151,9 +163,10 @@ export class DropWatch {
 }
 
 /**
- * Starts watching the channels for module `cards` when drops are on: the lines of the platform's
- * messages (not hers, not a bot's, not a card), and a drop posted through `ReplySinkKey`. Without
- * the people directory her own lines cannot be told apart, so nothing counts until it is there.
+ * Starts watching the channels for module `cards`: the lines of the platform's messages (not hers,
+ * not a bot's, not a card), and a drop posted through `ReplySinkKey`. Without the people directory
+ * her own lines cannot be told apart, so nothing counts until it is there. Which channels drop is
+ * each place's (`placeConfig`); without places, the cluster's list as it always was.
  */
 export function watchDrops(
   ctx: ModuleContext,
@@ -162,9 +175,13 @@ export function watchDrops(
   random: Random,
   now: () => number,
 ): void {
-  if (!config.drops || config.drop_channels.length === 0) return;
+  const places = placeConfig(ctx, CardsConfigSchema);
+  const perPlace = ctx.services.get(PlacesKey) !== undefined;
+  // Off everywhere, and no server can turn it on for itself: nothing to watch.
+  if (!perPlace && (!config.drops || config.drop_channels.length === 0)) return;
   const watch = new DropWatch({
     config,
+    ...(perPlace ? { at: (context: ContextKey) => places.for(context) } : {}),
     store,
     random,
     now,

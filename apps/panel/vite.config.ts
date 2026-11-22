@@ -31,10 +31,16 @@ const config = defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      // The exchange's chart and map arithmetic (moving averages, the up/down colours, the heat map's
+      // squarified layout with d3-hierarchy), shared with the pictures Discord gets so both agree.
+      // Imported only by the lazily loaded chart and map, so it stays out of the main bundle.
+      "@miyoria/card-face/market": fileURLToPath(new URL("../../packages/card-face/src/market.ts", import.meta.url)),
       // The card's drawing is shared with the Core (it renders the link preview); no build step in between.
       "@miyoria/card-face": fileURLToPath(new URL("../../packages/card-face/src/index.tsx", import.meta.url)),
       // What the card reads of the bond: the narrow entry with no imports, not all of the types.
       "@miyoria/types/bond": fileURLToPath(new URL("../../packages/types/src/bond.ts", import.meta.url)),
+      // What an exchange order's amount says (shares, or $ coins): the same parser as Discord's, no imports.
+      "@miyoria/types/exchange-amount": fileURLToPath(new URL("../../packages/types/src/exchange-amount.ts", import.meta.url)),
       // The tier names and the floors of the anchored tiers: the one list, a file with no imports.
       "@miyoria/contracts/wire/tiers": fileURLToPath(new URL("../../packages/contracts/wire/src/tiers.ts", import.meta.url)),
       // The route table: its types from source like the card, and at run time the table without
@@ -76,7 +82,9 @@ const config = defineConfig({
   },
   build: {
     outDir: "dist",
-    sourcemap: true,
+    // Core serves everything in `dist` to anyone, source maps included: they are written only
+    // when asked for (`MIYORIA_PANEL_SOURCEMAP=1 pnpm build`), for debugging a build.
+    sourcemap: process.env.MIYORIA_PANEL_SOURCEMAP === "1",
     target: "es2022",
     // No manualChunks: splitting React from the libraries that import it produced circular chunks
     // (React's exports were read before its chunk had run, so the page stayed blank).

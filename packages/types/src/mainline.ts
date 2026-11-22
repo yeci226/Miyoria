@@ -294,6 +294,11 @@ export interface FixedLine {
   blocked?: string | null;
   /** Who the line is for, as the delivery ledger records it. Unset: the people in the voice channel. */
   audience?: readonly Handle[];
+  /**
+   * Whom it is said to (`Delivery.to`): the person it replies to, else the people it names;
+   * empty: nobody in particular. Unset: not known.
+   */
+  to?: readonly Handle[];
 }
 
 /** Provided by the agent. */

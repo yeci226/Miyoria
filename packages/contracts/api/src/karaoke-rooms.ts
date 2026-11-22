@@ -11,10 +11,16 @@
 // `packages/api/src/karaoke-routes.ts`): its event stream (`GET .../rooms/{code}/events`, Server-Sent
 // Events: `KaraokeRoomEvent`), the clock (`POST .../rooms/{code}/clock`), a singer's microphone
 // (`POST .../rooms/{code}/audio`) and a singer's detected pitch (`POST .../rooms/{code}/pitch`).
+//
+// A room belongs to one server (phase 6, docs/design/v5-places.md §10): `GET` and `POST
+// /api/member/karaoke/rooms` take `?space=` (`SpaceQuery`; default: the person's own server, the
+// primary first). Asking about a server she is not in is a 404, one the person is not a member of
+// a 403. A room is then reached by its code, as before.
 
 import { z } from "zod";
 import { KaraokeSessionSchema, KaraokeSongViewSchema, KaraokeVoiceCheckSchema } from "./karaoke.js";
 import { route } from "./route.js";
+import { SpaceQuery } from "./shared.js";
 
 /** A room's code: six letters and digits people can read out (no 0/O, 1/I/L). */
 export const KARAOKE_ROOM_CODE = /^[2-9A-HJKMNP-Z]{6}$/;
@@ -313,12 +319,74 @@ export const KaraokeBoardLineSchema = z
     move: z.enum(["up", "down", "same"]),
     /**
      * Their pitch lately (the browser's detection), for the spectators' lanes: frames from `from`
-     * at 50 Hz in song time, one byte a frame (`encodeTrack`), base64.
+     * at 50 Hz in song time with their device's latency taken off (where it lands on the
+     * reference), one byte a frame (`encodeTrack`), base64.
      */
     pitch: z.object({ from: z.number().int(), track: z.string() }).nullable(),
+    /** Cheers they got from the people watching this round. */
+    cheers: z.number().int().min(0).default(0),
   })
   .meta({ id: "ApiKaraokeBoardLine" });
 export type KaraokeBoardLine = z.output<typeof KaraokeBoardLineSchema>;
+
+/**
+ * What someone watching a round cheers a singer with (「加油」「好聽」「太強了」「安可」): shown as
+ * words beside that singer on her stream and on the spectators' screens, with who sent it.
+ */
+export const KARAOKE_CHEERS = ["cheer", "nice", "wow", "encore"] as const;
+export const KaraokeCheerKindSchema = z.enum(KARAOKE_CHEERS).meta({ id: "ApiKaraokeCheerKind" });
+export type KaraokeCheerKind = z.output<typeof KaraokeCheerKindSchema>;
+
+/**
+ * Body of `POST .../rooms/{code}/cheer`: a member who is not singing the round cheers `member` (a
+ * singer of it), during the countdown or the round. Limited per person and per room (429 with how
+ * long to wait).
+ */
+export const KaraokeRoomCheerSchema = z
+  .strictObject({ member: z.string().min(1).max(32), kind: KaraokeCheerKindSchema })
+  .meta({ id: "ApiKaraokeRoomCheer" });
+export type KaraokeRoomCheer = z.input<typeof KaraokeRoomCheerSchema>;
+
+/** The answer to a cheer: how long until this person may cheer again (ms). */
+export const KaraokeCheerReplySchema = z
+  .object({ wait_ms: z.number().int().min(0) })
+  .meta({ id: "ApiKaraokeCheerReply" });
+export type KaraokeCheerReply = z.output<typeof KaraokeCheerReplySchema>;
+
+/** One cheer as the room's event stream carries it. Names are untrusted. */
+export const KaraokeCheerEventSchema = z
+  .object({
+    type: z.literal("cheer"),
+    round: z.number().int(),
+    /** Unique within the room (the same cheer is never shown twice). */
+    id: z.string(),
+    /** The singer cheered (their member id) and who cheered. */
+    member: z.string(),
+    by: z.object({ name: z.string(), color: z.number().int() }),
+    kind: KaraokeCheerKindSchema,
+  })
+  .meta({ id: "ApiKaraokeCheerEvent" });
+export type KaraokeCheerEvent = z.output<typeof KaraokeCheerEventSchema>;
+
+/**
+ * The singers' latest pitch, a few times a second while a round is sung (only to people not
+ * singing it): per singer the frames from `from` (as `KaraokeBoardLine.pitch`, about the last
+ * second; a later piece replaces what an earlier one said from its first frame on).
+ */
+export const KaraokeLiveEventSchema = z
+  .object({
+    type: z.literal("live"),
+    round: z.number().int(),
+    at_ms: z.number(),
+    lines: z.array(
+      z.object({
+        member: z.string(),
+        pitch: z.object({ from: z.number().int(), track: z.string() }),
+      }),
+    ),
+  })
+  .meta({ id: "ApiKaraokeLiveEvent" });
+export type KaraokeLiveEvent = z.output<typeof KaraokeLiveEventSchema>;
 
 /**
  * A message of a room's event stream (SSE: `event:` is `type`, `data:` the whole message).
@@ -328,6 +396,9 @@ export type KaraokeBoardLine = z.output<typeof KaraokeBoardLineSchema>;
  *   singing that round (the server never sends it to a singer's stream).
  * - `trend`: to a singer only, about themselves: `rising`, `dropping` or `holding`, their own
  *   running total and whether it comes from the stream (`voice`) or their browser (`estimate`).
+ * - `live`: the singers' latest pitch, a few times a second (not to the round's singers).
+ * - `cheer`: someone watching cheered a singer: to everyone not singing the round, and to that
+ *   singer (never to the other singers).
  */
 export const KaraokeRoomEventSchema = z
   .discriminatedUnion("type", [
@@ -350,6 +421,8 @@ export const KaraokeRoomEventSchema = z
        */
       total: z.number().nullable(),
     }),
+    KaraokeLiveEventSchema,
+    KaraokeCheerEventSchema,
   ])
   .meta({ id: "ApiKaraokeRoomEvent" });
 export type KaraokeRoomEvent = z.output<typeof KaraokeRoomEventSchema>;
@@ -374,7 +447,12 @@ export const KaraokeAudioReplySchema = z
   .meta({ id: "ApiKaraokeAudioReply" });
 export type KaraokeAudioReply = z.output<typeof KaraokeAudioReplySchema>;
 
-/** Body of `POST .../rooms/{code}/pitch`: the browser's detected pitch since `from` (50 Hz). */
+/**
+ * Body of `POST .../rooms/{code}/pitch`: the browser's detected pitch since `from` (50 Hz), sent a
+ * few times a second while the singer sings. Core takes it from the round's singers only, no
+ * faster than a few posts a second, within the song and not ahead of its own clock; it scores the
+ * estimate from it and relays it to the people watching and to her stream.
+ */
 export const KaraokePitchSchema = z
   .strictObject({ from: z.number().int().min(0), track: z.string().max(4_000) })
   .meta({ id: "ApiKaraokePitch" });
@@ -386,14 +464,20 @@ const entry = code.extend({ entry: z.string().regex(/^[0-9a-z]{1,32}$/) });
 
 /** The member's side of rooms: a session (by cookie), limited per account. */
 export const karaokeRooms = {
-  /** Whether a room can be opened, its price, their balance, and their open room. */
-  overview: member()
+  /**
+   * Whether a room can be opened, its price, their balance, and their open room. Not counted
+   * against the member limit: the page asks again every second or two while she is not in a voice
+   * channel, so the button follows her joining (it is read from memory and one balance).
+   */
+  overview: route
+    .meta({ audience: "member", permission: null })
     .route({ method: "GET", path: "/api/member/karaoke/rooms" })
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(KaraokeRoomsSchema),
-  /** Opens a room (no song yet) and pays for it (402 too few coins, 409 not now). */
+  /** Opens a room (no song yet) in a server and pays for it (402 too few coins, 409 not now). */
   open: member()
     .route({ method: "POST", path: "/api/member/karaoke/rooms" })
-    .input(z.object({ body: KaraokeRoomOpenSchema }))
+    .input(z.object({ query: SpaceQuery.optional(), body: KaraokeRoomOpenSchema }))
     .output(KaraokeRoomViewSchema),
   room: member()
     .route({ method: "GET", path: "/api/member/karaoke/rooms/{code}" })
@@ -431,6 +515,11 @@ export const karaokeRooms = {
     .route({ method: "POST", path: "/api/member/karaoke/rooms/{code}/relay" })
     .input(z.object({ params: code, body: KaraokeRoomRelaySchema }))
     .output(KaraokeRoomViewSchema),
+  /** Someone watching the round cheers one of its singers (shown on her stream). */
+  cheer: member()
+    .route({ method: "POST", path: "/api/member/karaoke/rooms/{code}/cheer" })
+    .input(z.object({ params: code, body: KaraokeRoomCheerSchema }))
+    .output(KaraokeCheerReplySchema),
   /** The opener starts the round with the queue's first ready song: a countdown for everyone. */
   start: member()
     .route({ method: "POST", path: "/api/member/karaoke/rooms/{code}/start" })

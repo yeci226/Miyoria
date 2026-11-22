@@ -9,6 +9,7 @@ const STAGE_WORDS: Readonly<Record<string, string>> = {
   reference: "抓旋律",
   encode: "做伴唱帶",
   lyrics: "找歌詞",
+  fetch: "拿歌中",
 };
 
 /** The word for a stage; any other stage (or none) is 準備中. */

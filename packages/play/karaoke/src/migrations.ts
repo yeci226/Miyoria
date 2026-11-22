@@ -217,16 +217,31 @@ CREATE INDEX \`karaoke_reference_edits_song_idx\` ON \`karaoke_reference_edits\`
 `;
 
 /**
+ * Step 6 of phase 6 (docs/design/v5-places.md §10): a room belongs to the server it was opened in.
+ * A room row names no channel or server of its own (its notice's channel was never kept), so every
+ * room from before goes to the primary Space (identity v2 chose it); a database with no Space yet
+ * keeps `NULL`. A column only: no row moves or goes. Songs, references and scores stay each
+ * person's, in every server.
+ */
+const SPACES = `ALTER TABLE \`karaoke_rooms\` ADD \`space_id\` text REFERENCES spaces(id);
+
+UPDATE karaoke_rooms SET space_id = (SELECT id FROM spaces WHERE is_primary = 1)
+WHERE space_id IS NULL;
+`;
+
+/**
  * The songs, requests, sessions, tracks and results; since migration 4 the rooms; since migration
- * 5 the edited references.
+ * 5 the edited references; since migration 6 the server of a room.
  */
 export const karaokeSchema: PluginSchema = {
   plugin: "karaoke",
+  requires: ["identity"],
   migrations: [
     { version: 1, name: "init", sql: INIT },
     { version: 2, name: "key_and_lyrics", sql: KEY_AND_LYRICS },
     { version: 3, name: "video_and_voice", sql: VIDEO_AND_VOICE },
     { version: 4, name: "rooms", sql: ROOMS },
     { version: 5, name: "reference_edits", sql: REFERENCE_EDITS },
+    { version: 6, name: "spaces", sql: SPACES },
   ],
 };

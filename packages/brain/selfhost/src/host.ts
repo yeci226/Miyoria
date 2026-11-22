@@ -56,7 +56,9 @@ import {
   type IncomingMessage,
   is,
   type MessageRef,
+  newAction,
   newId,
+  PartyStatusKey,
   PlatformHistoriesKey,
   PlatformSinksKey,
   parseTaskEvent,
@@ -65,6 +67,7 @@ import {
   sameAccount,
   type TurnOutcome,
   type TurnReason,
+  textLane,
   timestampMs,
   toTimestamp,
 } from "@miyoria/types";
@@ -115,12 +118,21 @@ import {
   withLimits,
 } from "../../self/src/index.js";
 import { LookAround } from "./around.js";
+import {
+  COURTESY_LABEL,
+  CourtesyBudget,
+  type CourtesyKind,
+  courtesyEmoji,
+  courtesyKind,
+  courtesyNote,
+} from "./courtesy.js";
 import { answeredLine, applyFeel, feelApplies, feelDeps } from "./feel.js";
 import { startIdleCompaction } from "./idle-compaction.js";
 import { ImpulseDesk } from "./impulses.js";
 import { type Initiative, type InitiativeOptions, startInitiative } from "./initiative.js";
 import { JobsHost, type JobsHostOptions } from "./jobs.js";
 import { type AdmittedInput, Lane, type LaneHost, type LaneRun } from "./lane.js";
+import { hourCap } from "./limits.js";
 import { MouthOutlet, Settlements, submitTyping } from "./outlet.js";
 import { ReplyContext } from "./parent.js";
 import { resolvePlace } from "./places.js";
@@ -152,6 +164,8 @@ export interface SelfHostOptions {
   delegate?: JobsHostOptions;
   /** Her own initiative: its numbers, `remind_me`'s time parser, its tables. */
   initiative?: InitiativeOptions;
+  /** 0 ≤ r < 1, for the chance of a reaction-only answer and its emoji (tests). */
+  random?: () => number;
 }
 
 /** `[modules.agent.corrections]` as the runner's output checks. */
@@ -236,12 +250,16 @@ export class SelfHost implements TextRunner {
   /** When she glanced at each place (`contextKeyString`). */
   #glances = new Map<string, readonly number[]>();
   #day = { key: "", count: 0 };
+  /** Reaction-only answers per place in the last hour (`courtesy.ts`). */
+  readonly #courtesy = new CourtesyBudget();
+  readonly #random: () => number;
   readonly #stop = new AbortController();
   #subscription: Subscription | null = null;
 
   constructor(agent: Agent, options: SelfHostOptions = {}) {
     this.#agent = agent;
     this.#o = options;
+    this.#random = options.random ?? Math.random;
     const transcript =
       options.transcript ?? agent.ctx.services.get(StoreKey)?.plugin(transcriptTables) ?? null;
     if (transcript === null) throw new Error("the text runner needs the store's transcripts");
@@ -588,7 +606,7 @@ export class SelfHost implements TextRunner {
     });
     const note = marks.verdict?.note ?? null;
     if (note) entry.flagged = note;
-    this.transcript.append(session, [entry], { context });
+    const [seq] = this.transcript.append(session, [entry], { context });
     this.#around.recent.add(msg);
     this.#attachParent(place, msg);
     const call = this.#call(msg);
@@ -615,6 +633,8 @@ export class SelfHost implements TextRunner {
     );
     // A person spoke there: her waiting starts there may count as answered.
     if (!marks.bot) this.initiative.line(context, said);
+    // Only a thank-you or a goodbye to her: now and then an emoji is the whole answer.
+    if (decision.decision === "wake" && (await this.#reactOnly(msg, seq ?? null))) return;
     // The place's lane now: an idle one may have ended while the line was taken in.
     this.#place(context).lane.push({
       type: "line",
@@ -623,6 +643,143 @@ export class SelfHost implements TextRunner {
       glance: decision.decision === "glance",
       inert: decision.decision === "hold" && INERT.has(decision.why),
     });
+  }
+
+  // ---- reaction-only answers -------------------------------------------------------------------
+
+  /**
+   * Whether `msg` (a line that calls her, in its transcript at `seq`) gets only an emoji: it is
+   * nothing but a thank-you or a goodbye (`courtesyKind`), nothing waits in its place, the
+   * place's budget and the reaction limit allow one, and the chance says so. Then the reaction is
+   * queued and the turn it stands for is recorded like any other (`#reactedOnly`); `false`: the
+   * line wakes her as before.
+   */
+  async #reactOnly(msg: IncomingMessage, seq: number | null): Promise<boolean> {
+    const agent = this.#agent;
+    const rhythm = agent.rhythm.config;
+    if (!rhythm.courtesy_react || rhythm.courtesy_chance <= 0 || agent.muted) return false;
+    if (agent.ctx.services.get(ActionSinkKey) === undefined) return false;
+    const context = msg.id.context;
+    if (context.kind === "voice" || this.voice.in(context)) return false;
+    if (msg.author.is_bot || msg.card === true || this.#asked.has(msg.id.id)) return false;
+    const carries =
+      msg.attachments.length > 0 ||
+      (msg.stickers?.length ?? 0) > 0 ||
+      (msg.embeds?.length ?? 0) > 0 ||
+      (msg.forwarded?.length ?? 0) > 0;
+    if (carries) return false;
+    const others = (msg.mentions_others?.length ?? 0) > 0 || msg.opens_with_other_mention === true;
+    if (others) return false;
+    const kind = courtesyKind(msg.text, agent.persona.names(), true);
+    if (kind === null) return false;
+    // Something waits for them here: a run, lines, a start of hers; a party game; a job she
+    // started; a question of hers they may be answering.
+    const place = this.#place(context);
+    if (!place.lane.quiet) return false;
+    if (agent.ctx.services.get(PartyStatusKey)?.running(context)) return false;
+    if ([...this.#jobs.values()].some((j) => contextKeyEquals(j.context, context))) return false;
+    if (this.#askedThem(place)) return false;
+    const now = this.#now;
+    const key = contextKeyString(context);
+    if (this.#courtesy.used(key, now) >= rhythm.courtesy_per_hour) return false;
+    if (this.#random() >= rhythm.courtesy_chance) return false;
+    if (agent.rhythm.takeReaction(context) !== null) return false;
+    this.#courtesy.take(key, now);
+    await this.#reactedOnly(place, msg, seq, kind, courtesyEmoji(kind, this.#random));
+    return true;
+  }
+
+  /** Her last line in `place`, among its last few entries, asked something. */
+  #askedThem(place: Place): boolean {
+    const entries = this.transcript.tail(place.session).entries;
+    for (let i = entries.length - 1, n = 0; i >= 0 && n < 6; i--, n++) {
+      const e = entries[i];
+      if (e?.kind === "self") return /[?？]/.test(e.content);
+    }
+    return false;
+  }
+
+  /**
+   * The books of a reaction-only answer, as of a run that only reacted and kept silent: the turn's
+   * start, its decision, the `react` tool, a note in the transcript (she sees in later runs what
+   * she did), its end and its outcome (`silence`). No model call, no line, no Floor.
+   */
+  async #reactedOnly(
+    place: Place,
+    msg: IncomingMessage,
+    seq: number | null,
+    kind: CourtesyKind,
+    emoji: string,
+  ): Promise<void> {
+    const agent = this.#agent;
+    const context = place.context;
+    const turn = newId();
+    const reason = addressedReason(directReason(msg, agent.persona.names())) ?? "mention";
+    agent.ctx.publish(Events.AgentTurnStarted, { turn, context }, { turn });
+    agent.ctx.publish(
+      Events.AgentDecision,
+      {
+        turn,
+        context,
+        respond: true,
+        score: 0,
+        reasons: ["runner self", `addressed: ${reason}`, `courtesy: ${kind}`, "reaction only"],
+      },
+      { turn },
+    );
+    agentTurns.inc({ decision: "responded" });
+    const sink = agent.ctx.services.get(ActionSinkKey);
+    let result = `reacted with ${emoji}`;
+    let ok = sink !== undefined;
+    if (sink === undefined) result = "no action sink";
+    else {
+      try {
+        await sink.submit(
+          newAction(
+            textLane(context),
+            "direct",
+            { type: "react", message: msg.id, emoji },
+            { turn },
+          ),
+        );
+      } catch (error) {
+        ok = false;
+        result = errorMessage(error);
+      }
+    }
+    agent.ctx.publish(Events.AgentTool, { turn, context, tool: "react", ok, result }, { turn });
+    if (ok) {
+      this.transcript.append(
+        place.session,
+        [
+          {
+            kind: "note",
+            label: COURTESY_LABEL,
+            about_seq: seq,
+            content: courtesyNote(emoji),
+            turn,
+          },
+        ],
+        { context },
+      );
+    }
+    agent.ctx.publish(Events.AgentTurnCompleted, { turn, context, text: "" }, { turn });
+    agent.publishOutcome({
+      turn,
+      context,
+      reason: msg.reply_to_self ? "reply_to_her" : "addressed",
+      outcome: ok ? { type: "silence" } : { type: "error", error: result },
+      addressed_by: [agent.handleOf(msg.author.account, msg.author.display_name)],
+      focus: [{ ...msg.id }],
+      restarts: 0,
+      reasoning: null,
+      latency_ms: null,
+      at: toTimestamp(this.#now),
+    });
+    agent.log.debug(
+      { context: contextKeyString(context), message: msg.id.id, kind, emoji },
+      "answered with a reaction only",
+    );
   }
 
   /** The quote the platform sent with a reply, when its parent is not in the transcript. */
@@ -944,7 +1101,10 @@ export class SelfHost implements TextRunner {
         this.runner.run({
           session: { id: place.session, context },
           wake: run.wake,
-          profile: withLimits(PROFILES.text, { pictureBytes: agent.config.vision.max_total_bytes }),
+          profile: withLimits(PROFILES.text, {
+            pictureBytes: agent.config.vision.max_total_bytes,
+            ...hourCap(agent, context),
+          }),
           signal: run.controller.signal,
           turn,
         }),
@@ -1296,6 +1456,8 @@ function runOutcome(state: TurnState, result: RunResult | null, error: string | 
     const cancel = state.run.cancel;
     return { type: "cancelled", cause: cancel?.cause ?? "shutdown", by: cancel?.by ?? null };
   }
+  // The hourly cap stays visible as such, even when someone waiting was told when she is back.
+  if (result.outcome === "over_budget") return { type: "error", error: result.outcome };
   if (state.lines > 0 || result.outcome === "said") {
     return { type: "sent", parts: Math.max(state.lines, result.lines.length) };
   }

@@ -13,6 +13,7 @@
 import { SELF_QUOTE_NAME, type TranscriptStore } from "@miyoria/memory/transcript";
 import { errorMessage } from "@miyoria/runtime/kernel";
 import {
+  type AccountRef,
   dataBlock,
   type IncomingMessage,
   type MessageRef,
@@ -166,7 +167,7 @@ export class ReplyContext {
     if (parent === null) return null;
     const quoted = (m: IncomingMessage): Quoted => ({
       id: m.id.id,
-      author: m.author.display_name,
+      author: this.#name(m.author.account, m.author.display_name),
       own: agent.isSelf(m.author.account),
       text: m.text,
       at: timestampMs(m.ts),
@@ -178,8 +179,13 @@ export class ReplyContext {
       quoteLine(parent, `${when},${REPLY_AROUND_TAGS.replied}`, PARENT_CHARS),
       ...after.map((m) => quoteLine(quoted(m), REPLY_AROUND_TAGS.after, AROUND_CHARS)),
     ];
-    const head = replyAroundHead(input.author.display_name);
+    const head = replyAroundHead(this.#name(input.author.account, input.author.display_name));
     return `${head}\n${dataBlock("reply_context", REPLY_AROUND_TITLE, lines.join("\n"))}`;
+  }
+
+  /** Someone by her handle for them, as the transcript names them (her own accounts as shown). */
+  #name(account: AccountRef, shown: string): string {
+    return this.#agent.isSelf(account) ? shown : this.#agent.handleOf(account, shown);
   }
 
   /** The replied-to message: fetched or remembered, else as the platform quoted it. */
@@ -190,7 +196,7 @@ export class ReplyContext {
       if (!own && agent.isBlocked(fetched.author.account)) return null;
       return {
         id: fetched.id.id,
-        author: fetched.author.display_name,
+        author: this.#name(fetched.author.account, fetched.author.display_name),
         own,
         text: fetched.text,
         at: timestampMs(fetched.ts),
@@ -202,7 +208,7 @@ export class ReplyContext {
     if (account !== null && !agent.isSelf(account) && agent.isBlocked(account)) return null;
     return {
       id: input.reply_to?.id ?? null,
-      author: quote.author_name,
+      author: account === null ? quote.author_name : this.#name(account, quote.author_name),
       own: account !== null && agent.isSelf(account),
       text: quote.text,
       at: null,

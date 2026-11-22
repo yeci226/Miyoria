@@ -29,9 +29,12 @@ import {
 const HOUR = 3_600_000;
 const MIN = 60_000;
 
-/** Quest, achievement and play coins are not what these sums are about. */
+/**
+ * Quest, achievement and play coins are not what these sums are about, and neither is the cut a
+ * win burns (prediction-auto.test.ts has it).
+ */
 const rig = (config: Record<string, JsonValue> = {}) =>
-  baseRig({ achievement_cap: 0, play_rewards: {}, ...config });
+  baseRig({ achievement_cap: 0, play_rewards: {}, prediction_rake: 0, ...config });
 
 const open = (
   r: Rig,

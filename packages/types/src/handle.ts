@@ -7,6 +7,7 @@
 // must never reach persisted data: run `ephemeralHandlesIn` over anything before storing it.
 
 import type { PersonId } from "./ids.js";
+import { isOrdinaryWord } from "./person-names.js";
 import type { AccountRef } from "./platform.js";
 import { serviceKey } from "./service-key.js";
 import type { Timestamp } from "./time.js";
@@ -29,6 +30,12 @@ export interface HandleEntry {
   account: AccountRef | null;
   /** The display name it was made from (the handle does not follow later renames). */
   display_name: string;
+  /**
+   * What the person's accounts are called now (a server nickname they changed since first
+   * sight), when the directory knows. The handle and `display_name` never follow a rename; a
+   * lookup by name should accept these too.
+   */
+  names?: readonly string[];
   created_at: Timestamp;
 }
 
@@ -92,11 +99,13 @@ export function isValidHandle(value: string): boolean {
 /**
  * The handle for a new person named `displayName`, given the handles already taken: the
  * cleaned name, else the name with the first free suffix (`Owen#2`, `Owen#3` ...). An empty
- * name, or one that looks like a reference code (someone called `u1`), always gets a suffix.
+ * name, one that looks like a reference code (someone called `u1`), or an ordinary word meaning
+ * nobody, everyone or a pronoun (`ORDINARY_WORDS`: a handle 「沒人」 made 「補送給沒人」 read as
+ * "to nobody") always gets a suffix. Handles assigned before keep their name.
  */
 export function assignHandle(displayName: string, taken: (handle: Handle) => boolean): Handle {
   const base = handleBase(displayName) || "?";
-  const bare = base !== "?" && !isEphemeralHandle(base);
+  const bare = base !== "?" && !isEphemeralHandle(base) && !isOrdinaryWord(base);
   if (bare && !taken(base)) return base;
   for (let n = 2; ; n++) {
     const candidate = `${base}${HANDLE_SUFFIX_SEPARATOR}${n}`;

@@ -160,9 +160,10 @@ describe("notes", () => {
 });
 
 describe("rewards", () => {
-  async function playSongs(rewards: Rewards | null, minPlayers = 2) {
+  async function playSongs(rewards: Rewards | null, minPlayers = 2, currency?: string) {
     const r = rig({
       rewards: () => rewards,
+      ...(currency === undefined ? {} : { currency: () => currency }),
       config: {
         rewards: { enabled: true, coins_per_point: 7, max_coins: 10, min_players: minPlayers },
       },
@@ -189,6 +190,12 @@ describe("rewards", () => {
     ]);
     expect(out.last()?.summary).toContain("魚幣發好了:Amy 7、Bob 7");
     expect(out.last()?.speak).toBe(false);
+  });
+
+  it("names the profile's coins in her note", async () => {
+    const { out } = await playSongs(new Rewards(), 2, "貝殼");
+    expect(out.last()?.summary).toContain("的貝殼發好了:Amy 7、Bob 7");
+    expect(out.last()?.summary).not.toContain("魚幣");
   });
 
   it("pays nobody who played alone, and is skipped without an economy or when it fails", async () => {

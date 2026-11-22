@@ -77,7 +77,10 @@ export class HttpTurnJudge implements TurnJudge {
         signal: AbortSignal.any([signal, AbortSignal.timeout(this.#o.timeoutMs)]),
       });
       sent = true;
-      if (!response.ok) throw new Error(`end-of-turn worker answered ${response.status}`);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error(`end-of-turn worker answered ${response.status}`);
+      }
       const body = WorkersTurnReplySchema.safeParse(await response.json());
       if (!body.success) throw new Error("end-of-turn worker sent a bad answer");
       this.#warned = false;

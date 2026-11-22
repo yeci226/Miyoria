@@ -199,6 +199,8 @@ export class Lane {
   readonly #inbox = new Inbox();
   /** Set once the lane ended (idle, or stopped). */
   ended = false;
+  /** Nothing runs, waits or is queued here (kept by `run`). */
+  #still = true;
 
   constructor(host: LaneHost) {
     this.#host = host;
@@ -210,6 +212,14 @@ export class Lane {
 
   close(): void {
     this.#inbox.close();
+  }
+
+  /**
+   * Nothing runs, waits for a run or is queued in this place, and no input is waiting to be
+   * read: a line taken in now would start the only run here.
+   */
+  get quiet(): boolean {
+    return !this.ended && this.#still && this.#inbox.empty;
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -225,6 +235,7 @@ export class Lane {
     try {
       for (;;) {
         const idle = pending.length === 0 && !glance && running === null && queued.length === 0;
+        this.#still = idle && window === null;
         const next = await this.#next(signal, running, running === null ? window : null, idle);
         const now = host.now();
         switch (next.type) {
@@ -367,6 +378,7 @@ export class Lane {
       }
     } finally {
       this.ended = true;
+      this.#still = true;
       this.#inbox.close();
     }
   }

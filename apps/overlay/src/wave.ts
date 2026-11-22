@@ -7,6 +7,8 @@
 
 /** Bars in a field made before the frame's height is known (even: mirrored halves). */
 export const BAR_COUNT = 26;
+/** Most bands a level carries: the contract's `OVERLAY_LEVEL_BANDS_MAX` (a test keeps them equal). */
+export const MAX_BANDS = 32;
 /** Spacing of the bars (rem); the column fills the frame's height at this spacing. */
 const PITCH_REM = 0.74;
 /** A level older than this counts as silence (the feed stops while nothing plays). */
@@ -72,7 +74,7 @@ export function barTargets(
 export class BarField {
   readonly values: Float32Array;
   readonly #targets: Float32Array;
-  readonly #peaks = new Float32Array(16);
+  readonly #peaks = new Float32Array(MAX_BANDS);
   readonly #speed: Float32Array;
   #value = 0;
   #bands: number[] | null = null;

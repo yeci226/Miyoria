@@ -14,6 +14,7 @@ import { Field } from "@/components/ui/label";
 import { Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { accountString, fmtDateTime, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
+import { WORLD } from "@/lib/world";
 import { CardsSection } from "./CardsSection";
 import { tierText } from "./heart";
 import { HeartSection, Section } from "./PersonHeart";
@@ -128,7 +129,7 @@ export function RelationshipEditor({ profile }: { profile: PersonProfile }) {
 
 const MAX_ADJUST = 100_000;
 const MAX_NOTE = 100;
-const CURRENCY = "魚幣";
+const CURRENCY = WORLD.currency;
 
 /** A signed whole number, or null when the text is not one a hand adjustment may use. */
 export function parseAmount(text: string): number | null {
@@ -161,7 +162,7 @@ export function WalletSection({ personId, name }: { personId: string; name: stri
   const n = parseAmount(amount);
   const trimmed = note.trim();
   const noteOk = trimmed.length > 0 && [...trimmed].length <= MAX_NOTE;
-  const disabledWhy = !canWrite ? READ_ONLY_HINT : denied ? "你的帳號沒有調整魚幣的權限(需要 admin.economy.adjust)" : undefined;
+  const disabledWhy = !canWrite ? READ_ONLY_HINT : denied ? `你的帳號沒有調整${CURRENCY}的權限(需要 admin.economy.adjust)` : undefined;
   const ready = n !== null && noteOk;
 
   const submit = () => {

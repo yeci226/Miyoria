@@ -31,6 +31,8 @@ import {
   type ModerationService,
   type Observation,
   type ObserveOptions,
+  type PartyOutcome,
+  PartyOutcomesKey,
   PartyOverviewKey,
   type Principal,
   Principals,
@@ -538,6 +540,25 @@ describe("party module", () => {
       ]);
       expect(evidence[0]?.detail).toContain("海龜湯");
       expect(evidence[0]?.session).toBe("discord:g1:t1");
+    });
+
+    it("tells how it came out once it ends: guessed, or not (revealed), and nothing else", async () => {
+      h = await Harness.create();
+      const outcomes: PartyOutcome[] = [];
+      h.sup.services.provide("economy", PartyOutcomesKey, {
+        ended: (o: PartyOutcome) => outcomes.push(o),
+      });
+      await h.invoke("party.start", { game: "soup" }, Principals.user(AMY, TEXT));
+      h.verdict = "solved";
+      await h.invoke("party.ask", { question: "他吃了同伴的肉" }, Principals.user(AMY, TEXT));
+      await h.invoke("party.start", { game: "soup" }, Principals.user(AMY, TEXT));
+      await h.invoke("party.host", { action: "next" }, Principals.user(AMY, TEXT));
+      expect(outcomes.map((o) => [o.game, o.reason, o.solved])).toEqual([
+        ["soup", "done", true],
+        ["soup", "done", false],
+      ]);
+      expect(outcomes[0]?.context).toEqual(TEXT);
+      expect(outcomes[0]?.session).not.toBe(outcomes[1]?.session);
     });
 
     it("hears nothing from other channels, and does not stop when she leaves the voice channel", async () => {

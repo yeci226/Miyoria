@@ -1,8 +1,8 @@
-// One renderer per concept (docs/design/v2-architecture.md §3.5, phase 0 item 18): her own state
+// One renderer per concept (docs/design/v2-architecture.md §3.5): her own state
 // for the trusted system part (`SELF_BLOCK_KEYS`) and the people present for the data part.
 //
 // Each renderer reads the v2 blackboard service when it is there and falls back to today's
-// sources otherwise (docs/design/v2-implementation.md W1):
+// sources otherwise:
 //
 // | block           | service                         | fallback                               |
 // |-----------------|---------------------------------|----------------------------------------|
@@ -48,6 +48,7 @@ import {
   type SelfState,
   type ShownEmotion,
   safeName,
+  shownNames,
   xmlAttrs,
 } from "@miyoria/types";
 import type { SelfBlock } from "./compiler.js";
@@ -290,6 +291,10 @@ export function goalsBlock(src: SelfSources): string {
   return items.length === 0 ? "" : ["你打算做的事:", ...items].join("\n");
 }
 
+/** Heading of what did not work lately, in the ledger block (`LedgerLimits.failed`). */
+export const FAILED_HEAD =
+  "剛才沒做成的事(只是結果,不是規則;弄清楚原因、換個寫法或做法就可以再試):";
+
 /** `self.ledger`: what she started on her own lately and the limits that apply now. */
 export function ledgerBlock(src: SelfSources): string {
   const view = src.ledger ?? null;
@@ -314,6 +319,15 @@ export function ledgerBlock(src: SelfSources): string {
   if (parts.length > 0) lines.push(`${parts.join(";")}。`);
   for (const b of l.blocked.slice(0, 3)) {
     lines.push(`- ${short(b.capability, 30)} 暫時不行:${short(b.reason, 50)}`);
+  }
+  // What did not work: a result to do better next time, not something she may not do.
+  const failed = (l.failed ?? []).slice(-3);
+  if (failed.length > 0) {
+    lines.push(FAILED_HEAD);
+    for (const f of failed) {
+      const at = clock(Date.parse(f.at), offset);
+      lines.push(`- ${at} ${short(f.capability, 30)}:${short(f.reason, 80)}`);
+    }
   }
   const unanswered = unansweredHint(view.unanswered);
   if (unanswered !== "") lines.push(unanswered);
@@ -363,6 +377,11 @@ export interface PresentPerson {
   account: AccountRef;
   /** Their stable handle (the name she uses for them). */
   handle: string;
+  /**
+   * What their accounts are called now, when that is not the handle (a nickname changed since
+   * she first saw them): `shown_as`, so a name in the chat maps to the handle. Unset: none.
+   */
+  shown?: readonly string[];
   person: PersonId | null;
   /** A speaker of this turn (listed first). */
   speaker: boolean;
@@ -381,6 +400,8 @@ const MAX_STANCE = 60;
 /** What the people block says of one person (`personTag`); empty values are left out. */
 export interface PersonAttrs {
   name: string;
+  /** What their accounts are called now, when not the handle (`PresentPerson.shown`). */
+  shown_as?: string | null;
   /** 朋友, 認識, ... */
   relation?: string | null;
   /** Her 羈絆 level with them, out of the scale's top (`92/1000`). */
@@ -410,8 +431,14 @@ export function personTag(attrs: PersonAttrs): string {
 }
 
 /** What is known about `p`, or `null` when nothing is. */
+/** `shown_as` of `p`: the names they go by now that are not the handle, or `null`. */
+export function shownAs(p: Pick<PresentPerson, "handle" | "shown">): string | null {
+  const shown = shownNames(p.handle, p.shown ?? []);
+  return shown.length === 0 ? null : shown.join("、");
+}
+
 function personAttrs(p: PresentPerson, src: PeopleSources): PersonAttrs | null {
-  const attrs: PersonAttrs = { name: p.handle };
+  const attrs: PersonAttrs = { name: p.handle, shown_as: shownAs(p) };
   const view = p.person === null ? null : (src.heart?.view(p.person) ?? null);
   if (view !== null) {
     // The heart's row (docs/design/v5-heart.md §2.9): the tier, the level and the slow values as
@@ -434,7 +461,8 @@ function personAttrs(p: PresentPerson, src: PeopleSources): PersonAttrs | null {
     if (stance !== "") attrs.stance = short(stance, MAX_STANCE);
   }
   const known = Object.entries(attrs).some(
-    ([k, v]) => k !== "name" && v !== null && v !== undefined && String(v).trim() !== "",
+    ([k, v]) =>
+      k !== "name" && k !== "shown_as" && v !== null && v !== undefined && String(v).trim() !== "",
   );
   return known ? attrs : null;
 }
@@ -490,7 +518,7 @@ export function peopleBody(present: readonly PresentPerson[], src: PeopleSources
     } catch {
       attrs = null;
     }
-    if (attrs === null) others.push(personTag({ name: p.handle }));
+    if (attrs === null) others.push(personTag({ name: p.handle, shown_as: shownAs(p) }));
     else lines.push(personTag(attrs));
   }
   if (lines.length === 0) return others.join("\n");

@@ -257,7 +257,8 @@ export class Rig {
     );
     const factory: TextRunnerFactory = (agent) => {
       rig.factoryCalls += 1;
-      rig.host = new SelfHost(agent, options.host ?? {});
+      // No chance draws on their own: a test that wants a reaction-only answer passes `random`.
+      rig.host = new SelfHost(agent, { random: () => 1, ...options.host });
       return rig.host;
     };
     const agent = new AgentModule(profile(options.mode ?? "normal")).withTextRunner(factory);

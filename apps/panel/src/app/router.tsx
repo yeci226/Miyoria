@@ -45,6 +45,7 @@ const ModulePage = lazyRouteComponent(() => import("@/pages/system/ModulePage"),
 const MachinesPage = lazyRouteComponent(() => import("@/pages/machines/MachinesPage"), "MachinesPage");
 const RulesPage = lazyRouteComponent(() => import("@/pages/rules/RulesPage"), "RulesPage");
 const EvalPage = lazyRouteComponent(() => import("@/pages/eval/EvalPage"), "EvalPage");
+const ReportsPage = lazyRouteComponent(() => import("@/pages/reports/ReportsPage"), "ReportsPage");
 const AccessPage = lazyRouteComponent(() => import("@/pages/access/AccessPage"), "AccessPage");
 const DataPage = lazyRouteComponent(() => import("@/pages/data/DataPage"), "DataPage");
 const SettingsPage = lazyRouteComponent(() => import("@/pages/settings/SettingsPage"), "SettingsPage");
@@ -179,6 +180,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/machines", component: MachinesPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/rules", component: RulesPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/eval", component: EvalPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/reports", component: ReportsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/access", component: AccessPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/data", component: DataPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage }),

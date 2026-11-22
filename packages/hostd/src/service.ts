@@ -14,6 +14,7 @@
 import { randomBytes } from "node:crypto";
 import type {
   HostServiceEvent,
+  HostServiceRouting,
   HostServiceState,
   HostServiceStatus,
 } from "@miyoria/contracts/host";
@@ -21,7 +22,7 @@ import { execa } from "execa";
 import type { Logger } from "pino";
 import type { ServiceLog } from "./logs.js";
 import { freePort, localAddress, PORT_DENIED_HINT, probePort, urlHost } from "./ports.js";
-import { httpHealthy, tcpHealthy } from "./probe.js";
+import { httpHealthy, httpProbe, tcpHealthy } from "./probe.js";
 import { type ExitInfo, type ServiceProcess, spawnService } from "./process.js";
 import {
   checkPlan,
@@ -34,6 +35,7 @@ import {
   type ServicePlan,
   type UsedLinks,
 } from "./resolve.js";
+import { type LoadReading, loadOf, loadStatus } from "./routing.js";
 
 /** Timings that tests shorten. */
 export interface Timing {
@@ -78,6 +80,18 @@ export interface ServiceHost {
   changed(): void;
   /** Called when a process was spawned, for the reverse stop order. */
   spawned(name: string): void;
+  /**
+   * Its `[routing]` as it applies on this host (readiness, variant, the owner's limits); absent
+   * without the table. Optional: stand-ins made before routing leave it out.
+   */
+  routing?(service: ManagedService): HostServiceRouting | undefined;
+  /** Why it is held up from outside now (the card is lent to another service), or `undefined`. */
+  outside?(name: string): string | undefined;
+  /**
+   * Its base URL on each route of `routes.toml` (v5-hostd §16); `undefined` on a host without the
+   * file. Optional: stand-ins made before routes leave it out.
+   */
+  reach?(service: ManagedService, port: number): Record<string, string> | undefined;
 }
 
 /** States in which a service is on its way up and others may wait for it. */
@@ -130,6 +144,8 @@ export class ManagedService {
   #stopping: Promise<void> | null = null;
   /** Processes hostd is ending itself; their exit is not another failure. */
   readonly #ending = new WeakSet<ServiceProcess>();
+  /** The last load its health answer reported (`[routing] queue`); `null` while there is none. */
+  #load: LoadReading | null = null;
 
   constructor(plan: ServicePlan, logs: ServiceLog, host: ServiceHost) {
     this.plan = plan;
@@ -189,12 +205,20 @@ export class ManagedService {
     return this.plan.entry?.descriptor.run;
   }
 
+  /** The last load reading, while the service runs and reports one. */
+  get load(): LoadReading | null {
+    return this.#state === "running" ? this.#load : null;
+  }
+
   status(withToken: boolean): HostServiceStatus {
     const port = this.#port;
+    const routing = this.#host.routing?.(this);
+    const load = this.load;
     const local = localAddress(this.#host.ctx.bind);
     // What Core may call directly: the advertised address, or this machine's own when Core is
     // here too. A joined machine with neither is reached through the control link only.
     const reach = this.#host.advertise ?? (this.#host.coreIsLocal() ? local : undefined);
+    const routes = port === undefined ? undefined : this.#host.reach?.(this, port);
     const gpuPolicy = this.plan.gpuPolicy;
     const resident = this.plan.entry?.descriptor.gpu?.vram_mb?.resident;
     return {
@@ -208,6 +232,7 @@ export class ManagedService {
       ...(port !== undefined && reach !== undefined
         ? { advertised: `http://${urlHost(reach)}:${port}` }
         : {}),
+      ...(routes !== undefined ? { reach: routes } : {}),
       healthy: this.#healthy,
       restarts: this.#recentFailures().length,
       ...(this.#reason !== undefined ? { reason: this.#reason } : {}),
@@ -221,7 +246,33 @@ export class ManagedService {
             },
           }
         : {}),
+      ...(routing !== undefined ? { routing } : {}),
+      ...(load !== null
+        ? { load: loadStatus(load, Date.now(), this.#host.outside?.(this.name)) }
+        : {}),
     };
+  }
+
+  /** Whether its health answer is read for its load (`[routing] queue` with an HTTP probe). */
+  get #reportsLoad(): boolean {
+    return (
+      this.plan.entry?.descriptor.routing?.queue === true && this.#run?.health.http !== undefined
+    );
+  }
+
+  /** Keeps the load of a health answer; tells the daemon when it changed. */
+  #readLoad(body: unknown): void {
+    const found = loadOf(body);
+    const before = this.#load;
+    this.#load = found === null ? null : { ...found, at: Date.now() };
+    const same =
+      (before === null && found === null) ||
+      (before !== null &&
+        found !== null &&
+        before.running === found.running &&
+        before.queued === found.queued);
+    // A new reading of the same load is not a change: its age shows in the next report anyway.
+    if (!same) this.#host.changed();
   }
 
   #recentFailures(): number[] {
@@ -438,6 +489,7 @@ export class ManagedService {
 
     this.#token = token;
     this.#links = spec.links;
+    this.#load = null;
     this.logs.line(
       `--- ${new Date().toISOString()} hostd 啟動 ${this.name}${port !== undefined ? `(埠 ${port})` : ""} ---`,
     );
@@ -487,12 +539,14 @@ export class ManagedService {
     const port = this.#port;
     const timeoutMs = (health?.timeout_s ?? 3) * 1000;
     if (health?.http !== undefined && port !== undefined) {
-      return httpHealthy(`${localUrl(this.#host.ctx.bind, port)}${health.http}`, {
+      const answer = await httpProbe(`${localUrl(this.#host.ctx.bind, port)}${health.http}`, {
         timeoutMs,
         ...(this.#token !== undefined
           ? { headers: { authorization: `Bearer ${this.#token}` } }
           : {}),
       });
+      if (this.#reportsLoad && answer.healthy) this.#readLoad(answer.body);
+      return answer.healthy;
     }
     if (health?.tcp === true && port !== undefined) {
       return tcpHealthy(localAddress(this.#host.ctx.bind), port, timeoutMs);

@@ -14,28 +14,43 @@
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { JsonObject, ProfileId } from "@miyoria/types";
+import {
+  type Character,
+  characterNames,
+  DEFAULT_CHARACTER,
+  type JsonObject,
+  orList,
+  type ProfileId,
+} from "@miyoria/types";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 
 /**
- * Her own names, not the persona's: Miyoria is who she is whichever persona she plays, so these
- * always count as addressing her and always appear in her prompt.
+ * Her own names, not the persona's: she is who `[character]` says whichever persona she plays, so
+ * these always count as addressing her and always appear in her prompt. These are Miyoria's, the
+ * default character's; a profile's come from `Profile.character`.
  */
-export const OWN_NAMES = ["Miyoria", "Miyo", "米優", "みよ"] as const;
+export const OWN_NAMES: readonly string[] = Object.freeze(characterNames(DEFAULT_CHARACTER));
 
 /**
  * The line that tells her so; `persona` is the persona's display name. A fact about her names,
  * not a frame: 「那是你演的樣子」 told the model, first thing, that the persona was a role it played,
- * the very distance that reads as 「很 AI」 (docs/design/persona-v4.md §7).
+ * the very distance that reads as 「很 AI」 (docs/design/persona-v4.md §7). With Miyoria's names it
+ * is word for word the line she always had.
  */
-export function ownIdentity(persona: string): string {
+export function ownIdentity(persona: string, character: Character = DEFAULT_CHARACTER): string {
   const name = persona.trim();
+  const own = character.name.trim();
+  const short = character.short_name.trim();
+  const others = character.other_names.map((n) => n.trim()).filter((n) => n !== "");
+  const called = short === "" ? [own] : [own, short];
   const also =
-    name !== "" && name.toLowerCase() !== "miyoria"
-      ? `「${name}」也是你,是大家在這裡認識的你;有人叫 Miyoria、Miyo 或 ${name} 都是在叫你。`
-      : "有人叫 Miyoria 或 Miyo 都是在叫你。";
-  return `你的本名是 Miyoria,大家也叫你 Miyo(米優、みよ)。${also}問你叫什麼,你知道自己叫 Miyoria。`;
+    name !== "" && name.toLowerCase() !== own.toLowerCase()
+      ? `「${name}」也是你,是大家在這裡認識的你;有人叫 ${orList([...called, name])} 都是在叫你。`
+      : `有人叫 ${orList(called)} 都是在叫你。`;
+  const spelled = others.length > 0 ? `(${others.join("、")})` : "";
+  const nick = short === "" ? "" : `大家也叫你 ${short}${spelled}。`;
+  return `你的本名是 ${own},${nick}${also}問你叫什麼,你知道自己叫 ${own}。`;
 }
 
 export class ProfileError extends Error {
@@ -236,6 +251,8 @@ export class Profile {
   readonly avatar: JsonObject | null;
   /** `lorebook.toml`, if present. */
   readonly lorebook: Lorebook | null;
+  /** Who she is in this profile (`[character]` of its config); Miyoria by default. */
+  readonly character: Character;
 
   constructor(init: {
     dir: string;
@@ -245,7 +262,9 @@ export class Profile {
     voice: JsonObject | null;
     avatar: JsonObject | null;
     lorebook?: Lorebook | null;
+    character?: Character;
   }) {
+    this.character = init.character ?? DEFAULT_CHARACTER;
     this.id = init.manifest.id;
     this.dir = init.dir;
     this.manifest = init.manifest;
@@ -256,12 +275,12 @@ export class Profile {
     this.lorebook = init.lorebook ?? null;
   }
 
-  /** Loads `profilesDir/<id>`. */
-  static load(profilesDir: string, id: string): Promise<Profile> {
-    return Profile.loadDir(join(profilesDir, id));
+  /** Loads `profilesDir/<id>`; `character` is who she is in it (default Miyoria). */
+  static load(profilesDir: string, id: string, character?: Character): Promise<Profile> {
+    return Profile.loadDir(join(profilesDir, id), character);
   }
 
-  static async loadDir(dir: string): Promise<Profile> {
+  static async loadDir(dir: string, character?: Character): Promise<Profile> {
     const manifestPath = join(dir, "profile.toml");
     const manifest = parseProfileManifest(await readText(manifestPath, ""), manifestPath);
 
@@ -302,6 +321,7 @@ export class Profile {
       voice: await readOptionalTable(join(dir, "voice.toml")),
       avatar: await readOptionalTable(join(dir, "avatar.toml")),
       lorebook,
+      ...(character === undefined ? {} : { character }),
     });
   }
 
@@ -310,15 +330,20 @@ export class Profile {
   }
 
   /**
-   * Display name, nicknames and her own names (`OWN_NAMES`), for "is she being addressed" checks.
+   * Display name, nicknames and her own names (the character's), for "is she being addressed"
+   * checks.
    */
   names(): string[] {
-    return [this.manifest.display_name, ...this.manifest.nicknames, ...OWN_NAMES];
+    return [
+      this.manifest.display_name,
+      ...this.manifest.nicknames,
+      ...characterNames(this.character),
+    ];
   }
 
   /** Who she is whatever the persona: the first thing in her prompt. */
   ownIdentity(): string {
-    return ownIdentity(this.manifest.display_name);
+    return ownIdentity(this.manifest.display_name, this.character);
   }
 
   /** Replaces a persona section's text (runtime edit, e.g. from the panel). */
@@ -342,3 +367,13 @@ export class Profile {
     return out.trimEnd();
   }
 }
+
+export {
+  LANDING_DIR,
+  LANDING_FILE,
+  LANDING_FILE_MAX_BYTES,
+  LANDING_FILE_NAME,
+  type LoadedLanding,
+  landingPicture,
+  loadLanding,
+} from "./landing.js";

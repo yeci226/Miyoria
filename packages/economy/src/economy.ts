@@ -27,9 +27,11 @@ import {
   accountRefString,
   CARD_REASONS,
   type Clock,
+  type ContextKey,
   EventLogKey,
   type EventPayload,
   Events,
+  EXCHANGE_REASONS,
   HandleDirectoryKey,
   type HeartEvidenceInput,
   HeartKey,
@@ -41,6 +43,8 @@ import {
   ModerationKey,
   newId,
   type PersonId,
+  type Places,
+  PlacesKey,
   Principals,
   type ProfileId,
   type Publish,
@@ -58,6 +62,7 @@ import { BountyBoard } from "./bounties.js";
 import type { EconomyConfig } from "./config.js";
 import { DanmakuDesk } from "./danmaku.js";
 import { type EconomyDocStore, EconomyDocsKey, MemoryDocs } from "./docs.js";
+import { GIFT_REASON, giftHunger, giftLabel } from "./gift-words.js";
 import { Purse } from "./purse.js";
 import {
   type CoinCap,
@@ -67,6 +72,7 @@ import {
   type CoinRule,
 } from "./records.js";
 import { MAX_SCREEN_CHARS, screenEvent, screenText, screenWait, waitMinutes } from "./screen.js";
+import { spacesToShow } from "./spaces.js";
 import { otherName, sendCoins } from "./transfer.js";
 import {
   type AdjustResult,
@@ -189,6 +195,18 @@ const MARKET_LABEL: Readonly<Record<string, string>> = {
   [MARKET_REASONS.lotteryPrize]: "每週樂透中獎",
   [MARKET_REASONS.auctionHold]: "拍賣出價(押著)",
   [MARKET_REASONS.auctionRelease]: "拍賣出價退回",
+};
+
+/** What the deep-sea exchange's rows say (docs/design/exchange.md). */
+const EXCHANGE_LABEL: Readonly<Record<string, string>> = {
+  [EXCHANGE_REASONS.in]: "交易所:買進",
+  [EXCHANGE_REASONS.out]: "交易所:賣出或退回",
+  [EXCHANGE_REASONS.fee]: "交易所:手續費和稅(燒掉)",
+  [EXCHANGE_REASONS.feeBack]: "交易所:沒成交,手續費退回",
+  [EXCHANGE_REASONS.burn]: "交易所:買進(真實行情)",
+  [EXCHANGE_REASONS.burnBack]: "交易所:沒成交,退回",
+  [EXCHANGE_REASONS.mint]: "交易所:賣出(真實行情)",
+  [EXCHANGE_REASONS.loss]: "交易所:槓桿賠超過保證金的部分",
 };
 
 /** What karaoke rooms' rows say (docs/design/karaoke.md 「做了什麼第四步」). */
@@ -347,7 +365,7 @@ export interface EconomyDeps {
 export class EconomyService implements Economy {
   readonly #d: EconomyDeps;
   readonly #turns = new SerialQueue();
-  /** Her own coins (purse.ts), her crowdfunding goals (goals.ts) and her bounties (bounties.ts). */
+  /** Her own coins (purse.ts) and her bounties (bounties.ts). */
   readonly purse: Purse;
   readonly bountyDesk: BountyBoard;
   /** Danmaku on the stream overlay (danmaku.ts, docs/design/v5-play.md §11.6). */
@@ -462,6 +480,25 @@ export class EconomyService implements Economy {
     return this.#d.services;
   }
 
+  /** Identity's places (servers and their members); `undefined` without Core's identity. */
+  places(): Places | undefined {
+    return this.#d.services.get(PlacesKey);
+  }
+
+  /**
+   * The servers a list shown in `ctx` covers (`spaces.ts`): that server, or in a DM the ones the
+   * person of `account` is a member of. `undefined`: no filter.
+   */
+  async spacesFor(
+    ctx: ContextKey | null | undefined,
+    account: AccountRef | null,
+  ): Promise<string[] | undefined> {
+    const places = this.places();
+    if (!places) return undefined;
+    const who = account === null ? null : await this.member(account);
+    return spacesToShow(places, ctx, who?.person.id ?? null);
+  }
+
   get profile(): ProfileId {
     return this.#d.profile;
   }
@@ -527,8 +564,8 @@ export class EconomyService implements Economy {
 
   // ---- her bounties (§13) -------------------------------------------------------
 
-  bounties(): Promise<BountyView[]> {
-    return this.bountyDesk.view();
+  bounties(spaces?: readonly string[]): Promise<BountyView[]> {
+    return this.bountyDesk.view(spaces);
   }
 
   /** Something she knows from now on, silently; `writer` is the working-context bucket. */
@@ -632,9 +669,10 @@ export class EconomyService implements Economy {
    */
   #feedLeft(rows: readonly CoinEntry[]): number {
     const refunded = new Set(rows.filter((r) => r.reason === "refund").map((r) => r.ref));
+    // Food named as a gift (gifts.ts) counts against the same share as rice.
     const taken = rows
-      .filter((r) => r.reason === "feed" && !refunded.has(r.id))
-      .reduce((n, r) => n + hungerOf(r), 0);
+      .filter((r) => (r.reason === "feed" || r.reason === GIFT_REASON) && !refunded.has(r.id))
+      .reduce((n, r) => n + (r.reason === "feed" ? hungerOf(r) : giftHunger(r)), 0);
     const left = this.#d.config.feed_hunger_cap - taken;
     return left > FEED_EPSILON ? left : 0;
   }
@@ -787,6 +825,15 @@ export class EconomyService implements Economy {
       case MARKET_REASONS.auctionHold:
       case MARKET_REASONS.auctionRelease:
         return MARKET_LABEL[r.reason] ?? r.reason;
+      case EXCHANGE_REASONS.in:
+      case EXCHANGE_REASONS.out:
+      case EXCHANGE_REASONS.fee:
+      case EXCHANGE_REASONS.feeBack:
+      case EXCHANGE_REASONS.burn:
+      case EXCHANGE_REASONS.burnBack:
+      case EXCHANGE_REASONS.mint:
+      case EXCHANGE_REASONS.loss:
+        return EXCHANGE_LABEL[r.reason] ?? r.reason;
       case KARAOKE_REASONS.room:
       case KARAOKE_REASONS.roomRefund:
       case KARAOKE_REASONS.prize:
@@ -796,7 +843,11 @@ export class EconomyService implements Economy {
         return r.delta > c.checkin ? "每日簽到(連續 7 天)" : EARN_LABEL.checkin;
       default:
         return (
-          labelV2(r, c) ?? RETIRED_LABEL[r.reason] ?? EARN_LABEL[r.reason as EarnReason] ?? r.reason
+          labelV2(r, c) ??
+          giftLabel(r) ??
+          RETIRED_LABEL[r.reason] ??
+          EARN_LABEL[r.reason as EarnReason] ??
+          r.reason
         );
     }
   }
@@ -957,8 +1008,8 @@ export class EconomyService implements Economy {
     return sendCoins(this, from, to, amount, key);
   }
 
-  board(limit?: number): Promise<BoardLine[]> {
-    return sponsorBoard(this, limit);
+  board(limit?: number, members?: ReadonlySet<PersonId>): Promise<BoardLine[]> {
+    return sponsorBoard(this, limit, members);
   }
 
   setOnBoard(account: AccountRef, on: boolean): Promise<boolean> {

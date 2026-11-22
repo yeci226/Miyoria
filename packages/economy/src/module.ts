@@ -10,12 +10,15 @@ import {
   type ModuleCardFact,
   type ModuleContext,
 } from "@miyoria/runtime/kernel";
+import { StoreKey } from "@miyoria/store";
 import {
   CardWalletKey,
   Events,
+  ExchangeWalletKey,
   KaraokeWalletKey,
   MarketWalletKey,
   ParticipationKey,
+  PartyOutcomesKey,
   PartyRewardsKey,
   type Principal,
   type ProfileId,
@@ -26,8 +29,13 @@ import { EconomyCommands } from "./commands.js";
 import { EconomyConfigSchema } from "./config.js";
 import { Earnings } from "./earn.js";
 import { EconomyService } from "./economy.js";
+import { EconomyExchangeWallet } from "./exchange-wallet.js";
+import { giftTables } from "./gift-tables.js";
+import { answerGiftCapability } from "./gift-tools.js";
+import { FreeGiftsKey, GiftDesk } from "./gifts.js";
 import { EconomyKaraokeWallet } from "./karaoke-wallet.js";
 import { EconomyMarketWallet } from "./market-wallet.js";
+import { WATCHED_TOPICS } from "./prediction-watch.js";
 import { giveCapability, speakerCapabilities } from "./tools.js";
 import { EconomyKey } from "./types.js";
 import { v2Capabilities } from "./v2-tools.js";
@@ -35,6 +43,8 @@ import { Economy2Key } from "./v2-types.js";
 
 /** How often a finished voice window is paid when nobody speaks to end it. */
 const VOICE_TICK_MS = 30_000;
+/** How often gift quotes and unanswered gifts are settled. */
+const GIFT_TICK_MS = 15_000;
 /** How often danmaku left in the middle are settled and her note is due. */
 const DANMAKU_TICK_MS = 5_000;
 /** The card's action that takes every danmaku line off the overlay. */
@@ -52,7 +62,8 @@ const CLEAR_DANMAKU_ACTION: ModuleCardAction = {
  * `economy.accept_food` / `economy.checkin` / `economy.look` and her own money's tools
  * (`economy.treat`, `buy_self`, `post_bounty`, `award_bounty`,
  * `cancel_bounty`; agency-tools.ts, purse.ts, bounties.ts). Also provides `Participation`
- * (the web page's head-pats) and `PartyRewards` (party games, party.ts). Uses `EconomyDocs` (bets,
+ * (the web page's head-pats), `PartyRewards` (party games, party.ts) and `PartyOutcomes` (how a
+ * game came out, for the predictions that settle by themselves, prediction-watch.ts). Uses `EconomyDocs` (bets,
  * her room) and `LedgerStats` (the health table) when the app provides them, and `CoinLedgerStore`,
  * `RelationshipEffects` (a hair of affinity per gift), `PersonNoteWriter`, `Directives`,
  * `PeopleStore`, `SocialSignals` / `AffectState` (who is blocked), `SelfState` (her hunger),
@@ -110,15 +121,24 @@ export class EconomyModule implements Module {
     };
     ctx.provide(EconomyKey, economy);
     this.#economy = economy;
+    // Gifts named in words (gifts.ts): their own tables, her answer, the sweep below.
+    const store = ctx.services.get(StoreKey);
+    const gifts = new GiftDesk(economy, () => store?.plugin(giftTables) ?? null);
+    ctx.provide(FreeGiftsKey, gifts);
+    off.push(actuators.register(answerGiftCapability(economy, gifts)));
     // Her cards are paid through it (`@miyoria/play/cards`).
     ctx.provide(CardWalletKey, new EconomyCardWallet(economy));
     // The weekly market is paid through it (`@miyoria/play/market`).
     ctx.provide(MarketWalletKey, new EconomyMarketWallet(economy));
+    // The deep-sea exchange is paid through it (`@miyoria/play/exchange`).
+    ctx.provide(ExchangeWalletKey, new EconomyExchangeWallet(economy));
     // Karaoke rooms are paid through it (`@miyoria/play/karaoke`).
     ctx.provide(KaraokeWalletKey, new EconomyKaraokeWallet(economy));
     ctx.provide(ParticipationKey, economy.v2.play);
     ctx.provide(Economy2Key, economy.v2);
     ctx.provide(PartyRewardsKey, economy.v2.party);
+    // How a party game came out settles the predictions bound to it (prediction-watch.ts).
+    ctx.provide(PartyOutcomesKey, economy.v2.prediction.watch);
     if (!economy.docsAreDurable) {
       ctx.log.warn("no store provides EconomyDocs: bets and the room are kept in memory only");
     }
@@ -140,6 +160,11 @@ export class EconomyModule implements Module {
     ctx.spawn("earn", async () => {
       for await (const env of events) await earnings.onEvent(env, ctx.clock.now());
     });
+    // Her game goals settle the predictions bound to them (prediction-watch.ts).
+    const games = ctx.subscribe([...WATCHED_TOPICS]);
+    ctx.spawn("predictions", async () => {
+      for await (const env of games) await economy.v2.prediction.watch.onEvent(env);
+    });
     // Her bounties run out here; her purse note is written once at the start.
     ctx.spawn("agency", async (signal) => {
       await economy.purse.refresh().catch((error: unknown) => {
@@ -155,6 +180,16 @@ export class EconomyModule implements Module {
           await economy.v2.sweep();
         } catch (error) {
           ctx.log.warn({ err: errorMessage(error) }, "the economy 2.0 sweep failed");
+        }
+      }
+    });
+    // Gift quotes that ran out, gifts she did not answer in time, forgotten givers' gifts.
+    ctx.spawn("gifts", async (signal) => {
+      for await (const _ of interval(GIFT_TICK_MS, signal)) {
+        try {
+          await gifts.sweep();
+        } catch (error) {
+          ctx.log.warn({ err: errorMessage(error) }, "the gift sweep failed");
         }
       }
     });

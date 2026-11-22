@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useApi } from "@/app/connection";
 import { Logo } from "@/components/logo";
+import { SITE_NAME } from "@/lib/site-name";
 import { Page } from "@/components/page";
 import { LiveStage } from "./LiveStage";
 import type { SourceFactory } from "./feed";
@@ -26,7 +27,7 @@ export function LivePage({ source }: { source?: SourceFactory | null }) {
     <div className="flex min-h-svh flex-col">
       <header className="glass-dock sticky top-0 z-30 flex min-h-13 items-center gap-2.5 border-b px-4 py-2 sm:px-7">
         <Logo className="size-5 shrink-0 text-primary" />
-        <h1 className="text-[15px] font-semibold">Miyoria</h1>
+        <h1 className="text-[15px] font-semibold">{SITE_NAME}</h1>
         {who && (
           <div className="ml-auto flex min-w-0 items-center gap-2">
             {who.avatar_url && <img src={who.avatar_url} alt="" className="size-6 rounded-full" />}

@@ -16,6 +16,7 @@ import {
 import {
   BountyStoreKey,
   CoinLedgerStoreKey,
+  Economy2Key,
   EconomyCardWallet,
   EconomyConfigSchema,
   EconomyKey,
@@ -80,6 +81,8 @@ import {
   ModerationKey,
   newId,
   type PersonId,
+  type Places,
+  PlacesKey,
   SelfStateKey,
   SocialSignalsKey,
 } from "@miyoria/types";
@@ -94,6 +97,7 @@ import { Monitor } from "../src/monitor.js";
 import { cardVersion } from "../src/og.js";
 import {
   clientKey,
+  DEFAULT_CLIENT_IP_HEADER,
   PUBLIC_DAYS,
   PUBLIC_STATS_KEY,
   PublicConfigSchema,
@@ -372,6 +376,8 @@ async function rig(publicConfig: Record<string, JsonValue> = {}, panelDir = ""):
   s.provide("sing", SingerKey, {
     playing: () => songs.find((e) => e.state === "playing") ?? null,
     singing: () => songs.find((e) => e.state === "playing") ?? null,
+    voiceContext: () => null,
+    waitsElsewhere: () => false,
     list: {
       all: () => {
         counters.songs += 1;
@@ -536,13 +542,22 @@ async function rig(publicConfig: Record<string, JsonValue> = {}, panelDir = ""):
   const base = api.url() ?? "";
 
   const loginResult = async (code: string) => {
-    const start = await fetch(`${base}/api/auth/oauth/login`, { redirect: "manual" });
+    // From a browser on the redirect's host, so the login is not sent over to it first.
+    const start = await fetch(`${base}/api/auth/oauth/login`, {
+      redirect: "manual",
+      headers: { "x-forwarded-host": new URL(REDIRECT).host },
+    });
     await start.arrayBuffer();
     const authorize = new URL(start.headers.get("location") ?? "");
     const url = new URL(`${base}/api/auth/oauth/callback`);
     url.searchParams.append("code", code);
     url.searchParams.append("state", authorize.searchParams.get("state") ?? "");
-    const done = await fetch(url, { redirect: "manual" });
+    // The browser sends back the cookie its login started with.
+    const held = /miyoria_login=([^;]+)/.exec(start.headers.get("set-cookie") ?? "")?.[1] ?? "";
+    const done = await fetch(url, {
+      redirect: "manual",
+      headers: { cookie: `miyoria_login=${held}` },
+    });
     await done.arrayBuffer();
     const set = done.headers.get("set-cookie");
     return {
@@ -694,14 +709,19 @@ describe("the route table", () => {
       "GET /api/auth/oauth/callback",
       "GET /api/auth/oauth/login",
       "GET /api/health",
+      "GET /api/member/files/pass/:token",
       "GET /api/public/board",
       "GET /api/public/card-art/:file",
       "GET /api/public/card/:serial",
       "GET /api/public/cards/odds",
+      "GET /api/public/gifts",
+      "GET /api/public/landing",
+      "GET /api/public/landing/files/:file",
       "GET /api/public/live",
       "GET /api/public/live/video/:file",
       "GET /api/public/songs",
       "GET /api/public/status",
+      "GET /api/public/stream",
       "GET /og/card/:file",
       "GET /og/default.png",
       "POST /api/auth/logout",
@@ -713,7 +733,9 @@ describe("the route table", () => {
         .map(line)
         .sort(),
     ).toEqual([
+      "DELETE /api/member/files/:id",
       "DELETE /api/member/karaoke/rooms/:code/queue/:entry",
+      "GET /api/member/board",
       "GET /api/member/bounties",
       "GET /api/member/card",
       "GET /api/member/card/:serial",
@@ -723,8 +745,23 @@ describe("the route table", () => {
       "GET /api/member/cards/pity",
       "GET /api/member/cards/wishlist",
       "GET /api/member/danmaku",
+      "GET /api/member/exchange",
+      "GET /api/member/exchange/account",
+      "GET /api/member/exchange/boards",
+      "GET /api/member/exchange/candles/:code",
+      "GET /api/member/exchange/list/:kind",
+      "GET /api/member/exchange/map/:kind",
+      "GET /api/member/exchange/portfolio",
+      "GET /api/member/exchange/suggest",
+      "GET /api/member/exchange/ticker/:code",
       "GET /api/member/export",
+      "GET /api/member/files",
       "GET /api/member/fortune",
+      "GET /api/member/gifts",
+      "GET /api/member/gifts/:id/picture",
+      "GET /api/member/github",
+      "GET /api/member/github/callback",
+      "GET /api/member/github/link",
       "GET /api/member/karaoke",
       "GET /api/member/karaoke/edit/:song/backing",
       "GET /api/member/karaoke/files/:session/:name",
@@ -739,17 +776,39 @@ describe("the route table", () => {
       "GET /api/member/market/lottery",
       "GET /api/member/market/tickets",
       "GET /api/member/me",
+      "GET /api/member/predictions",
+      "GET /api/member/quests",
       "GET /api/member/session",
+      "GET /api/member/spaces",
+      "GET /api/member/stream",
       "GET /api/member/wallet",
+      "POST /api/member/bet",
       "POST /api/member/board",
       "POST /api/member/card",
       "POST /api/member/checkin",
       "POST /api/member/danmaku",
+      "POST /api/member/exchange/account",
+      "POST /api/member/exchange/cancel",
+      "POST /api/member/exchange/leverage",
+      "POST /api/member/exchange/lookup",
+      "POST /api/member/exchange/order",
+      "POST /api/member/exchange/quote",
+      "POST /api/member/exchange/visibility",
+      "POST /api/member/exchange/watch",
       "POST /api/member/feed",
+      "POST /api/member/files/:id/download",
+      "POST /api/member/files/:id/keep",
+      "POST /api/member/files/:id/visibility",
       "POST /api/member/forget",
       "POST /api/member/frame",
+      "POST /api/member/gifts/:id/cancel",
+      "POST /api/member/gifts/:id/confirm",
+      "POST /api/member/gifts/quote",
+      "POST /api/member/github/mention",
+      "POST /api/member/github/unlink",
       "POST /api/member/karaoke/rooms",
       "POST /api/member/karaoke/rooms/:code/audio",
+      "POST /api/member/karaoke/rooms/:code/cheer",
       "POST /api/member/karaoke/rooms/:code/clock",
       "POST /api/member/karaoke/rooms/:code/close",
       "POST /api/member/karaoke/rooms/:code/join",
@@ -781,7 +840,10 @@ describe("the route table", () => {
     // and one that is not theirs is not found; a series names one of their own titles; a karaoke
     // song is nobody's, and a karaoke session (and its files) that is not theirs is not found; a
     // room's code names a room, which anyone with the code may join or watch; a queue entry is one
-    // of that room's, which only its adder, the opener or a panel admin may take out or move.
+    // of that room's, which only its adder, the opener or a panel admin may take out or move; an
+    // exchange ticker's code names a stock and a list's kind one of the fixed lists; a gift id
+    // names a gift, and one that is not theirs is refused; a file id names one of the things she
+    // made, and one that was not made for them is not found.
     const named = all.filter(
       (r) =>
         r.member &&
@@ -792,6 +854,12 @@ describe("the route table", () => {
           .replace(/^\/api\/member\/karaoke\/rooms\/:code(\/queue\/:entry)?/, "")
           .replace(/^\/api\/member\/karaoke\/files\/:session\/:name$/, "")
           .replace(/^\/api\/member\/karaoke\/edit\/:song\/backing$/, "")
+          .replace(
+            /^\/api\/member\/exchange\/(ticker\/:code|candles\/:code|list\/:kind|map\/:kind)$/,
+            "",
+          )
+          .replace(/^\/api\/member\/gifts\/:id\/(confirm|cancel|picture)$/, "")
+          .replace(/^\/api\/member\/files\/:id(\/(keep|visibility|download))?$/, "")
           .includes(":"),
     );
     expect(named).toEqual([]);
@@ -1095,14 +1163,78 @@ describe("rate limits", () => {
         env: peer === undefined ? undefined : { incoming: { socket: { remoteAddress: peer } } },
         req: { header: () => header },
       }) as never;
-    expect(clientKey(ctx("127.0.0.1", "203.0.113.7"))).toBe("203.0.113.7");
-    expect(clientKey(ctx("::ffff:127.0.0.1", "203.0.113.7"))).toBe("203.0.113.7");
-    expect(clientKey(ctx("198.51.100.9", "203.0.113.7"))).toBe("198.51.100.9");
-    expect(clientKey(ctx("127.0.0.1", undefined))).toBe("local");
+    const key = (peer: string | undefined, header: string | undefined) =>
+      clientKey(ctx(peer, header), DEFAULT_CLIENT_IP_HEADER);
+    expect(key("127.0.0.1", "203.0.113.7")).toBe("203.0.113.7");
+    expect(key("::ffff:127.0.0.1", "203.0.113.7")).toBe("203.0.113.7");
+    expect(key("198.51.100.9", "203.0.113.7")).toBe("198.51.100.9");
+    expect(key("127.0.0.1", undefined)).toBe("local");
+    // No socket to ask: nobody is known to be this machine, so the header is nobody's word.
+    expect(key(undefined, "203.0.113.7")).toBe("local");
     // One IPv6 client holds a /64.
-    expect(clientKey(ctx("127.0.0.1", "2001:db8:1:2:3:4:5:6"))).toBe(
-      clientKey(ctx("127.0.0.1", "2001:db8:1:2:aaaa:bbbb:cccc:dddd")),
+    expect(key("127.0.0.1", "2001:db8:1:2:3:4:5:6")).toBe(
+      key("127.0.0.1", "2001:db8:1:2:aaaa:bbbb:cccc:dddd"),
     );
+  });
+
+  it("reads the header the proxy on this machine uses (client_ip_header)", () => {
+    const ctx = (peer: string, headers: Record<string, string>) =>
+      ({
+        env: { incoming: { socket: { remoteAddress: peer } } },
+        req: { header: (name: string) => headers[name] },
+      }) as never;
+    const sent = {
+      "cf-connecting-ip": "203.0.113.7",
+      "x-forwarded-for": "198.51.100.1, 203.0.113.9",
+    };
+    // Of a list, the entry the proxy added itself: the first is the visitor's own word.
+    expect(clientKey(ctx("127.0.0.1", sent), "X-Forwarded-For")).toBe("203.0.113.9");
+    expect(clientKey(ctx("::1", sent), "x-forwarded-for")).toBe("203.0.113.9");
+    expect(clientKey(ctx("127.0.0.1", sent), "x-real-ip")).toBe("local");
+    // No header at all: whatever the visitor sends, nothing of it counts.
+    expect(clientKey(ctx("127.0.0.1", sent), "")).toBe("local");
+    // From anywhere but this machine the header is never read, whichever it is.
+    expect(clientKey(ctx("198.51.100.9", sent), "x-forwarded-for")).toBe("198.51.100.9");
+    expect(clientKey(ctx("198.51.100.9", sent), "cf-connecting-ip")).toBe("198.51.100.9");
+  });
+
+  it("every limited route counts visitors by the configured header", async () => {
+    const r = await rig({ client_ip_header: "x-forwarded-for", rate_per_minute: 30 });
+    let sent = 0;
+    const from = (last: string) => ({
+      "x-forwarded-for": `198.51.100.1, ${last}`,
+      // What a visitor sends through a proxy that passes it on: a new one each time, never counted.
+      "cf-connecting-ip": `192.0.2.${++sent % 250}`,
+    });
+    const statuses: number[] = [];
+    for (let i = 0; i < 31; i++) {
+      statuses.push((await r.get("/api/public/status", undefined, from("203.0.113.60"))).status);
+    }
+    expect(statuses.slice(0, 30).every((s) => s === 200)).toBe(true);
+    expect(statuses.at(-1)).toBe(429);
+    expect((await r.get("/api/public/status", undefined, from("203.0.113.61"))).status).toBe(200);
+
+    // Card checks (`card.ts`) and logins (`server.ts`) have limits of their own, by the same key.
+    const check = (last: string) =>
+      r.get("/api/public/card/MYR-0000-0000-0000", undefined, from(last));
+    const checks: number[] = [];
+    for (let i = 0; i < 21; i++) checks.push((await check("203.0.113.70")).status);
+    expect(checks.slice(0, 20).every((s) => s === 404)).toBe(true);
+    expect(checks.at(-1)).toBe(429);
+    expect((await check("203.0.113.71")).status).toBe(404);
+    const logins: number[] = [];
+    for (let i = 0; i < 21; i++) {
+      const res = await raw(r.base, "GET", "/api/auth/oauth/login", {
+        headers: from("203.0.113.80"),
+      });
+      logins.push(res.status);
+    }
+    expect(logins.at(0)).toBe(302);
+    expect(logins.at(-1)).toBe(429);
+    const other = await raw(r.base, "GET", "/api/auth/oauth/login", {
+      headers: from("203.0.113.81"),
+    });
+    expect(other.status).toBe(302);
   });
 
   it("does not grow without bound when addresses keep changing", () => {
@@ -1599,6 +1731,99 @@ describe("song requests from the page", () => {
         requester: discord(ALICE),
       },
     ]);
+  });
+
+  it("go to one server: the member's own, or the one they picked, and say when it waits", async () => {
+    const r = await rig();
+    const space = (id: string, guild: string, primary: boolean) => ({
+      id,
+      platform: "discord",
+      external_id: guild,
+      name: guild,
+      primary,
+    });
+    const spaces = [space("S1", "g1", true), space("S2", "g2", false)];
+    let memberOf = ["S1", "S2"];
+    r.sup.services.provide("core", PlacesKey, {
+      primary: () => spaces[0] ?? null,
+      spaces: () => spaces,
+      space: (id: string) => spaces.find((s) => s.id === id) ?? null,
+      spacesOf: () => spaces.filter((s) => memberOf.includes(s.id)),
+      isMember: (_person: unknown, id: string) => memberOf.includes(id),
+    } as unknown as Places);
+    // She is in voice in g1 only.
+    const voice: ContextKey = { platform: "discord", scope: "g1", channel: "v1", kind: "voice" };
+    r.sup.services.removeOwnedBy("sing");
+    r.sup.services.provide("sing", SingerKey, {
+      playing: () => null,
+      singing: () => null,
+      list: { all: () => [] },
+      voiceContext: (guild: string | null) => (guild === "g1" ? voice : null),
+      waitsElsewhere: (guild: string | null) => guild !== null && guild !== "g1",
+    } as never);
+    const actuators = r.sup.services.require(ActuatorRegistryKey);
+    const invoke = actuators.invoke.bind(actuators);
+    const asked: { guild: unknown; context: unknown }[] = [];
+    actuators.invoke = (request) => {
+      asked.push({
+        guild: (request.args as { guild?: unknown }).guild,
+        context: request.principal.context,
+      });
+      return invoke(request);
+    };
+    const cookie = await r.login("alice");
+
+    const own = await r.post("/api/member/songs", cookie, { query: "song a" });
+    expect(own.status).toBe(200);
+    expect(own.body).toEqual({ accepted: true });
+    const picked = await r.post("/api/member/songs?space=S2", cookie, { query: "song b" });
+    expect(picked.status).toBe(200);
+    expect((picked.body as { waiting: string }).waiting).toContain("別的伺服器");
+    expect(asked).toEqual([
+      { guild: "g1", context: voice },
+      { guild: "g2", context: null },
+    ]);
+    expect((await r.post("/api/member/songs?space=S9", cookie, { query: "c" })).status).toBe(404);
+    memberOf = ["S1"];
+    const stranger = await r.post("/api/member/songs?space=S2", cookie, { query: "d" });
+    expect(stranger.status).toBe(403);
+    expect(asked).toHaveLength(2);
+  });
+
+  it("the public list is one server's: the asked one, else the primary", async () => {
+    const r = await rig();
+    const spaces = [
+      { id: "S1", platform: "discord", external_id: "g1", name: "g1", primary: true },
+      { id: "S2", platform: "discord", external_id: "g2", name: "g2", primary: false },
+    ];
+    r.sup.services.provide("core", PlacesKey, {
+      primary: () => spaces[0] ?? null,
+      spaces: () => spaces,
+      space: (id: string) => spaces.find((s) => s.id === id) ?? null,
+    } as unknown as Places);
+    const at = (guild: string | null) =>
+      guild === null ? null : { platform: "discord", scope: guild, channel: "t", kind: "channel" };
+    const entry = (title: string, guild: string | null, extra: object = {}) =>
+      ({
+        query: title,
+        state: "ready",
+        context: at(guild),
+        song: { id: title, title, artist: "A", duration_s: 1 },
+        ...extra,
+      }) as unknown as SongEntry;
+    r.sup.services.removeOwnedBy("sing");
+    r.sup.services.provide("sing", SingerKey, {
+      playing: () => null,
+      singing: () => null,
+      list: {
+        all: () => [entry("One", "g1"), entry("Two", "g2"), entry("Web", null, { guild: "g2" })],
+      },
+    } as never);
+    const titles = async (path: string) =>
+      ((await r.get(path)).body as { upcoming: { title: string }[] }).upcoming.map((s) => s.title);
+    expect(await titles("/api/public/songs")).toEqual(["One"]);
+    expect(await titles("/api/public/songs?space=S2")).toEqual(["Two", "Web"]);
+    expect((await r.get("/api/public/songs?space=S9")).status).toBe(404);
   });
 
   it("are bound by the capability's rate limit", async () => {
@@ -2703,7 +2928,16 @@ describe("the wallet", () => {
       });
     const balanceOf = async (id: string) =>
       tables.economy.ledger.balance("p", await tables.wallet(discord(id)));
-    return { ...r, coins, economy: tables.economy, hunger, spend, fund, balanceOf };
+    return {
+      ...r,
+      coins,
+      economy: tables.economy,
+      economy2: economy.v2,
+      hunger,
+      spend,
+      fund,
+      balanceOf,
+    };
   }
 
   it("shows their own wallet, field by field", async () => {
@@ -2723,6 +2957,92 @@ describe("the wallet", () => {
     });
   });
 
+  it("shows their own quests, with the one she thought of from what they may read", async () => {
+    const r = await walletRig();
+    r.sup.services.provide("economy", Economy2Key, r.economy2);
+    const asked: string[] = [];
+    r.sup.services.provide("llm", LlmRouterKey, {
+      complete: async (_purpose: string, request: { messages: { content: string }[] }) => {
+        asked.push(request.messages[1]?.content ?? "");
+        return {
+          text: JSON.stringify({ quest: "「跟她說說吉他練得怎樣」" }),
+          finish_reason: "stop",
+          usage: null,
+        };
+      },
+    } as never);
+    const alice = await r.login("alice");
+    const res = await r.get("/api/member/quests", alice);
+    expect(res.status).toBe(200);
+    const body = res.body as { quests: { id: string; label: string; by: string | null }[] };
+    expect(body.quests.map((q) => q.id)).toEqual(["new_topic", "together", "her_pick"]);
+    expect(body.quests[2]).toMatchObject({ label: "跟她說說吉他練得怎樣", by: "her" });
+    // She thought from what the page shows Alice, and nobody else's memories.
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain("想學吉他");
+    expect(asked[0]).not.toContain("SECRET");
+    // The same all day: asked once.
+    await r.get("/api/member/quests", alice);
+    expect(asked).toHaveLength(1);
+    // Someone she does not know, or blocked, has no quests and nobody is asked.
+    for (const who of ["dave", "carol"]) {
+      const other = await r.get("/api/member/quests", await r.login(who));
+      expect(other.status).toBe(200);
+      expect((other.body as { quests: unknown[] }).quests).toEqual([]);
+    }
+    expect(asked).toHaveLength(1);
+  });
+
+  it("shows the predictions with their own stake, takes a stake once per key, never says which operator", async () => {
+    // Taking part pays nothing here: only the stake moves.
+    const r = await walletRig({ prediction_rake: 0, play_rewards: {} });
+    r.sup.services.provide("economy", Economy2Key, r.economy2);
+    const p = await r.economy2.openPrediction({
+      question: "她會唱完嗎",
+      options: ["會", "不會"],
+      minutes: 30,
+    });
+    await r.fund(ALICE, 100);
+    const alice = await r.login("alice");
+    const list = await r.get("/api/member/predictions", alice);
+    expect(list.status).toBe(200);
+    expect((list.body as { predictions: unknown[] }).predictions[0]).toMatchObject({
+      id: p.id,
+      status: "open",
+      settles: { kind: "her", label: "她公布結果" },
+      settled_by: null,
+      my_bet: null,
+    });
+    const body = { prediction: p.id, option: "1", amount: 20 };
+    const first = await r.spend("/api/member/bet", alice, body, "k1");
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual({
+      prediction: p.id,
+      question: "她會唱完嗎",
+      option: "會",
+      amount: 20,
+      balance: 80,
+      duplicate: false,
+    });
+    expect((await r.spend("/api/member/bet", alice, body, "k1")).body).toMatchObject({
+      duplicate: true,
+      balance: 80,
+    });
+    expect((await r.spend("/api/member/bet", alice, body, "k2")).status).toBe(409);
+    expect(await r.balanceOf(ALICE)).toBe(80);
+    const dave = await r.login("dave");
+    expect((await r.spend("/api/member/bet", dave, body, "k3")).status).toBe(403);
+    await r.economy2.resolvePredictionByAdmin(p.id, 1, "owner:999");
+    const after = (await r.get("/api/member/predictions", alice)).body as {
+      predictions: {
+        settled_by: { by: string; who: string | null };
+        my_bet: { outcome: string };
+      }[];
+    };
+    expect(after.predictions[0]?.settled_by).toMatchObject({ by: "admin", who: null });
+    expect(after.predictions[0]?.my_bet.outcome).toBe("won");
+  });
+
   it("shows her bounties to everyone", async () => {
     const r = await walletRig();
     r.sup.services.provide("economy", BountyStoreKey, r.economy.bounties);
@@ -2735,6 +3055,7 @@ describe("the wallet", () => {
       status: "open",
       created_at: new Date(now).toISOString() as never,
       expires_at: new Date(now + 86_400_000).toISOString() as never,
+      space: null,
       closed_at: null,
       winner: null,
     });

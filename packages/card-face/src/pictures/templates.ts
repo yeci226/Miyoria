@@ -50,6 +50,16 @@ import {
   TYPE,
   X0,
 } from "./draw.js";
+import {
+  exchangeBankruptPicture,
+  exchangeMapPicture,
+  exchangeOverviewPicture,
+  exchangePortfolioPicture,
+  exchangeQuotePicture,
+  exchangeReceiptPicture,
+  exchangeRichPicture,
+} from "./exchange.js";
+import { giftPicture } from "./gift.js";
 import { textWidth } from "./measure.js";
 
 /** A template's result: the layout and the summary. */
@@ -542,4 +552,12 @@ export const TEMPLATES: { readonly [K in PictureKind]: Template<PictureDataMap[K
   odds: oddsPicture,
   lottery: lotteryPicture,
   auction: auctionPicture,
+  exchange_quote: exchangeQuotePicture,
+  exchange_portfolio: exchangePortfolioPicture,
+  exchange_overview: exchangeOverviewPicture,
+  exchange_rich: exchangeRichPicture,
+  exchange_receipt: exchangeReceiptPicture,
+  exchange_bankrupt: exchangeBankruptPicture,
+  exchange_map: exchangeMapPicture,
+  gift: giftPicture,
 };

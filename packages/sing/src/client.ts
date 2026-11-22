@@ -342,27 +342,28 @@ export class HttpSingWorker implements SingWorker {
     return this.#job(`/jobs/${encodeURIComponent(id)}`, {}, signal);
   }
 
+  /** A call whose answer is not read: its body is let go, so the connection is free at once. */
+  async #send(path: string, init: RequestInit, signal?: AbortSignal): Promise<void> {
+    const res = await this.#call(path, init, this.#timeoutMs, signal);
+    await res.body?.cancel().catch(() => undefined);
+  }
+
   async cancel(id: string): Promise<void> {
-    await this.#call(`/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }, this.#timeoutMs);
+    await this.#send(`/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   async goExclusive(id: string): Promise<void> {
-    await this.#call(
-      `/jobs/${encodeURIComponent(id)}/exclusive`,
-      { method: "POST" },
-      this.#timeoutMs,
-    );
+    await this.#send(`/jobs/${encodeURIComponent(id)}/exclusive`, { method: "POST" });
   }
 
   async context(context: GpuContext, signal?: AbortSignal): Promise<void> {
-    await this.#call(
+    await this.#send(
       "/gpu/context",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(context),
       },
-      this.#timeoutMs,
       signal,
     );
   }

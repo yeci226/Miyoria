@@ -209,6 +209,32 @@ describe("ledger", () => {
     expect(r.arbiter.ledger().entries[0]).toMatchObject({ outcome: "failed", detail: "OBS 沒開" });
   });
 
+  it("a task that failed after it ran is what did not work, not something on hold, for a while", () => {
+    const r = rig();
+    r.arbiter.record({
+      kind: "task",
+      source: "message",
+      context: HERE,
+      person: null,
+      summary: "送魚幣給一個人",
+      outcome: "failed",
+      detail: "不知道「Lumen」是誰,沒有送出",
+      impulse: null,
+      turn: "t1",
+      task: null,
+    });
+    const limits = r.arbiter.limits(HERE);
+    expect(limits.blocked).toEqual([]);
+    expect(limits.failed).toEqual([
+      expect.objectContaining({
+        capability: "送魚幣給一個人",
+        reason: "不知道「Lumen」是誰,沒有送出",
+      }),
+    ]);
+    r.clock.advance(31 * MIN);
+    expect(r.arbiter.limits(HERE).failed).toBeUndefined();
+  });
+
   it("an announcement nobody answers never raises the streak", async () => {
     const r = rig();
     const d = await r.arbiter.submit(impulse(r.clock, { source: "song", context: HERE }));

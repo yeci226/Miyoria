@@ -59,6 +59,7 @@ import {
   EXHAUSTED_LINE,
   FALLBACK_LINES,
   FOR_ARG,
+  HOUR_CAP_LINE,
   TimeoutError,
   timeout,
 } from "../../agent/src/index.js";
@@ -76,7 +77,7 @@ import {
 } from "./rules.js";
 import type { Spoken } from "./say.js";
 import { ALL_CHECKS, type OutputChecks, type ScreenedLine, StepText } from "./screens.js";
-import { SpendLedger, stepCost } from "./spend.js";
+import { type Capped, SpendLedger, stepCost } from "./spend.js";
 import { modelSummarise } from "./summarise.js";
 import {
   type CallRecord,
@@ -234,6 +235,14 @@ function reportedJob(data: JsonValue): string | null {
     if (typeof value === "number") return String(value);
   }
   return null;
+}
+
+/**
+ * The whole minutes from `now` until a capped session is under its cap again, rounded up and at
+ * least one: never a time already past.
+ */
+export function capMinutes(capped: Pick<Capped, "until">, now: number): number {
+  return Math.max(1, Math.ceil((capped.until - now) / 60_000));
 }
 
 /** Pictures of her tools one step offers the model (the rest are said to be left out). */
@@ -436,6 +445,7 @@ class Run {
     const session = this.#session;
     if (this.#spend.over(session.id, this.#now(), this.#limits)) {
       this.#hit.push("spend");
+      await this.#capNotice(this.#capped());
       return "over_budget";
     }
     const input = {
@@ -530,8 +540,75 @@ class Run {
     if (this.#rounds >= l.rounds) return "rounds";
     if (this.#now() - this.#startedAt >= l.wallMs) return "time";
     if (this.#usage.prompt_tokens + this.#usage.completion_tokens >= l.tokens) return "tokens";
-    if (this.#spend.over(this.#session.id, this.#now(), l)) return "spend";
+    if (this.#spend.over(this.#session.id, this.#now(), l)) {
+      // She is told in the last step; the stretch starts here (the warning, and a later notice).
+      this.#capped();
+      return "spend";
+    }
     return null;
+  }
+
+  /**
+   * The session's hourly cap as the ledger counts it (`null`: not its own cap that stopped the
+   * run, e.g. a sub-agent's day pool). The first refusal of a stretch of a conversation is a
+   * warning for the owner; a sub-agent's job budget (its own `sessionUsdPerHour`) is reported by
+   * its job instead.
+   */
+  #capped(): Capped | null {
+    const now = this.#now();
+    const capped = this.#spend.capped(this.#session.id, now, this.#limits);
+    if (capped?.first === true && this.#profile.speaks) {
+      const usd = capped.spent.basis === "usd";
+      this.#p.log.warn(
+        {
+          turn: this.turn,
+          session: this.#session.id,
+          basis: capped.spent.basis,
+          spent: usd ? capped.spent.usd : capped.spent.tokens,
+          cap: capped.cap,
+          minutes: capMinutes(capped, now),
+        },
+        "a conversation reached its hourly cap: she does not answer here until it is under it",
+      );
+    }
+    return capped;
+  }
+
+  /**
+   * The one fixed line of a capped stretch for someone waiting: when she is back. Said once per
+   * stretch of the session (`SpendLedger.claimNotice`), never for a run nobody waits on, and
+   * without a model call.
+   */
+  async #capNotice(capped: Capped | null): Promise<void> {
+    const owed =
+      this.#profile.speaks &&
+      someoneWaits(this.#wake) &&
+      this.#lines.length === 0 &&
+      !this.#signal.aborted;
+    if (capped === null || !owed) return;
+    const session = this.#session.id;
+    if (!this.#spend.claimNotice(session)) return;
+    const line = HOUR_CAP_LINE(capMinutes(capped, this.#now()));
+    let said = false;
+    try {
+      const out = await this.#deliver(this.#session.context, line, null, "fixed");
+      if (out.ok) {
+        said = true;
+        const entry: EntryInput = {
+          kind: "self",
+          content: line,
+          turn: this.turn,
+          message_id: out.message_id,
+          spoken: this.#profile.name === "voice",
+        };
+        this.#append([entry], new Set(out.later ? [entry] : []));
+      }
+    } catch (error) {
+      if (error instanceof Cancelled || this.#signal.aborted) throw error;
+      this.#p.log.warn({ turn: this.turn, err: errorMessage(error) }, "no cap notice either");
+    } finally {
+      if (!said) this.#spend.releaseNotice(session);
+    }
   }
 
   #request(base: RunMessages, offered: readonly ToolEntry[], limit: LimitName | null): ChatRequest {

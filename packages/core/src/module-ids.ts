@@ -38,6 +38,7 @@ export const MODULE_IDS: readonly string[] = [
   "economy",
   "cards",
   "market",
+  "exchange",
   "karaoke",
   "web",
   "sandbox",
@@ -46,6 +47,7 @@ export const MODULE_IDS: readonly string[] = [
   "live",
   "party",
   "eval",
+  "report",
   "extensions",
   "platform.discord.bot",
   "replay",
@@ -80,7 +82,7 @@ export const REQUIRED_MODULES: readonly string[] = Object.keys(REQUIRED_MODULE_R
  * missing `enabled` key means disabled): high-risk ones, and ones that need a server of their own
  * (`imagegen` needs ComfyUI), and `watch`, which sends pictures of a friend's stream to a vision model.
  */
-export const OPT_IN_MODULES: readonly string[] = ["sandbox", "imagegen", "watch"];
+export const OPT_IN_MODULES: readonly string[] = ["sandbox", "imagegen", "report", "watch"];
 
 /** Whether the config file enables module `id` (`OPT_IN_MODULES` need `enabled = true`). */
 export function moduleEnabled(config: Config, id: string): boolean {

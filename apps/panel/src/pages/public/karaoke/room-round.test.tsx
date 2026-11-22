@@ -99,7 +99,7 @@ interface Refusal {
 
 async function makeCore(core: Any, songSeconds: number) {
   const { play, testing, store: storeTesting, rpc, routes, publicSide, errors, Hono, fs, os, path } = core;
-  const raw = storeTesting.openTestDb({ plugins: [play.karaokeSchema] });
+  const raw = storeTesting.openTestDb({ identity: true, plugins: [play.karaokeSchema] });
   const worker = new testing.FakeKaraokeWorker();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "karaoke-room-round-"));
   const config = play.KaraokeConfigSchema.parse({ comment_channel: "discord:111111:222222", open: true });

@@ -1,0 +1,38 @@
+# routes.toml:Core 可以怎麼連到這台電腦的服務(docs/design/v5-hostd.md §16)。
+# 放在 host.toml 旁邊,名字是 routes.toml。沒有這個檔案就和以前一樣:
+# host.toml 有 [network] advertise 就直接連那個位址,沒有就經控制連線。
+# hostd 啟動時讀一次,改了要 miyoria down 再 miyoria up。
+#
+# Core 會量每一條(延遲、偶爾一小段流量),照工作挑:即時語音只走 tailnet 或 direct,
+# 大檔案挑流量大的,一條失敗就換下一條;控制連線(relay)一直都在,是最後的退路。
+
+# hostd 的閘道:direct 和 tunnel 路徑都經過它,只要開這一個埠。
+# 只轉給這台的 worker,而且要帶那個 worker 自己的 token;Core 的 API 不在它後面。
+# [gateway]
+# bind = "127.0.0.1"                  # 預設。聽 127.0.0.1 以外的位址一定要有下面兩個
+# port = 7890
+# tls_cert = "certs/fullchain.pem"    # PEM,相對於這個檔案的資料夾
+# tls_key = "certs/privkey.pem"
+
+# tailnet:每個服務自己的埠,在 tailnet(或區網)的位址上。
+# host.toml 的 [network] bind 要是這個位址或 0.0.0.0,別台才連得到。
+# [[route]]
+# kind = "tailnet"
+# address = "friend-pc.tail1234.ts.net"   # 沒寫就用 host.toml 的 [network] advertise
+
+# direct:公開的位址加轉發的埠,一定要 https。
+# 你要自己做:路由器把外部的埠轉到這台的閘道埠;一張 Core 信任的憑證
+# (例如 DDNS 的名稱加 Let's Encrypt)。憑證放在閘道([gateway] 的 tls_cert、tls_key,bind = "0.0.0.0"),
+# 或閘道聽 127.0.0.1、前面放 Caddy 之類的 TLS 反向代理。
+# [[route]]
+# kind = "direct"
+# url = "https://friend.example.net:7890"
+
+# tunnel:Cloudflare tunnel 的主機名稱,不用轉發埠。
+# 你要自己做:裝 cloudflared,開一個 tunnel,把一個主機名稱指到 http://127.0.0.1:<閘道的埠>。
+# 每個請求的內容有上限,大檔案會自動分段傳;不給即時語音用。
+# [[route]]
+# kind = "tunnel"
+# url = "https://miyoria-friend.example.com"
+# max_body_mb = 100                     # 預設,Cloudflare 免費方案的上傳上限
+# name = "cf"                           # 每條路徑都可以取名字,面板上看到的就是它

@@ -3,6 +3,7 @@
 // picking one up: the first one gets it, one a day, not twice in a row, free and with a part only
 // a drop gives.
 
+import { placeFields } from "@miyoria/runtime/kernel";
 import { openTestDb, type TestDb } from "@miyoria/store/testing";
 import type { ContextKey } from "@miyoria/types";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +11,7 @@ import {
   CardService,
   CardStore,
   type CardsConfig,
+  CardsConfigSchema,
   cardsConfig,
   cardsSchema,
   DropWatch,
@@ -259,5 +261,51 @@ describe("withDropPart", () => {
     expect(dropped.rarity).toBe("SR");
     const none = SEED_PARTS.filter((p) => !p.drop_only);
     expect(withDropPart(drawn, none, () => 0)).toBe(drawn);
+  });
+});
+
+describe("drop settings per place", () => {
+  it("are a list per server and a switch per channel; the rest is the cluster's", () => {
+    const fields = placeFields(CardsConfigSchema).map((f) => [f.keys.join("."), f.scope]);
+    expect(fields).toEqual(
+      expect.arrayContaining([
+        ["drops", "room"],
+        ["drop_channels", "space"],
+      ]),
+    );
+    expect(fields.map(([key]) => key)).not.toContain("drops_per_person_day");
+  });
+
+  it("drop in a channel its own server lists and turned on, nowhere else", async () => {
+    const OTHER: ContextKey = { platform: "discord", scope: "g2", channel: "c1", kind: "channel" };
+    const OFF_HERE: ContextKey = { ...HERE, channel: "c3" };
+    const posted: ContextKey[] = [];
+    const later: (() => Promise<void>)[] = [];
+    const w = new DropWatch({
+      config: cardsConfig(),
+      // g1 lists c1 and c3 but c3 turned itself off; g2 lists only c9 (its c1 is not in it).
+      at: (context) =>
+        cardsConfig(
+          context.scope === "g1"
+            ? { ...ON, drop_channels: ["c1", "c3"], drops: context.channel !== "c3" }
+            : { ...ON, drop_channels: ["c9"] },
+        ),
+      store,
+      random: () => 0,
+      later: (_ms, run) => later.push(run),
+      post: async (context) => {
+        posted.push(context);
+        return true;
+      },
+      now: () => now,
+    });
+    expect([HERE, OFF_HERE, OTHER].map((c) => w.open(c))).toEqual([true, false, false]);
+    for (const context of [HERE, OFF_HERE, OTHER]) {
+      for (let i = 0; i < 25; i++) {
+        w.heard({ context, who: `discord:u${i % 3}`, at: now - (25 - i) * 1000 });
+      }
+    }
+    for (const run of later.splice(0)) await run();
+    expect(posted).toEqual([HERE]);
   });
 });

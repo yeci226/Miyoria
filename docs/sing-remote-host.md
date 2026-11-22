@@ -130,6 +130,7 @@ pnpm dev logs sing -f    # 看 log,Ctrl+C 離開
 | 再啟動 | `pnpm dev up` |
 | 登入 Windows 時自動啟動 | `pnpm dev host autostart on`(`off` 關掉,`status` 看目前) |
 | 看狀態 / log | `pnpm dev status`、`pnpm dev logs sing -f` |
+| Owen 從面板幫你更新 | **預設就會**:你的電腦加入 Owen 的 Core 之後,他可以從面板把你這份 checkout 更新到 `origin/main` 上的提交(只快轉;你有沒提交的變更就不動;她在唱歌時會等;不下載模型)。不想讓他更新:在 `host.toml` 加 `[update]` 和 `allow_remote = false`,一分鐘內生效。細節見 [OPERATIONS.md](OPERATIONS.md) 的「從面板更新別台電腦」 |
 
 `update` 不會動到 `workers/models/`、`workers/voices/` 和歌曲快取(`data/songs`):這些不在 git 裡。
 
@@ -156,20 +157,48 @@ pnpm dev update
 
 ## 6. Owen 這邊怎麼用
 
-你被核准、服務連線之後,Core 自己找得到你的 sing:Owen 不用寫你的位址。Core 依登記處挑第一個健康的 sing;要讓你的先、他自己的後,在 `miyoria.toml` 寫(名字是你加入時用的名字):
+你被核准、服務連線之後,Core 自己找得到你的 sing:Owen 不用寫你的位址。
+
+**好幾台都有 sing 時,每首歌送到哪台。**翻唱是「一個一個獨立的工作」(`workers/sing/routing.toml` 的 `class = "job"`)。每點一首歌,Core 替每台算「這首做完並傳回 Core 要多久」:前面還有幾首(你的 sing 的 `/health` 會說正在做和排隊的數量,加上 Core 剛送出、你那台還沒回報的)乘上一首在那台平常要多久,加上這首本身,加上把做好的檔案傳回來的時間(Core 量過你那台的傳輸速度)。最快的那台拿到這首。兩首同時點,會分到兩台閒著的電腦。一首在你那台平常要多久、傳得多快,Core 會記住(重啟也不會忘),在面板「電腦」頁看得到,每首歌為什麼送到哪台也看得到。
+
+`[modules.cluster.order]` 還是有用,但只是「偏好」:排後面一位,分數就多 30 秒(`order_step_secs`),所以前面那台排了好幾首時,歌還是會送到後面那台。
 
 ```toml
 [modules.cluster.order]
 sing = ["你的名字", "他自己那台的名字"]
 ```
 
-**連不上時退回 Owen 自己的 worker**:Owen 那台要有在跑的 sing(`miyoria add sing`,平常不佔顯卡)。新點的歌先送到排最前面的,連不上(你的電腦關了、斷線)就送下一個。點歌的請求如果已經連上、只是回應逾時,就不換台(那台可能已經收下,換台會兩張顯卡各做一次),照單一 worker 的方式回報錯誤。一首歌在哪台做,之後查進度、抓音軌和影片都找同一台(檔案在那台);那台連不上超過 `[modules.sing] fallback_retry_secs`(預設 30 秒)還是不回,這首歌就在下一台重做,原本那台回來時會取消留在它那邊的工作。連不上的那台這段時間內不再問,之後會再試。只有「連不上」才換台,worker 有回應的錯誤(例如連結的網域不允許)照常回報。
+**她的語音所在的電腦不接翻唱。**做歌會把 TTS 和 ASR 擠出顯卡(`yields_to = ["tts", "asr"]`),所以 Core 預設不把歌送到正在跑她語音的那台(通常是 Owen 自己那台)。Owen 可以在 `[modules.cluster.routing]` 改 `allow_on_speech_host`:`"never"`(預設)、`"when_idle"`(她不在語音、沒在直播、而且 10 分鐘沒人說話才可以)、`"always"`(可以,但她在語音或直播時排很後面)。
+
+**連不上時換下一台**:新點的歌先送到分數最好的,連不上(你的電腦關了、斷線)就送下一個。點歌的請求如果已經連上、只是回應逾時,就不換台(那台可能已經收下,換台會兩張顯卡各做一次),照單一 worker 的方式回報錯誤。一首歌在哪台做,之後查進度、抓音軌和影片都找同一台(檔案在那台);那台連不上超過 `[modules.sing] fallback_retry_secs`(預設 30 秒)還是不回,這首歌就在下一台重做,原本那台回來時會取消留在它那邊的工作。連不上的那台這段時間內不再問,之後會再試。只有「連不上」才換台,worker 有回應的錯誤(例如連結的網域不允許)照常回報。
 
 **歌詞。**你的 sing worker 自己找歌詞(lrclib、網易雲)。需要問 LLM(猜這是哪首歌)和 ASR 抽查歌詞時,你的 hostd 請 Owen 的 Core 代跑:用的是 Owen 的模型和金鑰,金鑰不會到你的電腦,每次呼叫記在 Owen 的每日預算和呼叫紀錄裡。所以你**不需要**金鑰,也不用另外跑歌詞服務。
 
+## 你的電腦要符合什麼,Core 能對你的電腦做什麼
+
+**要接翻唱工作,你的電腦要「準備好」。**你的 hostd 自己檢查 `workers/sing/routing.toml` 的 `[needs]`:Seed-VC 原始碼和參考聲音要在、顯卡至少 7.5 GB。缺什麼,hostd 回報「沒準備好」和缺的東西,Core 就不送歌來;補上之後下一次回報就好了,不用重啟。
+
+**你的聲音模型要和別台一樣。**hostd 把她的 RVC 模型檔(`workers/models/applio/logs/miyoria-deepseek-48k/` 裡的 `.pth`)、參考聲音和 `SING_VOICE` 這幾個設定算成一個短的雜湊值(檔案大小加上頭尾各 1 MB 的內容,不會整個讀)回報給 Core。和大多數電腦不同的那台不接歌(唱出來聲音會不一樣),面板會寫出來。你把模型放在別的路徑(`SING_RVC_MODEL`)也會算成不同。
+
+**Core 的主人能做的:**送翻唱工作給你的 sing、查進度、抓做好的檔案(全部走你撥出去的那條連線);在面板把你的電腦釘選、排除、加權或「清空」(做完手上的,不接新的);從面板把你的 checkout 更新到他追蹤的提交(見第 5 節,可以關掉)。
+
+**Core 的主人不能做的:**在你的電腦上執行任何指令、讀你的檔案、下載模型、改你的 `host.toml`、拿到你的金鑰以外的東西。你的服務只聽你電腦本機(除非你自己設 `[network] advertise`,或在 `routes.toml` 開了閘道)。
+
+**讓 Core 有更快的路連到你(選用)。**預設所有東西都走你撥出去的那條連線,最慢但一定通。傳大檔案(影片、做好的歌)想快一點,可以在 `host.toml` 旁邊放一個 `routes.toml`,宣告 Core 還能怎麼連到你:`tunnel`(Cloudflare tunnel 的主機名稱,不用轉發埠,最簡單)、`direct`(公開的位址加轉發的埠,要 https 和一張 Core 信任的憑證)、`tailnet`(你在 Owen 的 tailnet 裡時)。Core 會量每一條,挑快的,一條失敗就換下一條,最後還是那條連線。轉發埠、憑證、`cloudflared` 這些要你自己設;例子和每一種要做什麼寫在 repo 根目錄的 [routes.example.toml](../routes.example.toml),細節在 [v5-hostd.md](design/v5-hostd.md) §16。不管哪一條,Core 都要帶你那個服務的 token 才進得去,而且只進得去你的 worker。改了 `routes.toml` 要 `pnpm dev down` 再 `pnpm dev up`;沒有這個檔案就和現在一樣。
+
+**你自己限制你的電腦接什麼**(寫在你的 `host.toml`,Core 改不了):
+
+```toml
+[services.sing]
+accept = false        # sing 照樣在跑,但 Core 不送新工作過來
+concurrency = 1       # 同時最多幾首(不能比描述檔的多)
+```
+
+**先更新,再加這兩行**:比較舊的 hostd 看不懂這兩個設定,會拒絕整個 `host.toml`。舊版的 Core 也看不懂 `accept = false`;要連舊 Core 都不送,改成 `enabled = false`(sing 就不跑),或請 Owen 把 `sing` 從你的核准能力拿掉。完全不想讓他用你的電腦:`pnpm dev down`,或請他 `host remove` 你。
+
 ## 7. 已知限制
 
-1. **歌曲影片**:Core 播歌前會從 worker 的 `/songs/{id}/files/video.mp4` 把影片下載到自己的 `data/songs/<id>/`(也走同一條連線),所以 worker 在別台也能放影片。前提是 Core 和 Stage 在同一台(Stage 讀的是 Core 這台的本機路徑)。
+1. **歌曲影片**:Core 播歌前會從 worker 的 `/songs/{id}/files/video.mp4` 把影片下載到自己的 `data/songs/<id>/`(也走同一條連線),所以 worker 在別台也能放影片。前提是 Core 和 Stage 在同一台(Stage 讀的是 Core 這台的本機路徑)。連線慢時(例如只有不到 1 Mbit/s 的上傳,幾十 MB 的影片唱完都還沒到),在 `[modules.sing]` 設 `video_source = "local"`:Core 自己用 yt-dlp(`ytdlp_path`,轉 mp4 要有 ffmpeg)從歌的連結下載影片,失敗才跟 worker 拿;只有 worker 說有影片的歌才放。
 2. **做歌時不會讓 TTS / ASR 讓出顯卡**:你的電腦上沒有它們,所以她說話和做歌不會互相搶 VRAM(反而更好),但也沒有「她先說一句我去準備歌」的流程;若 Core 端還是有這句提示,Owen 可以把 `[modules.sing] prepare_notice = false`。
 3. 這個 worker 一次只做一首歌(佇列),你那邊 GPU 被別的程式(遊戲)占住時會變慢。
 4. 做歌的細節(GPU 怎麼和別的程式分)見 [workers/README.md](../workers/README.md) 第 9 節。

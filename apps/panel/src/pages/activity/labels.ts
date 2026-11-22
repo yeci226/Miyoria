@@ -150,8 +150,8 @@ export const VERDICT_TONE: Record<ArbiterVerdict, Tone> = {
   expired: "neutral",
 };
 
-/** `repeat` and `nobody` have no label yet: the pages show the reason as the server wrote it. */
-export const REASON_LABEL: Partial<Record<ArbiterReason, string>> = {
+/** Every reason the Arbiter gives, in words (a new reason does not compile without one). */
+export const REASON_LABEL: Record<ArbiterReason, string> = {
   budget: "預算用完",
   rate: "次數上限",
   cooldown: "冷卻中",
@@ -161,6 +161,8 @@ export const REASON_LABEL: Partial<Record<ArbiterReason, string>> = {
   ceiling: "頻道等級限制",
   busy: "正忙著",
   unanswered: "上次沒人回",
+  repeat: "剛說過了",
+  nobody: "沒有人在場",
   superseded: "被更急的取代",
   expired: "過期",
   denied: "閘門拒絕",
@@ -209,6 +211,7 @@ export function outcomeText(o: TurnOutcome): string {
     case "cancelled":
       return `${CANCEL_LABEL[o.cause] ?? o.cause}${o.by ? `(${o.by})` : ""}`;
     case "error":
-      return `出錯:${o.error}`;
+      // The runner's hourly cap of one conversation (`[modules.agent]` `session_usd_per_hour`).
+      return o.error === "over_budget" ? "這個對話這一小時的花費到上限了" : `出錯:${o.error}`;
   }
 }

@@ -4,6 +4,7 @@
 // follow-ups and promises, by the id a close names them by).
 
 import { dataBlock, type PersonId } from "@miyoria/types";
+import { fromElsewhere } from "../../memory/src/places.js";
 import type { TranscriptEntry } from "../../transcript/src/types.js";
 import type { DocumentKind, Provenance } from "./schema.js";
 import { SECTIONS, sectionLabel, sectionOrder } from "./sections.js";
@@ -122,7 +123,10 @@ export function entryLine(
       return `[${entry.seq}] ${name}${who ? `(${who.code})` : ""}: ${cut(text, 400)}`;
     }
     case "tool_result":
-      return text === "" ? null : `[${entry.seq}] (工具結果)${cut(text, 200)}`;
+      // What she read of another place is that place's: never written up here.
+      return text === "" || fromElsewhere(entry.content)
+        ? null
+        : `[${entry.seq}] (工具結果)${cut(text, 200)}`;
     default:
       return null;
   }

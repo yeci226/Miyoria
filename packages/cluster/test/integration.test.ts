@@ -178,9 +178,10 @@ describe("CoreLink against the cluster module", () => {
 
     // The host asks Core.
     expect(await api.guard?.states()).toEqual(["singing"]);
-    expect(await api.client?.call("cluster.resolve", { capability: "asr" })).toEqual({
-      endpoints: [],
-    });
+    // A service the table grants nothing gets no endpoint (nor its token), with Core's code.
+    await expect(
+      api.client?.call("cluster.resolve", { capability: "asr", service: "asr" }),
+    ).rejects.toMatchObject({ code: HOST_ERROR_CODE.NotAllowed });
     await expect(api.client?.call("cluster.nothing", {})).rejects.toBeInstanceOf(HostRpcError);
     expect(states).toEqual(["connecting", "connected"]);
   });

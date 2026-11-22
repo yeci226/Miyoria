@@ -2,6 +2,72 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "@miyoria/contracts/host",
   "$defs": {
+    "HostCheckout": {
+      "type": "object",
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/HostCommit"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "upstream": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "behind": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ahead": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "fetched_at": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "read_at": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "commit",
+        "branch",
+        "upstream",
+        "behind",
+        "ahead",
+        "dirty",
+        "fetched_at",
+        "read_at"
+      ]
+    },
     "HostClusterContext": {
       "type": "object",
       "properties": {
@@ -28,6 +94,10 @@
           }
         }
       }
+    },
+    "HostCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
     },
     "HostConfig": {
       "type": "object",
@@ -104,6 +174,19 @@
           },
           "additionalProperties": false
         },
+        "update": {
+          "default": {
+            "allow_remote": true
+          },
+          "type": "object",
+          "properties": {
+            "allow_remote": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
         "services": {
           "default": {},
           "type": "object",
@@ -160,6 +243,9 @@
             "string",
             "null"
           ]
+        },
+        "direct_only": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -235,6 +321,33 @@
         "headers",
         "body"
       ]
+    },
+    "HostGatewayConfig": {
+      "type": "object",
+      "properties": {
+        "bind": {
+          "default": "127.0.0.1",
+          "type": "string",
+          "minLength": 1
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "tls_cert": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tls_key": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "port"
+      ],
+      "additionalProperties": false
     },
     "HostGpu": {
       "type": "object",
@@ -1493,6 +1606,38 @@
         },
         "arbiter": {
           "$ref": "#/$defs/HostGpuArbiterStatus"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostCheckout"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remote_update": {
+          "$ref": "#/$defs/HostRemoteUpdate"
+        },
+        "upgrade": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostUpgradeJob"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostRoute"
+          }
+        },
+        "route_token": {
+          "type": "string"
         }
       },
       "required": [
@@ -1888,6 +2033,20 @@
         "link"
       ]
     },
+    "HostRemoteUpdate": {
+      "type": "object",
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "allowed"
+      ]
+    },
     "HostReport": {
       "$ref": "#/$defs/HostInfo"
     },
@@ -1972,6 +2131,195 @@
         "on-failure",
         "never"
       ]
+    },
+    "HostRoute": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/HostRouteKind"
+        },
+        "url": {
+          "type": "string"
+        },
+        "max_body_bytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "implicit": {
+          "type": "boolean"
+        },
+        "problem": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ]
+    },
+    "HostRouteDecl": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+        },
+        "kind": {
+          "$ref": "#/$defs/HostRouteKind"
+        },
+        "address": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "max_body_mb": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "HostRouteKind": {
+      "type": "string",
+      "enum": [
+        "tailnet",
+        "direct",
+        "tunnel",
+        "relay"
+      ]
+    },
+    "HostRoutesFile": {
+      "type": "object",
+      "properties": {
+        "gateway": {
+          "$ref": "#/$defs/HostGatewayConfig"
+        },
+        "route": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostRouteDecl"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostRouting": {
+      "type": "object",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/HostRoutingClass"
+        },
+        "latency": {
+          "default": "interactive",
+          "$ref": "#/$defs/HostRoutingLatency"
+        },
+        "concurrency": {
+          "default": 1,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "queue": {
+          "default": false,
+          "type": "boolean"
+        },
+        "needs": {
+          "default": {
+            "files": []
+          },
+          "$ref": "#/$defs/HostRoutingNeeds"
+        },
+        "variant": {
+          "$ref": "#/$defs/HostRoutingVariant"
+        },
+        "yields_to": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "unit_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "result_mb": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "class"
+      ],
+      "additionalProperties": false
+    },
+    "HostRoutingClass": {
+      "type": "string",
+      "enum": [
+        "single",
+        "session",
+        "job"
+      ]
+    },
+    "HostRoutingLatency": {
+      "type": "string",
+      "enum": [
+        "realtime",
+        "interactive",
+        "batch"
+      ]
+    },
+    "HostRoutingNeeds": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "vram_gb": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "HostRoutingVariant": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "env": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "HostRun": {
       "type": "object",
@@ -2121,6 +2469,9 @@
         },
         "launch": {
           "$ref": "#/$defs/HostLaunch"
+        },
+        "routing": {
+          "$ref": "#/$defs/HostRouting"
         }
       },
       "required": [
@@ -2171,6 +2522,14 @@
             "policy"
           ],
           "additionalProperties": false
+        },
+        "accept": {
+          "type": "boolean"
+        },
+        "concurrency": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false
@@ -2407,6 +2766,33 @@
         "services"
       ]
     },
+    "HostServiceLoad": {
+      "type": "object",
+      "properties": {
+        "running": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "queued": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "age_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "outside": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "running",
+        "queued",
+        "age_ms"
+      ]
+    },
     "HostServiceLogLine": {
       "type": "object",
       "properties": {
@@ -2492,6 +2878,65 @@
         "stopped"
       ]
     },
+    "HostServiceRouting": {
+      "type": "object",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/HostRoutingClass"
+        },
+        "latency": {
+          "$ref": "#/$defs/HostRoutingLatency"
+        },
+        "concurrency": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "queue": {
+          "type": "boolean"
+        },
+        "yields_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "variant": {
+          "type": "string"
+        },
+        "accept": {
+          "type": "boolean"
+        },
+        "owner_concurrency": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unit_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "result_mb": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "class",
+        "latency",
+        "concurrency",
+        "queue",
+        "yields_to",
+        "ready",
+        "accept"
+      ]
+    },
     "HostServiceState": {
       "type": "string",
       "enum": [
@@ -2548,6 +2993,15 @@
         "advertised": {
           "type": "string"
         },
+        "reach": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "healthy": {
           "type": "boolean"
         },
@@ -2582,6 +3036,12 @@
             "policy",
             "leased"
           ]
+        },
+        "routing": {
+          "$ref": "#/$defs/HostServiceRouting"
+        },
+        "load": {
+          "$ref": "#/$defs/HostServiceLoad"
         }
       },
       "required": [
@@ -2653,6 +3113,246 @@
       },
       "required": [
         "services"
+      ]
+    },
+    "HostUpgrade": {
+      "type": "object",
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/HostCommit"
+        },
+        "wait_s": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 21600
+        },
+        "by": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "commit"
+      ]
+    },
+    "HostUpgradeCancelResult": {
+      "type": "object",
+      "properties": {
+        "cancelled": {
+          "type": "boolean"
+        },
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostUpgradeJob"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "cancelled",
+        "job"
+      ]
+    },
+    "HostUpgradeJob": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/HostCommit"
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostCommit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "waiting",
+            "running",
+            "done",
+            "failed",
+            "refused",
+            "cancelled"
+          ]
+        },
+        "step": {
+          "$ref": "#/$defs/HostUpgradeStepName"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostUpgradeStep"
+          }
+        },
+        "waiting_for": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "number"
+        },
+        "finished_at": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "commit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostCommit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rolled_back": {
+          "type": "boolean"
+        },
+        "restarted": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "not_restarted": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "reason"
+            ]
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "service": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "reason"
+            ]
+          }
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostUpgradeMissing"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "from",
+        "state",
+        "step",
+        "steps",
+        "started_at"
+      ]
+    },
+    "HostUpgradeMissing": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "model",
+            "manual"
+          ]
+        },
+        "what": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "kind",
+        "what"
+      ]
+    },
+    "HostUpgradeStep": {
+      "type": "object",
+      "properties": {
+        "step": {
+          "$ref": "#/$defs/HostUpgradeStepName"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "running",
+            "done",
+            "failed",
+            "skipped"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "at": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "step",
+        "state",
+        "at"
+      ]
+    },
+    "HostUpgradeStepName": {
+      "type": "string",
+      "enum": [
+        "check",
+        "fetch",
+        "wait",
+        "merge",
+        "install",
+        "sync",
+        "restart",
+        "verify",
+        "rollback"
       ]
     },
     "HostWelcome": {

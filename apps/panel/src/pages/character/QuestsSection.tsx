@@ -25,6 +25,7 @@ export function QuestsSection({ personId }: { personId: string }) {
               <li key={x.id} className="flex items-center gap-3 py-2 text-sm">
                 <Dot tone={x.done ? "success" : "neutral"} className={x.done ? undefined : "[&>span]:bg-transparent [&>span]:ring-[1.5px] [&>span]:ring-inset [&>span]:ring-muted-foreground/70"} />
                 <span className={x.done ? undefined : "text-muted-foreground"}>{x.label}</span>
+                {x.id === "her_pick" && x.by !== null && <span className="text-xs text-muted-foreground">{x.by === "her" ? "她想的" : "沒有她的記憶可想,用一般的"}</span>}
                 <span className="ml-auto text-[13px] text-muted-foreground">{x.done ? "完成" : "還沒"}</span>
               </li>
             ))}

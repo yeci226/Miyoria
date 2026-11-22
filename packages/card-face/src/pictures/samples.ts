@@ -2,9 +2,38 @@
 // (`packages/api/test/pictures.test.ts`). Every name here is made up. `LONG` is the same data
 // with the longest names and the biggest numbers a picture has to hold.
 
-import type { PictureDataMap, PictureKind } from "@miyoria/types";
+import type { ExchangeCandlePoint, PictureDataMap, PictureKind } from "@miyoria/types";
 
-const WEEK = ["2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17"];
+/**
+ * 130 made-up daily candles (prices in cents) ending at 2,045.00, with volume: a slow climb with a
+ * wobble, deterministic (no random numbers), so the sample picture is the same every time.
+ */
+const SAMPLE_CANDLES: ExchangeCandlePoint[] = (() => {
+  const out: ExchangeCandlePoint[] = [];
+  let close = 160_000;
+  for (let i = 0; i < 130; i++) {
+    const open = close;
+    const drift = 330 + Math.round(Math.sin(i / 5) * 2_400 + Math.cos(i / 2.3) * 1_100);
+    close = Math.max(1_000, open + drift);
+    const high = Math.max(open, close) + 600 + ((i * 37) % 900);
+    const low = Math.min(open, close) - 500 - ((i * 53) % 800);
+    const day = new Date(Date.UTC(2026, 4, 25) + Math.floor((i * 7) / 5) * 86_400_000);
+    out.push({
+      o: open,
+      h: high,
+      l: low,
+      c: close,
+      v: 18_000_000 + ((i * 7_919_993) % 30_000_000),
+      label: `${day.getUTCMonth() + 1}/${day.getUTCDate()}`,
+    });
+  }
+  // The last close is the sample's price.
+  const last = out.at(-1) as ExchangeCandlePoint;
+  const shift = 204_500 - last.c;
+  return out.map((k) => ({ ...k, o: k.o + shift, h: k.h + shift, l: k.l + shift, c: k.c + shift }));
+})();
+
+const WEEK =["2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17"];
 
 export const PICTURE_SAMPLES: { readonly [K in PictureKind]: PictureDataMap[K] } = {
   wallet: {
@@ -158,6 +187,128 @@ export const PICTURE_SAMPLES: { readonly [K in PictureKind]: PictureDataMap[K] }
       { amount: 120, name: "珊瑚礁的守門員", at: "2026-11-21T20:31:00.000Z" },
     ],
   },
+  exchange_quote: {
+    small_print: "魚幣是遊戲點數,沒有現金價值,不能用真錢或現實物品買賣、交換。這裡的行情只供遊戲使用,不是投資建議。資料來源:Yahoo Finance,報價可能延遲。",
+    code: "2330.TW",
+    name: "示範半導體",
+    sector: "台股",
+    blurb: "約 2,045 魚幣一股・資料來源:Yahoo Finance",
+    currency: "TWD",
+    price: 204_500,
+    price_label: "現價",
+    ref: 201_000,
+    change: 0.0174,
+    limit: null,
+    timeframe: "daily",
+    candles: SAMPLE_CANDLES,
+    range: "5/25 – 11/23",
+    today: null,
+    news: [],
+    as_of: "2026-11-23 10:05 的報價",
+    coin_line: "約 2,045 魚幣一股",
+    market_line: "台股開盤中・報價約 3 分鐘前",
+    colors: "tw",
+  },
+  exchange_portfolio: {
+    small_print: "魚幣是遊戲點數,沒有現金價值,不能用真錢或現實物品買賣、交換。這裡的行情只供遊戲使用,不是投資建議。資料來源:Yahoo Finance,報價可能延遲。槓桿可能讓你賠光錢包和其他持股。",
+    name: "小魚乾",
+    currency: "魚幣",
+    balance: 812,
+    worth: 1_247,
+    holdings: [
+      { code: "RICE", qty: "1.2250", cost: 98, value: 101 },
+      { code: "0050.TW", qty: "0.0150", cost: 197, value: 190 },
+    ],
+    leveraged: [{ code: "AAPL", margin: 77, equity: 61, ratio: 0.79, price: 34_250, line_price: 23_001 }],
+    as_of: "以最新報價計算",
+    colors: "tw",
+  },
+  exchange_overview: {
+    small_print: "魚幣是遊戲點數,沒有現金價值,不能用真錢或現實物品買賣、交換。這裡的行情只供遊戲使用,不是投資建議。資料來源:Yahoo Finance,報價可能延遲。",
+    local: [
+      { code: "RICE", name: "白飯食品", price: 10_120, change: 0.012, series: [10_000, 10_040, 9_980, 10_060, 10_120] },
+      { code: "WHLE", name: "鯨落唱片", price: 10_610, change: -0.018, series: [10_800, 10_760, 10_700, 10_650, 10_610] },
+      { code: "NAPS", name: "打盹床業", price: 8_830, change: 0.002, series: [8_800, 8_810, 8_790, 8_820, 8_830] },
+      { code: "CUBE", name: "方塊礦業", price: 11_900, change: 0.031, series: [11_540, 11_600, 11_700, 11_820, 11_900] },
+      { code: "DPSK", name: "DipSick AI", price: 9_120, change: -0.045, series: [9_550, 9_400, 9_300, 9_200, 9_120] },
+    ],
+    popular: [
+      { code: "RICE", name: "白飯食品", holders: 12, change: 0.012 },
+      { code: "2330.TW", name: "示範半導體", holders: 7, change: 0.0174 },
+      { code: "AAPL", name: "示範科技", holders: 3, change: null },
+    ],
+    markets: [
+      { label: "台股", open: true, hours: "09:00–13:30" },
+      { label: "美股", open: false, hours: "09:30–16:00" },
+      { label: "獨家", open: true, hours: "12:00–23:00" },
+    ],
+    as_of: "2026-11-23 10:05",
+    colors: "tw",
+  },
+  exchange_rich: {
+    small_print: "魚幣是遊戲點數,沒有現金價值,不能用真錢或現實物品買賣、交換。這裡的行情只供遊戲使用,不是投資建議。資料來源:Yahoo Finance,報價可能延遲。",
+    currency: "魚幣",
+    week_start: null,
+    rows: [
+      { rank: 1, name: "海帶芽", value: 3_420, extra: "NAPS RICE" },
+      { rank: 2, name: "小魚乾", value: 1_247, extra: null },
+      { rank: 3, name: "珊瑚礁的守門員", value: 980, extra: null },
+    ],
+    me: { rank: 2, hidden: false },
+  },
+  exchange_receipt: {
+    small_print: "魚幣是遊戲點數,沒有現金價值,不能用真錢或現實物品買賣、交換。這裡的行情只供遊戲使用,不是投資建議。資料來源:Yahoo Finance,報價可能延遲。",
+    name: "小魚乾",
+    side: "buy",
+    code: "2330.TW",
+    ticker: "示範半導體",
+    shares: "0.0490",
+    price: "TWD 2,045.00",
+    coins: 101,
+    fee: 1,
+    currency: "魚幣",
+    leverage: 1,
+    at: "2026-11-23 10:06",
+  },
+  exchange_bankrupt: {
+    small_print: "魚幣是遊戲點數,沒有現金價值,不能用真錢或現實物品買賣、交換。這裡的行情只供遊戲使用,不是投資建議。槓桿可能讓你賠光錢包和其他持股。",
+    name: "小魚乾",
+    currency: "魚幣",
+    written_off: 37,
+    since: "2026-11-23",
+    until: "2026-11-30",
+  },
+  exchange_map: {
+    small_print: "魚幣是遊戲點數,沒有現金價值,不能用真錢或現實物品買賣、交換。這裡的行情只供遊戲使用,不是投資建議。資料來源:Yahoo Finance,報價可能延遲。",
+    title: "熱門台股圖",
+    tiles: [
+      { code: "2330.TW", name: "示範半導體", sector: "半導體", weight: 300, change: 0.0174 },
+      { code: "2454.TW", name: "示範晶片", sector: "半導體", weight: 23, change: -0.012 },
+      { code: "2303.TW", name: "示範晶圓", sector: "半導體", weight: 6, change: 0.004 },
+      { code: "2317.TW", name: "示範代工", sector: "科技", weight: 30, change: -0.021 },
+      { code: "2308.TW", name: "示範電子", sector: "科技", weight: 20, change: 0.035 },
+      { code: "2382.TW", name: "示範電腦", sector: "科技", weight: 11, change: 0 },
+      { code: "2881.TW", name: "示範金控", sector: "金融", weight: 12, change: 0.006 },
+      { code: "2882.TW", name: "示範保險", sector: "金融", weight: 10, change: -0.003 },
+      { code: "2891.TW", name: "示範銀行", sector: "金融", weight: 9, change: null },
+      { code: "2412.TW", name: "示範電信", sector: "電信", weight: 10, change: 0.001 },
+      { code: "0050.TW", name: "示範五十", sector: "ETF", weight: 6, change: 0.011 },
+      { code: "0056.TW", name: "示範高股息", sector: "ETF", weight: 4, change: -0.008 },
+      { code: "1301.TW", name: "示範塑膠", sector: "原物料", weight: 3, change: -0.031 },
+    ],
+    footnote: "格子大小為預設權重,非即時市值;單一格最多占整張圖的 35%,超過的縮到這個大小",
+    max_share: 0.35,
+    as_of: "2026-11-23 10:05",
+    colors: "tw",
+  },
+  gift: {
+    name: "小魚乾",
+    item: "一杯珍奶",
+    kind: "喝的",
+    line: "珍珠好多!你怎麼知道我今天想喝甜的,下次換我請你",
+    date: "2026-11-21",
+    favourite: true,
+  },
 };
 
 const LONG_NAME = "超級無敵長的名字的小魚乾是我 The Longest Display Name";
@@ -260,5 +411,61 @@ export const LONG_SAMPLES: { readonly [K in PictureKind]: PictureDataMap[K] } = 
     bids: 12_345,
     bidders: 999,
     mine: { amount: 99_999_999, leading: true },
+  },
+  exchange_quote: {
+    ...PICTURE_SAMPLES.exchange_quote,
+    name: LONG_NAME,
+    price: 99_999_999,
+    price_label: "收盤價(11/20)・休市中",
+    change: -0.1,
+    limit: "down",
+    blurb: "一段很長的介紹。".repeat(20),
+    coin_line: "約 999,999,999 魚幣一股".repeat(3),
+    market_line: "美股休市・報價約 999 分鐘前".repeat(3),
+    timeframe: "intraday",
+    candles: SAMPLE_CANDLES.slice(0, 1).map((k) => ({ ...k, h: 99_999_999_999, v: 999_999_999_999 })),
+    today: "昨天她被餵了 999 次,比平常多 → 今天開盤 +3.0%".repeat(4),
+    colors: "us",
+  },
+  exchange_portfolio: {
+    ...PICTURE_SAMPLES.exchange_portfolio,
+    name: LONG_NAME,
+    balance: 987_654_321,
+    worth: 999_999_999,
+    holdings: [...PICTURE_SAMPLES.exchange_portfolio.holdings, { code: "WHLE", qty: "123456.7890", cost: 99_999, value: 1 }],
+    leveraged: [{ code: "NVDA", margin: 150, equity: 0, ratio: -0.2, price: 1, line_price: 99_999_999 }],
+    colors: "us",
+  },
+  exchange_overview: {
+    ...PICTURE_SAMPLES.exchange_overview,
+    local: PICTURE_SAMPLES.exchange_overview.local.map((l) => ({ ...l, name: LONG_NAME, price: 99_999_999, series: [] })),
+    popular: Array.from({ length: 12 }, (_, i) => ({ code: `LONG${i}.TWO`, name: LONG_NAME, holders: 99_999, change: -0.0999 })),
+  },
+  exchange_rich: {
+    ...PICTURE_SAMPLES.exchange_rich,
+    rows: Array.from({ length: 20 }, (_, i) => ({ rank: i + 1, name: i === 0 ? LONG_NAME : `第 ${i + 1} 名`, value: 999_999_999 - i, extra: "2330.TW 0050.TW AAPL NVDA RICE WHLE CUBE NAPS" })),
+    me: { rank: null, hidden: true },
+  },
+  exchange_receipt: { ...PICTURE_SAMPLES.exchange_receipt, name: LONG_NAME, ticker: LONG_NAME, coins: 999_999_999, side: "sell", leverage: 2 },
+  exchange_bankrupt: { ...PICTURE_SAMPLES.exchange_bankrupt, name: LONG_NAME, written_off: 999_999_999 },
+  exchange_map: {
+    ...PICTURE_SAMPLES.exchange_map,
+    title: LONG_NAME,
+    tiles: Array.from({ length: 50 }, (_, i) => ({
+      code: `LONG${i}.TWO`,
+      name: LONG_NAME,
+      sector: i % 7 === 0 ? "一個名字很長的產業類別" : `類別${i % 5}`,
+      weight: 1 + ((i * 37) % 97),
+      change: ((i % 11) - 5) / 40,
+    })),
+    footnote: "很長的說明。".repeat(30),
+    colors: "us",
+  },
+  gift: {
+    ...PICTURE_SAMPLES.gift,
+    name: LONG_NAME,
+    item: "一把會自己彈奏月光奏鳴曲的透明電吉他和一整箱備用的弦",
+    line: "一段很長很長的話。".repeat(12),
+    kind: "",
   },
 };

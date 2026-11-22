@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KaraokeOverview, KaraokeSongView, MemberSession } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { Logo } from "@/components/logo";
+import { SITE_NAME } from "@/lib/site-name";
 import { Page } from "@/components/page";
 import { EmptyLine, ErrorLine, SkeletonRows } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
@@ -47,7 +48,7 @@ function Header({ member, home }: { member: MemberSession | null; home: string }
   return (
     <header className="glass-dock sticky top-0 z-30 flex min-h-13 items-center gap-2.5 border-b px-4 py-2 sm:px-7">
       <Logo className="size-5 shrink-0 text-primary" />
-      <p className="text-[15px] font-semibold">Miyoria</p>
+      <p className="text-[15px] font-semibold">{SITE_NAME}</p>
       <span aria-hidden className="text-muted-foreground">
         /
       </span>

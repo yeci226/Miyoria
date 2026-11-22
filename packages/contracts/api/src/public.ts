@@ -4,6 +4,7 @@
 import { z } from "zod";
 import { IssuedCardSchema } from "./member.js";
 import { route } from "./route.js";
+import { SpaceQuery } from "./shared.js";
 
 /** What she is doing, as the public page says it. `offline`: the modules that know are stopped. */
 export const PublicStateSchema = z
@@ -96,6 +97,8 @@ export const publicView = {
   songs: route
     .meta({ audience: "public", permission: null })
     .route({ method: "GET", path: "/api/public/songs" })
+    // `?space=`: that server's songs (`404` for one she is not in); without it, the primary's.
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(PublicSongsSchema),
   /** The sponsor board. Same cache and limits as the status. */
   board: route

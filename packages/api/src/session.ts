@@ -26,6 +26,12 @@ const log = getLogger("api.session");
 /** Name of the session cookie. */
 export const COOKIE = "miyoria_session";
 /**
+ * Name of the cookie that ties a Discord login to the browser that started it: the callback is
+ * only taken from a browser that holds it, so a callback link made in someone else's login logs
+ * nobody in.
+ */
+export const LOGIN_COOKIE = "miyoria_login";
+/**
  * Header cookie-authenticated changes must carry (value `1`). A cross-site form or link cannot
  * set it, which makes it a CSRF guard.
  */
@@ -343,12 +349,17 @@ export function cookieHeader(start: string, secure: boolean): string {
 
 /** The session cookie's value, if the request has one. Every `Cookie` header is searched. */
 export function cookieToken(cookieHeaders: readonly string[]): string | null {
+  return cookieValue(cookieHeaders, COOKIE);
+}
+
+/** The value of the cookie `name`, if the request has one. Every `Cookie` header is searched. */
+export function cookieValue(cookieHeaders: readonly string[], name: string): string | null {
   for (const header of cookieHeaders) {
     for (const pair of header.split(";")) {
       const trimmed = pair.trim();
       const eq = trimmed.indexOf("=");
       if (eq < 0) continue;
-      if (trimmed.slice(0, eq) !== COOKIE) continue;
+      if (trimmed.slice(0, eq) !== name) continue;
       const value = trimmed.slice(eq + 1).trim();
       return value === "" ? null : value;
     }

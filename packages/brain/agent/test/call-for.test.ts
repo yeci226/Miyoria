@@ -50,6 +50,18 @@ describe("callFor", () => {
     expect(out).toEqual({ ok: true, message: eel });
   });
 
+  it("takes the handle and her call name when it knows them, and refuses part of a name", () => {
+    const names = (a: { id: string }) =>
+      a.id === eel.author.account.id ? { handle: "鰻魚", call: "小鰻" } : null;
+    for (const pick of ["鰻魚", "小鰻", "阿鰻"]) {
+      const out = callFor(focus, targets, pick, true, asks, latest, names);
+      expect(out, pick).toEqual({ ok: true, message: eel });
+    }
+    const part = callFor(focus, targets, "ミルク", true, asks, latest, names);
+    expect(part.ok).toBe(false);
+    if (!part.ok) expect(part.error).toContain("[1] 鰻魚(阿鰻)");
+  });
+
   it("with one person, or a tool that acts for nobody, it is as before", () => {
     const one = callFor([eel], targets.slice(0, 1), undefined, true, asks, () => eel);
     expect(one).toEqual({ ok: true, message: eel });

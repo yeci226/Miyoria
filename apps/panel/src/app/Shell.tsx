@@ -1,14 +1,16 @@
 import { Link, Outlet, useRouter, useRouterState } from "@tanstack/react-router";
-import { IdCard, LogOut, Search } from "lucide-react";
+import { IdCard, LogOut, Search, Server } from "lucide-react";
 import { useEffect, useState } from "react";
 import { CommandPalette } from "@/app/CommandPalette";
 import { EmergencyStop, HER_NAME, useHerNow } from "@/components/live-state";
 import { Logo } from "@/components/logo";
+import { SITE_NAME } from "@/lib/site-name";
 import { HeaderSlotContext } from "@/components/page";
 import { Dot, type Tone } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/misc";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Sidebar,
   SidebarContent,
@@ -29,8 +31,9 @@ import { AppearancePopover } from "./AppearancePopover";
 import { useConnection } from "./connection";
 import { useEvents } from "./events-store";
 import { groupFor, isActive, NAV, NAV_GROUPS, titleFor } from "./nav";
-import { useHealth, useMind, useStage, useWorld } from "./queries";
+import { useHealth, useMind, useRunningProfile, useStage, useWorld } from "./queries";
 import { READ_ONLY_HINT, useSession } from "./session";
+import { useAdminSpace } from "./space";
 
 const MOD_KEY = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘" : "Ctrl";
 
@@ -172,6 +175,30 @@ function NavHint({ to }: { to: string }) {
   return null;
 }
 
+/**
+ * Which server the admin pages are about (`?space=`, `useAdminSpace`). Nothing at all while she is in
+ * one server or none, so a single-server panel looks as it always did.
+ */
+function SpaceSwitcher() {
+  const { space, spaces, multiple, setSpace } = useAdminSpace();
+  if (!multiple) return null;
+  return (
+    <Select value={space ?? undefined} onValueChange={setSpace}>
+      <SelectTrigger aria-label="伺服器" size="sm" className="w-auto max-w-48 shrink-0 gap-1.5">
+        <Server className="size-3.5 text-muted-foreground" aria-hidden />
+        <SelectValue placeholder="選一個伺服器" />
+      </SelectTrigger>
+      <SelectContent align="end">
+        {spaces.map((s) => (
+          <SelectItem key={s.id} value={s.id}>
+            {s.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 /** Shown in the header on every page while her autonomy is stopped. */
 function PausedPill() {
   const mind = useMind();
@@ -189,23 +216,33 @@ function PausedPill() {
 }
 
 /** Her name and what she is doing, at the top of the sidebar. */
+/** The profile line under her name: which one runs, and whether its data is its own. */
+function profileText(p: { id?: unknown; own?: unknown } | undefined): string | null {
+  if (typeof p?.id !== "string" || p.id === "") return null;
+  return `profile ${p.id} · ${p.own === true ? "自己的資料" : "安裝資料夾的資料"}`;
+}
+
 function HerCard() {
   const now = useHerNow();
+  const running = useRunningProfile().data;
+  const name = (typeof running?.persona === "string" && running.persona) || HER_NAME;
+  const profile = profileText(running);
   return (
     <Link
       to="/"
-      aria-label={`${HER_NAME}:${now.label}${now.detail ? ` ${now.detail}` : ""}`}
+      aria-label={`${name}:${now.label}${now.detail ? ` ${now.detail}` : ""}${profile ? `,${profile}` : ""}`}
       className="mx-2.5 flex items-center gap-2.5 rounded-lg bg-control p-2 outline-none transition-colors hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:mx-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:p-1"
     >
       <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-[13px] font-semibold text-primary-foreground [text-shadow:none]">
-        {HER_NAME.slice(0, 1)}
+        {name.slice(0, 1)}
       </span>
       <span className="grid min-w-0 group-data-[collapsible=icon]:hidden">
-        <span className="truncate text-[13px] leading-tight font-medium">{HER_NAME}</span>
+        <span className="truncate text-[13px] leading-tight font-medium">{name}</span>
         <span className="flex min-w-0 items-center gap-1.5 text-xs leading-tight text-sidebar-foreground">
           <Dot tone={now.tone} className="size-1.5 [&>span]:size-1.5" />
           <span className="truncate">{now.label}</span>
         </span>
+        {profile && <span className="truncate text-[11px] leading-tight text-muted-foreground">{profile}</span>}
       </span>
     </Link>
   );
@@ -235,7 +272,7 @@ function AppSidebar({ pathname, onSearch }: { pathname: string; onSearch: () => 
         <div className="flex h-11 items-center gap-1 pr-2">
           <Link to="/" className="mr-auto flex h-full items-center gap-2 px-4 text-sm font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sidebar-ring">
             <Logo className="size-4 shrink-0 text-primary" />
-            Miyoria
+            {SITE_NAME}
           </Link>
           <ConnectionDot />
           <SessionFooter />
@@ -263,7 +300,7 @@ function AppSidebar({ pathname, onSearch }: { pathname: string; onSearch: () => 
           className="flex h-15 items-center gap-2.5 px-[18px] text-sm font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
         >
           <Logo className="size-[18px] shrink-0 text-primary" />
-          <span className="truncate group-data-[collapsible=icon]:hidden">Miyoria</span>
+          <span className="truncate group-data-[collapsible=icon]:hidden">{SITE_NAME}</span>
         </Link>
         <HerCard />
         <SearchButton onOpen={onSearch} />
@@ -331,6 +368,7 @@ function AppHeader({ pathname, onSearch, onSlot }: { pathname: string; onSearch:
       <PausedPill />
       <div ref={onSlot} className="order-last flex w-full min-w-0 flex-wrap items-center gap-2 empty:hidden md:order-none md:w-auto md:flex-nowrap" />
       <span className="flex-1" />
+      <SpaceSwitcher />
       <Button variant="outline" size="icon" className="md:hidden" aria-label="搜尋" onClick={onSearch}>
         <Search />
       </Button>
@@ -346,7 +384,7 @@ export function Shell() {
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
-    document.title = `${titleFor(pathname)} · Miyoria`;
+    document.title = `${titleFor(pathname)} · ${SITE_NAME}`;
   }, [pathname]);
 
   useEffect(() => {

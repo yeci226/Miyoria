@@ -62,9 +62,13 @@ import { directivesRpc } from "./directives.js";
 import { economyRpc, personQuestsRpc } from "./economy.js";
 import { ApiError, NO_SUCH_ENDPOINT } from "./errors.js";
 import { evalRpc } from "./eval/route.js";
+import { exchangeAdminRpc, exchangeRpc } from "./exchange-routes.js";
 import { jsonRequest } from "./extract.js";
 import { factsRpc } from "./facts.js";
+import { filesAdminRpc, memberFilesRpc } from "./files/routes.js";
 import { fortuneRpc } from "./fortune-routes.js";
+import { giftsAdminRpc, giftsPublicRpc, giftsRpc } from "./gift-routes.js";
+import { githubLinkRpc } from "./github-link.js";
 import { selfRpc, worldRpc } from "./inner.js";
 import { karaokeAdminRpc, karaokeRefusals, karaokeRoomsRpc, karaokeRpc } from "./karaoke-routes.js";
 import { digestRpc, knowledgeRpc, reflectionRpc } from "./learning.js";
@@ -83,11 +87,15 @@ import { opsRpc } from "./ops.js";
 import { partyRpc } from "./party.js";
 import { peopleRpc } from "./people.js";
 import { personWalletRpc } from "./people-wallet.js";
+import { memberSpacesRpc, placesSpacesRpc } from "./places-routes.js";
 import { planRpc } from "./plan.js";
+import { walletPlayRpc } from "./play-routes.js";
 import { outcomesRpc, promptsRpc } from "./prompts.js";
 import { limitMember, publicRpc } from "./public.js";
+import { pushRpc } from "./push/routes.js";
+import { reportsRpc } from "./reports.js";
 import { roleRpc } from "./roles.js";
-import type { Method, Route } from "./route.js";
+import type { Method, Route, RouteGroup } from "./route.js";
 import { sandboxRpc } from "./sandbox.js";
 import { placesRpc, settingsRpc } from "./settings.js";
 import type { ApiContext, ApiState } from "./state.js";
@@ -120,22 +128,32 @@ export const router = os.router({
   workspace: workspaceRpc,
   skills: skillsRpc,
   public: { ...publicRpc, ...boardRpc, ...cardCheckRpc },
-  member: { ...memberRpc, ...livePatRpc },
+  push: pushRpc,
+  member: { ...memberRpc, ...livePatRpc, ...memberSpacesRpc },
   cards: cardsRpc,
   cardsAdmin: cardsAdminRpc,
-  wallet: walletRpc,
+  wallet: { ...walletRpc, ...walletPlayRpc },
   agency: agencyRpc,
   fortune: fortuneRpc,
   market: marketRpc,
   marketAdmin: marketAdminRpc,
+  exchange: exchangeRpc,
+  exchangeAdmin: exchangeAdminRpc,
+  gifts: giftsRpc,
+  giftsAdmin: giftsAdminRpc,
+  giftsPublic: giftsPublicRpc,
   karaoke: karaokeRpc,
   karaokeAdmin: karaokeAdminRpc,
   karaokeRooms: karaokeRoomsRpc,
+  reports: reportsRpc,
+  githubLink: githubLinkRpc,
+  memberFiles: memberFilesRpc,
+  filesAdmin: filesAdminRpc,
   people: { ...peopleRpc, ...personWalletRpc, ...personQuestsRpc },
   ...coreRpc,
   // The settings routes before `POST /api/modules/{id}/{action}` (see the contract).
   modules: { list: coreRpc.modules.list, ...settingsRpc, action: coreRpc.modules.action },
-  places: placesRpc,
+  places: { ...placesRpc, ...placesSpacesRpc },
   events: eventsRpc,
   llm: { ...coreRpc.llm, ...llmCallsRpc },
   economy: economyRpc,
@@ -170,15 +188,33 @@ export function defaultResponseCheck(env: NodeJS.ProcessEnv = process.env): Resp
 /** The groups of the public side (`[modules.api.public]`): the public views and the member pages (the cards, the wallet, fortune, the market, karaoke and its rooms are member pages too). */
 const PUBLIC_SIDE = new Set([
   "public",
+  "push",
   "member",
   "cards",
   "wallet",
   "agency",
   "fortune",
   "market",
+  "exchange",
+  "gifts",
+  "giftsPublic",
   "karaoke",
   "karaokeRooms",
+  "githubLink",
+  "memberFiles",
 ]);
+
+/**
+ * Routes of the `host` group (a machine joining the cluster): served with the admin routes on
+ * `bind` (this machine or the tailnet), never on the public listener, although they need no session.
+ */
+const HOST_ROUTES = new Set(["cluster.join"]);
+
+/** The route group of the table's route at `path` with `meta`. */
+function tableGroup(path: readonly string[], meta: RouteMeta): RouteGroup {
+  if (HOST_ROUTES.has(path.join("."))) return "host";
+  return meta.audience === "admin" ? "admin" : "public";
+}
 
 /** Whether a route is served at all: the public side's routes go away with its switch. */
 function served(state: ApiState, path: readonly string[]): boolean {
@@ -354,8 +390,15 @@ async function serve(handler: Handler, state: ApiState, c: ApiContext, body: boo
   return new Response(response.body, { status, headers: response.headers });
 }
 
-/** What an event stream route answers with besides its body. */
-const STREAM_HEADERS = { "content-type": "text/event-stream", "cache-control": "no-cache" };
+/**
+ * What an event stream route answers with besides its body: never cached, and never buffered by a
+ * proxy on the way (nginx and the like hold a response back unless told not to).
+ */
+const STREAM_HEADERS = {
+  "content-type": "text/event-stream",
+  "cache-control": "no-cache",
+  "x-accel-buffering": "no",
+};
 
 /** The `{name}` of an OpenAPI path as Hono's `:name`. */
 const honoPath = (path: string) => path.replace(/\{([^}]+)\}/g, ":$1");
@@ -394,6 +437,7 @@ export function tableRoutes(state: ApiState, table: AnyRouter, options: RpcOptio
       path: honoPath(def.route.path ?? ""),
       public: meta.audience === "public",
       member: meta.audience === "member",
+      group: tableGroup(path, meta),
       handler: async (c) => {
         if (refused !== null) {
           try {
@@ -415,6 +459,7 @@ export function tableRoutes(state: ApiState, table: AnyRouter, options: RpcOptio
         }
         const response = await serve(handler, state, c, body);
         response.headers.set("cache-control", STREAM_HEADERS["cache-control"]);
+        response.headers.set("x-accel-buffering", STREAM_HEADERS["x-accel-buffering"]);
         return response;
       },
     });

@@ -34,6 +34,11 @@ export interface Said {
   text: string;
   /** To her: a mention, a reply to her, her name, or a DM. */
   addressed: boolean;
+  /**
+   * The message it replies to, when it is a reply: one of hers (`self`) and its text as the
+   * platform quoted it (`null`: not quoted). Unset: not a reply, or not known.
+   */
+  reply?: { self: boolean; text: string | null };
 }
 
 /** A line of hers that reached someone. */
@@ -43,6 +48,8 @@ export interface Her {
   context: ContextKey;
   said: string;
   audience: Handle[];
+  /** Whom it was said to (`Delivery.to`); unset: an older line, not known. */
+  to?: Handle[];
 }
 
 /** Something she did or that happened to her. */
@@ -75,14 +82,24 @@ function obj(v: JsonValue | undefined): JsonObject | null {
 }
 
 /** The text and name of what was said, from the bus event behind the observation. */
-function spoken(body: JsonObject, summary: string): { name: string; text: string } {
+function spoken(
+  body: JsonObject,
+  summary: string,
+): { name: string; text: string; reply?: Said["reply"] } {
   const event = obj(obj(body.origin)?.event);
   const data = obj(event?.data);
   if (data !== null) {
     const text = str(data.text);
     const who = obj(data.author) ?? obj(data.speaker);
     const name = str(who?.display_name);
-    if (text !== null && name !== null) return { name, text };
+    if (text !== null && name !== null) {
+      // A reply: to one of her messages or someone else's, and what it quotes.
+      const replied = obj(data.reply_to) !== null || data.reply_to_self === true;
+      const quoted = str(obj(data.referenced)?.text);
+      return replied
+        ? { name, text, reply: { self: data.reply_to_self === true, text: quoted } }
+        : { name, text };
+    }
   }
   // `name:text`, the input defence's note on the next line.
   const first = summary.split("\n")[0] ?? "";
@@ -158,7 +175,17 @@ export function parseWindow(events: readonly LogEvent[], from: number): Window {
       const audience = Array.isArray(body.audience)
         ? body.audience.filter((h): h is string => typeof h === "string")
         : [];
-      window.her.push({ id: event.id, at, context: event.context, said, audience });
+      const to = Array.isArray(body.to)
+        ? body.to.filter((h): h is string => typeof h === "string")
+        : undefined;
+      window.her.push({
+        id: event.id,
+        at,
+        context: event.context,
+        said,
+        audience,
+        ...(to === undefined ? {} : { to }),
+      });
       if (event.context.kind === "dm" && audience.length === 1 && audience[0] !== undefined) {
         const place = contextKeyString(event.context);
         if (!window.partners.has(place)) window.partners.set(place, audience[0]);
@@ -174,7 +201,7 @@ export function parseWindow(events: readonly LogEvent[], from: number): Window {
     const from = str(observation.from) ?? event.person;
     if (SPEECH_SOURCES.test(source) && from !== null && event.context !== null) {
       if (summary.endsWith(":(略過)")) continue;
-      const { name, text } = spoken(body, summary);
+      const { name, text, reply } = spoken(body, summary);
       if (text.trim() === "") continue;
       window.said.push({
         id: event.id,
@@ -184,6 +211,7 @@ export function parseWindow(events: readonly LogEvent[], from: number): Window {
         name: name === "" ? from : name,
         text,
         addressed: observation.addressed_to_her === true || event.context.kind === "dm",
+        ...(reply === undefined ? {} : { reply }),
       });
       // A DM has one other person in it.
       if (event.context.kind === "dm") window.partners.set(contextKeyString(event.context), from);

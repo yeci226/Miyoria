@@ -11,7 +11,8 @@
 // * One person failing (a ledger error) does not stop the others; the first error is thrown after
 //   everyone was tried, and `@miyoria/play/party` logs it and does not retry.
 // * One card in the game's voice channel says what moved (notices.ts): each player's coins, who
-//   finished the daily quest by playing, and what that unlocked. Nothing moved, no card.
+//   finished the daily "with others" quest by playing (when at least `quest_together_min_people`
+//   took part), and what that unlocked. Nothing moved, no card.
 
 import type { AccountRef, PartyRewardRequest, PartyRewards } from "@miyoria/types";
 import type { EconomyService } from "./economy.js";
@@ -36,6 +37,9 @@ export class PartyRewardDesk implements PartyRewards {
     if (request.id.trim() === "") return;
     const idem = `play:party:${request.id}`;
     const seen: AccountRef[] = [];
+    // Played with others: enough people took part for the "with others" quest.
+    const people = new Set(request.awards.map((a) => `${a.account.platform}:${a.account.id}`));
+    const together = people.size >= this.e.config.quest_together_min_people;
     const paid: Earned[] = [];
     const quests: QuestDone[] = [];
     const unlocks: string[] = [];
@@ -51,7 +55,7 @@ export class PartyRewardDesk implements PartyRewards {
       }
       seen.push(award.account);
       try {
-        const out = await this.#pay(award.account, coins, idem);
+        const out = await this.#pay(award.account, coins, idem, together);
         if (out === null) continue;
         if (out.paid > 0) paid.push({ account: award.account, paid: out.paid });
         if (out.quest?.status === "paid")
@@ -79,6 +83,7 @@ export class PartyRewardDesk implements PartyRewards {
     account: AccountRef,
     coins: number,
     idem: string,
+    together: boolean,
   ): Promise<{
     paid: number;
     quest: QuestResult | null;
@@ -97,10 +102,10 @@ export class PartyRewardDesk implements PartyRewards {
         true,
       ),
     );
-    // Playing counts for the daily quest even when today's coins for play are all paid.
+    // Playing with others counts for the daily quest even when today's coins for play are all paid.
     const quest =
-      paid.status === "paid" || paid.status === "capped"
-        ? await this.e.v2.questDone(who, "play_game")
+      together && (paid.status === "paid" || paid.status === "capped")
+        ? await this.e.v2.questDone(who, "together")
         : null;
     // A paid quest checked the achievements already; the game's own coins may reach one too.
     const unlocked =

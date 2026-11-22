@@ -10,7 +10,14 @@ import {
   type Subscription,
   Supervisor,
 } from "@miyoria/runtime/kernel";
-import { Events as BusEvents, is, PlatformHistories, PlatformSinks } from "@miyoria/types";
+import {
+  Events as BusEvents,
+  is,
+  type Places,
+  PlacesKey,
+  PlatformHistories,
+  PlatformSinks,
+} from "@miyoria/types";
 import { ChannelType, type Client, Events, MessageType } from "discord.js";
 import { afterEach, describe, expect, test } from "vitest";
 import { DiscordConfigSchema } from "../src/config.js";
@@ -152,23 +159,73 @@ describe("GatewayBridge", () => {
     expect(r.histories.get("discord")?.platform).toBe("discord");
     expect(r.shared.ready).toBe(true);
 
-    // The command guild gets the set; the global scope and the other guild are cleared once.
-    await waitUntil(() => r.fake.puts.length === 3);
+    // The command guild gets the set and the global scope is cleared once; the other guild she is
+    // in keeps whatever set it has (phase 6: clearing it left a second server with no commands).
+    await waitUntil(() => r.fake.puts.length === 2);
     expect(r.fake.puts.map((p) => p.route)).toEqual([
       "/applications/100/guilds/77/commands",
       "/applications/100/commands",
-      "/applications/100/guilds/88/commands",
     ]);
     expect(r.fake.puts[0]?.body).toMatchObject([
       { name: "ping", description: "Ping", options: [] },
     ]);
     expect(r.fake.puts[1]?.body).toEqual([]);
-    expect(r.fake.puts[2]?.body).toEqual([]);
 
     // A second ready (reconnect) does not start a second sync task.
     r.fake.client.emit(Events.ClientReady, r.fake.client);
     await waitUntil(() => r.shared.ready);
-    expect(r.fake.puts).toHaveLength(3);
+    expect(r.fake.puts).toHaveLength(2);
+  });
+
+  test("every_server_gets_the_commands_with_a_star_and_a_server_she_joins_gets_them_too", async () => {
+    const r = await boot([], { command_guilds: ["*"] });
+    r.registry.register(commandSpec("ping", "Ping"), () => CommandReply.public("pong"));
+    r.fake.client.emit(Events.ClientReady, r.fake.client);
+    await waitUntil(() => r.fake.puts.length === 3);
+    expect(r.fake.puts.map((p) => p.route)).toEqual([
+      "/applications/100/guilds/77/commands",
+      "/applications/100/guilds/88/commands",
+      "/applications/100/commands",
+    ]);
+    // She joins a third server: only that one is sent the set.
+    const joined = {
+      id: "99",
+      name: "第三個",
+      members: { fetch: async () => undefined, cache: { values: () => [].values() } },
+      presences: { cache: { values: () => [].values() } },
+      voiceStates: { cache: { values: () => [].values() } },
+    };
+    r.fake.client.guilds.cache.set("99", joined as never);
+    r.fake.client.emit(Events.GuildCreate, joined);
+    await waitUntil(() => r.fake.puts.length === 4);
+    expect(r.fake.puts[3]?.route).toBe("/applications/100/guilds/99/commands");
+    expect(r.fake.puts[3]?.body).toMatchObject([{ name: "ping" }]);
+  });
+
+  test("servers_she_joins_and_leaves_are_recorded", async () => {
+    const r = await boot([], { presence_intents: false });
+    const calls: string[] = [];
+    const places = {
+      seen: (platform: string, id: string, name: string | null) => {
+        calls.push(`seen ${platform} ${id} ${name}`);
+        return id;
+      },
+      left: (platform: string, id: string) => calls.push(`left ${platform} ${id}`),
+    } as unknown as Places;
+    r.sup.services.provide("kernel", PlacesKey, places);
+    const guild = (id: string, name: string) => ({
+      id,
+      name,
+      members: { fetch: async () => undefined, cache: { values: () => [].values() } },
+      presences: { cache: { values: () => [].values() } },
+      voiceStates: { cache: { values: () => [].values() } },
+    });
+    r.fake.client.emit(Events.GuildCreate, guild("99", "第三個"));
+    await waitUntil(() => calls.length === 1);
+    // An outage is not a leave; a real one is.
+    r.fake.client.emit(Events.GuildDelete, { id: "99", available: false });
+    r.fake.client.emit(Events.GuildDelete, { id: "99" });
+    expect(calls).toEqual(["seen discord 99 第三個", "left discord 99"]);
   });
 
   test("messages_become_platform_events", async () => {
@@ -422,6 +479,8 @@ describe("GatewayBridge", () => {
     const replies: unknown[] = [];
     r.fake.client.emit(Events.InteractionCreate, {
       isChatInputCommand: () => true,
+      // Every discord.js interaction has it; the bridge asks before dispatching.
+      isAutocomplete: () => false,
       commandName: "ping",
       user: { id: "42", username: "alice_w", globalName: null },
       guildId: "300",

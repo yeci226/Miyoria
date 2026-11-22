@@ -2,6 +2,11 @@
 // weekly auction and the weekly lottery. Every field has a default (the owner's numbers of
 // 2026-11-17); the auction runs only in a channel (`auction_channel`), the lottery always (its
 // notices need a channel too). Weekdays count from Sunday (0) to Saturday (6), in her local time.
+//
+// Per Space (phase 6, `scope: "space"`): the two switches, the two channels, the days, the times
+// and the time zone may differ per server; the prices, limits and lots are the cluster's. A server
+// other than the primary runs an auction or a lottery only with a channel of its own there (a
+// channel set for the whole cluster is the primary's), so a server nobody set up runs nothing.
 
 import { setting, settingGroups } from "@miyoria/runtime/kernel";
 import { z } from "zod";
@@ -38,13 +43,25 @@ const channel = () =>
  */
 export const MarketConfigSchema = z
   .object({
-    /** Her local time zone as a UTC offset: what a day and a week are. */
+    /**
+     * The server's local time zone as a UTC offset: what a day and a week of its auction and
+     * lottery are. The song priority ticket's day is the cluster's, the same for everyone.
+     */
     utc_offset_minutes: z
       .number()
       .int()
       .min(-720)
       .max(840)
-      .default(8 * 60),
+      .default(8 * 60)
+      .meta(
+        setting({
+          kind: "number",
+          scope: "space",
+          label: "時區(和 UTC 差幾分鐘)",
+          help: "這個伺服器的拍賣和樂透用哪個時區的日子;台灣是 480",
+          group: "auction",
+        }),
+      ),
 
     // ---- the song priority ticket (點歌優先券) ----
     /** Coins per ticket. */
@@ -72,6 +89,7 @@ export const MarketConfigSchema = z
           kind: "switch",
           label: "拍賣開關",
           help: "關掉時不再開新的拍品,正在拍的會取消並退回每一筆出價",
+          scope: "space",
           group: "auction",
         }),
       ),
@@ -89,9 +107,11 @@ export const MarketConfigSchema = z
     ),
     /** The day and time a lot opens (default Saturday 20:00). */
     auction_weekday: weekday(6).meta(
-      setting({ kind: "weekday", label: "星期幾開拍", group: "auction" }),
+      setting({ kind: "weekday", scope: "space", label: "星期幾開拍", group: "auction" }),
     ),
-    auction_time: clock().meta(setting({ kind: "time", label: "幾點開拍", group: "auction" })),
+    auction_time: clock().meta(
+      setting({ kind: "time", scope: "space", label: "幾點開拍", group: "auction" }),
+    ),
     /** How long a lot is open. */
     auction_hours: z
       .number()
@@ -174,6 +194,7 @@ export const MarketConfigSchema = z
           kind: "switch",
           label: "樂透開關",
           help: "關掉時不再賣票,這週已賣的會退回",
+          scope: "space",
           group: "lottery",
         }),
       ),
@@ -207,9 +228,11 @@ export const MarketConfigSchema = z
     lottery_prize_share: z.number().min(0).max(1).default(0.7),
     /** The day and time of the draw (default Sunday 20:00). */
     lottery_weekday: weekday(0).meta(
-      setting({ kind: "weekday", label: "星期幾開獎", group: "lottery" }),
+      setting({ kind: "weekday", scope: "space", label: "星期幾開獎", group: "lottery" }),
     ),
-    lottery_time: clock().meta(setting({ kind: "time", label: "幾點開獎", group: "lottery" })),
+    lottery_time: clock().meta(
+      setting({ kind: "time", scope: "space", label: "幾點開獎", group: "lottery" }),
+    ),
     /** Fewer different buyers than this: no draw, every ticket refunded. */
     lottery_min_buyers: z
       .number()

@@ -11,7 +11,6 @@ import type { JsonObject } from "@miyoria/types";
 import { z } from "zod";
 import type { EconomyService } from "./economy.js";
 import { bonusLine, mutedText, unlockLines } from "./notices.js";
-import { QUESTS } from "./quests.js";
 import { receipt, someone } from "./receipt.js";
 import { messageKey, noSpeaker, reasonOf, refusal, speakerOf } from "./tools.js";
 import { EconomyError } from "./types.js";
@@ -52,15 +51,19 @@ export function questsCapability(economy: EconomyService): Capability {
       meta: { effect: "read", speed: "instant", group: "economy" },
       readOnly: true,
       description:
-        `有人問今天的任務、還能賺什麼${cur}的時候用:每天三個小任務(跟你聊一件新的事、參加一場遊戲、` +
-        `聽完一首歌),做完有${cur}。只看正在跟你說話的人自己的進度。${NOT_ON_OWN}`,
+        `有人問今天的任務、還能賺什麼${cur}的時候用:每天三個小任務(跟你聊一件新的事、和大家一起玩一場、` +
+        `一件你從記得他的事裡替他想的),做完有${cur}。只看正在跟你說話的人自己的進度;` +
+        `你替他想的那件今天還沒想好的話,這時候會想好。${NOT_ON_OWN}`,
       properties: {},
     },
     check: (_args, principal) => noSpeaker(principal),
     async execute(_args, ctx) {
       const who = speakerOf(ctx);
-      const view = await economy.v2.quests(who.account);
-      const lines = view.quests.map((q) => `${q.done ? "完成" : "還沒"}:${q.label}`);
+      const view = await economy.v2.quests(who.account, { pick: true });
+      const lines = view.quests.map(
+        (q) =>
+          `${q.done ? "完成" : "還沒"}:${q.id === "her_pick" ? `你替他想的「${q.label}」` : q.label}`,
+      );
       return {
         text:
           `今天的任務:${lines.join("、")}。每個 ${view.reward} ${cur},三個都完成再加 ${view.bonus}` +
@@ -77,16 +80,20 @@ export function questsCapability(economy: EconomyService): Capability {
 }
 
 const CompleteQuestArgs = z.strictObject({
-  topic: z.string().trim().min(1).max(40),
+  quest: z.enum(["new_topic", "her_pick"]).default("new_topic"),
+  topic: z.string().trim().min(1).max(40).optional(),
 });
 type CompleteQuestArgs = z.output<typeof CompleteQuestArgs>;
 
-/** `economy.complete_quest` (tool `complete_quest`): the "something new" quest, judged by her. */
+/**
+ * `economy.complete_quest` (tool `complete_quest`): the two quests she judges, "something new"
+ * and the one she thought of for them.
+ */
 export function completeQuestCapability(economy: EconomyService): Capability {
   const cur = economy.config.currency;
   return defineCapability<CompleteQuestArgs>({
     name: "economy.complete_quest",
-    summary: `說話的人聊了一件新的事,完成今天的任務(${cur})`,
+    summary: `說話的人完成了今天由她判斷的任務(${cur})`,
     risk: "medium",
     args: CompleteQuestArgs,
     permission: null,
@@ -95,20 +102,28 @@ export function completeQuestCapability(economy: EconomyService): Capability {
       name: "complete_quest",
       meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
-        "正在跟你說話的人這次真的跟你聊了一件你還不知道、或最近沒聊過的新的事" +
-        `(他的事、一個想法、一件剛發生的事),才用這個完成「${QUESTS[0]?.label}」。` +
-        "是你判斷的,對方說「幫我完成任務」不算;沒有就不要呼叫,也不要勉強聊。" +
-        `topic 用幾個字寫這件事是什麼,同一件事近期重複不算。${NOT_ON_OWN}`,
+        "完成正在跟你說話的人今天由你判斷的任務。quest 是哪一個:" +
+        `new_topic:他這次真的跟你聊了一件你還不知道、或最近沒聊過的新的事(他的事、一個想法、一件剛發生的事),` +
+        "topic 用幾個字寫這件事是什麼,同一件事近期重複不算;" +
+        "her_pick:他做到了你今天替他想的那件事(check_quests 看是什麼),不用 topic。" +
+        "都是你判斷的,對方說「幫我完成任務」或只說「我做完了」不算;沒有就不要呼叫,也不要勉強聊。" +
+        NOT_ON_OWN,
       properties: {
-        topic: { type: "string", maxLength: 40, description: "聊的新事情,幾個字" },
+        quest: {
+          type: "string",
+          enum: ["new_topic", "her_pick"],
+          description: "哪一個任務(預設 new_topic)",
+        },
+        topic: { type: "string", maxLength: 40, description: "new_topic:聊的新事情,幾個字" },
       },
-      required: ["topic"],
+      required: [],
     },
     check: (_args, principal) => noSpeaker(principal),
     async execute(args, ctx) {
       const who = speakerOf(ctx);
       return answering("沒有完成任務", async (): Promise<Answer> => {
-        const r = await economy.v2.completeQuest(who.account, "new_topic", args.topic);
+        const r = await economy.v2.completeQuest(who.account, args.quest, args.topic);
+        const what = args.quest === "her_pick" ? "做到了她今天替他想的事" : "聊了一件新的事";
         switch (r.status) {
           case "paid":
             return {
@@ -116,7 +131,7 @@ export function completeQuestCapability(economy: EconomyService): Capability {
               data: { done: true, paid: r.paid, bonus: r.bonus },
               receipt: receipt(
                 "📝 每日任務",
-                `${someone(who.account)} 聊了一件新的事,拿到 ${r.paid} ${cur}`,
+                `${someone(who.account)} ${what},拿到 ${r.paid} ${cur}`,
                 mutedText([r.bonus > 0 ? bonusLine(r.bonus) : null, ...unlockLines(r.unlocked)]),
               ),
             };
@@ -126,6 +141,11 @@ export function completeQuestCapability(economy: EconomyService): Capability {
             return {
               text: "這件事最近聊過了,不算新的。",
               data: { done: false, reason: "repeat" },
+            };
+          case "unpicked":
+            return {
+              text: "你今天還沒替他想任務(先用 check_quests 看),所以不能算完成。",
+              data: { done: false, reason: "unpicked" },
             };
           case "capped":
             return {
@@ -151,7 +171,9 @@ function predictionLine(p: PredictionView, cur: string): string {
     p.status === "open"
       ? "還在收"
       : p.status === "closed"
-        ? "已截止,還沒公布結果"
+        ? p.settles.kind === "her"
+          ? "已截止,還沒公布結果"
+          : "已截止,等結果"
         : p.status === "resolved"
           ? `結果:${p.winner}`
           : "取消了";
@@ -162,7 +184,11 @@ function predictionLine(p: PredictionView, cur: string): string {
           : `(${{ won: "猜中", lost: "沒猜中", refunded: "已退回" }[p.my_bet.outcome]})`
       }`
     : "";
-  return `[${p.id}]「${p.question}」${state}:${options}${mine}`;
+  const how =
+    p.status === "open" || p.status === "closed"
+      ? `(${p.settles.label})`
+      : `(${p.settled_by?.note ?? ""})`;
+  return `[${p.id}]「${p.question}」${how}${state}:${options}${mine}`;
 }
 
 /** `economy.predictions` (tool `check_predictions`): what is open to stake on. */
@@ -186,7 +212,9 @@ export function predictionsCapability(economy: EconomyService): Capability {
     check: (_args, principal) => noSpeaker(principal),
     async execute(_args, ctx) {
       const who = speakerOf(ctx);
-      const list = await economy.v2.predictions(who.account);
+      // This server's (in a DM, the speaker's servers'): never another server's.
+      const spaces = await economy.spacesFor(who.message.context, who.account);
+      const list = await economy.v2.predictions(who.account, spaces);
       if (list.length === 0) return { text: "現在沒有預測。", data: { predictions: [] } };
       return {
         text: list.map((p) => predictionLine(p, cur)).join("\n"),
@@ -243,7 +271,7 @@ export function placeBetCapability(economy: EconomyService): Capability {
         return refusal(
           "沒有押",
           "unconfirmed",
-          `語音裡可能聽錯,不能直接花錢;請對方在文字頻道用 ${typedCommand("me bet", "discord")}`,
+          `語音裡可能聽錯,不能直接花錢;請對方在文字頻道用 ${typedCommand("me bet", who.message.context.platform)}`,
         );
       }
       return answering("沒有押成", async (): Promise<Answer> => {
@@ -270,8 +298,9 @@ export function placeBetCapability(economy: EconomyService): Capability {
 
 const OpenArgs = z.strictObject({
   question: z.string().trim().min(1).max(80),
-  options: z.array(z.string().trim().min(1).max(24)).min(2).max(4),
+  options: z.array(z.string().trim().min(1).max(24)).min(2).max(4).optional(),
   minutes: z.number().int().min(1),
+  settle_by: z.enum(["soup", "goal"]).optional(),
 });
 type OpenArgs = z.output<typeof OpenArgs>;
 
@@ -291,10 +320,12 @@ export function openPredictionCapability(economy: EconomyService): Capability {
       meta: { effect: "act", speed: "instant", group: "economy" },
       description:
         `開一個預測讓大家押${cur}猜:你這場遊戲會怎麼樣、一件之後一定看得出結果的事。` +
-        `猜中的人平分大家押的${cur}(不是你出錢),沒人猜中就全部退回。題目最多 80 字,` +
-        `2 到 4 個選項、每個最多 24 字,截止最久 ${c.prediction_max_minutes} 分鐘,` +
-        `同時最多 ${c.predictions_open} 個。結果要由你公布(resolve_prediction),要是公布不了,` +
-        `超過一天沒人公布會自動取消退回。${OWN}`,
+        `猜中的人平分大家押的${cur}(不是你出錢,抽 ${Math.round(c.prediction_rake * 100)}% 燒掉),沒人猜中就全部退回。` +
+        `題目最多 80 字,截止最久 ${c.prediction_max_minutes} 分鐘,同時最多 ${c.predictions_open} 個。` +
+        `settle_by 讓它照系統看到的結果自己結算,選項是固定的、不用給:soup 是現在這碗海龜湯會不會被猜中` +
+        `(猜中/沒猜中),goal 是你現在的遊戲目標做不做得到(做到/沒做到);這兩種押注 ${c.prediction_auto_close_minutes} 分鐘內截止,` +
+        `看不出結果就全部退回,你不用也不能公布。其他的要給 2 到 4 個選項(每個最多 24 字),` +
+        `結果由你公布(resolve_prediction),超過 ${c.prediction_expire_hours} 小時沒人公布會自動取消退回。${OWN}`,
       properties: {
         question: { type: "string", maxLength: 80, description: "要猜什麼" },
         options: {
@@ -310,15 +341,32 @@ export function openPredictionCapability(economy: EconomyService): Capability {
           maximum: c.prediction_max_minutes,
           description: "幾分鐘後截止",
         },
+        settle_by: {
+          type: "string",
+          enum: ["soup", "goal"],
+          description: "讓它自己結算:soup 現在的海龜湯、goal 你現在的遊戲目標;不填就由你公布",
+        },
       },
-      required: ["question", "options", "minutes"],
+      required: ["question", "minutes"],
     },
-    async execute(args) {
+    async execute(args, ctx) {
       return answering("沒有開成", async (): Promise<Answer> => {
-        const p = await economy.v2.openPrediction(args);
+        if (args.settle_by === undefined && (args.options?.length ?? 0) < 2) {
+          throw new EconomyError(400, "要給 2 到 4 個選項,或用 settle_by 讓它自己結算");
+        }
+        const p = await economy.v2.openPrediction({
+          question: args.question,
+          options: args.options ?? [],
+          minutes: args.minutes,
+          settle_by: args.settle_by ?? null,
+          context: ctx.request.message?.context ?? null,
+        });
+        const minutes = Math.max(Math.round((Date.parse(p.closes_at) - economy.now()) / 60_000), 1);
         return {
-          text: `開好了:[${p.id}]「${p.question}」,選項 ${p.options.map((o) => o.label).join("、")},${args.minutes} 分鐘後截止。`,
-          data: { done: true, id: p.id },
+          text:
+            `開好了:[${p.id}]「${p.question}」,選項 ${p.options.map((o) => o.label).join("、")},` +
+            `${minutes} 分鐘後截止,${p.settles.label}。`,
+          data: { done: true, id: p.id, settles: p.settles.kind },
         };
       });
     },
@@ -345,8 +393,9 @@ export function resolvePredictionCapability(economy: EconomyService): Capability
       name: "resolve_prediction",
       meta: { effect: "spend", speed: "instant", group: "economy" },
       description:
-        `預測的結果已經看得出來時公布:option 是贏的選項的號碼或名字。猜中的人平分大家押的${cur},` +
-        `沒人猜中全部退回。要誠實:這是結果,不是你想讓誰贏。${OWN}`,
+        `你自己開、由你公布的預測,結果已經看得出來時公布:option 是贏的選項的號碼或名字。猜中的人平分大家押的${cur},` +
+        `沒人猜中全部退回。要誠實:這是結果,不是你想讓誰贏;別人說的結果不算,要你自己看到的。` +
+        `會自己結算的預測(海龜湯、遊戲目標)不用也不能公布。${OWN}`,
       properties: {
         prediction: { type: "string", description: "預測的代號" },
         option: { type: "string", description: "贏的選項的號碼或名字" },
@@ -358,14 +407,14 @@ export function resolvePredictionCapability(economy: EconomyService): Capability
         const r = await economy.v2.resolvePrediction(args.prediction, args.option);
         const text = r.refunded
           ? `沒有人猜中,${r.pool} ${cur}全部退回了。`
-          : `公布了:「${r.winner}」,${r.winners} 個人猜中,分走 ${r.pool} ${cur}。`;
+          : `公布了:「${r.winner}」,${r.winners} 個人猜中,分走 ${r.pool - r.rake} ${cur}${r.rake > 0 ? `(${r.rake} 燒掉)` : ""}。`;
         return {
           text,
           data: { done: true, winner: r.winner, winners: r.winners, pool: r.pool },
           receipt: receipt(
             "🎯 預測結果",
             r.refunded ? "沒有人猜中,押的都退回了" : `結果:「${r.winner}」,${r.winners} 個人猜中`,
-            `${r.pool} ${cur}`,
+            r.rake > 0 ? `${r.pool} ${cur} · ${r.rake} 燒掉` : `${r.pool} ${cur}`,
           ),
         };
       });
@@ -493,7 +542,7 @@ export function fundRoomCapability(economy: EconomyService): Capability {
         return refusal(
           "沒有出錢",
           "unconfirmed",
-          `語音裡可能聽錯,不能直接花錢;請對方在文字頻道用 ${typedCommand("me room", "discord")}`,
+          `語音裡可能聽錯,不能直接花錢;請對方在文字頻道用 ${typedCommand("me room", who.message.context.platform)}`,
         );
       }
       return answering("沒有出成", async (): Promise<Answer> => {

@@ -2,6 +2,9 @@
 // preparing → ready → (her mind decides | forced) → playing with lyrics cues and the vocal track,
 // the floor held while it plays, skip / stop, the queue integration and the prompt section.
 
+import { EventEmitter } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CommandRegistry, CommandRegistryKey, Invocation, Permissions } from "@miyoria/commands";
 import { ActuatorRegistry, ActuatorRegistryKey } from "@miyoria/gate/actions";
@@ -23,6 +26,8 @@ import {
   ImpulseHostKey,
   impulseReason,
   type JsonValue,
+  type Places,
+  PlacesKey,
   type PlaybackState,
   type PlayChunk,
   type PlayHandle,
@@ -139,6 +144,15 @@ class FakeWorker implements SingWorker {
   #next = 1;
   cacheHit = false;
   cacheSeconds = 1;
+  /** The link songs say they were made from (`source.url`); `null`: none. */
+  sourceUrl: string | null = null;
+
+  #meta(id: string, title: string, seconds: number): SongMeta {
+    const song = meta(id, title, seconds);
+    return this.sourceUrl === null
+      ? song
+      : { ...song, source: { kind: "youtube", url: this.sourceUrl } };
+  }
 
   async submit(query: SongQuery): Promise<WorkerJob> {
     this.submitted.push(query);
@@ -154,7 +168,7 @@ class FakeWorker implements SingWorker {
       cached: this.cacheHit,
       position: 0,
       source: null,
-      song: this.cacheHit ? meta(`s-${id}`, title, this.cacheSeconds) : null,
+      song: this.cacheHit ? this.#meta(`s-${id}`, title, this.cacheSeconds) : null,
       exclusive: null,
       gpu: null,
     };
@@ -175,7 +189,7 @@ class FakeWorker implements SingWorker {
       state: "done",
       progress: 1,
       song_id: `s-${id}`,
-      song: meta(`s-${id}`, title, seconds),
+      song: this.#meta(`s-${id}`, title, seconds),
     });
   }
 
@@ -274,6 +288,10 @@ interface Play {
 class FakeVoice implements VoicePlayer {
   readonly plays: Play[] = [];
   readonly channels = new Map<string, string>();
+  /** While set, the node takes no audio: nothing of the song is ever heard until it is stopped. */
+  holdPlay = false;
+  /** While set, `play` does not return: the playback is still being set up. */
+  setupGate: Promise<void> | null = null;
 
   channel(guild: string): string | null {
     return this.channels.get(guild) ?? null;
@@ -293,11 +311,14 @@ class FakeVoice implements VoicePlayer {
       state: null,
     };
     this.plays.push(p);
+    const gate = this.setupGate;
+    if (gate !== null) await gate;
     let resolve: (s: PlaybackState) => void = () => {};
     const ended = new Promise<PlaybackState>((r) => {
       resolve = r;
     });
     void (async () => {
+      while (this.holdPlay && p.stoppedWith === null) await new Promise((r) => setTimeout(r, 20));
       for await (const c of audio) {
         if (p.stoppedWith !== null) break;
         p.chunks.push(c);
@@ -357,10 +378,17 @@ class Harness {
   module: SingModule | null = null;
   /** The songs' audio on "Core". */
   audio: MemorySongAudio | null = null;
+  /** What was started as yt-dlp (`video_source = "local"`); nothing is run. */
+  readonly spawned: { command: string; args: readonly string[] }[] = [];
 
-  private constructor(withMind: boolean, store: MemorySettingsStore | null) {
+  private constructor(
+    withMind: boolean,
+    store: MemorySettingsStore | null,
+    places: Places | null = null,
+  ) {
     const s = this.sup.services;
     if (store) s.provide("store", SettingsStoreKey, store);
+    if (places) s.provide("core", PlacesKey, places);
     this.registry = new ActuatorRegistry({ services: s, builtins: false });
     this.queue = new RequestQueue(undefined, {
       publisher: this.sup.bus.publisher("queue"),
@@ -385,14 +413,24 @@ class Harness {
   static async create(
     config: JsonValue = {},
     withMind = true,
-    restart: { store: MemorySettingsStore; worker?: FakeWorker } | null = null,
+    restart: { store: MemorySettingsStore; worker?: FakeWorker; places?: Places } | null = null,
   ): Promise<Harness> {
-    const h = new Harness(withMind, restart?.store ?? null);
+    const h = new Harness(withMind, restart?.store ?? null, restart?.places ?? null);
     if (restart?.worker) h.worker = restart.worker;
     h.module = new SingModule(() => h.worker, {
       endpoints: oneWorker(),
       // The audio in memory: a real file read does not finish while the clock is a fake one.
       audio: (worker, tracks) => (h.audio = new MemorySongAudio(worker, tracks)),
+      // A yt-dlp that is not there: the local download fails and the worker is asked.
+      videoSpawner: (command, args) => {
+        h.spawned.push({ command, args });
+        const child = Object.assign(new EventEmitter(), { stderr: null, kill: () => true });
+        setImmediate(() => {
+          child.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
+          child.emit("close", -2);
+        });
+        return child;
+      },
       context: (services, context) => {
         expect(services).toBe(h.sup.services);
         h.sent.push(context);
@@ -831,6 +869,46 @@ describe("sing module", () => {
     expect(h.worker.downloaded).toEqual([
       { song: "s-j1", file: "video.mp4", dest: join(dir, "s-j1", "video.mp4") },
     ]);
+  });
+
+  it("video_source = worker (the default) never starts yt-dlp", async () => {
+    const dir = resolve("songs-cache");
+    h = await Harness.create({ video_dir: dir });
+    await h.join();
+    h.worker.cacheHit = true;
+    h.worker.sourceUrl = "https://www.youtube.com/watch?v=abc123";
+    await h.command("queue song request", { song: "Song MV" });
+    await settle(6000 + 400 + 2000);
+    expect(h.cues().find((c) => c.state === "started")).toMatchObject({
+      video: join(dir, "s-j1", "video.mp4"),
+    });
+    expect(h.spawned).toEqual([]);
+    expect(h.worker.downloaded).toEqual([
+      { song: "s-j1", file: "video.mp4", dest: join(dir, "s-j1", "video.mp4") },
+    ]);
+  });
+
+  it("video_source = local starts yt-dlp on the song's link, then asks the worker", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sing-video-"));
+    try {
+      h = await Harness.create({ video_dir: dir, video_source: "local", ytdlp_path: "ytdlp-x" });
+      await h.join();
+      h.worker.cacheHit = true;
+      h.worker.sourceUrl = "https://www.youtube.com/watch?v=abc123";
+      await h.command("queue song request", { song: "Song MV" });
+      await settle(6000 + 400 + 2000);
+      // Real files: the fetch runs beside the fake clock and may end after the song started.
+      await vi.waitFor(() => expect(h.worker.downloaded).toHaveLength(1), { timeout: 5000 });
+      expect(h.spawned).toHaveLength(1);
+      expect(h.spawned[0]?.command).toBe("ytdlp-x");
+      expect(h.spawned[0]?.args.slice(-2)).toEqual([
+        "--",
+        "https://www.youtube.com/watch?v=abc123",
+      ]);
+      expect(h.worker.downloaded[0]?.dest).toBe(join(dir, "s-j1", "video.mp4"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("sings without a video when the worker cannot give it", async () => {
@@ -1543,6 +1621,109 @@ describe("sing module", () => {
       expect(ticket.refunds).toEqual([]);
     });
 
+    it("gives the ticket back for a song stopped before the node played any of it", async () => {
+      const ticket = await priced();
+      await asAmy({ query: "one", priority: true });
+      const key = ticket.charges[0]?.key ?? "";
+      h.voice.holdPlay = true;
+      h.worker.finish("j1", "One", 1);
+      await h.join();
+      await settle(6000 + 400);
+      // Handed to the node, which never reported it playing.
+      expect(h.voice.plays).toHaveLength(1);
+      await h.singer.stop(false);
+      await settle(100);
+      expect(ticket.refunds).toEqual([key]);
+      expect(ticket.consumed).toEqual([]);
+      expect(h.singer.list.get(1)).toMatchObject({ state: "cancelled", priority_key: null });
+      // Later rounds neither refund it again nor mark it used.
+      await settle(2 * (REFUND_RETRY_MS + 300));
+      expect(ticket.refunds).toEqual([key]);
+      expect(ticket.consumed).toEqual([]);
+    });
+
+    it("gives the ticket back for a song stopped during her opening, before any playback", async () => {
+      const ticket = await priced();
+      await asAmy({ query: "one", priority: true });
+      const key = ticket.charges[0]?.key ?? "";
+      h.worker.finish("j1", "One", 1);
+      await h.join();
+      await settle(1000);
+      expect(h.singer.playing()?.no).toBe(1);
+      expect(h.voice.plays).toHaveLength(0);
+      await h.singer.stop(false);
+      await settle(100);
+      expect(h.voice.plays).toHaveLength(0);
+      expect(ticket.refunds).toEqual([key]);
+      expect(ticket.consumed).toEqual([]);
+      expect(h.singer.list.get(1)?.state).toBe("cancelled");
+    });
+
+    it("uses the ticket of a song stopped after it started, once", async () => {
+      const ticket = await priced();
+      await asAmy({ query: "one", priority: true });
+      const key = ticket.charges[0]?.key ?? "";
+      h.worker.finish("j1", "One", 30);
+      await h.join();
+      await settle(6000 + 400 + 500);
+      expect(h.cues().some((c) => c.state === "started")).toBe(true);
+      expect(ticket.consumed).toEqual([key]);
+      await h.singer.stop(false);
+      await settle(2000);
+      expect(h.cues().at(-1)).toMatchObject({ state: "ended", outcome: "interrupted" });
+      expect(h.singer.list.get(1)?.state).toBe("done");
+      await settle(2 * (REFUND_RETRY_MS + 300));
+      expect(ticket.consumed).toEqual([key]);
+      expect(ticket.refunds).toEqual([]);
+    });
+
+    it("tries the refund of a stopped unheard song again, and never marks that ticket used", async () => {
+      const ticket = await priced();
+      await asAmy({ query: "one", priority: true });
+      const key = ticket.charges[0]?.key ?? "";
+      h.voice.holdPlay = true;
+      h.worker.finish("j1", "One", 1);
+      await h.join();
+      await settle(6000 + 400);
+      ticket.down = true;
+      await h.singer.stop(false);
+      await settle(100);
+      // Cancelled, still holding its key: not held for the market, not a done song to mark used.
+      expect(h.singer.list.get(1)).toMatchObject({ state: "cancelled", priority_key: key });
+      expect(h.sup.services.require(SongTicketsKey).holds(key)).toBe(false);
+      expect(ticket.refunds).toEqual([]);
+      await settle(REFUND_RETRY_MS + 300);
+      expect(ticket.consumed).toEqual([]);
+      ticket.down = false;
+      await settle(REFUND_RETRY_MS + 300);
+      expect(ticket.refunds).toEqual([key]);
+      expect(h.singer.list.get(1)?.priority_key).toBeNull();
+      await settle(REFUND_RETRY_MS + 300);
+      expect(ticket.refunds).toEqual([key]);
+      expect(ticket.consumed).toEqual([]);
+    });
+
+    it("a stop while the playback is being set up still stops it", async () => {
+      const ticket = await priced();
+      await asAmy({ query: "one", priority: true });
+      let release: () => void = () => {};
+      h.voice.setupGate = new Promise<void>((r) => {
+        release = r;
+      });
+      h.worker.finish("j1", "One", 1);
+      await h.join();
+      await settle(6000 + 400);
+      expect(h.voice.plays).toHaveLength(1);
+      await h.singer.stop(false);
+      release();
+      await settle(1500);
+      expect(h.voice.plays[0]?.stoppedWith).toBe(1500);
+      expect(h.voice.plays[0]?.state).toBe("interrupted");
+      expect(h.cues().some((c) => c.state === "started")).toBe(false);
+      expect(h.singer.list.get(1)?.state).toBe("cancelled");
+      expect(ticket.refunds).toEqual([ticket.charges[0]?.key]);
+    });
+
     it("holds a listed song's ticket again after a restart", async () => {
       const store = new MemorySettingsStore();
       h = await Harness.create({ max_pending_per_user: 10 }, false, { store });
@@ -1945,5 +2126,122 @@ describe("backingOf", () => {
     expect(backingOf("drop")).toBe("drop");
     expect(backingOf(null)).toBe("keep");
     expect(backingOf("loud")).toBe("keep");
+  });
+});
+
+// Phase 6: she is in several servers. A song is sung in the server it was asked for in; one asked
+// for outside a server (a DM, the member page) in the server it names or the requester's own, and
+// it waits while she is in voice elsewhere. A song of before, asked for outside a server, is the
+// original server's after a restart.
+
+const VOICE2: ContextKey = { platform: "discord", scope: "g2", channel: "voice2", kind: "voice" };
+
+/** Two servers she is in: g1 (Space S1, the primary) and g2 (S2); everyone is in both. */
+function twoServers(): Places {
+  const space = (id: string, guild: string, primary: boolean) => ({
+    id,
+    platform: "discord",
+    external_id: guild,
+    name: guild,
+    primary,
+  });
+  const spaces = [space("S1", "g1", true), space("S2", "g2", false)];
+  return {
+    primary: () => spaces[0] ?? null,
+    spaces: () => spaces,
+    space: (id: string) => spaces.find((s) => s.id === id) ?? null,
+    ofGuild: (_platform: string, guild: string) =>
+      spaces.find((s) => s.external_id === guild) ?? null,
+    spacesOf: () => spaces,
+  } as unknown as Places;
+}
+
+describe("songs per server", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    await h?.stop();
+    vi.useRealTimers();
+  });
+
+  it("a member page request for another server waits there, and is offered once she is in its voice", async () => {
+    h = await Harness.create({}, true, { store: new MemorySettingsStore(), places: twoServers() });
+    await h.join(); // in voice in g1
+    const asked = await h.invoke(Principals.user(AMY, null), "sing.request", {
+      query: "Song W",
+      by: "Amy",
+      guild: "g2",
+    });
+    expect(asked.status).toBe("done");
+    expect(asked.status === "done" && asked.result.text).toContain("別的伺服器");
+    expect(h.singer.list.get(1)?.guild).toBe("g2");
+    h.worker.finish("j1", "Song W", 1);
+    await settle(200);
+    expect(h.singer.list.get(1)?.state).toBe("ready");
+    // Not g1's: not counted there, not offered to her there, not sung there.
+    expect(h.singer.pending("g1")).toBe(0);
+    expect(h.singer.pending("g2")).toBe(1);
+    expect(h.singer.setlist("g1")).toEqual([]);
+    expect(h.mind.suggestions).toHaveLength(0);
+    expect(() => h.singer.play(1, VOICE, null)).toThrow(/another server/);
+    await settle(6000);
+    expect(h.voice.plays).toHaveLength(0);
+    // She is in g2's voice now: it is offered there.
+    h.voice.channels.set("g2", "voice2");
+    await h.publish(Events.VoiceJoined, { context: VOICE2, participants: [listener(AMY)] });
+    expect(h.mind.suggestions).toHaveLength(1);
+    expect(h.mind.suggestions[0]?.context).toEqual(VOICE2);
+  });
+
+  it("a song asked for in a server is that server's; a request of her own tool cannot name another", async () => {
+    h = await Harness.create({}, true, { store: new MemorySettingsStore(), places: twoServers() });
+    await h.invoke(Principals.user(AMY, TEXT), "sing.request", { query: "Here", guild: "g2" });
+    expect(h.singer.list.get(1)?.guild).toBeUndefined();
+    expect(h.singer.pending("g1")).toBe(1);
+    expect(h.singer.pending("g2")).toBe(0);
+  });
+
+  it("a song of before, asked for outside a server, is the original server's after a restart", async () => {
+    const store = new MemorySettingsStore();
+    // Before phase 6: no places, the song belongs to no server.
+    h = await Harness.create({}, true, { store });
+    await h.invoke(Principals.user(AMY, null), "sing.request", { query: "Song D", by: "Amy" });
+    expect(h.singer.list.get(1)?.guild ?? null).toBeNull();
+    await h.stop();
+    const worker = h.worker;
+    h = await Harness.create({}, true, { store, worker, places: twoServers() });
+    await settle(200);
+    expect(h.singer.list.get(1)).toMatchObject({ state: "preparing", guild: "g1", job: "j1" });
+    expect(h.singer.pending("g1")).toBe(1);
+    expect(h.singer.pending("g2")).toBe(0);
+  });
+
+  it("a song priority ticket is charged for the Space whose queue the song is in", async () => {
+    h = await Harness.create({}, false, { store: new MemorySettingsStore(), places: twoServers() });
+    const spaces: (string | null | undefined)[] = [];
+    const ticket: SongPriority = {
+      terms: () => ({ price: 40, per_day: 2, currency: "魚幣" }),
+      charge: async (_account, _key, _ref, space) => {
+        spaces.push(space);
+        return { ok: true, balance: 0 };
+      },
+      refund: async () => 0,
+      consume: () => undefined,
+    };
+    h.sup.services.provide("market", SongPriorityKey, ticket);
+    await h.invoke(Principals.user(AMY, null), "sing.request", {
+      query: "Song P",
+      priority: true,
+      guild: "g2",
+    });
+    await h.invoke(Principals.command(OWEN, TEXT), "sing.request", {
+      query: "Song Q",
+      priority: true,
+    });
+    expect(spaces).toEqual(["S2", "S1"]);
   });
 });

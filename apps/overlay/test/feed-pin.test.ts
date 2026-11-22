@@ -118,11 +118,11 @@ describe("parseMessage, every message type", () => {
       bands: [0, 2],
     });
     expect(parseMessage(frame({ type: "levels", rms: -1, bands: [] }))).toStrictEqual({ type: "levels", rms: 0, bands: null });
-    expect(parseMessage(frame({ type: "levels", rms: 0, bands: new Array(16).fill(0.5) }))).toMatchObject({
-      bands: new Array(16).fill(0.5),
+    expect(parseMessage(frame({ type: "levels", rms: 0, bands: new Array(32).fill(0.5) }))).toMatchObject({
+      bands: new Array(32).fill(0.5),
     });
-    // more than 16 bands, or a non-number in them: the bands are dropped, the frame is kept
-    expect(parseMessage(frame({ type: "levels", rms: 0.5, bands: new Array(17).fill(0.5) }))).toStrictEqual({
+    // more than 32 bands (the contract's most), or a non-number in them: the bands are dropped, the frame is kept
+    expect(parseMessage(frame({ type: "levels", rms: 0.5, bands: new Array(33).fill(0.5) }))).toStrictEqual({
       type: "levels",
       rms: 0.5,
       bands: null,

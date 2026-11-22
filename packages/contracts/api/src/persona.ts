@@ -1,4 +1,4 @@
-// Her persona sections and their edit history.
+// Her persona sections and their edit history, and which profile this Core runs.
 
 import { z } from "zod";
 import { TimestampSchema } from "../../wire/src/index.js";
@@ -42,6 +42,24 @@ export const PersonaOverrideSchema = z
   .meta({ id: "ApiPersonaOverride" });
 export type PersonaOverride = z.output<typeof PersonaOverrideSchema>;
 
+/**
+ * `GET /api/profile`: which profile this Core runs (docs/design/v5-profiles.md), for the panel's
+ * one-line indicator. Switching is stopping the Core and starting it on another; no route does it.
+ */
+export const RunningProfileSchema = z
+  .object({
+    /** The profile's folder name. */
+    id: z.string(),
+    /** It has its own config and data; `false`: it runs on the install's. */
+    own: z.boolean(),
+    /** Her name (`[character] name`). */
+    character: z.string(),
+    /** The persona's display name. */
+    persona: z.string(),
+  })
+  .meta({ id: "ApiRunningProfile" });
+export type RunningProfile = z.output<typeof RunningProfileSchema>;
+
 /** A section key; the server answers 400 for one that is not letters, digits, `-` or `_`. */
 const SectionParams = z.object({ key: z.string() });
 
@@ -62,4 +80,9 @@ export const persona = {
     .route({ method: "GET", path: "/api/persona/{key}/history" })
     .input(z.object({ params: SectionParams }))
     .output(z.array(PersonaOverrideSchema)),
+  /** Which profile runs. */
+  profile: route
+    .meta({ audience: "admin", permission: null })
+    .route({ method: "GET", path: "/api/profile" })
+    .output(RunningProfileSchema),
 };

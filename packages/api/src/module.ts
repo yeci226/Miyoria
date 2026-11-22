@@ -23,6 +23,7 @@
 import type { AddressInfo } from "node:net";
 import { isIPv4, isIPv6 } from "node:net";
 import { createAdaptorServer, type ServerType } from "@hono/node-server";
+import { GiftPricerKey, QuestPickerKey } from "@miyoria/economy";
 import { BondRingImagesKey } from "@miyoria/heart/person";
 import { tokenize } from "@miyoria/memory/memory";
 import { CardFacesKey } from "@miyoria/play/cards";
@@ -33,10 +34,29 @@ import {
   type Module,
   type ModuleContext,
 } from "@miyoria/runtime/kernel";
-import { ArtifactStoreKey, SettingsStoreKey } from "@miyoria/store";
-import { ActivityManagerKey, Events, KeepsakesKey, PicturesKey } from "@miyoria/types";
+import {
+  ArtifactCleanerKey,
+  ArtifactStoreKey,
+  FileLinksKey,
+  SettingsStoreKey,
+} from "@miyoria/store";
+import {
+  ActivityManagerKey,
+  Events,
+  KeepsakesKey,
+  ModerationKey,
+  PicturesKey,
+} from "@miyoria/types";
 import { z } from "zod";
+import { MemoryFailureLimiter } from "./admin-limit.js";
 import { CardFaceService } from "./card-faces.js";
+import { ImageCleaner } from "./files/clean.js";
+import { FilesConfigSchema, parseOrigin } from "./files/config.js";
+import { FileLinkService } from "./files/links.js";
+import { fileOriginApp } from "./files/serve.js";
+import type { FilesSide } from "./files/side.js";
+import { Tickets } from "./files/tickets.js";
+import { GiftPriceService } from "./gift-price.js";
 import { KeepsakeService } from "./keepsakes.js";
 import { MONITOR_TOPICS, Monitor } from "./monitor.js";
 import { DiscordOAuthConfigSchema, OAuth, recheckMs, sessionTtlMs } from "./oauth.js";
@@ -44,6 +64,7 @@ import { PANEL_DIR_ENV, pickDir } from "./panel.js";
 import { memberPicture } from "./picture-data.js";
 import { backgroundPath, PictureRenderer, PictureService } from "./pictures.js";
 import { PublicConfigSchema, PublicSide, STATS_EVERY_MS } from "./public.js";
+import { QuestPickService } from "./quest-words.js";
 import { RingImages } from "./ring-image.js";
 import { createApp } from "./server.js";
 import { Sessions } from "./session.js";
@@ -84,6 +105,14 @@ export const ApiConfigSchema = z.object({
    * folder); without either the panel's 暮色 gradient.
    */
   picture_background: z.string().default(""),
+  /**
+   * The tunnel-facing listener (v5-architecture §11.1): the public views, the member pages and the
+   * site, and nothing of the admin API. Empty (the default): one listener at `bind` serves
+   * everything, as before. Once it is set, `bind` must be this machine, the tailnet or the LAN.
+   */
+  public_bind: z.string().default(""),
+  /** The file origin of her share links (`files/config.ts`). Off until `origin` is set. */
+  files: FilesConfigSchema.prefault({}),
 });
 export type ApiConfig = z.output<typeof ApiConfigSchema>;
 
@@ -166,6 +195,51 @@ async function listen(server: ServerType, host: string, port: number): Promise<A
   }
 }
 
+function urlOf(a: AddressInfo | null): string | null {
+  if (!a) return null;
+  const host = a.family === "IPv6" ? `[${a.address}]` : a.address;
+  return `http://${host}:${a.port}`;
+}
+
+/** Listens on `bind` (`what` names it in the error), or throws `ApiConfigError`. */
+async function listenOn(server: ServerType, bind: string, what: string): Promise<AddressInfo> {
+  const { host, port } = parseBind(bind);
+  try {
+    return await listen(server, host, port);
+  } catch (error) {
+    throw new ApiConfigError(`cannot bind ${what} to \`${bind}\`: ${errorMessage(error)}`, {
+      cause: error,
+    });
+  }
+}
+
+/** The tailnet's addresses: Tailscale's CGNAT range and its IPv6 prefix. */
+function isTailnet(address: string): boolean {
+  if (isIPv4(address)) {
+    const [a, b] = address.split(".").map(Number) as [number, number];
+    return a === 100 && b >= 64 && b <= 127;
+  }
+  return isIPv6(address) && address.toLowerCase().startsWith("fd7a:115c:a1e0:");
+}
+
+/** A LAN address (RFC 1918, IPv6 unique local or link local). */
+function isLan(address: string): boolean {
+  if (isIPv4(address)) {
+    const [a, b] = address.split(".").map(Number) as [number, number];
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  const v6 = address.toLowerCase();
+  return isIPv6(address) && (/^f[cd]/.test(v6) || v6.startsWith("fe80:"));
+}
+
+/**
+ * Where the admin listener may be once the public side has its own: this machine, the tailnet or
+ * the LAN; never every address (`0.0.0.0`, `::`) and never a public one.
+ */
+export function privateAddress(address: string): boolean {
+  return isLoopback(address) || isTailnet(address) || isLan(address);
+}
+
 async function close(server: ServerType): Promise<void> {
   const closed = new Promise<void>((resolve) => server.close(() => resolve()));
   const http = server as ServerType & {
@@ -195,6 +269,8 @@ export class ApiModule implements Module {
   readonly #emotions: readonly string[];
   readonly #random: () => number;
   #address: AddressInfo | null = null;
+  #publicAddress: AddressInfo | null = null;
+  #filesAddress: AddressInfo | null = null;
 
   constructor(options: ApiModuleOptions = {}) {
     this.#tokenize = options.tokenize ?? tokenize;
@@ -210,10 +286,17 @@ export class ApiModule implements Module {
 
   /** `http://host:port` of the running server. */
   url(): string | null {
-    const a = this.#address;
-    if (!a) return null;
-    const host = a.family === "IPv6" ? `[${a.address}]` : a.address;
-    return `http://${host}:${a.port}`;
+    return urlOf(this.#address);
+  }
+
+  /** `http://host:port` of the public listener (`public_bind`), while it runs. */
+  publicUrl(): string | null {
+    return urlOf(this.#publicAddress);
+  }
+
+  /** `http://host:port` of the file origin's listener, while it runs. */
+  filesUrl(): string | null {
+    return urlOf(this.#filesAddress);
   }
 
   async start(ctx: ModuleContext): Promise<void> {
@@ -226,7 +309,9 @@ export class ApiModule implements Module {
       );
     }
     const oauth = OAuth.fromConfig(config.discord_oauth, ctx.clock);
-    const { host, port } = parseBind(config.bind);
+    // Bad addresses fail before anything listens.
+    parseBind(config.bind);
+    if (config.public_bind.trim() !== "") parseBind(config.public_bind);
 
     const panelDir = pickDir(this.#env(PANEL_DIR_ENV), config.panel_dir);
     if (panelDir !== null) ctx.log.info({ dir: panelDir }, "serving the admin panel at /");
@@ -243,6 +328,7 @@ export class ApiModule implements Module {
       ),
       oauth,
       cookieSecure,
+      limiter: new MemoryFailureLimiter(),
     };
 
     const monitor = new Monitor();
@@ -264,6 +350,10 @@ export class ApiModule implements Module {
     ctx.provide(KeepsakesKey, new KeepsakeService(state));
     // Her words on a milestone card, which the cards module issues with no page open.
     ctx.provide(CardFacesKey, new CardFaceService(state));
+    // The daily quest she thinks of for each person, from what the member page shows them.
+    ctx.provide(QuestPickerKey, new QuestPickService(state));
+    // The tier of a gift a member named in words (one small model call per new name).
+    ctx.provide(GiftPricerKey, new GiftPriceService(state));
     // The bond ring's picture for `/me profile` and `/admin person show`.
     ctx.provide(BondRingImagesKey, new RingImages());
     // Her picture messages: the templates drawn to PNG, kept in the artifact store.
@@ -276,15 +366,22 @@ export class ApiModule implements Module {
       PicturesKey,
       new PictureService(pictures, (who, kind) => memberPicture(state, who, kind)),
     );
-    const app = createApp(state, { metricsPublic: config.metrics_public });
+    // Her files: images handed out re-encoded, and links on the file origin when one is set.
+    const files = this.#filesSide(ctx, config, oauth);
+    state.files = files;
+    ctx.provide(ArtifactCleanerKey, files.cleaner);
+    if (files.links !== null) ctx.provide(FileLinksKey, files.links);
+
+    const split = config.public_bind.trim() !== "";
+    const servers: ServerType[] = [];
+    const app = createApp(state, { metricsPublic: config.metrics_public, side: "admin" });
     const server = createAdaptorServer({ fetch: app.fetch });
-    let address: AddressInfo;
-    try {
-      address = await listen(server, host, port);
-    } catch (error) {
+    servers.push(server);
+    const address = await listenOn(server, config.bind, "admin API");
+    if (split && !privateAddress(address.address)) {
+      await close(server);
       throw new ApiConfigError(
-        `cannot bind admin API to \`${config.bind}\`: ${errorMessage(error)}`,
-        { cause: error },
+        `with \`public_bind\` set, \`[modules.api] bind\` must be this machine, the tailnet or the LAN, not \`${config.bind}\``,
       );
     }
     if (!isLoopback(address.address)) {
@@ -293,6 +390,46 @@ export class ApiModule implements Module {
     this.#address = address;
     ctx.log.info({ addr: `${address.address}:${address.port}` }, "admin API listening");
     if (config.metrics_public) ctx.log.info("serving /metrics without authentication");
+    try {
+      if (split) {
+        const publicApp = createApp(state, { metricsPublic: false, side: "public" });
+        const publicServer = createAdaptorServer({ fetch: publicApp.fetch });
+        servers.push(publicServer);
+        const at = await listenOn(publicServer, config.public_bind, "the public listener");
+        this.#publicAddress = at;
+        ctx.log.info(
+          { addr: `${at.address}:${at.port}` },
+          "public site and member API listening (no admin routes)",
+        );
+      }
+      if (files.origin !== null) {
+        const fileApp = fileOriginApp({
+          store: () => ctx.services.get(ArtifactStoreKey),
+          cleaner: files.cleaner,
+          tickets: files.tickets,
+          site: () => files.site,
+          isMember: (person, space) =>
+            ctx.services.get(ArtifactStoreKey)?.shares.isMember(person, space) ?? false,
+          moderation: () => ctx.services.get(ModerationKey),
+          now: () => ctx.clock.now(),
+          perIpPerMinute: config.files.per_ip_per_minute,
+          perLinkPerMinute: config.files.per_link_per_minute,
+          publicCacheSecs: config.files.public_cache_secs,
+          clientIpHeader: config.public.client_ip_header,
+        });
+        const fileServer = createAdaptorServer({ fetch: fileApp.fetch });
+        servers.push(fileServer);
+        const at = await listenOn(fileServer, config.files.bind, "the file origin");
+        this.#filesAddress = at;
+        ctx.log.info(
+          { addr: `${at.address}:${at.port}`, origin: files.origin },
+          "file origin listening",
+        );
+      }
+    } catch (error) {
+      for (const s of servers) await close(s);
+      throw error;
+    }
 
     const sub = ctx.subscribe(MONITOR_TOPICS);
     ctx.spawn("monitor", () => monitor.run(sub));
@@ -346,11 +483,52 @@ export class ApiModule implements Module {
         if (signal.aborted) resolve();
         else signal.addEventListener("abort", () => resolve(), { once: true });
       });
-      await close(server);
+      for (const s of servers) await close(s);
     });
+  }
+
+  /** The file side: the cleaner always, the file origin and its links only with an origin. */
+  #filesSide(ctx: ModuleContext, config: ApiConfig, oauth: OAuth | null): FilesSide {
+    const store = () => ctx.services.get(ArtifactStoreKey);
+    const cleaner = new ImageCleaner(store);
+    const tickets = new Tickets(() => ctx.clock.now());
+    let origin: string | null;
+    let site: string | null;
+    try {
+      origin = parseOrigin(config.files.origin, "[modules.api.files] origin");
+      site =
+        parseOrigin(config.files.site, "[modules.api.files] site") ??
+        (oauth === null ? null : oauth.redirectFor(null).origin);
+    } catch (error) {
+      throw new ApiConfigError(errorMessage(error), { cause: error });
+    }
+    if (origin !== null && site !== null && new URL(origin).host === new URL(site).host) {
+      throw new ApiConfigError(
+        "`[modules.api.files] origin` must be a host of its own, not the site's: files there could reach the login",
+      );
+    }
+    // Without the Discord login nobody can show who they are, so only links anyone may open.
+    const scoped = oauth !== null && site !== null;
+    const links =
+      origin === null
+        ? null
+        : new FileLinkService({
+            store,
+            cleaner,
+            origin,
+            scoped: () => scoped,
+            perPersonPerDay: config.files.links_per_person_per_day,
+            moderation: () => ctx.services.get(ModerationKey),
+            now: () => ctx.clock.now(),
+          });
+    if (origin === null)
+      ctx.log.debug("no file origin: share links are off, attachments still work");
+    return { config: config.files, origin, site, tickets, links, cleaner };
   }
 
   async stop(): Promise<void> {
     this.#address = null;
+    this.#publicAddress = null;
+    this.#filesAddress = null;
   }
 }

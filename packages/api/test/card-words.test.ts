@@ -3,10 +3,12 @@
 
 import { PersonaHandleKey } from "@miyoria/brain/agent";
 import { LlmRouterKey } from "@miyoria/llm/llm";
+import { DEFAULT_CHARACTER } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
   CARD_VOICE,
   type CardContext,
+  cardVoice,
   checked,
   MAX_FIELDS,
   MAX_LINE,
@@ -263,5 +265,25 @@ describe("nobody else on a card", () => {
     expect(told[1]).not.toContain("阿凱");
     // Asked again without the scene, she is told to pick from what she remembers.
     expect(told[1]).toContain("從上面你記得的事裡挑一件");
+  });
+});
+
+describe("how her card words sound, by profile", () => {
+  it("is word for word what it always was for the first character", () => {
+    expect(cardVoice()).toBe(CARD_VOICE);
+    expect(cardVoice(DEFAULT_CHARACTER)).toBe(CARD_VOICE);
+    expect(CARD_VOICE).toContain(
+      "- 卡上的字就是你在聊天裡會說的話:短、口語,有你的尾音、吐槽和鯨魚的小毛病,像隨手寫在卡背的一兩句。",
+    );
+  });
+
+  it("names another profile's nature, or none", () => {
+    const cat = cardVoice({ ...DEFAULT_CHARACTER, creature: "黑貓" });
+    expect(cat).toContain("有你的尾音、吐槽和黑貓的小毛病,");
+    expect(cat).not.toContain("鯨魚");
+    const none = cardVoice({ ...DEFAULT_CHARACTER, creature: "" });
+    expect(none).toContain("有你的尾音和吐槽,像隨手寫在卡背的一兩句。");
+    expect(none).not.toContain("鯨魚");
+    expect(none.replace("有你的尾音和吐槽,", "有你的尾音、吐槽和鯨魚的小毛病,")).toBe(CARD_VOICE);
   });
 });

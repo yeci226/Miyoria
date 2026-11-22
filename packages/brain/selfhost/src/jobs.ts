@@ -286,8 +286,13 @@ export class JobsHost {
     for (const tool of this.#tools) agent.tools.register(tool);
     // The `reflect` module runs its daily reflection through this, under the nightly figure.
     agent.ctx.provide(ReflectGuardKey, {
-      run: async (run, signal) => {
-        const out = await this.runReflect({ run, ...(signal === undefined ? {} : { signal }) });
+      run: async (run, signal, options) => {
+        const out = await this.runReflect({
+          run,
+          ...(signal === undefined ? {} : { signal }),
+          ...(options?.goal === undefined ? {} : { goal: options.goal }),
+          ...(options?.summarise === undefined ? {} : { summarise: options.summarise }),
+        });
         return { ran: out.ran, result: out.result, why: out.why };
       },
     });

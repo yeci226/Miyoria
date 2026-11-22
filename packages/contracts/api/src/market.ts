@@ -4,9 +4,13 @@
 // up, buy tickets), and the owner's side: set or skip the coming week's lot, settle now, history.
 // Without the `market` module these are a `503` that names it. Nobody else's tickets are shown
 // before a draw; a bid is public, like the notice in Discord.
+//
+// Every route is about one Space's market (`?space=`, `SpaceQuery`): a member's own server by
+// default (preferring the primary), the primary on the owner's side.
 
 import { z } from "zod";
 import { IdempotencyHeaders, route } from "./route.js";
+import { SpaceQuery } from "./shared.js";
 
 /** The node of the owner's hand on the market (the same as on someone's coins). */
 const NODE_MARKET = "admin.economy.adjust";
@@ -243,28 +247,40 @@ const member = () => route.meta({ audience: "member", permission: null, limited:
 export const market = {
   auction: member()
     .route({ method: "GET", path: "/api/member/market/auction" })
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(AuctionViewSchema),
-  bids: member().route({ method: "GET", path: "/api/member/market/bids" }).output(MyBidsSchema),
+  bids: member()
+    .route({ method: "GET", path: "/api/member/market/bids" })
+    .input(z.object({ query: SpaceQuery }).optional())
+    .output(MyBidsSchema),
   lottery: member()
     .route({ method: "GET", path: "/api/member/market/lottery" })
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(LotteryViewSchema),
   tickets: member()
     .route({ method: "GET", path: "/api/member/market/tickets" })
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(MyTicketsSchema),
   /** A bid on the open lot (`409` with a sentence when it is too low or nothing is open). */
   bid: member()
     .route({ method: "POST", path: "/api/member/market/bid" })
-    .input(z.object({ body: BidRequestSchema }))
+    .input(z.object({ query: SpaceQuery.optional(), body: BidRequestSchema }))
     .output(BidResultSchema),
   /** The winner of a name lot gives the name (or gives it up for a full refund). */
   name: member()
     .route({ method: "POST", path: "/api/member/market/name" })
-    .input(z.object({ body: NameRequestSchema }))
+    .input(z.object({ query: SpaceQuery.optional(), body: NameRequestSchema }))
     .output(NameResultSchema),
   /** Tickets of this week; the same `Idempotency-Key` is the same purchase. */
   buy: member()
     .route({ method: "POST", path: "/api/member/market/lottery" })
-    .input(z.object({ headers: IdempotencyHeaders, body: TicketRequestSchema }))
+    .input(
+      z.object({
+        query: SpaceQuery.optional(),
+        headers: IdempotencyHeaders,
+        body: TicketRequestSchema,
+      }),
+    )
     .output(TicketResultSchema),
 };
 
@@ -273,17 +289,18 @@ export const marketAdmin = {
   history: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "GET", path: "/api/market/history" })
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(MarketHistorySchema),
   /** Sets or skips the coming week's lot; `409` when this week's has opened (it is then next week's). */
   plan: route
     .meta({ audience: "admin", permission: NODE_MARKET })
     .route({ method: "POST", path: "/api/market/plan" })
-    .input(z.object({ body: LotPlanRequestSchema }))
+    .input(z.object({ query: SpaceQuery.optional(), body: LotPlanRequestSchema }))
     .output(LotPlanSchema),
   /** Ends the open lot now, or draws this week's lottery now; `409` when there is none. */
   settle: route
     .meta({ audience: "admin", permission: NODE_MARKET })
     .route({ method: "POST", path: "/api/market/settle" })
-    .input(z.object({ body: SettleRequestSchema }))
+    .input(z.object({ query: SpaceQuery.optional(), body: SettleRequestSchema }))
     .output(z.object({ ok: z.literal(true) })),
 };

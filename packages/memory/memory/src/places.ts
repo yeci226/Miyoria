@@ -116,3 +116,17 @@ export function quotable(disclosure: Disclosure, viewer: Pick<Viewer, "context">
 export function withheldTalk(partner: Handle | null): string {
   return `${partner === null ? "有人" : `跟 ${safeName(partner)} `}私訊聊過${WITHHELD}`;
 }
+
+/**
+ * The head of what she read of another place from where she is (the `look` tool, docs/design/
+ * v5-places.md §9): those words are that place's, shown here only as far as `disclose` allowed.
+ * Nothing written from a run is made of them (the segment pass leaves such a tool result out), so
+ * they never become a note or a memory of the place she read them in, which would carry them to
+ * wherever that place's things are shown.
+ */
+export const ELSEWHERE_MARK = "〔別的地方的事〕";
+
+/** Whether `text` (a tool result) is what she read of another place. */
+export function fromElsewhere(text: string): boolean {
+  return text.trimStart().startsWith(ELSEWHERE_MARK);
+}

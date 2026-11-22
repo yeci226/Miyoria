@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { IdempotencyHeaders, route } from "./route.js";
+import { SpaceQuery } from "./shared.js";
 
 /** `GET /api/member/session`: who is logged in, as far as they need to see it. */
 export const MemberSessionSchema = z
@@ -141,7 +142,14 @@ export type SongRequest = z.input<typeof SongRequestSchema>;
 
 /** Answer of `POST /api/member/songs`. */
 export const SongAcceptedSchema = z
-  .object({ accepted: z.boolean() })
+  .object({
+    accepted: z.boolean(),
+    /**
+     * Why it waits, in zh-TW, when she is in voice in another server: it is sung the next time
+     * she is in voice in the server it was asked for. Absent or `null` otherwise.
+     */
+    waiting: z.string().nullable().optional(),
+  })
   .meta({ id: "ApiMemberSongAccepted" });
 export type SongAccepted = z.output<typeof SongAcceptedSchema>;
 
@@ -303,7 +311,8 @@ export const member = {
   requestSong: route
     .meta({ audience: "member", permission: null })
     .route({ method: "POST", path: "/api/member/songs" })
-    .input(z.object({ body: SongRequestSchema }))
+    // `?space=`: the server it is sung in (a member of several picks; default their own).
+    .input(z.object({ query: SpaceQuery.optional(), body: SongRequestSchema }))
     .output(SongAcceptedSchema),
   cards: route
     .meta({ audience: "member", permission: null, limited: true })

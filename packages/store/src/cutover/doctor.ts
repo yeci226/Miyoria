@@ -51,6 +51,22 @@ export interface DatabaseCounts {
   newest_event: Timestamp | null;
 }
 
+/** One Space (server) of a V5 file, for `db doctor` (docs/design/v5-places.md). */
+export interface SpaceReport {
+  platform: string;
+  external_id: string;
+  name: string;
+  /** Members who have not left. */
+  members: number;
+  /** She left it. */
+  left: boolean;
+  /**
+   * The install's original server: `spaces.is_primary` once identity v2 ran, before that the one
+   * identity v2 will pick (the active Space with the most members, then the earliest, then by id).
+   */
+  primary: boolean;
+}
+
 export interface DoctorReport {
   path: string;
   layout: DatabaseLayout;
@@ -69,6 +85,9 @@ export interface DoctorReport {
   foreign_keys: { count: number; first: string[] } | null;
   /** V5: persons (not merged into another), accounts, events. V4: people, accounts, `log_events`. */
   counts: DatabaseCounts | null;
+  /** V5: the Spaces, primary first; `primary_pending` while identity v2 has not run yet. */
+  spaces: SpaceReport[] | null;
+  primary_pending: boolean;
   /** V4 only: what `import-links` would bring into an empty database. */
   import: LinkImportCounts | null;
   /** Why the import preview could not be made. */
@@ -160,6 +179,55 @@ function checks(db: DatabaseSync): Pick<DoctorReport, "integrity" | "foreign_key
   };
 }
 
+/**
+ * The Spaces of a V5 file with their members and the primary: the column once identity v2 ran,
+ * else the one its migration will pick (the same order as `identity/migrations.ts` v2).
+ */
+function spaceReports(db: DatabaseSync): Pick<DoctorReport, "spaces" | "primary_pending"> {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(spaces)").all() as { name: string }[]).map((c) => c.name),
+  );
+  const pending = !columns.has("is_primary");
+  const rows = db
+    .prepare(
+      `SELECT s.id, s.platform, s.external_id, s.name, s.left_at IS NOT NULL AS left_,
+         ${pending ? "0" : "s.is_primary"} AS is_primary,
+         (SELECT count(*) FROM space_members m WHERE m.space_id = s.id AND m.left_at IS NULL) AS members,
+         (SELECT count(*) FROM space_members m WHERE m.space_id = s.id) AS ever
+       FROM spaces s ORDER BY s.joined_at, s.id`,
+    )
+    .all() as {
+    id: string;
+    platform: string;
+    external_id: string;
+    name: string;
+    left_: number;
+    is_primary: number;
+    members: number;
+    ever: number;
+  }[];
+  let primary = rows.find((r) => r.is_primary === 1)?.id ?? null;
+  if (pending) {
+    // identity v2: the active Space with the most member rows, then the earliest, then the smallest
+    // id (the rows' own order; the sort is stable).
+    const pick = rows
+      .filter((r) => r.left_ === 0)
+      .sort((a, b) => b.ever - a.ever)
+      .at(0);
+    primary = pick?.id ?? null;
+  }
+  const spaces = rows.map((r) => ({
+    platform: r.platform,
+    external_id: r.external_id,
+    name: r.name,
+    members: Number(r.members),
+    left: r.left_ === 1,
+    primary: r.id === primary,
+  }));
+  spaces.sort((a, b) => Number(b.primary) - Number(a.primary));
+  return { spaces, primary_pending: pending };
+}
+
 /** Looks at the database file at `path` without changing it (see the file comment). */
 export function inspectDatabase(path: string, options: DoctorOptions = {}): DoctorReport {
   const facts = fileFacts(path);
@@ -174,6 +242,8 @@ export function inspectDatabase(path: string, options: DoctorOptions = {}): Doct
     integrity: null,
     foreign_keys: null,
     counts: null,
+    spaces: null,
+    primary_pending: false,
     import: null,
     import_error: null,
   };
@@ -230,6 +300,7 @@ export function inspectDatabase(path: string, options: DoctorOptions = {}): Doct
       events: has("events") ? (scalar(db, "SELECT count(*) FROM events") ?? 0) : 0,
       newest_event: newest === null ? null : fromMicros(newest),
     };
+    if (has("spaces") && has("space_members")) Object.assign(report, spaceReports(db));
     return report;
   } finally {
     ro.close();

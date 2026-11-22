@@ -70,6 +70,7 @@ const NO_KARAOKE: KaraokeStageScene = {
   currency: "",
   air: { backing: false, relay: null, delay_ms: 0, backing_gain: 0, voice_gain: 0, duck_gain: 0 },
   settling: null,
+  cheers: [],
 };
 
 /** Whether `path` may be served as a round's video: an absolute path to an `.mp4` file. */

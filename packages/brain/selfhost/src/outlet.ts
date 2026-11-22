@@ -133,6 +133,12 @@ export interface OutletClaims {
   audience(line: OutgoingLine): Handle[] | null;
   /** The people known in the line's place whom an `@name` in it may mention (not blocked ones). */
   people(line: OutgoingLine): { account: AccountRef; name: string }[];
+  /**
+   * Whom the line is said to, as her questions are tracked (`Delivery.to`): the author of the
+   * message it replies to (`reply`), else the people it names (by handle, the name they go by,
+   * her call name), else nobody in particular (`[]`). `null`: not a run of the host.
+   */
+  to?(line: OutgoingLine, reply: MessageRef | null): Handle[] | null;
 }
 
 /** The outlet of the host: `MainLine.say`, then the scheduler's word on it. */
@@ -232,8 +238,17 @@ export class MouthOutlet implements Outlet {
     signal: AbortSignal,
   ): Promise<Delivery> {
     let first: Delivery | null = null;
+    const reply = this.#replyTo(line);
+    const to = this.#claims?.to?.(line, reply) ?? null;
     for (const [index, text] of this.#parts(line).entries()) {
-      const delivery = await this.#say(line, text, index === 0, turn, audience, signal);
+      const delivery = await this.#say(
+        line,
+        text,
+        index === 0,
+        turn,
+        { audience, to, reply },
+        signal,
+      );
       if (delivery.status === "blocked") {
         if (first === null) return delivery;
         break;
@@ -244,15 +259,23 @@ export class MouthOutlet implements Outlet {
     return first ?? { status: "blocked", reason: "nothing to send" };
   }
 
-  /** `text`, a part of `line`, to the mouth under `turn`, and how it left the scheduler. */
+  /**
+   * `text`, a part of `line`, to the mouth under `turn`, and how it left the scheduler. The
+   * first part carries the line's reply reference.
+   */
   async #say(
     line: OutgoingLine,
     text: string,
     first: boolean,
     turn: string,
-    audience: readonly Handle[] | null,
+    whom: {
+      audience: readonly Handle[] | null;
+      to: readonly Handle[] | null;
+      reply: MessageRef | null;
+    },
     signal: AbortSignal,
   ): Promise<Delivery> {
+    const { audience, to } = whom;
     const agent = this.#agent;
     agent.mainline.own(turn);
     if (line.focus) await this.#pace(line, text, signal);
@@ -260,7 +283,7 @@ export class MouthOutlet implements Outlet {
     const ms = Math.min(cfg.reply_ttl_ms + SETTLE_SLACK_MS, SETTLE_MAX_MS);
     const settled = this.#settlements.wait(turn, line.place, text, ms, signal);
     settled.catch(() => undefined);
-    if (first) agent.mainline.replyNext(turn, line.place, this.#replyTo(line));
+    if (first) agent.mainline.replyNext(turn, line.place, whom.reply);
     await agent.mainline.say({
       context: line.place,
       text,
@@ -268,6 +291,7 @@ export class MouthOutlet implements Outlet {
       turn,
       source: "self",
       ...(audience === null ? {} : { audience }),
+      ...(to === null ? {} : { to }),
     });
     const end = await settled;
     if (line.focus) this.#lastAt.set(line.turn, agent.ctx.clock.now());

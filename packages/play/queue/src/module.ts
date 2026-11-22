@@ -7,10 +7,10 @@ import {
   type ModuleContext,
 } from "@miyoria/runtime/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
-import { SocialSignalsKey, serviceKey } from "@miyoria/types";
+import { PlacesKey, SocialSignalsKey, serviceKey } from "@miyoria/types";
 import { registerCommands } from "./commands.js";
 import { QueueConfigSchema } from "./config.js";
-import { RequestQueue } from "./queue.js";
+import { queueSpaces, RequestQueue } from "./queue.js";
 
 const log = getLogger("queue");
 
@@ -23,7 +23,8 @@ interface Running {
 
 /**
  * Module `queue`: provides the `RequestQueue`, restores and snapshots its state, publishes
- * `queue.*` events and registers the queue commands.
+ * `queue.*` events and registers the queue commands. Each Space (server) has its own queue, pause
+ * and vote; a snapshot of before is read as the original server's.
  *
  * Uses the optional services `SettingsStore` (persistence), `SocialSignals` (affinity
  * weighting) and `CommandRegistry` (commands, module `commands`). Config: see `QueueConfig`.
@@ -47,6 +48,8 @@ export class QueueModule implements Module {
       store: ctx.services.get(SettingsStoreKey) ?? null,
       publisher: ctx.publisher,
       clock: ctx.clock,
+      // Each Space its own queue (phase 6); without identity's places, one queue.
+      spaces: queueSpaces(ctx.services.get(PlacesKey) ?? null),
     });
     try {
       if (await queue.restore()) log.info("restored the request queue");

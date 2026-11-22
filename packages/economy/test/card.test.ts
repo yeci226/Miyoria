@@ -38,6 +38,7 @@ function bounty(id: string, expires: number): Bounty {
     expires_at: toTimestamp(expires),
     closed_at: null,
     winner: null,
+    space: null,
   };
 }
 

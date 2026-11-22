@@ -310,7 +310,22 @@ export class MemoryModule implements Module {
         installer,
         sub,
         signal,
-        () => recent.log.invalidate(),
+        (body) => {
+          recent.log.invalidate();
+          // Her documents: the quotes of that message lose their words, and a line that rested on
+          // them alone is outdated and loses its text (`NotesStore.redactEvidence`).
+          if (notes === null) return;
+          try {
+            const gone = notes.redactEvidence({ message_id: body.message.id });
+            if (gone.evidence > 0)
+              ctx.log.info(gone, "an excluded message was taken out of her notes");
+          } catch (error) {
+            ctx.log.warn(
+              { error: errorMessage(error) },
+              "cannot take an excluded message out of her notes",
+            );
+          }
+        },
         seen,
         () => live?.running ?? false,
       ),
@@ -503,7 +518,8 @@ async function consolidationLoop(
   installer: Installer,
   sub: Subscription,
   signal: AbortSignal,
-  excluded: () => void = () => {},
+  /** A message was excluded: what else holds it lets go (after the memory records). */
+  excluded: (body: MessageExcluded) => void = () => {},
   /** Someone spoke (birthdays and other dates of theirs are checked). */
   seen: (account: AccountRef, context: ContextKey, nowMs: number) => void = () => undefined,
   /**
@@ -550,11 +566,12 @@ async function consolidationLoop(
         if (body !== null) {
           try {
             const gone = await engine.excludeMessage(body);
-            excluded();
             ctx.log.info(gone, "a message she was asked not to remember was taken out");
           } catch (error) {
             ctx.log.warn({ error: errorMessage(error) }, "cannot take out an excluded message");
           }
+          // Her notes too, whether or not the memory records could be.
+          excluded(body);
         }
       } else if (env.type === CONVERSATION_FOLDED_TOPIC) {
         const payload = env.data as JsonValue;

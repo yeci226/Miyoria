@@ -1,5 +1,6 @@
-import { setting, settingGroups } from "@miyoria/runtime/kernel";
+import { CurrencySchema, setting, settingGroups } from "@miyoria/runtime/kernel";
 import { z } from "zod";
+import { DEFAULT_FREE_GIFTS, FreeGiftConfigSchema } from "./gift-config.js";
 
 const coins = z.number().int().nonnegative();
 
@@ -52,7 +53,7 @@ export const DEFAULT_ROOM: RoomItem[] = [
 export const EconomyConfigSchema = z
   .object({
     /** Shown everywhere the coins are named. */
-    currency: z.string().trim().min(1).max(16).default("魚幣"),
+    currency: CurrencySchema,
     /** Daily check-in, once per local day (the panel and Discord together). */
     checkin: coins.default(10),
     /** Extra on every 7th consecutive check-in day. */
@@ -254,6 +255,17 @@ export const EconomyConfigSchema = z
     quest_cap: coins.default(45),
     /** Days a topic may not repeat for the "talk about something new" quest. */
     quest_topic_days: z.number().int().positive().default(14),
+    /**
+     * The "with others" quest: how many people (her not counted) a game or a song heard to its end
+     * needs, them included. 2: at least one other person.
+     */
+    quest_together_min_people: z.number().int().min(2).default(2),
+    /**
+     * The quest she thinks of for each person from her memories of them: `false` gives everyone
+     * one of the plain ones instead (no model call). She gets `quest_pick_secs` to write it.
+     */
+    quest_pick_by_her: z.boolean().default(true),
+    quest_pick_secs: z.number().int().positive().max(60).default(20),
     // Achievements and titles (achievements.ts): a one-time reward by size, and the day's most.
     achievement_small: z.number().int().positive().default(10),
     achievement_big: z.number().int().positive().default(30),
@@ -266,6 +278,18 @@ export const EconomyConfigSchema = z
     prediction_max_minutes: z.number().int().positive().default(120),
     predictions_open: z.number().int().positive().default(3),
     prediction_expire_hours: z.number().int().positive().default(24),
+    /**
+     * The cut of the pool a prediction with winners burns (v5-play §4.2: 5% to 10%); nothing is
+     * taken when every stake goes back.
+     */
+    prediction_rake: z.number().min(0).max(0.1).default(0.05),
+    /**
+     * Predictions that settle by themselves (prediction-watch.ts): betting closes at most this many
+     * minutes after opening (the result may come at any moment), and one whose result has not come
+     * this many minutes after betting closed gives every stake back.
+     */
+    prediction_auto_close_minutes: z.number().int().positive().default(5),
+    prediction_auto_wait_minutes: z.number().int().positive().default(120),
     // Her room (room.ts): what the audience can fund together, and the most one person puts in one.
     room_items: z
       .array(RoomItemSchema)
@@ -279,6 +303,19 @@ export const EconomyConfigSchema = z
     // that were taken back in a week the table says "inflating".
     health_days: z.number().int().positive().max(90).default(14),
     health_warn_ratio: z.number().min(0).max(1).default(0.6),
+    /**
+     * The one fixed rate between New Taiwan dollars and coins (owner 2026-11-21): one coin is this
+     * many NT$, about one (a bowl of rice is 10). Never fetched, never floating. Free-form gifts
+     * price by it, and the exchange reads this same key through its wallet (it has no rate of its
+     * own for coins, only `[modules.exchange] twd_per_usd`).
+     */
+    twd_per_coin: z.number().positive().default(1),
+    /**
+     * Gifts a member names in their own words (`[modules.economy.free_gifts]`, gift-config.ts,
+     * docs/design/economy.md §16): a real-world estimate in NT$ turned into coins at
+     * `twd_per_coin`, confirmed by the member, taken or refused by her.
+     */
+    free_gifts: FreeGiftConfigSchema.default(DEFAULT_FREE_GIFTS),
     /** Where "today" starts. */
     utc_offset_minutes: z.number().int().min(-720).max(840).default(480),
     frames: z

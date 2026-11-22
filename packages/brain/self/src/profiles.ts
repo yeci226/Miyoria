@@ -29,11 +29,15 @@ export interface RunLimits {
   pictureBytes?: number;
   /** Prompt and completion tokens of a run, all steps together. */
   tokens: number;
-  /** What a session may spend on models in an hour (USD). Owner decision Q6: 1. */
+  /**
+   * What a session may spend on models in a rolling hour (USD); 0: no such cap (the router's daily
+   * budget still holds). The text and voice runs take `[modules.agent]` `session_usd_per_hour` of
+   * their place; the profile's value (owner decision Q6: 1) is the default.
+   */
   sessionUsdPerHour: number;
   /**
    * The same cap in tokens, for a session whose model has no price in `[llm.pricing]`: its cost
-   * cannot be counted, so its tokens are.
+   * cannot be counted, so its tokens are. 0: no such cap. `session_tokens_per_hour`.
    */
   sessionTokensPerHour: number;
 }
@@ -119,9 +123,13 @@ export const VOICE_TOOLS: ReadonlySet<string> = new Set([
  */
 export const SILENT_WAIT_MS = 1_000;
 
-const HOUR_USD = 1;
-/** About what 1 USD buys of a flash model's cached input; only used when no price is known. */
-const HOUR_TOKENS = 3_000_000;
+/** The default of `[modules.agent]` `session_usd_per_hour`, and the cap of runs that do not read it. */
+export const HOUR_USD = 1;
+/**
+ * About what 1 USD buys of a flash model's cached input; only used when no price is known. The
+ * default of `session_tokens_per_hour`.
+ */
+export const HOUR_TOKENS = 3_000_000;
 
 export const PROFILES: Readonly<Record<ProfileName, RunProfile>> = {
   text: {

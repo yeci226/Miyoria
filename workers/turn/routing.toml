@@ -1,0 +1,5 @@
+# [routing] of the turn worker (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# session: the VAD is a WebSocket stream per call and the end-of-turn guess follows it; realtime.
+class = "session"
+latency = "realtime"

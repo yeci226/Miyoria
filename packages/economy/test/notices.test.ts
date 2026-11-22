@@ -122,8 +122,9 @@ describe("achievement notices", () => {
   it("puts the unlock and the all-three bonus on her tool's receipt", async () => {
     const r = await rig({ quest_bonus: 15 });
     const posted = sink(r);
-    await r.economy.v2.completeQuest(ALICE, "play_game");
-    await r.economy.v2.completeQuest(ALICE, "listen_song");
+    await r.economy.v2.completeQuest(ALICE, "together");
+    await r.economy.v2.quests(ALICE, { pick: true });
+    await r.economy.v2.completeQuest(ALICE, "her_pick");
     await say(r, v2Capabilities(r.economy), "complete_quest", ALICE, "m1", { topic: "新養的魚" });
     // The receipt is the only card, where she was talking.
     expect(posted).toHaveLength(1);
@@ -159,8 +160,9 @@ describe("song notices", () => {
     const r = await rig({ quest_bonus: 15 });
     const posted = sink(r);
     singer(r);
-    // Bob has done the other two quests: listening is his third.
-    await r.economy.v2.completeQuest(BOB, "play_game");
+    // Bob has done the other two quests: listening with others is his third.
+    await r.economy.v2.quests(BOB, { pick: true });
+    await r.economy.v2.completeQuest(BOB, "her_pick");
     await r.economy.v2.completeQuest(BOB, "new_topic", "他的貓");
     const earnings = new Earnings(r.economy, r.economy.config, r.services, getLogger("test"));
     await earnings.onEvent(joined(ALICE, BOB, ERIN), T0);

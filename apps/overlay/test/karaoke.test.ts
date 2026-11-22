@@ -109,6 +109,7 @@ describe("karaoke frames", () => {
             onAir: true,
             parts: null,
             pitch: null,
+            cheers: 0,
           },
         ],
         note: null,
@@ -119,6 +120,7 @@ describe("karaoke frames", () => {
         joinUrl: null,
         qrWhileSinging: false,
         settling: null,
+        cheers: [],
       },
     });
   });
@@ -443,7 +445,8 @@ describe("the phases of a round on the stream", () => {
         .filter(([k, v]) => k !== "qr" && v === true)
         .map(([k]) => k);
     expect(shown(scene({ state: "lobby" }))).toEqual(["lobby"]);
-    expect(shown(scene({ state: "countdown" }))).toEqual(["title", "lanes", "lyrics", "board"]);
+    // The countdown's intro names the song: no title plate yet.
+    expect(shown(scene({ state: "countdown" }))).toEqual(["lanes", "lyrics", "board"]);
     expect(shown(scene({ state: "singing" }))).toEqual(["title", "lanes", "lyrics", "board"]);
     expect(shown(scene({ state: "singing", settling: { waiting: ["Mia"] } }))).toEqual(["title", "board", "settling"]);
     expect(shown(scene({ state: "results" }))).toEqual(["results"]);
@@ -526,6 +529,7 @@ describe("the results", () => {
     onAir: false,
     parts: null,
     pitch: null,
+    cheers: 0,
     ...extra,
   });
 
@@ -576,6 +580,7 @@ describe("the board", () => {
     onAir: false,
     parts: null,
     pitch: null,
+    cheers: 0,
     ...extra,
   });
 

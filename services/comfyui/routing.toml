@@ -1,0 +1,10 @@
+# [routing] of ComfyUI (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# job: each picture stands alone. ComfyUI has its own queue, which hostd does not read (it is an
+# external program), so Core sees no load for it. It does not take the GPU lease, so it names nothing
+# in yields_to: Core's imagegen module frees it while she sings, as before.
+class = "job"
+latency = "interactive"
+concurrency = 1
+unit_s = 60
+result_mb = 4

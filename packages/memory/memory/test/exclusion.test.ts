@@ -18,10 +18,12 @@ import {
   Events,
   type IncomingMessage,
   type MessageExcluded,
+  type PersonId,
   type Timestamp,
 } from "@miyoria/types";
 import { afterEach, describe, expect, it } from "vitest";
 import { EventLogService } from "../../facts/src/index.js";
+import { notesTables, personSubject } from "../../notes/src/index.js";
 import {
   MemoryEngine,
   MemoryEngineKey,
@@ -35,6 +37,8 @@ import { acct, guildCtx, plus, profile, router, t0, tablesOf } from "./helpers.j
 const ctx = guildCtx("g1", "c1");
 const OWEN = acct("2");
 const AMY = acct("3");
+/** Owen as her notes know him. */
+const PERSON = "01HOWEN0000000000000000000" as PersonId;
 
 const stores: SqliteStore[] = [];
 afterEach(async () => {
@@ -228,12 +232,30 @@ describe("excluded messages", () => {
       const engine = services.require(MemoryEngineKey);
       const stored = await engine.store(fact("Owen 養了一隻貓", [r.cat.seen.id]), t0());
       const id = (stored as { id: string }).id;
+      // A line of her notes that quotes the message, and one that quotes another.
+      const notes = r.store.plugin(notesTables);
+      const line = (text: string, quote: string, message_id: string) =>
+        notes.add(
+          personSubject(PERSON),
+          {
+            section: "近況",
+            text,
+            provenance: "told_by_subject",
+            scope: { type: "space", space: "s1" },
+            evidence: [{ quote, person_id: PERSON, message_id }],
+          },
+          { author: "segment", segment: { session: "s", seq_from: 1, seq_to: 2 } },
+        ).id;
+      const cat = line("Owen 養了一隻貓", "我養了一隻貓", "m1");
+      const ramen = line("Owen 喜歡拉麵", "我喜歡拉麵", "m2");
       sup.bus.publish("agent", Events.AgentMessageExcluded, excludedBody("m1"));
       const deadline = Date.now() + 5000;
-      while ((await tablesOf(r.store).get(id)) !== null) {
+      while ((await tablesOf(r.store).get(id)) !== null || notes.line(cat)?.text !== "") {
         expect(Date.now() < deadline, "not taken out").toBe(true);
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
+      expect(notes.line(cat)?.evidence[0]).toMatchObject({ quote: "", redacted: true });
+      expect(notes.line(ramen)).toMatchObject({ text: "Owen 喜歡拉麵", outdated_at: null });
     } finally {
       await sup.stopAll();
     }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { initialState, parseMessage, reduce } from "../src/feed.js";
-import { BarField, barDistance, barTargets, levelValue } from "../src/wave.js";
+import { BarField, barDistance, barTargets, levelValue, MAX_BANDS } from "../src/wave.js";
+import { OVERLAY_LEVEL_BANDS_MAX } from "@miyoria/contracts/overlay";
 
 describe("levels feed", () => {
   it("parses levels, clamps rms and drops odd bands", () => {
@@ -12,6 +13,14 @@ describe("levels feed", () => {
     expect(parseMessage('{"type":"levels","rms":3}')).toEqual({ type: "levels", rms: 1, bands: null });
     expect(parseMessage('{"type":"levels","rms":0.1,"bands":["x"]}')).toMatchObject({ bands: null });
     expect(parseMessage('{"type":"levels"}')).toBeNull();
+    // As many bands as the contract allows, and not one more.
+    const bands = (n: number) => JSON.stringify(Array.from({ length: n }, () => 0.5));
+    expect(MAX_BANDS).toBe(OVERLAY_LEVEL_BANDS_MAX);
+    const frame = (n: number) => `{"type":"levels","rms":0.1,"bands":${bands(n)}}`;
+    expect(parseMessage(frame(MAX_BANDS))).toMatchObject({
+      bands: Array.from({ length: MAX_BANDS }, () => 0.5),
+    });
+    expect(parseMessage(frame(MAX_BANDS + 1))).toMatchObject({ bands: null });
   });
 
   it("never changes the reduced state", () => {
@@ -48,6 +57,14 @@ describe("voice bars", () => {
     expect(middle).toBeGreaterThan(end * 2);
     barTargets(1, [0, 0, 0, 0, 0, 1], out, peaks);
     expect(out[0] ?? 0).toBeGreaterThan((out[12] ?? 0) * 0.9);
+  });
+
+  it("shapes the bars from as many bands as the contract allows", () => {
+    const f = new BarField(8);
+    // Only the lowest band is loud: the middle bars stand above the ends.
+    f.push(0.2, Array.from({ length: MAX_BANDS }, (_, k) => (k === 0 ? 0.2 : 0.001)), 0);
+    f.advance(100, 100);
+    expect(f.values[3] ?? 0).toBeGreaterThan((f.values[0] ?? 0) * 1.5);
   });
 
   it("rises quickly, falls slowly and goes still when the feed stops", () => {

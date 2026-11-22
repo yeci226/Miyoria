@@ -247,7 +247,8 @@ export class Timeline implements JustNow {
         (h) =>
           contextKeyEquals(h.context, s.context) && h.at >= s.at && h.at - s.at <= 3 * MINUTE_MS,
       );
-      const said = `${safeName(s.name)}對你說:「${cut(s.text, cfg.quote_chars)}」`;
+      // By handle, as everything else names them (the name shown may have changed since).
+      const said = `${safeName(s.handle)}對你說:「${cut(s.text, cfg.quote_chars)}」`;
       out.push({
         at: toTimestamp(s.at),
         kind: "talk",
@@ -307,7 +308,7 @@ export class OtherPlaces implements Elsewhere {
       place.lines.push({ at, text });
     };
     for (const s of window.said)
-      add(s.context, s.at, `${safeName(s.name)}:${cut(s.text, cfg.quote_chars)}`);
+      add(s.context, s.at, `${safeName(s.handle)}:${cut(s.text, cfg.quote_chars)}`);
     for (const h of window.her) add(h.context, h.at, `你:${cut(h.said, cfg.quote_chars)}`);
     const states = this.#deps.states();
     const out: PlaceSummary[] = [];

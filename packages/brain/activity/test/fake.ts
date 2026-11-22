@@ -170,18 +170,36 @@ export class FakeWorld implements ActivityPort {
         if (this.golive.get(guild) === "live")
           return { text: "already live", data: { already: true } };
         this.golive.set(guild, "starting");
-        this.emit(Events.VoiceGoLive, { guild, state: "starting", error: null, reason: null });
+        this.emit(Events.VoiceGoLive, {
+          platform: "discord",
+          guild,
+          state: "starting",
+          error: null,
+          reason: null,
+        });
         this.#later(() => {
           if (this.golive.get(guild) !== "starting") return;
           if (this.liveNeedsObs || this.goliveHangs) return;
           const failed = this.goliveFails;
           if (failed !== null) {
             this.golive.delete(guild);
-            this.emit(Events.VoiceGoLive, { guild, state: "failed", error: failed, reason: null });
+            this.emit(Events.VoiceGoLive, {
+              platform: "discord",
+              guild,
+              state: "failed",
+              error: failed,
+              reason: null,
+            });
             return;
           }
           this.golive.set(guild, "live");
-          this.emit(Events.VoiceGoLive, { guild, state: "live", error: null, reason: null });
+          this.emit(Events.VoiceGoLive, {
+            platform: "discord",
+            guild,
+            state: "live",
+            error: null,
+            reason: null,
+          });
         });
         return { text: "Go Live started", data: { already: false } };
       }
@@ -189,7 +207,13 @@ export class FakeWorld implements ActivityPort {
         if (!this.golive.has(guild)) return { text: "not live", data: { stopped: false } };
         this.#later(() => {
           this.golive.delete(guild);
-          this.emit(Events.VoiceGoLive, { guild, state: "stopped", error: null, reason: null });
+          this.emit(Events.VoiceGoLive, {
+            platform: "discord",
+            guild,
+            state: "stopped",
+            error: null,
+            reason: null,
+          });
         });
         return { text: "Go Live stopped", data: { stopped: true } };
       }
@@ -208,7 +232,13 @@ export class FakeWorld implements ActivityPort {
           for (const [g, state] of this.golive) {
             if (state !== "starting") continue;
             this.golive.set(g, "live");
-            this.emit(Events.VoiceGoLive, { guild: g, state: "live", error: null, reason: null });
+            this.emit(Events.VoiceGoLive, {
+              platform: "discord",
+              guild: g,
+              state: "live",
+              error: null,
+              reason: null,
+            });
           }
         }
         return {

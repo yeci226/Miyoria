@@ -6,7 +6,9 @@
 // * `GET /api/modules/{id}`: one module with its card and what it depends on
 // * `GET|PUT /api/modules/{id}/settings`, `GET .../settings/history`, `POST .../settings/revert`:
 //   through Core's `ModuleSettingsKey`, the only validator; a save or revert needs
-//   `admin.settings.<id>` besides write access, and is audited
+//   `admin.settings.<id>` besides write access, and is audited. `?space=` (and `room=`, a channel
+//   id) reads and writes one place's own values (docs/design/v5-places.md); a role assigned in
+//   that server may then hold the node instead
 // * `POST /api/modules/{id}/actions/{action}`: a card's quick action, through the actuator gate as
 //   the panel when it names a capability, else the module's own `act`
 // * `GET /api/places/rooms`: the channel picker's rooms (`PlaceDirectoryKey`)
@@ -38,16 +40,20 @@ import {
 import {
   type AccountRef,
   AuthorizerKey,
+  CurrencyKey,
+  DEFAULT_CURRENCY,
   type JsonValue,
   type ModuleId,
   PlaceDirectoryKey,
   type PlaceRoomKind,
   Principals,
+  type SpaceRef,
 } from "@miyoria/types";
 import { os } from "./contract.js";
 import { findModule } from "./core.js";
 import { ApiError } from "./errors.js";
 import { actAs } from "./ops.js";
+import { adminSpace, UNKNOWN_SPACE } from "./space-param.js";
 import { type ApiContext, type ApiState, actorOf, toJson } from "./state.js";
 
 const log = getLogger("api.settings");
@@ -159,18 +165,59 @@ function sessionAccount(c: ApiContext): AccountRef | null {
   return principal?.kind === "session" ? principal.record.account : null;
 }
 
-/** Whether the request may change module `id`'s settings. */
-function mayEdit(state: ApiState, c: ApiContext, id: ModuleId): boolean {
+/**
+ * The place of `?space=&room=`, checked against `Places` (404 for a Space she is not in); `null`
+ * without `space` (the cluster). A room needs its Space.
+ */
+function placeOf(
+  state: ApiState,
+  q: { space?: string | undefined; room?: string | undefined } | undefined,
+): { space: SpaceRef; room: string | null } | null {
+  if (q?.space === undefined) {
+    if (q?.room !== undefined) throw ApiError.badRequest("`room` needs `space`");
+    return null;
+  }
+  const space = adminSpace(state, q.space);
+  if (space === null) throw ApiError.notFound(UNKNOWN_SPACE);
+  return { space, room: q.room ?? null };
+}
+
+/**
+ * Whether the request may change module `id`'s settings: `admin.settings.<id>` anywhere (owner,
+ * admin, a role assigned for the whole install), or for a place, a role assigned in that server.
+ * A Discord role mapped to a role counts only where the panel knows the person's Discord roles,
+ * which it does not yet: the mapping applies in Discord itself.
+ */
+export function mayEdit(
+  state: ApiState,
+  c: ApiContext,
+  id: ModuleId,
+  space: SpaceRef | null = null,
+): boolean {
   const principal = c.get("principal");
   if (principal === undefined || principal.kind === "token") return true;
   if (!principal.write) return false;
-  return state.optional(AuthorizerKey)?.allows(principal.record.account, settingsNode(id)) ?? false;
+  const authorizer = state.optional(AuthorizerKey);
+  if (authorizer === undefined) return false;
+  const account = principal.record.account;
+  if (authorizer.allows(account, settingsNode(id))) return true;
+  if (space === null) return false;
+  return authorizer.allowsSubject(
+    {
+      account,
+      context: { platform: space.platform, scope: space.external_id, channel: "", kind: "channel" },
+      platform_roles: [],
+      is_guild_admin: false,
+    },
+    settingsNode(id),
+  );
 }
 
-function requireEdit(state: ApiState, c: ApiContext, id: ModuleId): void {
+function requireEdit(state: ApiState, c: ApiContext, id: ModuleId, space: SpaceRef | null): void {
   if (sessionAccount(c) === null) return;
-  if (!mayEdit(state, c, id)) {
-    throw new ApiError(403, `changing this module's settings needs \`${settingsNode(id)}\``);
+  if (!mayEdit(state, c, id, space)) {
+    const where = space === null ? "" : `(或在${space.name}的這個權限)`;
+    throw new ApiError(403, `改這個子系統的設定要有 \`${settingsNode(id)}\`${where}`);
   }
 }
 
@@ -217,19 +264,31 @@ function moduleOf(state: ApiState, id: ModuleId): void {
   findModule(state.service(SupervisorKey, "supervisor").list(), id);
 }
 
-async function readSettings(state: ApiState, c: ApiContext, id: ModuleId): Promise<ModuleSettings> {
+type PlaceQuery = { space?: string | undefined; room?: string | undefined } | undefined;
+
+async function readSettings(
+  state: ApiState,
+  c: ApiContext,
+  id: ModuleId,
+  q: PlaceQuery,
+): Promise<ModuleSettings> {
   moduleOf(state, id);
+  const place = placeOf(state, q);
   let view: ReturnType<ModuleSettingsService["describe"]>;
   try {
-    view = settingsService(state).describe(id);
+    view = settingsService(state).describe(
+      id,
+      place === null ? null : { space: place.space.id, room: place.room },
+    );
   } catch (error) {
     throw settingsFailure(error);
   }
   return {
     ...view,
     updated: view.updated && { ...view.updated, by_label: authorLabel(state, view.updated.by) },
-    can_edit: mayEdit(state, c, id),
-    currency: state.optional(Economy2Key)?.currency ?? "魚幣",
+    can_edit: mayEdit(state, c, id, place?.space ?? null),
+    currency:
+      state.optional(Economy2Key)?.currency ?? state.optional(CurrencyKey) ?? DEFAULT_CURRENCY,
   };
 }
 
@@ -237,18 +296,25 @@ async function saveSettings(
   state: ApiState,
   c: ApiContext,
   id: ModuleId,
+  q: PlaceQuery,
   body: SaveSettingsRequest,
 ): Promise<SaveSettingsResult> {
   moduleOf(state, id);
-  requireEdit(state, c, id);
+  const place = placeOf(state, q);
+  requireEdit(state, c, id, place?.space ?? null);
   const request = {
     expected: body.expected,
     // The contract checked every value is JSON.
     set: (body.set ?? {}) as Record<string, JsonValue>,
     reset: body.reset ?? [],
     note: body.note ?? null,
+    place: place === null ? null : { space: place.space.id, room: place.room },
   };
-  const detail = { set: Object.keys(request.set), reset: request.reset };
+  const detail = {
+    set: Object.keys(request.set),
+    reset: request.reset,
+    ...(place === null ? {} : { space: place.space.id, room: place.room }),
+  };
   try {
     const result = await settingsService(state).save(id, request, authorOf(c));
     await state.audit(c, "settings.save", id, toJson({ ...detail, ...result }), true);
@@ -273,7 +339,7 @@ async function revertSettings(
   expected: number,
 ): Promise<SaveSettingsResult> {
   moduleOf(state, id);
-  requireEdit(state, c, id);
+  requireEdit(state, c, id, null);
   try {
     const result = await settingsService(state).revert(id, version, expected, authorOf(c));
     await state.audit(c, "settings.revert", id, toJson({ version, ...result }), true);
@@ -290,18 +356,37 @@ async function revertSettings(
   }
 }
 
-function history(
+async function history(
   state: ApiState,
   id: ModuleId,
-  q: { limit?: string | undefined; before?: string | undefined },
-): SettingsHistory {
+  q: {
+    limit?: string | undefined;
+    before?: string | undefined;
+    space?: string | undefined;
+    room?: string | undefined;
+  },
+): Promise<SettingsHistory> {
   moduleOf(state, id);
+  const place = placeOf(state, q);
   const limit = q.limit === undefined ? undefined : Number.parseInt(q.limit, 10);
   const before = q.before === undefined ? undefined : Number.parseInt(q.before, 10);
-  const page = settingsService(state).history(id, {
+  const options = {
     ...(limit === undefined ? {} : { limit }),
     ...(before === undefined ? {} : { before }),
-  });
+  };
+  let page: Awaited<ReturnType<ModuleSettingsService["placeHistory"]>>;
+  try {
+    page =
+      place === null
+        ? settingsService(state).history(id, options)
+        : await settingsService(state).placeHistory(
+            id,
+            { space: place.space.id, room: place.room },
+            options,
+          );
+  } catch (error) {
+    throw settingsFailure(error);
+  }
   return {
     items: page.items.map((item) => ({ ...item, by_label: authorLabel(state, item.by) })),
     next_before: page.next_before,
@@ -370,10 +455,10 @@ function rooms(
 export const settingsRpc = {
   get: os.modules.get.handler(({ input, context }) => moduleDetail(context.state, input.params.id)),
   settings: os.modules.settings.handler(({ input, context }) =>
-    readSettings(context.state, context.c, input.params.id),
+    readSettings(context.state, context.c, input.params.id, input.query),
   ),
   saveSettings: os.modules.saveSettings.handler(({ input, context }) =>
-    saveSettings(context.state, context.c, input.params.id, input.body),
+    saveSettings(context.state, context.c, input.params.id, input.query, input.body),
   ),
   settingsHistory: os.modules.settingsHistory.handler(({ input, context }) =>
     history(context.state, input.params.id, input.query),

@@ -8,10 +8,15 @@
 
 import { frameName } from "@miyoria/card-face";
 import type { IssuedCard } from "@miyoria/contracts/api";
+import { type Character, DEFAULT_CHARACTER } from "@miyoria/types";
 
-export const SITE_NAME = "Miyoria";
-const SITE_DESCRIPTION =
-  "Miyoria 是住在 Discord 和直播裡的 AI VTuber。看看她現在在做什麼,領一張她發的會員卡。";
+/** The site is named after her: the running profile's `[character] name` (Miyoria by default). */
+export const SITE_NAME = DEFAULT_CHARACTER.name;
+
+function siteDescription(her: Character): string {
+  const p = her.pronoun;
+  return `${her.name} 是住在 Discord 和直播裡的 AI VTuber。看看${p}現在在做什麼,領一張${p}發的會員卡。`;
+}
 
 /** Marks the block of `index.html` that holds the tags this file rewrites. */
 export const META_START = "<!-- meta:start -->";
@@ -29,7 +34,17 @@ export interface PageMeta {
   imageHeight: number;
   /** Whether search engines may list it. */
   index: boolean;
+  /** `og:site_name`: her name (default `SITE_NAME`). */
+  siteName?: string;
+  /**
+   * The words of her world for the panel (`<meta name="miyoria:world">`, JSON); absent: the panel
+   * uses the first character's, and no tag is written.
+   */
+  world?: object;
 }
+
+/** The tag the panel reads the words of her world from (`apps/panel/src/lib/world.ts`). */
+export const WORLD_META = "miyoria:world";
 
 /** The default preview image: the panel serves it (`og.ts`). */
 export const DEFAULT_IMAGE_PATH = "/og/default.png";
@@ -56,7 +71,7 @@ export function metaTags(meta: PageMeta): string {
     `<meta name="robots" content="${meta.index ? "index, follow" : "noindex, nofollow"}" />`,
     `<link rel="canonical" href="${u}" />`,
     `<meta property="og:type" content="website" />`,
-    `<meta property="og:site_name" content="${SITE_NAME}" />`,
+    `<meta property="og:site_name" content="${escapeHtml(meta.siteName ?? SITE_NAME)}" />`,
     `<meta property="og:locale" content="zh_TW" />`,
     `<meta property="og:title" content="${t}" />`,
     `<meta property="og:description" content="${d}" />`,
@@ -71,6 +86,9 @@ export function metaTags(meta: PageMeta): string {
     `<meta name="twitter:description" content="${d}" />`,
     `<meta name="twitter:image" content="${i}" />`,
     `<meta name="twitter:image:alt" content="${alt}" />`,
+    ...(meta.world === undefined
+      ? []
+      : [`<meta name="${WORLD_META}" content="${escapeHtml(JSON.stringify(meta.world))}" />`]),
     META_END,
   ].join("\n    ");
 }
@@ -118,29 +136,34 @@ export function originOf(request: Request): string {
   return `${scheme}://${host}`;
 }
 
-/** The site's own tags for `path` (a panel route, not a card). */
-export function pageMeta(path: string, origin: string): PageMeta {
+/** The site's own tags for `path` (a panel route, not a card); `her`: the running profile's. */
+export function pageMeta(
+  path: string,
+  origin: string,
+  her: Character = DEFAULT_CHARACTER,
+): PageMeta {
   const first = `/${path.split("/").filter(Boolean)[0] ?? ""}`;
-  let title = SITE_NAME;
-  let description = SITE_DESCRIPTION;
+  const site = her.name;
+  let title = site;
+  let description = siteDescription(her);
   let index = true;
   if (first === "/me") {
-    title = `我的頁面 · ${SITE_NAME}`;
+    title = `我的頁面 · ${site}`;
     description = "她記得你什麼、你的會員卡、錢包和點歌,都在這裡。";
     index = false;
   } else if (first === "/card") {
-    title = `會員卡 · ${SITE_NAME}`;
-    description = "Miyoria 發的會員卡,掃卡上的條碼就能確認它是不是真的。";
+    title = `會員卡 · ${site}`;
+    description = `${site} 發的會員卡,掃卡上的條碼就能確認它是不是真的。`;
     index = false;
   } else if (first === "/watch") {
-    title = `現場 · ${SITE_NAME}`;
-    description = "Miyoria 現在的直播畫面和她說的話,登入後可以在畫面上摸摸她。";
+    title = `現場 · ${site}`;
+    description = `${site} 現在的直播畫面和${her.pronoun}說的話,登入後可以在畫面上摸摸${her.pronoun}。`;
   } else if (first === "/login") {
-    title = `登入 · ${SITE_NAME}`;
+    title = `登入 · ${site}`;
     index = false;
   } else if (ADMIN.has(first)) {
-    title = `管理面板 · ${SITE_NAME}`;
-    description = "Miyoria 的管理面板。";
+    title = `管理面板 · ${site}`;
+    description = `${site} 的管理面板。`;
     index = false;
   }
   return {
@@ -149,32 +172,42 @@ export function pageMeta(path: string, origin: string): PageMeta {
     // A card page without a card names no serial: nothing a visitor typed is echoed back.
     url: `${origin}${first === "/card" ? "/card" : path}`,
     image: `${origin}${DEFAULT_IMAGE_PATH}`,
-    imageAlt: `${SITE_NAME}`,
+    imageAlt: `${site}`,
     imageWidth: OG_WIDTH,
     imageHeight: OG_HEIGHT,
     index,
+    siteName: site,
   };
 }
 
 /** The words about a card that its page already prints (name, title, number, frame). */
-export function cardWords(card: IssuedCard): { title: string; description: string; alt: string } {
+export function cardWords(
+  card: IssuedCard,
+  her: Character = DEFAULT_CHARACTER,
+): { title: string; description: string; alt: string } {
+  const site = her.name;
   const title = card.relationship ?? "初次見面";
   const no = `No.${String(card.number).padStart(3, "0")}`;
   const frame = frameName(card.frame);
-  const bits = [`${card.name} 的 ${SITE_NAME} 會員卡`, `${title}`, no];
+  const bits = [`${card.name} 的 ${site} 會員卡`, `${title}`, no];
   if (card.foil) bits.push("閃卡");
   if (frame) bits.push(frame);
   const description = `${bits.join(" · ")} · 編號 ${card.serial}`;
   return {
-    title: `${card.name} 的會員卡 · ${SITE_NAME}`,
+    title: `${card.name} 的會員卡 · ${site}`,
     description,
-    alt: `${card.name} 的 ${SITE_NAME} 會員卡,${title},${no}`,
+    alt: `${card.name} 的 ${site} 會員卡,${title},${no}`,
   };
 }
 
 /** The tags of a card's page: its own preview image (`imageUrl`) and words. */
-export function cardMeta(card: IssuedCard, origin: string, imageUrl: string): PageMeta {
-  const words = cardWords(card);
+export function cardMeta(
+  card: IssuedCard,
+  origin: string,
+  imageUrl: string,
+  her: Character = DEFAULT_CHARACTER,
+): PageMeta {
+  const words = cardWords(card, her);
   return {
     title: words.title,
     description: words.description,
@@ -184,5 +217,6 @@ export function cardMeta(card: IssuedCard, origin: string, imageUrl: string): Pa
     imageWidth: CARD_IMAGE_WIDTH,
     imageHeight: CARD_IMAGE_HEIGHT,
     index: false,
+    siteName: her.name,
   };
 }

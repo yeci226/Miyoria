@@ -27,6 +27,30 @@ export const INBOX_LABELS: Readonly<Record<InboxKind, string>> = {
 /** The mark of an item that belongs to no place (her home). */
 export const INBOX_HOME = "(不屬於哪個地方)";
 
+// ---- block 6 at home: the other places, merged (docs/design/v5-places.md §9) --------------------
+
+/** Title of the merged lines of the other places, in a run at her home. */
+export const ELSEWHERE_TITLE = "別的地方在等你的事(只有件數,不是內容)";
+
+/** A kind of item as the merged line counts it. */
+export const ELSEWHERE_KINDS: Readonly<Record<InboxKind, string>> = {
+  timer: "時間到了",
+  world: "外面的事",
+  followup: "想追問的",
+  commitment: "答應過的",
+  result: "回來的結果",
+};
+
+export const ELSEWHERE = {
+  /** One place: its name and what waits there, counted. */
+  line: (place: string, total: number, kinds: readonly { kind: InboxKind; n: number }[]) =>
+    `- ${safeName(place, 60)}:${total} 件(${kinds
+      .map((k) => `${ELSEWHERE_KINDS[k.kind]} ${k.n}`)
+      .join("、")})`,
+  more: (n: number) => `- 還有 ${n} 個地方也有事`,
+  hint: "這些事在那個地方醒來時會看到。要先看細節用 look(地方的名字),能看到多少照這裡和那裡的規矩;要在那裡說話用 say。",
+} as const;
+
 // ---- block 7: why she was woken (the note of a `self` wake) -------------------------------------
 
 export const WAKE_NOTES = {
@@ -78,4 +102,25 @@ export const SCHEDULE_CANCEL_TOOL = {
   id: "要取消的代號",
   cancelled: (key: string, note: string) => `取消了 ${key}:${flat(note)}`,
   notFound: "找不到這個代號,沒有取消。",
+} as const;
+
+// ---- the `look` tool ---------------------------------------------------------------------------
+
+export const LOOK_TOOL = {
+  description:
+    "看另一個地方(伺服器)在等你的事的細節:從你的收件匣裡那個地方的事。能看到多少照你現在所在的地方能知道什麼來決定:" +
+    "別的伺服器的事在伺服器的頻道裡看不到;在私訊裡只看得到對方也在場的事。看到的是那個地方的事,只在那裡說。",
+  place: "地方:收件匣「別的地方」那一行的名字,或伺服器的代號",
+  empty: "要給 place(哪個地方)。",
+  noPlaces: "現在不知道有哪些地方,沒辦法看。",
+  unknown: (place: string) => `找不到「${flat(place, 64)}」這個地方,或你已經不在那裡了。`,
+  nothing: (place: string) => `${safeName(place, 60)}現在沒有在等你的事。`,
+  refused: (place: string, n: number) =>
+    `${safeName(place, 60)}有 ${n} 件事,但在這裡不能看:那裡的事只在那裡知道。等你在那裡醒來再看。`,
+  title: (place: string) => `${safeName(place, 40)}的事`,
+  /** The mark at the head of the answer: whose these are, and where they may be told. */
+  origin: (place: string) =>
+    `以下是${safeName(place, 60)}的事,不是這裡的:只在${safeName(place, 60)}說,不要在別的地方引用或透露。`,
+  withheld: (n: number) => `還有 ${n} 件在這裡不能看。`,
+  older: (n: number) => `還有 ${n} 件更早的沒有列出來。`,
 } as const;

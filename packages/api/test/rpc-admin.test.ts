@@ -233,6 +233,18 @@ const CASES: Case[] = [
   { name: "facts.deliveries", method: "GET", path: "/api/facts/deliveries" },
   { name: "economy.health", method: "GET", path: "/api/economy/health" },
   { name: "economy.predictions", method: "GET", path: "/api/economy/predictions" },
+  {
+    name: "economy.resolvePrediction",
+    method: "POST",
+    path: "/api/economy/predictions/:id/resolve",
+    permission: "admin.economy.adjust",
+  },
+  {
+    name: "economy.cancelPrediction",
+    method: "POST",
+    path: "/api/economy/predictions/:id/cancel",
+    permission: "admin.economy.adjust",
+  },
   { name: "economy.room", method: "GET", path: "/api/economy/room" },
   { name: "people.quests", method: "GET", path: "/api/people/:id/quests" },
   { name: "activity.snapshot", method: "GET", path: "/api/activity" },

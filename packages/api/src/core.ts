@@ -21,11 +21,20 @@ import {
   SupervisorKey,
 } from "@miyoria/runtime/kernel";
 import { DecisionLogKey, PersonaOverrideStoreKey } from "@miyoria/store";
-import type { BusEnvelope, JsonValue, ModuleId } from "@miyoria/types";
+import {
+  type BusEnvelope,
+  CharacterKey,
+  DEFAULT_CHARACTER,
+  type JsonValue,
+  type ModuleId,
+  type RunningProfile,
+  RunningProfileKey,
+} from "@miyoria/types";
 import { withEventMeta } from "@orpc/server";
 import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
 import { contextParam } from "./extract.js";
+import { adminStillIn, RECHECK_MS } from "./recheck.js";
 import { moduleCards } from "./settings.js";
 import { type ApiContext, type ApiState, actorOf } from "./state.js";
 
@@ -182,8 +191,25 @@ async function personaHistory(state: ApiState, key: string): Promise<PersonaOver
 /** `GET /api/health`. */
 export const healthRpc = os.health.handler(() => ({ status: "ok", version: MIYORIA_VERSION }));
 
-/** `GET /api/persona`, `PUT /api/persona/{key}`, `GET /api/persona/{key}/history`. */
+/** Which profile this Core runs; a Core built without the service reports its profile id alone. */
+function runningProfile(state: ApiState): RunningProfile {
+  const running = state.optional(RunningProfileKey);
+  if (running) return { ...running };
+  const persona = state.optional(PersonaHandleKey);
+  return {
+    id: state.profile(),
+    own: false,
+    character: (state.optional(CharacterKey) ?? DEFAULT_CHARACTER).name,
+    persona: persona?.displayName() ?? "",
+  };
+}
+
+/**
+ * `GET /api/persona`, `PUT /api/persona/{key}`, `GET /api/persona/{key}/history`, and
+ * `GET /api/profile`.
+ */
 export const personaRpc = {
+  profile: os.persona.profile.handler(({ context }) => runningProfile(context.state)),
   list: os.persona.list.handler(({ context }) => personaSections(context.state)),
   set: os.persona.set.handler(({ input, context }) =>
     setPersonaSection(context.state, context.c, input.params.key, input.body),
@@ -233,10 +259,12 @@ function wireEnvelope(env: BusEnvelope): BusEnvelope {
 /**
  * The bus envelopes matching `topics` (comma-separated patterns; none: everything), each with its
  * id as the SSE `id:`, until the client goes away or the module stops. An event that does not
- * serialize is skipped. The subscription is made when the stream starts and closed in `finally`.
+ * serialize is skipped. The subscription is made when the stream starts and closed in `finally`;
+ * the caller is checked again every `RECHECK_MS` and the stream ends when they no longer may.
  */
 async function* busEvents(
   state: ApiState,
+  c: ApiContext,
   topics: string | undefined,
   signal: AbortSignal | undefined,
 ): AsyncGenerator<BusEnvelopeJson, void, unknown> {
@@ -250,6 +278,14 @@ async function* busEvents(
   // ends that wait.
   const close = () => sub.close();
   signal?.addEventListener("abort", close, { once: true });
+  // The caller is asked about again while the stream is open: it ends with the session, when the
+  // token stops matching, or when the address is locked out.
+  const recheck = setInterval(() => {
+    void adminStillIn(state, c).then((ok) => {
+      if (!ok) close();
+    }, close);
+  }, RECHECK_MS);
+  recheck.unref?.();
   try {
     for await (const env of sub) {
       let wire: BusEnvelopeJson;
@@ -263,6 +299,7 @@ async function* busEvents(
       yield withEventMeta(wire, { id: env.id });
     }
   } finally {
+    clearInterval(recheck);
     signal?.removeEventListener("abort", close);
     sub.close();
   }
@@ -270,5 +307,5 @@ async function* busEvents(
 
 /** `GET /api/events`: Server-Sent Events of bus envelopes (`HEAD` is answered by the shell). */
 export const eventsRpc = os.events.handler(({ input, context, signal }) =>
-  busEvents(context.state, input.query.topics, signal),
+  busEvents(context.state, context.c, input.query.topics, signal),
 );

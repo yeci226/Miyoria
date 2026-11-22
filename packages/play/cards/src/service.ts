@@ -22,6 +22,7 @@ import {
   BOND_LADDER,
   type BondTier,
   type Clock,
+  DEFAULT_CURRENCY,
   type PersonId,
 } from "@miyoria/types";
 import type { Part, Rarity, Slot } from "./catalogue.js";
@@ -51,7 +52,10 @@ const log = getLogger("cards");
 
 const DAY_MS = 86_400_000;
 
-/** What a member reads when a card is refused, and when a wishlist is. */
+/**
+ * What a member reads when a card is refused, and when a wishlist is; `insufficient` names the
+ * default coins (`refusalText` names the profile's).
+ */
 export const CARD_TEXTS = {
   daily_cap: "今天的卡已經發完了,明天再來",
   insufficient: "魚幣不夠",
@@ -144,9 +148,10 @@ export interface DailyOptions {
   key?: string;
 }
 
-/** The sentence for a refusal. */
-export function refusalText(r: DailyRefusal): string {
+/** The sentence for a refusal; `currency` is the profile's coin name. */
+export function refusalText(r: DailyRefusal, currency: string = DEFAULT_CURRENCY): string {
   if (r.reason === "refused" || r.reason === "capped") return r.message;
+  if (r.reason === "insufficient") return `${currency}不夠`;
   return CARD_TEXTS[r.reason];
 }
 

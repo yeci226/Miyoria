@@ -104,8 +104,79 @@ CREATE UNIQUE INDEX \`persons_handle_idx\` ON \`persons\` ("handle" COLLATE NOCA
 CREATE INDEX \`rooms_space_idx\` ON \`rooms\` (\`space_id\`);
 `;
 
+// v2, phase 6 (docs/design/v5-places.md §5): the primary Space, and a person's Spaces by account.
+// An install that already has servers makes primary the one she is still in with the most
+// members (then the oldest, then the lowest id): for the single-server install, its only server.
+// A database with no Space gets none; the first one `Identity` sees later becomes primary. Columns
+// and indexes as drizzle-kit writes them from `schema.ts`; the UPDATE is by hand.
+const PLACES = `ALTER TABLE \`spaces\` ADD \`is_primary\` integer DEFAULT false NOT NULL;
+
+UPDATE \`spaces\` SET \`is_primary\` = 1 WHERE \`id\` = (
+	SELECT s.\`id\` FROM \`spaces\` s WHERE s.\`left_at\` IS NULL
+	ORDER BY (SELECT COUNT(*) FROM \`space_members\` m WHERE m.\`space_id\` = s.\`id\`) DESC, s.\`joined_at\`, s.\`id\`
+	LIMIT 1
+);
+
+CREATE INDEX \`space_members_account_idx\` ON \`space_members\` (\`account_id\`) WHERE "space_members"."left_at" IS NULL;
+
+CREATE UNIQUE INDEX \`spaces_primary_idx\` ON \`spaces\` (\`is_primary\`) WHERE "spaces"."is_primary" = 1;
+`;
+
+// v3, phase 6 (docs/design/v5-places.md §2): anyone who acts in a Space is its member, not only
+// someone who wrote there. Until now only a message made a member; this gives the members the log
+// can prove to the people who acted there before without a `space_members` row. Only rows that
+// name the Space: an event's own `space_id` (identity resolved it from the event's context) with
+// the account that acted (`account_id`), and the people her voice presence lines saw in one of the
+// Space's voice channels (`voice.joined` / `voice.participants`, kept in the facts observation
+// with their accounts; never her own, `is_self`). Only accounts identity already has, on the
+// Space's platform, and never hers. An existing row is never touched, so someone who left stays
+// left. A command left no such trace: whoever only used commands becomes a member the next time
+// they act there. Data only; by hand.
+const ACTED = `WITH voice AS MATERIALIZED (
+	SELECT e.\`space_id\`, e.\`at\`, e.\`data\` FROM \`events\` e
+	WHERE e.\`type\` IN ('facts.observation', 'facts.observation.ambient')
+		AND e.\`space_id\` IS NOT NULL AND e.\`redacted_at\` IS NULL AND json_valid(e.\`data\`)
+		AND json_extract(e.\`data\`, '$.origin.topic') IN ('voice.joined', 'voice.participants')
+),
+acted (\`space_id\`, \`account_id\`, \`at\`) AS (
+	SELECT e.\`space_id\`, e.\`account_id\`, e.\`at\` FROM \`events\` e
+	WHERE e.\`space_id\` IS NOT NULL AND e.\`account_id\` IS NOT NULL
+	UNION ALL
+	SELECT v.\`space_id\`, a.\`id\`, v.\`at\`
+	FROM voice v, json_each(v.\`data\`, '$.origin.event.data.participants') p, \`accounts\` a
+	WHERE json_extract(p.\`value\`, '$.is_self') IS 0
+		AND a.\`platform\` = json_extract(p.\`value\`, '$.account.platform')
+		AND a.\`external_id\` = json_extract(p.\`value\`, '$.account.id')
+)
+INSERT INTO \`space_members\` (\`space_id\`, \`account_id\`, \`last_seen\`)
+SELECT x.\`space_id\`, x.\`account_id\`, MAX(x.\`at\`)
+FROM acted x
+JOIN \`spaces\` s ON s.\`id\` = x.\`space_id\`
+JOIN \`accounts\` a ON a.\`id\` = x.\`account_id\` AND a.\`platform\` = s.\`platform\` AND a.\`is_self\` = 0
+WHERE NOT EXISTS (
+	SELECT 1 FROM \`space_members\` m WHERE m.\`space_id\` = x.\`space_id\` AND m.\`account_id\` = x.\`account_id\`
+)
+GROUP BY x.\`space_id\`, x.\`account_id\`;
+`;
+
+// v4, phase 6 (docs/design/v5-places.md §1): which Spaces were already hers before servers were
+// told apart. Every Space that exists when this runs is established, the primary and every other
+// server she was already in (one she left too: its row existed, so coming back is coming home):
+// each goes on as it did, with the cluster's settings. A Space first seen later starts quiet until
+// someone sets it up; the first Space of a fresh install (the primary) is established when it is
+// made (`Identity`). The column as drizzle-kit writes it from `schema.ts`; the UPDATE by hand.
+const ESTABLISHED = `ALTER TABLE \`spaces\` ADD \`established\` integer DEFAULT false NOT NULL;
+
+UPDATE \`spaces\` SET \`established\` = 1;
+`;
+
 /** Persons, accounts, link codes, spaces, rooms, sessions and space members. */
 export const identitySchema: PluginSchema = {
   plugin: "identity",
-  migrations: [{ version: 1, name: "init", sql: INIT }],
+  migrations: [
+    { version: 1, name: "init", sql: INIT },
+    { version: 2, name: "places", sql: PLACES },
+    { version: 3, name: "members_who_acted", sql: ACTED },
+    { version: 4, name: "established", sql: ESTABLISHED },
+  ],
 };

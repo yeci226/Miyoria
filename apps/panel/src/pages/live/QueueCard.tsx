@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, ChevronsUp, SkipForward } from "lucide-react";
 import { useId, useMemo } from "react";
 import type { QueueItemInfo } from "@miyoria/contracts/api";
 import { useQueue, useQueueMutations } from "@/app/queries";
+import { useAdminSpace } from "@/app/space";
 import { READ_ONLY_HINT, useCanWrite } from "@/app/session";
 import { DataTable } from "@/components/data-table";
 import { QueryView } from "@/components/query-state";
@@ -26,8 +27,10 @@ const KIND: Record<string, string> = {
 };
 
 export function QueueCard() {
-  const queue = useQueue();
-  const { skip, move, pause } = useQueueMutations();
+  // Each server has its own queue: the one the shell's switcher is on.
+  const { space } = useAdminSpace();
+  const queue = useQueue(space);
+  const { skip, move, pause } = useQueueMutations(space);
   const canWrite = useCanWrite();
   const id = useId();
   const items = queue.data?.items ?? [];

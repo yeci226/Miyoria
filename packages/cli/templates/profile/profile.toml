@@ -1,0 +1,17 @@
+# {{name}} 的人格(`miyoria profile new` 建立)。這個資料夾就是她的 profile:人格、聲音、模型,
+# 加上她自己的 miyoria.toml、.env 和 data/(docs/design/v5-profiles.md)。
+id = "{{id}}"
+display_name = "{{name}}"
+nicknames = []      # 被叫到這些名字也算「直接叫她」;她的本名和簡稱寫在 miyoria.toml 的 [character]
+interests = []      # 她有興趣的話題:聊天提到這些時,她比較會主動插話
+
+[language]
+primary = "zh-TW"
+secondary = []
+
+[behavior]
+default_channel_mode = "quiet"   # 沒設定的文字頻道的聊天等級:off / mention-only / quiet / normal / lively
+
+[persona]
+# persona/ 底下的段落,依這個順序組成人格 prompt;persona/examples/*.md 是範例對話(只示範語氣)
+sections = ["identity", "style"]

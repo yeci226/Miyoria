@@ -224,6 +224,8 @@ Environment
     SING_RESOLVE_TIMEOUT_S give up finding a song after this long (default 60)
     SING_PREFETCH          0 = the next queued song is not looked up and downloaded while one is made (default 1)
     SING_YTDLP_CACHE       yt-dlp's cache folder                  (default <data dir>/_ytdlp-cache)
+    SING_YTDLP_COOKIES     yt-dlp cookies file (Netscape format)  (default workers/sing/cookies.txt when it exists)
+    SING_YTDLP_COOKIES_FROM_BROWSER  read a browser's cookies, e.g. firefox (default none)
     SING_RELOAD_TIMEOUT_S  longest wait for a worker to reload    (default 300)
     SING_MOCK_SECONDS      mock: song length                      (default 3)
     SING_MOCK_STAGE_MS     mock: delay per stage                  (default 0)
@@ -2549,11 +2551,12 @@ async def cancel_job(job_id: str) -> JSONResponse:
     job = state.jobs.get(job_id)
     if job is None:
         return _error(404, f"no job {job_id}")
-    if job.state == "queued":
-        job.state, job.error, job.finished_at = "cancelled", "cancelled", now_iso()
-        job.prefetched = None
-    elif job.state == "running":
-        job.cancel.set()
+    with state.lock:  # the worker takes a queued job under it: never cancel one it just started
+        if job.state == "queued":
+            job.state, job.error, job.finished_at = "cancelled", "cancelled", now_iso()
+            job.prefetched = None
+        elif job.state == "running":
+            job.cancel.set()
     return JSONResponse({"job": _public(job)})
 
 

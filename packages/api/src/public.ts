@@ -23,7 +23,7 @@ import type {
   PublicToday,
 } from "@miyoria/contracts/api";
 import { getLogger, type ModuleContext } from "@miyoria/runtime/kernel";
-import { SingerKey, type SongEntry } from "@miyoria/sing";
+import { SingerKey, type SongEntry, songGuild } from "@miyoria/sing";
 import { knownNames, type SettingsStore } from "@miyoria/store";
 import {
   ActivityManagerKey,
@@ -35,12 +35,15 @@ import {
   type JsonValue,
   type KnownName,
   ModerationKey,
+  PlacesKey,
   parseSongCue,
 } from "@miyoria/types";
 import { z } from "zod";
 import { os, type RpcContext } from "./contract.js";
 import { ApiError } from "./errors.js";
+import { adminSpace } from "./space-param.js";
 import type { ApiContext, ApiState } from "./state.js";
+import type { SyncWatch } from "./watch.js";
 
 const log = getLogger("api.public");
 
@@ -79,6 +82,9 @@ const HEAVY_PER_HOUR = 6;
 /** Card checks per client and minute, on top of the public limit: serials are not for guessing. */
 const CARD_CHECKS_PER_MINUTE = 20;
 
+/** The visitor's address as a Cloudflare tunnel gives it. */
+export const DEFAULT_CLIENT_IP_HEADER = "cf-connecting-ip";
+
 /**
  * `[modules.api.public]`.
  *
@@ -101,6 +107,17 @@ export const PublicConfigSchema = z.object({
   rate_total_per_minute: z.number().int().positive().default(3000),
   /** Where "today" starts, in minutes from UTC. */
   utc_offset_minutes: z.number().int().min(-840).max(840).default(480),
+  /**
+   * The header in which the reverse proxy on this machine names the visitor's address, read only
+   * for requests that arrive from this machine. `CF-Connecting-IP` for a Cloudflare tunnel;
+   * `X-Real-IP` or `X-Forwarded-For` (its last entry) for nginx or Caddy, which must set it
+   * themselves and not pass on what the visitor sent. Empty: no header is read.
+   */
+  client_ip_header: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9-]*$/)
+    .default(DEFAULT_CLIENT_IP_HEADER),
 });
 export type PublicConfig = z.output<typeof PublicConfigSchema>;
 
@@ -156,13 +173,20 @@ function network(address: string): string {
  * Who a public request comes from. Behind the Cloudflare tunnel every request arrives from
  * `cloudflared` on this machine, so the socket says nothing and `CF-Connecting-IP` is the visitor;
  * Cloudflare overwrites that header, so nobody out there can choose it. From any other peer the
- * header is the client's own word and the socket address counts.
+ * header is the client's own word and the socket address counts; with no socket to ask, nobody
+ * is known to be this machine, so the header counts for nothing either.
+ *
+ * `header`: the header the proxy on this machine uses (`client_ip_header`, normally through
+ * `PublicSide.client`); of a list (`X-Forwarded-For`) the last entry counts, the one that proxy
+ * added itself. Empty: none.
  */
-export function clientKey(c: ApiContext): string {
+export function clientKey(c: ApiContext, header: string): string {
   const env = c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined;
   const peer = env?.incoming?.socket?.remoteAddress ?? null;
   if (peer !== null && !isLoopbackPeer(peer)) return network(peer);
-  return network(c.req.header("cf-connecting-ip")?.trim() || "local");
+  const name = header.trim().toLowerCase();
+  const said = peer === null || name === "" ? undefined : c.req.header(name);
+  return network(said?.split(",").at(-1)?.trim() || "local");
 }
 
 /** Throws `429` when the member behind `c` has been asking too much. */
@@ -358,6 +382,11 @@ export class PublicSide {
     this.#everyone = new RateWindow(config.rate_total_per_minute, MINUTE_MS, 1);
   }
 
+  /** Who the request behind `c` comes from, for the limits (`clientKey`). */
+  client(c: ApiContext): string {
+    return clientKey(c, this.config.client_ip_header);
+  }
+
   /** How many ms a public request must wait, `null` when it may go ahead. */
   admit(client: string): number | null {
     const now = this.#now();
@@ -493,12 +522,26 @@ export function publicStatus(state: ApiState): PublicStatus {
 /** How many songs she just sang are listed. */
 const RECENT_SONGS = 5;
 
-/** `GET /api/public/songs`. Who asked for a song and what they typed stay out of it. */
-export function publicSongs(state: ApiState): PublicSongs {
+/**
+ * The server `?space=` names (`404` for one she is not in), else the primary; its guild id. `null`
+ * without identity's places (or any Space): every song, as there was one server.
+ */
+export function publicSongGuild(state: ApiState, requested: string | undefined): string | null {
+  if (state.optional(PlacesKey) === undefined) return null;
+  return adminSpace(state, requested)?.external_id ?? null;
+}
+
+/**
+ * `GET /api/public/songs`. Who asked for a song and what they typed stay out of it. `guild`: that
+ * server's songs only (a song of before there were several, with no server, is everyone's).
+ */
+export function publicSongs(state: ApiState, guild: string | null = null): PublicSongs {
   const singer = state.optional(SingerKey);
   if (!singer) return { playing: null, upcoming: [], recent: [] };
-  const all = singer.list.all();
-  const now = singer.playing();
+  const here = (e: SongEntry) => guild === null || (songGuild(e) ?? guild) === guild;
+  const all = singer.list.all().filter(here);
+  const playing = singer.playing();
+  const now = playing !== null && here(playing) ? playing : null;
   return {
     playing: now ? songLine(state, now) : null,
     upcoming: all
@@ -512,6 +555,23 @@ export function publicSongs(state: ApiState): PublicSongs {
   };
 }
 
+/** `GET /api/public/status` as a view: one for everyone (also the `status` push topic). */
+export function publicStatusWatch(state: ApiState): SyncWatch<PublicStatus> {
+  return { key: "status", build: () => publicStatus(state) };
+}
+
+/**
+ * `GET /api/public/songs?space=` as a view (also the `songs` push topic): `404` for a server she
+ * is not in, thrown here for both.
+ */
+export function publicSongsWatch(
+  state: ApiState,
+  requested: string | undefined,
+): SyncWatch<PublicSongs> {
+  const guild = publicSongGuild(state, requested);
+  return { key: `songs:${guild ?? ""}`, build: () => publicSongs(state, guild) };
+}
+
 /**
  * The answer of a public view: one value serves everyone for `cache_secs`, shared by every client,
  * after the client's own rate limit (`429`). It carries the cache headers the public views have.
@@ -519,7 +579,7 @@ export function publicSongs(state: ApiState): PublicSongs {
 export function servePublic<T>(context: RpcContext, key: string, build: () => T): T {
   const { state, c } = context;
   const side = state.publicSide;
-  const wait = side.admit(clientKey(c));
+  const wait = side.admit(side.client(c));
   if (wait !== null) throw ApiError.tooMany(wait);
   context.resHeaders?.set("cache-control", `public, max-age=${Math.ceil(side.config.cache_secs)}`);
   context.resHeaders?.set("x-content-type-options", "nosniff");
@@ -528,10 +588,12 @@ export function servePublic<T>(context: RpcContext, key: string, build: () => T)
 
 /** `GET /api/public/status`, `GET /api/public/songs`; served only while the public side is on (see `rpc.ts`). */
 export const publicRpc = {
-  status: os.public.status.handler(({ context }) =>
-    servePublic(context, "status", () => publicStatus(context.state)),
-  ),
-  songs: os.public.songs.handler(({ context }) =>
-    servePublic(context, "songs", () => publicSongs(context.state)),
-  ),
+  status: os.public.status.handler(({ context }) => {
+    const view = publicStatusWatch(context.state);
+    return servePublic(context, view.key, view.build);
+  }),
+  songs: os.public.songs.handler(({ input, context }) => {
+    const view = publicSongsWatch(context.state, input?.query.space);
+    return servePublic(context, view.key, view.build);
+  }),
 };

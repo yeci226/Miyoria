@@ -20,12 +20,16 @@ export {
   flaggedBody,
   INTERRUPTED,
   type IncomingMeta,
+  nameSpeakers,
   REMOVED,
   type RenderOptions,
   SELF_QUOTE_NAME,
+  SHOWN_AS,
   SPOKEN_TAG,
+  type SpeakerNames,
   type StepMeta,
   SUMMARY_TITLE,
+  speakerNamesOf,
   toMessages,
 } from "./convert.js";
 export { transcriptSchema } from "./migrations.js";

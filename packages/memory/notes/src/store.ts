@@ -59,6 +59,7 @@ import {
   identityResolver,
   type NotesReader,
   type ScopeResolver,
+  sameScope,
   scopeId,
   scopeOf,
   visibleTo,
@@ -72,6 +73,7 @@ import type {
   EvidenceInput,
   HistoryEntry,
   LineInput,
+  MergeInput,
   NoteDocument,
   NoteEvidence,
   NoteLine,
@@ -557,6 +559,16 @@ export class NotesStore {
       .all()
       .map((row) => ({ document: documentOf(row), lines: visible.get(row.id)?.length ?? 0 }))
       .filter((entry) => reader === "owner" || entry.lines > 0);
+  }
+
+  /** How many documents have a line in use that `author` wrote. */
+  writtenBy(author: NoteAuthor): number {
+    const row = this.#db.orm
+      .select({ n: sql<number>`count(DISTINCT ${L.document_id})` })
+      .from(L)
+      .where(and(eq(L.author, author), isNull(L.outdated_at), isNull(L.redacted_at)))
+      .get();
+    return row?.n ?? 0;
   }
 
   /**
@@ -1141,6 +1153,104 @@ export class NotesStore {
       lenient: false,
     });
     return this.#applied(result);
+  }
+
+  /**
+   * Puts fewer lines in the place of more as one change set (the nightly tidy, `tidy.ts`): every
+   * line a merge names in `from` is marked outdated with `reason` and points at the merge's new
+   * line. A line named must be in use in this document, be named once, and have the very scope of
+   * its merge's new line: a merge never carries text from one scope into another. Lines merged
+   * rest on one person at most (who told them, whose words their evidence quotes) and the new line
+   * names that person as `told_by`; one line rewritten keeps its own. The outdates go
+   * first, so the limits count the lines that stay. All or nothing; a call that merges nothing
+   * gets no version.
+   */
+  merge(
+    subject: string,
+    merges: readonly MergeInput[],
+    meta: Omit<ChangeMeta, "lenient">,
+    reason = "tidied",
+  ): ChangeResult {
+    const result = this.#merge(subject, merges, meta, reason);
+    this.#tell(result.applied.filter((a) => a.op === "add").map((a) => a.line));
+    return result;
+  }
+
+  #merge(
+    subject: string,
+    merges: readonly MergeInput[],
+    meta: Omit<ChangeMeta, "lenient">,
+    reason: string,
+  ): ChangeResult {
+    return this.#db.tx(() => {
+      const doc = this.#need(subject);
+      if (merges.length === 0) return { document: doc, version: null, applied: [], refused: [] };
+      const now = this.#now();
+      const version = doc.version + 1;
+      const change: ChangeMeta = { ...meta, lenient: false };
+      const named = new Set<string>();
+      const rows = merges.map((m) => {
+        if (m.from.length === 0)
+          throw new NotesError("empty", "a merge names the lines it replaces");
+        return m.from.map((ref) => {
+          const row = this.#find(doc, ref);
+          if (named.has(row.id)) {
+            throw new NotesError("duplicate", `line ${shortLineId(row.id)} is merged twice`);
+          }
+          named.add(row.id);
+          const scope = scopeOf(row.scope, row.scope_id);
+          if (scope === null || !sameScope(scope, m.line.scope)) {
+            throw new NotesError(
+              "bad_scope",
+              `line ${shortLineId(row.id)} is not of the scope of the line it would merge into`,
+            );
+          }
+          return row;
+        });
+      });
+      // "Forget me" removes a line through who told it or whose words back it: a merged line
+      // rests on one person at most, and names them, so forgetting them still removes it.
+      const evidence = this.#evidenceOf([...named]);
+      rows.forEach((list, index) => {
+        const told = merges[index]?.line.told_by ?? null;
+        const [only] = list;
+        if (list.length === 1 && only !== undefined) {
+          if (told !== only.told_by) {
+            throw new NotesError("mixed_people", "a line rewritten keeps who told it");
+          }
+          return;
+        }
+        const people = new Set<string>();
+        for (const row of list) {
+          if (row.told_by !== null) people.add(row.told_by);
+          for (const e of evidence.get(row.id) ?? []) {
+            if (e.redacted_at === null && e.person_id !== null) people.add(e.person_id);
+          }
+        }
+        if (people.size > 1) {
+          throw new NotesError("mixed_people", "lines of different people are not merged");
+        }
+        const [person] = [...people];
+        if (told !== (person ?? null)) {
+          throw new NotesError("mixed_people", "a merged line names the one person it rests on");
+        }
+      });
+      const applied: AppliedOp[] = [];
+      rows.forEach((list, index) => {
+        for (const row of list) {
+          this.#markOutdated(doc, row, reason, change, version, now);
+          applied.push({ index, op: "outdate", line: row.id, replaced: null });
+        }
+      });
+      merges.forEach((m, index) => {
+        const line = this.#add(doc, m.line, change, version, now);
+        const replaced = rows[index]?.map((r) => r.id) ?? [];
+        this.#db.orm.update(L).set({ replaced_by: line }).where(inArray(L.id, replaced)).run();
+        applied.push({ index, op: "add", line, replaced: null });
+      });
+      this.#db.orm.update(D).set({ version, updated_at: now }).where(eq(D.id, doc.id)).run();
+      return { document: { ...doc, version, updated_at: now }, version, applied, refused: [] };
+    });
   }
 
   #applied(result: ChangeResult): NoteLine {

@@ -160,7 +160,10 @@ export const QueueVoteResultSchema = z
   .meta({ id: "EventsQueueVoteResult" });
 export type QueueVoteResultData = z.output<typeof QueueVoteResultSchema>;
 
-/** The queue as it stands, on every change: `queue.changed`. `vote` only while one runs. */
+/**
+ * One Space's queue as it stands, on every change: `queue.changed`. `vote` only while one runs.
+ * The envelope's `space_id` names the Space (`null` on a Core without places, one queue).
+ */
 export const QueueChangedSchema = z
   .object({
     items: z.array(QueueItemSchema),

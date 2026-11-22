@@ -4,6 +4,12 @@
 // lines, ten minutes; one a day per person; two or three a day per channel, here two); the rest are
 // cautious choices of this module's (the chance, the gap, the delay, how long a drop lasts).
 //
+// Per place (phase 6): `drop_channels` is each server's own list (a channel of another server never
+// counts, so a list set for the whole cluster is the original server's), and `drops` may be turned
+// on or off per channel. A channel drops cards when it is in its server's list and `drops` is on
+// for it. The limits and how lively a channel must be are the same everywhere; what one person may
+// pick up in a day counts across servers.
+//
 // ```toml
 // [modules.cards]
 // drops = true
@@ -20,7 +26,15 @@ export const DROP_CONFIG = {
   drops: z
     .boolean()
     .default(false)
-    .meta(setting({ kind: "switch", label: "掉落卡片", help: "只在下面的頻道掉", group })),
+    .meta(
+      setting({
+        kind: "switch",
+        scope: "room",
+        label: "掉落卡片",
+        help: "只在下面的頻道掉;可以每個頻道各自開關",
+        group,
+      }),
+    ),
   /** The channel ids (Discord snowflakes) where she may drop a card: each channel's own opt-in. */
   drop_channels: z
     .array(z.string().min(1))
@@ -31,7 +45,9 @@ export const DROP_CONFIG = {
         multiple: true,
         room: "text",
         ref: "id",
+        scope: "space",
         label: "掉落的頻道",
+        help: "每個伺服器各自的頻道",
         group,
       }),
     ),

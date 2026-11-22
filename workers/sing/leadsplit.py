@@ -70,6 +70,23 @@ def config_path(ckpt: Path, env: dict[str, str] | None = None) -> Path | None:
     return modelpaths.config_beside(ckpt, env)
 
 
+def load_config(text: str) -> dict:
+    """The model's config. These files write their tuples as ``!!python/tuple``, which the safe loader
+    refuses; that one tag is read here and nothing else of Python is: a config that names an object
+    or a function to call (which the unsafe loader would run) is an error."""
+    import yaml
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    Loader.add_constructor("tag:yaml.org,2002:python/tuple",
+                           lambda loader, node: tuple(loader.construct_sequence(node, deep=True)))
+    cfg = yaml.load(text, Loader=Loader)  # noqa: S506 - a SafeLoader with one more plain tag
+    if not isinstance(cfg, dict):
+        raise RuntimeError("the model's config is not a mapping")
+    return cfg
+
+
 def available(env: dict[str, str] | None = None) -> bool:
     """Whether a split would run: switched on, and the checkpoint and its config are there."""
     if not enabled(env):
@@ -83,12 +100,11 @@ class LeadSplitter:
 
     def __init__(self, ckpt: Path, device: str) -> None:
         import torch
-        import yaml
 
         cfg_file = config_path(ckpt)
         if cfg_file is None:
             raise RuntimeError(f"no config (.yaml) beside {ckpt}")
-        cfg = yaml.load(cfg_file.read_text("utf-8"), Loader=yaml.UnsafeLoader)
+        cfg = load_config(cfg_file.read_text("utf-8"))
         self.chunk = int(cfg["audio"]["chunk_size"])
         self.sr = int(cfg["audio"]["sample_rate"])
         self.overlap = int((cfg.get("inference") or {}).get("num_overlap", 4))

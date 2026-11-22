@@ -42,6 +42,7 @@ const line = (name: string, color: number, extra: Partial<KaraokeLine> = {}): Ka
   onAir: false,
   parts: null,
   pitch: null,
+  cheers: 0,
   ...extra,
 });
 
@@ -52,16 +53,22 @@ const NOTES: KaraokeNote[] = [
 ];
 
 describe("who gets a lane", () => {
-  it("the singers in the order they came, then the board's others, at most eight, with their scores", () => {
+  it("the round's singers in the order they came, then the board's others, at most eight, with their scores", () => {
     const members = [member("Mia", 0), member("阿翔", 3, "spectator"), member("Kai", 2), member("Mia", 5)];
-    const board = [line("Kai", 2, { total: 90.04 }), line("Mia", 0, { total: null }), line("走了的人", 1)];
+    const board = [
+      line("Kai", 2, { total: 90.04, cheers: 3 }),
+      line("Mia", 0, { total: null, rank: null }),
+      line("走了的人", 1, { rank: 2 }),
+    ];
     const lanes = laneSingers(members, board);
-    expect(lanes.map((l) => [l.name, l.color, l.total])).toEqual([
-      ["Mia", 0, null],
-      ["Kai", 2, 90.04],
-      ["Mia", 5, null],
-      ["走了的人", 1, 80],
+    // The second Mia chose to sing but is not in the round: no lane.
+    expect(lanes.map((l) => [l.name, l.color, l.total, l.rank, l.cheers])).toEqual([
+      ["Mia", 0, null, null, 0],
+      ["Kai", 2, 90.04, 1, 3],
+      ["走了的人", 1, 80, 2, 0],
     ]);
+    // Before the round's board, whoever chose to sing.
+    expect(laneSingers(members, []).map((l) => l.color)).toEqual([0, 2, 5]);
     expect(lanes[0]?.key).toBe(lineKey({ name: "Mia", color: 0 }));
     const crowd = Array.from({ length: 12 }, (_, i) => member(`唱 ${i}`, i % 8));
     expect(laneSingers(crowd, [])).toHaveLength(LANES_MAX);

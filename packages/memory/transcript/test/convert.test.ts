@@ -1,7 +1,7 @@
 // Between entries and the model's messages: the shape of the history a request carries, what is
 // made inert on the way, and that a model step's output survives the round trip.
 
-import type { ChatMessage } from "@miyoria/llm/llm";
+import { type ChatMessage, contentText } from "@miyoria/llm/llm";
 import type { IncomingMessage } from "@miyoria/types";
 import { toTimestamp } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import {
   INTERRUPTED,
   REMOVED,
   REPLY_PARENT_LABEL,
+  type SpeakerNames,
   SUMMARY_TITLE,
   type TranscriptEntry,
   type TranscriptSummary,
@@ -456,5 +457,45 @@ describe("entryOfIncoming", () => {
       spoken: true,
       person_id: null,
     });
+  });
+});
+
+describe("speakers by her handles for them", () => {
+  // Made-up members: Nobu goes by "Model-9 Lumen" now, Kiri renamed to Nobu's handle.
+  const NOBU = { platform: "discord", id: "1" };
+  const KIRI = { platform: "discord", id: "2" };
+  const handles: Record<string, string> = { "1": "Nobu", "2": "Kiri" };
+  const names: SpeakerNames = (who) =>
+    who.account === null ? null : (handles[who.account.id] ?? null);
+  const lines = entries([
+    said("Model-9 Lumen", "早", { account: NOBU, message_id: "m1" }),
+    said("Model-9 Lumen", "今天好冷", { account: NOBU, message_id: "m2" }),
+    said("Nobu", "我才是 Nobu", { account: KIRI, message_id: "m3", reply_to: "m1" }),
+    said("Kiri", "改回來了", { account: KIRI, message_id: "m4" }),
+    said("Model-9 Lumen", "?", { account: NOBU, message_id: "m5" }),
+  ]);
+  const text = (list: TranscriptEntry[]) =>
+    toMessages(tail(list), { gapMs: 0, names })
+      .map((m) => contentText(m.content))
+      .join("\n");
+
+  it("open with the handle, and the name shown then once, the first time", () => {
+    expect(text(lines).split("\n")).toEqual([
+      "Nobu(顯示名「Model-9 Lumen」): 早",
+      "Nobu: 今天好冷",
+      "Kiri(顯示名「Nobu」)(回覆 Nobu「早」): 我才是 Nobu",
+      "Kiri: 改回來了",
+      "Nobu: ?",
+    ]);
+  });
+
+  it("render the old lines the same as the transcript grows", () => {
+    for (let n = 1; n < lines.length; n++) {
+      expect(text(lines).startsWith(text(lines.slice(0, n)))).toBe(true);
+    }
+  });
+
+  it("keep the names shown without a handle", () => {
+    expect(text(entries([said("Owen", "嗨")]))).toBe("Owen: 嗨");
   });
 });

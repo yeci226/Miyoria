@@ -2,7 +2,8 @@
 // (agent/turn.ts `#extras`, `#mainSlow`, `#mainPrompt`, `#styleNote`); no new memory:
 //
 //   1 fixed     the persona core (`PersonaHandle.corePrompt`); the runner adds its rules
-//   3 pinned    the owner's rules (`MainLine.ownerRules`: directives, capabilities on hold)
+//   3 pinned    the owner's rules (`MainLine.ownerRules`: his directives only; what is on hold
+//               and what did not work lately are her state, block 7)
 //   4 place     her skills (`SkillIndex`), the server's emoji and her notebook's index (the
 //               contributors' slow sections), 「今天的你」 (`LifeLog`), the recap of this place
 //               (`ConversationStates`), the people here as person cards (`PersonProfiles.render`,
@@ -30,6 +31,8 @@ import type { ContentPart } from "@miyoria/llm/llm";
 import {
   FLAGGED_TITLE,
   flaggedBody,
+  nameSpeakers,
+  type SpeakerNames,
   type TranscriptEntry,
   type TranscriptStore,
 } from "@miyoria/memory/transcript";
@@ -46,11 +49,15 @@ import {
   DATA_OPEN,
   DirectivesKey,
   dataBlock,
+  describePerson,
+  directoryCandidates,
   GoalAgendaKey,
+  HandleDirectoryKey,
   HeartKey,
   type LedgerView,
   LifeLogKey,
   MemoryRetrievalKey,
+  namedIn,
   type Participant,
   PartyStatusKey,
   PersonProfilesKey,
@@ -105,11 +112,16 @@ import {
   truncate,
   whenAndWhere,
 } from "../../agent/src/index.js";
+import { personTag, shownAs } from "../../agent/src/self-block.js";
 import { type PromptInput, type PromptSource, wakeAuthor } from "../../self/src/index.js";
 import { NOTICES_TITLE, TASKS_HEAD, VIEWERS_TITLE } from "./texts.js";
 
 /** People shown in block 4 at most (today's `MAX_PEOPLE`). */
 const MAX_PEOPLE = 10;
+/** Everyone else who spoke in the transcript is listed by name only, up to this many. */
+const MAX_NAMED = 60;
+/** Title of the people the lines of a run name, and the names they go by (block 7). */
+export const NAMED_HEAD = "這次的訊息裡提到的人(名字對照,工具要寫「」裡的名字):";
 /** Lines before the run the contributors see (today's `CONTRIBUTOR_HISTORY`). */
 const CONTRIBUTOR_HISTORY = 6;
 /** Newest lines the flagged block looks through (today's `FLAGGED_HISTORY`). */
@@ -119,8 +131,11 @@ const QUERY_LINES = 3;
 /** Contributors whose words come from elsewhere here: memory (retrieval), the recap (block 4). */
 const MEMORY_CONTRIBUTOR = "memory";
 const RECAP_CONTRIBUTOR = "conversation";
-/** Contributor sections of block 4 (today's `SLOW_ORDER`), the most stable first. */
-const SLOW_ORDER: readonly string[] = ["server_emoji", "notebook"];
+/**
+ * Contributor sections of block 4, the most stable first: the server's emoji and stickers
+ * (Discord's `server_emoji`, `server_stickers`) change when someone adds or renames one.
+ */
+const SLOW_ORDER: readonly string[] = ["server_emoji", "server_stickers", "notebook"];
 const SLOW_SECTIONS: ReadonlySet<string> = new Set(SLOW_ORDER);
 /** No budget but the blocks' own. */
 const UNLIMITED = Number.MAX_SAFE_INTEGER;
@@ -165,10 +180,16 @@ export function speakersOf(entries: readonly TranscriptEntry[], max = MAX_PEOPLE
   return out;
 }
 
-/** `name: text` of the other people's lines (hers as `name`), the way contributors read lines. */
-function lineText(e: TranscriptEntry, her: string): string | null {
+/**
+ * `name: text` of the other people's lines (hers as `name`), the way contributors read lines:
+ * people by her handle for them (`names`), else by the name they were shown under.
+ */
+function lineText(e: TranscriptEntry, her: string, names: SpeakerNames | null): string | null {
   if (e.redacted_at !== null || e.content.trim() === "") return null;
-  if (e.kind === "other") return `${safeName(e.author ?? "")}: ${e.content}`;
+  if (e.kind === "other") {
+    const handle = e.account === null ? null : (names?.({ ...e, author: e.author }) ?? null);
+    return `${safeName(handle ?? e.author ?? "")}: ${e.content}`;
+  }
   if (e.kind === "self" || (e.kind === "tool_calls" && e.content !== "")) {
     return `${her}: ${e.content}`;
   }
@@ -303,6 +324,22 @@ export class HostPrompt implements PromptSource {
   constructor(agent: Agent, options: HostPromptOptions) {
     this.#agent = agent;
     this.#o = options;
+    // A compaction's summary names people the way the transcript does.
+    nameSpeakers(options.transcript, this.#speakerNames);
+  }
+
+  /**
+   * Her handle for the speaker of a line (`SpeakerNames`): the transcript, the summaries and the
+   * wake line name people the way the people block, her notes and her tools do. Bots and her own
+   * accounts keep the name they were shown under.
+   */
+  readonly #speakerNames: SpeakerNames = (who) => {
+    if (who.account === null || who.bot || this.#agent.isSelf(who.account)) return null;
+    return this.#agent.handleOf(who.account, who.author ?? who.account.id);
+  };
+
+  names(_input: PromptInput): SpeakerNames {
+    return this.#speakerNames;
   }
 
   get #services() {
@@ -319,12 +356,22 @@ export class HostPrompt implements PromptSource {
   }
 
   #present(speakers: readonly Speaker[]): PresentPerson[] {
-    return speakers.map((s) => ({
-      account: s.account,
-      handle: this.#agent.handleOf(s.account, s.name),
-      person: this.#agent.attitude(s.account)?.person ?? null,
-      speaker: false,
-    }));
+    return speakers.map((s) => {
+      const handle = this.#agent.handleOf(s.account, s.name);
+      return {
+        account: s.account,
+        handle,
+        shown: this.#shown(handle, s.name),
+        person: this.#agent.attitude(s.account)?.person ?? null,
+        speaker: false,
+      };
+    });
+  }
+
+  /** What `handle`'s accounts are called now besides it: `name` (as the place shows it) and the table's. */
+  #shown(handle: string, name: string): string[] {
+    const table = this.#services.get(HandleDirectoryKey)?.resolve(handle)?.names ?? [];
+    return [...new Set([name, ...table])].filter((n) => n.trim() !== "" && n !== handle);
   }
 
   /** What the run of `input` reads once: the contributors' request and their sections. */
@@ -412,8 +459,10 @@ export class HostPrompt implements PromptSource {
     const tail = this.#o.transcript.tail(session);
     const speakers = speakersOf(tail.entries);
     this.#name(input.turn, speakers);
-    const roster = speakers
-      .map((s) => `${s.account.platform}:${s.account.id}`)
+    // Everyone who spoke, by the name shown now: someone renaming is a new block (the names map).
+    const everyone = speakersOf(tail.entries, MAX_NAMED + MAX_PEOPLE);
+    const roster = everyone
+      .map((s) => `${s.account.platform}:${s.account.id}=${s.name}`)
       .sort()
       .join(",");
     const slow = await this.#slow(input);
@@ -423,7 +472,7 @@ export class HostPrompt implements PromptSource {
     const key = `${roster}|${tail.summary?.id ?? 0}|${stableHash(slow.join("\n"))}|${hearts}`;
     const cached = this.#places.get(session);
     if (cached !== undefined && cached.key === key) return cached.text;
-    const { text, settled } = await this.#renderPlace(input, speakers, slow);
+    const { text, settled } = await this.#renderPlace(input, speakers, slow, everyone);
     // Read warm and not ready yet (the people's cards): made again next run, not kept as is.
     if (settled) this.#places.set(session, { key, text });
     return text;
@@ -446,14 +495,22 @@ export class HostPrompt implements PromptSource {
     input: PromptInput,
     speakers: readonly Speaker[],
     slow: readonly string[],
+    everyone: readonly Speaker[] = speakers,
   ): Promise<{ text: string | null; settled: boolean }> {
     const agent = this.#agent;
     const context = input.session.context;
     const parts: string[] = [...slow];
     const recap = this.#services.get(ConversationStatesKey)?.get(context)?.recap?.trim() ?? "";
     if (recap !== "") parts.push(dataBlock(RECAP_CONTRIBUTOR, RECAP_TITLE, recap));
-    const { body: people, settled } = await this.#people(input, speakers);
-    if (people !== null) parts.push(dataBlock("people", PRESENT_TITLE, people));
+    const { body: cards, settled } = await this.#people(input, speakers);
+    // Whoever else spoke here, by handle and the name they go by now: every line maps to someone.
+    const more = this.#present(
+      everyone.filter((e) => !speakers.some((s) => sameAccount(s.account, e.account))),
+    )
+      .filter((p) => !agent.isBlocked(p.account))
+      .map((p) => personTag({ name: p.handle, shown_as: shownAs(p) }));
+    const people = [cards ?? "", ...more].filter((l) => l !== "").join("\n");
+    if (people !== "") parts.push(dataBlock("people", PRESENT_TITLE, people));
     const chars = agent.config.mainline.examples_chars;
     if (chars > 0) {
       const dialogues = exampleDialogues(agent.persona.examples());
@@ -488,7 +545,12 @@ export class HostPrompt implements PromptSource {
     const { data } = contributedData(sections);
     const budgeted = budgetBlocks(data, {
       total: UNLIMITED,
-      budgets: { server_emoji: m.emoji_chars, notebook: m.notebook_chars, life: m.life_chars },
+      budgets: {
+        server_emoji: m.emoji_chars,
+        server_stickers: m.emoji_chars,
+        notebook: m.notebook_chars,
+        life: m.life_chars,
+      },
       defaultBudget: m.notebook_chars,
     });
     out.push(...budgeted.blocks);
@@ -564,16 +626,20 @@ export class HostPrompt implements PromptSource {
         accounts: present.map((p) => p.account),
         now: toTimestamp(input.now),
       };
+      // The names the place shows them under now, beside the handle table's.
+      const shown: Record<string, string[]> = {};
+      for (const p of present) if (p.person !== null) shown[p.person] = [...(p.shown ?? [])];
       const render = async (limit: number): Promise<string | null> => {
         const body = await timeout(limit, agent.ctx.signal, (s) =>
-          profiles.render(where, chars, {}, s),
+          profiles.render(where, chars, { shown }, s),
         );
         return body.trim() === "" ? null : body.trim();
       };
       const reads = this.#run(input).reads;
       try {
         if (reads === null) return { body: await render(this.#limit()), settled: true };
-        const key = `${accountsKey(present)}|${this.#heartKey(present)}`;
+        const names = present.map((p) => `${p.handle}=${(p.shown ?? []).join("、")}`).join(",");
+        const key = `${accountsKey(present)}|${this.#heartKey(present)}|${names}`;
         const read = await reads.warm("people", key, () => render(WARM_LOAD_MS));
         if (read !== undefined) return { body: read, settled: true };
         settled = false;
@@ -633,7 +699,7 @@ export class HostPrompt implements PromptSource {
     const notices = noticesBlock({ context, now: input.now, notices: agent.takeNotices(context) });
     const noticed = notices.split("\n").slice(1).join("\n");
     if (noticed !== "") blocks.push(dataBlock("notices", NOTICES_TITLE, noticed));
-    const flagged = flaggedBody(tail.entries.slice(-FLAGGED_LINES));
+    const flagged = flaggedBody(tail.entries.slice(-FLAGGED_LINES), this.#speakerNames);
     if (flagged !== "") blocks.push(dataBlock("flagged", FLAGGED_TITLE, flagged));
     const inbox = this.#o.inbox?.(input) ?? null;
     if (inbox !== null) blocks.push(inbox);
@@ -754,11 +820,12 @@ export class HostPrompt implements PromptSource {
           ? fresh
           : fresh.filter((e) => e.account !== null && sameAccount(e.account, author.account));
       asked = theirs.slice(-QUERY_LINES);
-      query = asked.map((e) => lineText(e, her) ?? "").join("\n");
+      query = asked.map((e) => lineText(e, her, this.#speakerNames) ?? "").join("\n");
     }
     const first = asked[0];
+    const names = this.#speakerNames;
     const before = (first === undefined ? entries : entries.slice(0, entries.indexOf(first)))
-      .map((e) => lineText(e, her))
+      .map((e) => lineText(e, her, names))
       .filter((l): l is string => l !== null);
     const request: PromptRequest = {
       profile: agent.persona.read((p) => p.id),
@@ -809,7 +876,7 @@ export class HostPrompt implements PromptSource {
       mood: agent.mood(),
       self: services.get(SelfStateKey) ?? null,
       her: services.get(WorldStateKey)?.snapshot().her ?? null,
-      level: levelHint(agent.handle.channelMode(context), context),
+      level: levelHint(agent.handle.channelMode(context), context, agent.handle.language(context)),
       notices: [],
     });
     const lines = [whenAndWhere(context, new Date(input.now), offset)];
@@ -841,7 +908,29 @@ export class HostPrompt implements PromptSource {
     if (promised !== null) lines.push(promised);
     const replied = (await this.#o.replyContext?.(input)) ?? null;
     if (replied !== null) lines.push(replied);
+    const named = this.#namedIn(this.#run(input).asked);
+    if (named !== null) lines.push(named);
     return lines.join("\n");
+  }
+
+  /**
+   * The people the lines of a run name by a name that is not their handle (`@Model-9 Lumen`, a
+   * nickname), with the handle to use: someone mentioned may be in no other block. `null`: none.
+   */
+  #namedIn(asked: readonly TranscriptEntry[]): string | null {
+    const text = asked.map((e) => e.content).join("\n");
+    if (text.trim() === "") return null;
+    const services = this.#services;
+    const candidates = directoryCandidates(
+      services.get(HandleDirectoryKey),
+      services.get(HeartKey)?.callNames?.() ?? [],
+    );
+    const lines = namedIn(text, candidates)
+      .filter((c) => c.account === null || !this.#agent.isSelf(c.account))
+      .map(describePerson)
+      .filter((d) => d.includes("("))
+      .slice(0, 5);
+    return lines.length === 0 ? null : `${NAMED_HEAD}\n${lines.map((l) => `- ${l}`).join("\n")}`;
   }
 
   /**

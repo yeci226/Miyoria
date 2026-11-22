@@ -7,20 +7,34 @@
 import { setting, settingGroups } from "@miyoria/runtime/kernel";
 import { z } from "zod";
 
-/** A Discord text channel as a context key, `discord:<guild>:<channel>` (empty: none). */
+/** A server's text channel as a context key, `<platform>:<server>:<channel>` (empty: none). */
+const CONTEXT = /^([a-z][a-z0-9_]{0,31}):([A-Za-z0-9_.-]{1,64}):([A-Za-z0-9_.-]{1,64})$/;
+
+/** A text channel of a server as a context key, `discord:<guild>:<channel>` (empty: none). */
 const channel = () =>
   z
     .string()
-    .regex(/^(discord:\d{5,30}:\d{5,30})?$/, "discord:<guild>:<channel>")
+    .regex(
+      /^([a-z][a-z0-9_]{0,31}:[A-Za-z0-9_.-]{1,64}:[A-Za-z0-9_.-]{1,64})?$/,
+      "<platform>:<server>:<channel>",
+    )
     .default("");
 
-/** The text channel of `key` (`discord:<guild>:<channel>`), or `null` for none. */
+/**
+ * The text channel of `key` (`discord:<guild>:<channel>`, or another platform's server and
+ * channel the same way), or `null` for none.
+ */
 export function commentContext(
   key: string,
-): { platform: "discord"; scope: string; channel: string; kind: "channel" } | null {
-  const m = /^discord:(\d{5,30}):(\d{5,30})$/.exec(key);
+): { platform: string; scope: string; channel: string; kind: "channel" } | null {
+  const m = CONTEXT.exec(key);
   if (m === null) return null;
-  return { platform: "discord", scope: m[1] as string, channel: m[2] as string, kind: "channel" };
+  return {
+    platform: m[1] as string,
+    scope: m[2] as string,
+    channel: m[3] as string,
+    kind: "channel",
+  };
 }
 
 /**
@@ -408,7 +422,7 @@ export const KaraokeConfigSchema = z
       .max(50)
       .default(12)
       .meta(setting({ kind: "number", label: "一間房最多排幾首", group: "rooms" })),
-    /** Rooms open at once. */
+    /** Rooms open at once, over every server (one song worker scores them all). */
     room_max: z
       .number()
       .int()

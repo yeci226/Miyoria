@@ -18,6 +18,11 @@ export interface ScheduleToolDeps {
   resolve(place: string, from: ContextKey): Promise<ContextKey | null>;
   /** A place's name as she would know it, when the platform has one. */
   describe(place: ContextKey): Promise<string | null>;
+  /**
+   * The Space of a place (identity's id; `null`: none). `schedule_list` in one server shows only
+   * that server's schedules and those of no server (docs/design/v5-places.md). Unset: all.
+   */
+  spaceOf?(place: ContextKey | null): string | null;
 }
 
 const SetParams = z.object({
@@ -70,7 +75,10 @@ export function scheduleTools(deps: ScheduleToolDeps): Tool[] {
   };
 
   const list = async (ctx: ToolContext): Promise<ToolResult> => {
-    const rows = book.open();
+    const space = deps.spaceOf?.(ctx.context) ?? null;
+    const rows = book
+      .open()
+      .filter((r) => deps.spaceOf === undefined || r.space_id === null || r.space_id === space);
     if (rows.length === 0) return { ok: true, text: SCHEDULE_LIST_TOOL.none };
     const here = contextKeyString(ctx.context);
     const lines: string[] = [];

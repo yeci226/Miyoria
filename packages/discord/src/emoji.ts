@@ -231,8 +231,8 @@ export function reactionEmoji(
 
 /** Where the meaning of each emoji comes from. */
 export interface EmojiMeanings {
-  /** The owner's line for an emoji name, if any. */
-  owner(name: string): string | undefined;
+  /** The owner's line for an emoji name in a server (its own lines, docs/design/v5-places.md). */
+  owner(name: string, guild: string | null): string | undefined;
   /** A line the image model wrote for an emoji id, if any. */
   described(id: string): string | undefined;
 }
@@ -250,9 +250,10 @@ export function emojiLines(
   emoji: readonly ServerEmoji[],
   meanings: EmojiMeanings,
   max: number,
+  guild: string | null = null,
 ): string[] {
   const rows = emoji.map((e) => {
-    const meaning = meanings.owner(e.name) ?? meanings.described(e.id);
+    const meaning = meanings.owner(e.name, guild) ?? meanings.described(e.id);
     return { name: e.name, meaning: meaning ? cut(meaning, MAX_MEANING) : null };
   });
   // Ones with a meaning first, so a long table keeps the ones she can use well.
@@ -271,15 +272,20 @@ export const EMOJI_CONTRIBUTOR = "server_emoji";
 export function emojiContributor(
   table: EmojiTable,
   meanings: EmojiMeanings,
-  options: { max_listed: number; enabled: () => boolean },
+  options: { max_listed: number; enabled: (guild: string) => boolean },
 ): PromptContributor {
   return {
     key: EMOJI_CONTRIBUTOR,
     async contribute(request: PromptRequest): Promise<PromptSection[]> {
-      if (!options.enabled() || request.voice) return [];
       const context = request.context;
-      if (context.platform !== "discord" || context.scope === null) return [];
-      const lines = emojiLines(table.list(context.scope), meanings, options.max_listed);
+      if (request.voice || context.platform !== "discord" || context.scope === null) return [];
+      if (!options.enabled(context.scope)) return [];
+      const lines = emojiLines(
+        table.list(context.scope),
+        meanings,
+        options.max_listed,
+        context.scope,
+      );
       if (lines.length === 0) return [];
       return [
         {

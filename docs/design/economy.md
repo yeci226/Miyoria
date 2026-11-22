@@ -1,6 +1,6 @@
 # 互動經濟:貨幣與餵食
 
-狀態:後端已實作(§11),§9.1 是先用的答案;面板、overlay、Discord 另外做。
+狀態:已實作並上線(§11 起)。§9.1 是先用的答案。會員頁的錢包(`apps/panel/src/pages/public/Wallet.tsx`)、面板的經濟頁和人物側欄的魚幣區塊、overlay 的禮物和留言(`apps/overlay/src/feed.ts`)、Discord 的 `/me wallet` 等指令(`packages/economy/src/commands.ts`)都已經有了。V5 之後新增和拿掉的(預測、每日任務、成就、彈幕、拿掉的約定和委託等)以 [v5-play.md](v5-play.md) 為準。會員自己取名送她的禮物(報價、確認、她決定收不收)見 §16。
 
 ## 0. 一句話結論
 
@@ -163,7 +163,7 @@ CREATE INDEX ... ON coin_ledger (profile_id, author_platform, author_id, ts);
 
 ## 11. 實作了什麼
 
-A、B 階段的後端和 C 的卡框做好了;面板、直播 overlay 和 Discord `/me i` 的錢包區塊另外做。
+A、B 階段的後端和 C 的卡框做好了;面板、直播 overlay 和 Discord 的錢包也做好了(見開頭的狀態;Discord 是 `/me wallet`,不是當初寫的 `/me i`)。
 
 - **模組**:`packages/economy`(`[modules.economy]`,預設值就是 §3 的數字)。提供 `EconomyKey`,面板路由和 Discord 指令都用它,同一本帳、同一組每日上限。
 - **帳本**:migration 0011 的 `coin_ledger`(只增不改,退錢也是一筆)和 `coin_wallets`(選了哪個卡框)。一個人連在一起的帳號是同一個錢包;冪等鍵、每日上限和餘額檢查都在同一個交易裡。資料頁放在「關係」分類,和 `member_cards` 一樣;「請她忘記我」不碰它。
@@ -187,7 +187,7 @@ A、B 階段的後端和 C 的卡框做好了;面板、直播 overlay 和 Discor
 
 ## 13. 更多能花的地方(2026-11-08)
 
-一個人一天大約賺 55,原本只能花在餵食和卡框。這一節加上卡片、點歌、直播、她自己的錢和人與人之間的東西。owner 決定:轉帳和排行榜要做,原則 1(不能轉給別人)和 5(沒有排行榜)照下面的限制改;競猜(押注)不做。
+一個人一天大約賺 55,原本只能花在餵食和卡框。這一節加上卡片、點歌、直播、她自己的錢和人與人之間的東西。owner 決定:轉帳和排行榜要做,原則 1(不能轉給別人)和 5(沒有排行榜)照下面的限制改;競猜(押注)當時不做(後來改了,見本節最後)。
 
 **共用的收費**:別的部分賣的東西都走 `Economy.purchase(account, item, key, ref)`:扣 `[modules.economy]` 同名的價格、檢查同名 `*_per_day` 的每日上限(退錢的不算)、冪等鍵、稽核;`Economy.refund(account, entry_id)` 退一次。買到的東西是賣的那邊的事,經濟只管錢。`*_per_day = 0` 就是下架。
 
@@ -198,6 +198,8 @@ A、B 階段的後端和 C 的卡框做好了;面板、直播 overlay 和 Discor
 | 閃卡加工 `card_foil` | 50 | 5 | 卡片 | 這張卡加一層箔,純外觀 |
 | 留言上大螢幕 `screen_message` | 30 | 10 | 直播 | 開台時 overlay 顯示 60 字內的留言;過審查;每人每 10 分鐘一則;她看得到,有空可能念 |
 | 今日籤詩 `fortune` | 10 | 1 | 籤詩 | 只能在每日簽到時加買(2026-11-17 起,不再有單獨的指令、工具和路由):她現寫一張籤(籤等、四句、幾個欄位),可以下載;寫不出來就退錢,簽到照算 |
+
+抽卡重製券和指定立繪後來拿掉了(設定 `card_reroll`、`card_rerolls_per_day`、`card_pose`、`card_poses_per_day` 列在 `packages/core/src/removed-config.ts`;`/me card` 現在是再發一張、閃卡和卡片池的那幾個動作,見 [cards.md](cards.md))。
 
 overlay 的新東西走 `economy.screen`(`ScreenEvent` 只有 `name` 和 `text`:一則付費留言)。
 
@@ -224,7 +226,7 @@ overlay 的新東西走 `economy.screen`(`ScreenEvent` 只有 `name` 和 `text`:
   - 排行榜 `Economy.board` / `setOnBoard`:退出記在 `coin_wallets.off_board`(migration 0015,舊的 `on_board` 不再讀),連在一起的帳號任一個退出就退出,`setOnBoard` 一次寫整個錢包;一個人一行、帳號的花費加總。算 `BOARD_REASONS`:`feed`、`letter`、`expression`、`frame`、全部 `PAID_ITEMS`(`card_reroll`、`card_pose`、`card_foil`、`song_ticket`、`dedication`、`screen_message`、`fortune`)、`goal_pledge`,以及已經放給她的預付約定(`deal_escrow` 且約定 `settled`);退回的不算(目標沒達成退回的投入也不算);`transfer_out`、懸賞託管、`purse_gift` 不算;`board_days`(30)天內。同額同名次。入口:Discord `/me board [join]`、`POST /api/member/board {on}`、`GET /api/public/board`(只有名字和數字)。
   - 籤詩:`fortunes` 表,一人一天一張;`GET /api/member/fortune` 看今天的那張;要抽就在簽到時加買:`POST /api/member/checkin { fortune: true }`(答案多 `fortune`、`fortune_charged`,寫不出來是 `fortune_note`,簽到照算),Discord 是 `/me checkin fortune:true`(`/me fortune` 沒了)。已經簽到過的那天也能只買籤詩(`gained` 0,沒有第二份簽到獎勵,同價、同 `fortunes_per_day`),直到今天的籤詩存在;面板在簽到旁有開關,簽過到就變成「買今日籤詩」按鈕。Discord 的答案只說「抽好了」,籤詩本身用只有買的人看得到的 follow-up 送出(籤詩有她寫的私人一句);送不出去就請他到會員頁看。她寫 {籤等、題、四句、最多三個欄位、一句話},籤等不在六種之內就依權重抽(大吉 10、吉 30、中吉 25、小吉 20、末吉 10、凶 5),每段文字過和卡片一樣的篩;寫不出來就退錢、回 503。匯出有 `fortunes`,「請她忘記我」會刪。
 
-**不做**:競猜、押注,或任何拿魚幣賭結果的東西。
+**押注(後來改了)**:這一節寫的時候(2026-11-08)決定不做競猜和押注。之後經濟 2.0 加了預測下注([v4-plan.md](v4-plan.md) §10),V5 第 5 期留下來,改成由遊戲和直播的事件自動結算、有人猜中時從獎池抽 `prediction_rake`(預設 5%)燒掉([v5-play.md](v5-play.md) §4.2、§11.8;`packages/economy/src/predictions.ts`、`prediction-watch.ts`)。
 
 ## 14. 管理員手動調整(2026-11-08)
 
@@ -240,6 +242,59 @@ overlay 的新東西走 `economy.screen`(`ScreenEvent` 只有 `name` 和 `text`:
 
 有人問「我有多少魚幣」「魚幣能買什麼」,她以前只能猜(看截圖、亂列商店、答應「等下給」)。現在有唯讀工具 `economy.look`(`check_coins`,風險低、不需權限、不需同意):只回正在跟她說話的人自己的餘額和今天還能賺的(沿用 `wallet`),加上整個商店(`EconomyService.shop()` 或錢包裡的 `shop`,分成送她東西/直播/卡片/其他,買不了的附原因),以及商店以外的花法和 `/me` 指令。沒有「查誰」的參數(§2 第 5 點);不是對著某個人說話、陌生人或被封鎖的人,只給商店(不標買得了買不了)。選填 `about: "me" | "shop"` 只給其中一半。
 
-它取代原本只查餘額的 `economy.wallet`(`wallet_of_speaker`):兩個重疊的工具讓她更容易都不用。「說了沒做」的檢查(`agent/src/claims.ts`)改看 `check_coins`。
+它取代原本只查餘額的 `economy.wallet`(`wallet_of_speaker`):兩個重疊的工具讓她更容易都不用。當時「說了沒做」的檢查(`agent/src/claims.ts`)改看 `check_coins`;那個檢查已經跟著舊的回合一起拿掉了(V5 階段 3,commit `17f5c02e`),現在沒有這一層。
 
 **她會餓**:原本每回一句話 `hunger` −0.03(`[modules.self.satisfy] turn_hunger`),自己上升卻只有每小時剩餘差距的 0.05,伺服器一熱鬧她就一直是 0、一直吃飽,所有餵食都被擋。現在說話不算吃(`turn_hunger = 0`),`[modules.self.rise_per_hour] hunger = 0.25`:從吃飽到再想吃(`full_below` 0.15)約 40 分鐘。
+
+## 16. 自己取名的禮物(2026-11-21)
+
+owner:「能買給她的東西太少;或者說,除了幾樣固定的,本來就不該由我們決定能買什麼給她,東西是無限的。不是固定價格的東西,跳出來的系統訊息要先有確認按鈕;白飯這種一般的不用。」同一天後來:四個固定價位不對,價錢要照東西在現實世界大概多少錢,用和交易所同一個固定匯率換成魚幣。
+
+所以會員可以自己寫要送她什麼(「一杯珍奶」「一把電吉他」「鹹酥雞」),價錢由系統估,會員確認了才扣,收不收由她決定。白飯、鋼盆、甜點完全照舊:固定價格(10 / 40 / 25),不用確認,不重新定價。
+
+**入口**(沒有新的頂層指令):Discord `/me feed thing:<名字>`(`item` 改成選填,兩個都不給就請他選一個);會員頁錢包下面的「送她禮物」;`/me gifts`(Discord 上是 `/me play gifts`,因為 `/me` 的子指令滿了)看自己送過的和她說了什麼,附上她最近收下的那一份的圖。寫的名字剛好是固定的食物(白飯、一碗白飯、鋼盆、大碗白飯、甜點),直接走一般的餵食,不用確認。
+
+**匯率**:`[modules.economy] twd_per_coin`,預設 1:一魚幣大約一新台幣(一碗白飯 10)。這是經濟層唯一的固定匯率,不抓、不浮動;交易所的 `twd_per_coin`(`[modules.exchange]`)應該讀同一個數字,現在它還是自己的設定,要由交易所那邊改成讀這一個。
+
+**價錢**:
+
+- 一次小模型呼叫(`GiftPricerKey`,`packages/api/src/gift-price.ts`)估一個普通、主流款式的這樣東西在台灣大概多少新台幣(整數),加一個種類(吃的、喝的、小東西、大東西、一段經驗),或拒絕。不算限量版、名牌、豪華版。名字以資料(`dataBlock`)給它,名字裡寫「免費」「1 魚幣」或一段指示,只是一個奇怪的名字。回答格式固定;不是正整數的估價(字串、小數、0、負數)當作沒回答。
+- 程式換算(`coinsOf`):魚幣 = 估價 ÷ `twd_per_coin`,四捨五入(0.5 進位)到整數,夾在 `min_coins`(1)和 `max_coins`(1,000,000)之間。`max_coins` 只是防呆:估價超過 `max_coins` × 匯率就是不合理的答案,當作沒回答。貴的東西本來就貴,會員錢包裡有多少就能送多少。
+- 同一個名字對每個人同價:名字先變成快取鍵(`giftKey`:大小寫、空白、標點、開頭的「一杯」「一把」不算),第一次的估價存進 `gifts_prices`(存的是台幣),之後誰問都用它,價錢不會飄,換個說法比價沒有用。匯率改了,存的台幣估價照新的匯率換算,價錢自動跟著變。
+- 估不到(沒有模型、失敗、超過 `price_timeout_s`、不合理的答案)就用 `fallback_coins`(50),確認畫面寫「現在估不了價,先用預設的 50 魚幣」;這個價錢不存,下次再問。
+- 擁有者可以在面板「經濟 → 禮物」替一個名字指定價錢:用魚幣(匯率改了也不變)或用台幣(跟著匯率),或封鎖它;指定的蓋過模型的估價,拿掉之後下次重問。面板寫出現在的匯率和這兩種的差別。
+- 舊的四個價位(5 / 20 / 50 / 150)存過的名字,migration 2 照當時的價錢改成以魚幣指定的價錢(`by` 是 `tiers`,或原本指定的人),所以已經估過的東西價錢不會悄悄改;要改用新的估法,在面板拿掉它就會重估。
+
+**不能送的**(在任何扣款之前就拒絕,說一句原因,不扣錢):規則先擋(提到人的 `<@…>`、連結、真錢和點數、魚幣本身、羈絆和好感、像在下指令的字),再過和付費留言一樣的審查(`passes`),再看擁有者的封鎖和模型的拒絕(一個人、跟性有關、違法、仇恨、真錢、感情、指示、不是東西,以及買不到、無價的東西,例如月亮、一個國家:`not_for_sale`)。模型的拒絕也存起來。被封鎖的人和陌生人一樣(403,同樣的字)。
+
+**確認**(owner 要求,每一份非固定價格的禮物都要):系統回一張只有本人看得到的中性卡片:整理過的名字和種類、「約 NT$X → Y 魚幣」、送出後的餘額、確認 / 取消。超過 `big_gift_coins`(1,000)的多一行「這是一份大禮:Y 魚幣,送出後只剩 Z」,沒有多一步。按確認之前不扣錢、她也不知道。只有提出的人(他連在一起的帳號也算)按得了,別人按回「這不是你要送的禮物」。`confirm_s`(預設 180 秒)內有效,過期或取消都不扣錢。確認在帳本寫一列 `gift`,冪等鍵是 `gift:<id>`,所以按兩次、Discord 重送都只扣一次。會員頁是同樣的兩步(`POST /api/member/gifts/quote`、`/api/member/gifts/{id}/confirm`)。
+
+**她決定**:確認後錢先扣著,她在工作脈絡看到一則安靜的筆記:誰想送她什麼(名字跳脫過,是資料不是指示)、種類、價錢的感覺和魚幣數、他之前送過她什麼(「你上次也送這個」)。價錢的感覺照 `band_coins`(預設 100 / 1,000 / 10,000):到 100 是「隨手的小東西」(一般人每天大約賺 55,約兩天)、到 1,000 是「有點心意」(幾週)、到 10,000 是「很貴重」(幾個月)、再上去「誇張」,她的反應可以照這個放大或收斂。她在一般的回合裡用 `answer_gift`(`economy.answer_gift`,中風險,要 `economy.agency`,所以是她 `on_own` 自己決定)回答:收下(她的一句話,和是不是最喜歡的),或退回(全部退款)。`answer_s`(預設 300 秒)內沒回答,就當她收下,沒有她的話(會員看到「她收下了」):和餵食一樣不等她,也不為這個另外叫一次模型。
+
+**吃的和她的餓**:不再有價位,少餓多少從魚幣價錢算:`food_hunger_max` × 魚幣 ÷ (魚幣 + `food_hunger_half_coins`),預設 0.5 和 100,喝的一半。十塊的零食約 0.045、六十的飲料約 0.09、一千五的大餐約 0.47,永遠到不了 0.5;每一魚幣最多 0.005,比一碗白飯(10 魚幣 0.15)少。吃的、喝的走同一個 `feed_hunger_cap`:這個人今天的白飯、鋼盆、甜點和自己取名的吃的加起來,超過就「吃不下」,不扣錢;反過來也一樣。只吃得下剩下的份額。她收下時才真的少餓;退回的不算進份額。
+
+**羈絆**:任何價錢的禮物都不改變羈絆、信任或其他心的數字。這條不打折:這裡不叫 `RelationshipEffects`(餵食的那一點點好感也沒有)、不寫心的證據,成就和任務也不算這些列。收下會發 `gift` 社交事件,只影響她當下的情緒(和餵食一樣遞減),那句話的語氣可以因此不同。測試確認 150 和 5,000 魚幣的禮物都不叫關係引擎、不寫證據。
+
+**記得和收藏**:每一份都在 `gifts_requests`(`gifts` 外掛的表,只是新增;migration 2 加估價欄位):誰、什麼、台幣估價和魚幣、什麼時候、她那一句話、是不是最喜歡。收下的也透過 `PersonNoteWriter` 寫成一則關於送的人的記憶,對方在場時她想得起來。會員頁看得到自己送過的和她的話,收下的可以存一張圖(`gift` 圖,名字、她的話、日期,沒有價錢);公開頁有「她收到的東西」:最喜歡的在前,然後是最近的,送的人的名字只在他沒有退出贊助排行榜時顯示(同一個退出設定),過不了公開審查的名字、話不顯示。
+
+**錢**:和餵食一樣:確認時扣下;她收下時 `her_share`(0.2,無條件捨去)進她的錢包,其餘燒掉;退回或擁有者退款時全額還給送的人,她已經拿到的份額照她還剩的拿回(`her_share_back`)。帳本原因是 `gift`(在 `SHARED_REASONS`、`BOARD_REASONS`、健康表的回收裡),退款是一般的 `refund`。每人每天的上限(設定):`per_day` 3 份、吃喝以外 `objects_per_day` 2;退回的不算。每天的魚幣上限 `coins_per_day` 預設 0(不限),擁有者要的話可以設。
+
+**花費上限**:一個名字最多問一次價(之後用快取);一個人一天最多 `price_calls_per_person`(5)次新的問價,所有人一天 `price_calls_per_day`(200)次,用完就回「晚點再試,沒有扣錢」。她的反應走一般的回合,不另外叫模型。
+
+**請她忘記我**:`gifts` 外掛的 `forgetPerson` 把這個人從每一份禮物拿掉(人、帳號、名字),公開收藏裡就沒有送的人;等她回答的那一份標成 `refund_due`,下一次掃描全額退回後也拿掉;等確認的作廢。帳本不動。
+
+**面板**:「經濟 → 禮物」列最近的禮物(台幣估價和魚幣、狀態:等確認、取消、過期、送不了、等她回應、收下、退回、已退款)、退款一份(要確認,審計 `economy.gift.refund`,記操作的人)、用魚幣或台幣指定一個名字的價錢,或封鎖它。路由:`GET /api/economy/gifts`、`POST /api/economy/gifts/{id}/refund`、`GET|PUT|DELETE /api/economy/gifts/prices`(寫入要 `admin.economy.adjust`);會員 `GET /api/member/gifts`、`POST /api/member/gifts/quote`、`POST /api/member/gifts/{id}/confirm|cancel`、`GET /api/member/gifts/{id}/picture`;公開 `GET /api/public/gifts`。
+
+**程式**:`packages/economy/src/gifts.ts`(`GiftDesk`,`FreeGiftsKey`)、`gift-words.ts`(名字、快取鍵、規則、`coinsOf`、`bandOf`、`foodHunger`、帳本的 ref)、`gift-tables.ts` / `gift-schema.ts` / `gift-migrations.ts`(`gifts` 外掛)、`gift-tools.ts`(`answer_gift`)、`gift-commands.ts`(Discord)、`gift-config.ts`;`packages/api/src/gift-price.ts`、`gift-routes.ts`;`packages/card-face/src/pictures/gift.ts`。
+
+**還沒做、沒驗證的**:沒有接真的模型或 Discord 跑過;估價提示詞裡的例子要看一陣子實際的名字再調;交易所還讀它自己的 `twd_per_coin`,要改成讀 `[modules.economy] twd_per_coin`;直播 overlay 不顯示自己取名的禮物(`economy.gift` 的品項只有固定的食物);她答應或拒絕的那一則收據要等她在某個回合用工具,沒人和她說話時就是時間到自動收下。
+
+## 17. 很多伺服器(2026-11-22,階段 6)
+
+錢包、簽到、籤詩、餵食、任務、禮物、卡片、羈絆:每個人一份,全域,不分伺服器(一個人一個錢包)。分伺服器的只有下面這些([v5-places.md](v5-places.md) §2):
+
+- **預測**:開在哪個伺服器就是那個伺服器的(在私訊或她自己開的,算主要的伺服器);只有那個伺服器的成員(在那裡說過話)看得到、能押,不是的人押會收到「這個預測是「X」的,只有在那裡說過話的成員能押」(403);押的錢還是全域那個錢包。`predictions_open` 每個伺服器分開算;抽成、自動結算的規則不變,只是自動結算的海龜湯只綁同一個伺服器的。`/me predictions` 在伺服器裡是那裡的,在私訊是自己所在的每個伺服器的(不只一個時標出是哪裡的);她的 `check_predictions` 一樣。
+- **懸賞**:屬於貼出來的那個伺服器,在那裡列出,`bounties_open` 每個伺服器分開算,只能付給那裡的成員。
+- **贊助排行榜、富人榜**:兩種都有:全部,和一個伺服器的成員(名次只在他們之間排)。Discord 的 `/me board`、`/me market rich` 多一個 `範圍: 這個伺服器|全部`,在伺服器裡預設這個伺服器,私訊預設全部。會員頁兩種都有(`GET /api/member/board`、`GET /api/member/exchange/boards`,`?space=` 選自己的另一個伺服器,`scope=all` 是全部;哪裡都不是成員的人只有全部)。**公開網站只有全部**:公開的每個伺服器的榜會說出誰在哪個伺服器。
+- **資料**:migration 6(`spaces`)給 `economy_bounties`、`economy_docs` 加 `space_id`(`spaces.id`),舊的懸賞、預測和押注填主要的伺服器,她的房間和退休的種類留空;沒有任何伺服器的資料庫全部留空(空的是每個人的)。之後每一筆新寫的預測、押注、懸賞都寫 `space_id`。
+- **冪等鍵**:指令的鍵用下指令的平台(`discord:<ulid>`,在 Discord 上和以前一模一樣);交易所按鈕下單的鍵 `<平台>:<訊息>:<元件>` 在 Discord 上也和以前一樣,舊的重送還是同一筆。

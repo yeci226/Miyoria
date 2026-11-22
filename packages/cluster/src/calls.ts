@@ -1,7 +1,7 @@
 // What a service of a host may ask Core for through its hostd (docs/design/v5-hostd.md §5, H8):
-// `cluster.llm`, a completion through Core's LLM, and `cluster.fetch`, one small HTTP request to a
-// capability's endpoint. The LLM key never leaves Core and every completion is counted and logged
-// like Core's own.
+// `cluster.llm`, a completion through Core's LLM, `cluster.fetch`, one small HTTP request to a
+// capability's endpoint, and `cluster.resolve`, a capability's endpoints with their tokens to call
+// itself. The LLM key never leaves Core and every completion is counted and logged like Core's own.
 //
 // Core decides, never the caller. hostd adds the name of the service that asked (`service`), which
 // the service cannot set itself; Core then checks that
@@ -9,7 +9,7 @@
 //   2. the host's last report lists that service,
 //   3. the service provides a capability the host is approved for, and
 //   4. the table `uses` lets that capability use what is asked for (an LLM purpose, a capability
-//      to fetch from). Purposes must also be on `purposes`.
+//      to fetch from, a capability to resolve). Purposes must also be on `purposes`.
 // Anything else is `NotAllowed`. `cluster.llm` is rate limited per host.
 
 import {
@@ -24,6 +24,9 @@ import {
   type HostLlmMessage,
   type HostLlmResult,
   HostLlmSchema,
+  type HostResolve,
+  type HostResolveResult,
+  HostResolveSchema,
   type HostServiceStatus,
   relayHeaders,
 } from "@miyoria/contracts/host";
@@ -36,14 +39,23 @@ import type { EndpointRegistry } from "./registry.js";
 export interface ClusterUse {
   /** LLM purposes it may ask for (`cluster.llm`). */
   llm?: readonly string[];
-  /** Capabilities it may send requests to (`cluster.fetch`). */
+  /** Capabilities it may send requests to through Core (`cluster.fetch`). */
   fetch?: readonly string[];
+  /**
+   * Capabilities whose endpoints it may be given to call itself (`cluster.resolve`), with the
+   * headers to send them, bearer tokens included. More than `fetch`: the token leaves Core.
+   */
+  resolve?: readonly string[];
 }
 
 /** By the capability a service PROVIDES: what it may use. */
 export type ClusterUses = Readonly<Record<string, ClusterUse>>;
 
-/** The song worker and the lyrics service: the lyrics lookup's model and its ASR spot check. */
+/**
+ * The song worker and the lyrics service: the lyrics lookup's model and its ASR spot check. No
+ * service resolves another capability's endpoints today (they go through `cluster.fetch`), so
+ * nothing may `cluster.resolve`.
+ */
 export const DEFAULT_CLUSTER_USES: ClusterUses = {
   sing: { llm: ["fast"], fetch: ["asr"] },
   lyrics: { llm: ["fast"], fetch: ["asr"] },
@@ -165,11 +177,31 @@ export class ClusterCalls {
     }
     const llm = new Set<string>();
     const fetch = new Set<string>();
+    const resolve = new Set<string>();
     for (const capability of capabilities) {
       for (const purpose of this.#uses[capability]?.llm ?? []) llm.add(purpose);
       for (const target of this.#uses[capability]?.fetch ?? []) fetch.add(target);
+      for (const target of this.#uses[capability]?.resolve ?? []) resolve.add(target);
     }
-    return { llm: [...llm], fetch: [...fetch] };
+    return { llm: [...llm], fetch: [...fetch], resolve: [...resolve] };
+  }
+
+  /**
+   * `cluster.resolve`: the endpoints of a capability, with their headers (bearer tokens), for a
+   * service allowed to call it itself. Everything else is refused before the registry is read,
+   * so no endpoint or token of a capability the service was not granted leaves Core.
+   */
+  resolve(host: CallerHost, params: unknown): HostResolveResult {
+    const parsed = HostResolveSchema.safeParse(params);
+    if (!parsed.success) throw invalid(parsed.error);
+    const request: HostResolve = parsed.data;
+    const uses = this.allowed(host, request.service);
+    if (!uses.resolve.includes(request.capability)) {
+      throw refuse(
+        `\`${request.service}\` on \`${host.name}\` may not be given the endpoints of \`${request.capability}\``,
+      );
+    }
+    return { endpoints: this.#o.registry.candidates(request.capability) };
   }
 
   /** `cluster.llm`. */

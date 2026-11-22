@@ -24,7 +24,7 @@ import {
   SONG_ID,
   unregisterCommands,
 } from "../src/commands.js";
-import type { KaraokeConfig } from "../src/config.js";
+import { commentContext, type KaraokeConfig, KaraokeConfigSchema } from "../src/config.js";
 import type { RoomDesk } from "../src/rooms.js";
 import type { KaraokeService } from "../src/service.js";
 import { ALICE, BOB, CAROL, makeRig, type Rig, STRANGER } from "./room-rig.js";
@@ -515,5 +515,26 @@ describe("a room's notice in the comment channel", () => {
     );
     expect(JSON.stringify(plain.card)).not.toContain("url");
     expect(plain.text).toContain("輸入房號加入");
+  });
+});
+
+describe("the comment channel", () => {
+  it("is a server's text channel of any platform, as its context key", () => {
+    expect(commentContext("discord:111111111111111111:123456789012345678")).toEqual({
+      platform: "discord",
+      scope: "111111111111111111",
+      channel: "123456789012345678",
+      kind: "channel",
+    });
+    expect(commentContext("matrix:example.org:room-1")).toMatchObject({
+      platform: "matrix",
+      scope: "example.org",
+      channel: "room-1",
+    });
+    expect(commentContext("")).toBeNull();
+    expect(KaraokeConfigSchema.safeParse({ comment_channel: "" }).success).toBe(true);
+    expect(KaraokeConfigSchema.safeParse({ comment_channel: "123456789012345678" }).success).toBe(
+      false,
+    );
   });
 });

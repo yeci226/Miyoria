@@ -1,7 +1,7 @@
 {
   "name": "@miyoria/play",
   "version": "0.1.0",
-  "description": "party: Party games she hosts: turtle soup (voice or text channel) and song guessing (voice); game: Game director: picks goals, acts through game adapter tools, comments live; queue: User request queue: fair ordering, voting mode, persistence and commands; cards: Her cards for each person (module `cards`): the paid daily card, its draw by public odds with a pity, the expression by relationship, the dex with series titles and the old collectibles, the wishlist; market: The weekly market (module `market`): the song priority ticket, a weekly auction of one lot in a channel and a weekly lottery; karaoke: Karaoke on the member page (module `karaoke`): songs prepared by the song worker, the score shared with the browser, sessions, results and her comment",
+  "description": "party: Party games she hosts: turtle soup (voice or text channel) and song guessing (voice); game: Game director: picks goals, acts through game adapter tools, comments live; queue: User request queue: fair ordering, voting mode, persistence and commands; cards: Her cards for each person (module `cards`): the paid daily card, its draw by public odds with a pity, the expression by relationship, the dex with series titles and the old collectibles, the wishlist; market: The weekly market (module `market`): the song priority ticket, a weekly auction of one lot in a channel and a weekly lottery; karaoke: Karaoke on the member page (module `karaoke`): songs prepared by the song worker, the score shared with the browser, sessions, results and her comment; exchange: The deep-sea exchange (module `exchange`): eight made-up companies priced by a seeded engine, a closed vault, fees burned, leverage with isolated margin, the leaderboards",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -31,6 +31,11 @@
       "@miyoria/source": "./market/src/index.ts",
       "types": "./dist/market/src/index.d.ts",
       "default": "./dist/market/src/index.js"
+    },
+    "./exchange": {
+      "@miyoria/source": "./exchange/src/index.ts",
+      "types": "./dist/exchange/src/index.d.ts",
+      "default": "./dist/exchange/src/index.js"
     },
     "./karaoke": {
       "@miyoria/source": "./karaoke/src/index.ts",

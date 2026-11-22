@@ -18,7 +18,8 @@
     "paths": {
       "@miyoria/contracts/overlay": ["../../packages/contracts/overlay/src/index.ts"],
       "@miyoria/contracts/workers": ["../../packages/contracts/workers/src/index.ts"],
-      "@miyoria/play/karaoke/lyrics": ["../../packages/play/karaoke/src/lyrics/index.ts"]
+      "@miyoria/play/karaoke/lyrics": ["../../packages/play/karaoke/src/lyrics/index.ts"],
+      "@miyoria/play/karaoke/score": ["../../packages/play/karaoke/src/score/index.ts"]
     }
   },
   "include": ["src", "test", "vite.config.ts"]

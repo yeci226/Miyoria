@@ -53,3 +53,18 @@ def test_no_characters_lost():
     expected = text.replace(" ", "").replace("\n", "")
     for kw in ({}, {"min_chars": 1}, {"min_chars": 8, "max_chars": 20}):
         assert "".join(split(text, **kw)).replace(" ", "") == expected
+
+
+def test_long_piece_without_commas_is_cut_at_a_space():
+    text = ("I really think that we should probably go ahead and try the brand new restaurants "
+            "which opened downtown yesterday evening")
+    out = split(text, max_chars=80)
+    assert out == ["I really think that we should probably go ahead and try the brand new",
+                   "restaurants which opened downtown yesterday evening"]
+    assert " ".join(out) == text
+
+
+def test_long_number_is_not_said_in_two_halves():
+    number = "1234567890" * 6
+    out = split(f"The total is {number} and 1234567890 more", max_chars=80)
+    assert any(number in piece for piece in out)

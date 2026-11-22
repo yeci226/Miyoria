@@ -1,6 +1,12 @@
 import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import { type AuditEntry, AuditLogKey } from "@miyoria/store";
-import { AuthorizerKey, BaseAuthorizer, type Subject } from "@miyoria/types";
+import {
+  AuthorizerKey,
+  BaseAuthorizer,
+  CharacterKey,
+  DEFAULT_CHARACTER,
+  type Subject,
+} from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import {
   ArgKind,
@@ -374,6 +380,23 @@ describe("registration", () => {
     expect(registry.groupInfo("admin")?.member_permission).toBeNull();
     expect(registry.groupInfo("me")?.guild_only).toBe(false);
     expect(registry.groupInfo("miyo")?.guild_only).toBe(true);
+  });
+
+  it("name_her_by_the_profile_character_and_miyoria_without_one", () => {
+    const text = (defs: ReturnType<typeof panelDefs>) => {
+      const miyo = defs.find((d) => d.command === "miyo");
+      const home = defs.find((d) => d.command === "me")?.pages.find((p) => p.id === "home");
+      return { title: miyo?.title, intro: home?.intro?.[0] };
+    };
+    expect(text(panelDefs())).toEqual({
+      title: "Miyoria 控制面板",
+      intro: "我是 Miyoria，一個 AI。這是你自己的面板，其他人看不到，也不用背指令。",
+    });
+    const services = new ServiceRegistry();
+    services.provide("kernel", CharacterKey, { ...DEFAULT_CHARACTER, name: "Kuro" });
+    const kuro = text(panelDefs({ services }));
+    expect(kuro.title).toBe("Kuro 控制面板");
+    expect(kuro.intro?.startsWith("我是 Kuro，一個 AI。")).toBe(true);
   });
 
   it("the_rules_are_on_both_miyo_and_admin", () => {

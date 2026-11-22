@@ -11,12 +11,14 @@ import {
 import { isApiError } from "@/api/http";
 import type { DecisionsQuery, E2eRecord, FactEventsQuery, LlmCallsQuery, LlmThinkingQuery, MemoryQuery, ModuleAction, PeopleQuery } from "@/api/types";
 import type { AddDirectiveRequest, AdjustPersonRequest, UpdatePersonRequest,ClusterInviteRequest, ArbiterVerdict, AssignRoleRequest, ChannelLevelsView, DataCategoryId, GameStartRequest, LotPlanRequest, ModuleInfo, QueueState, RemoveMappingRequest, RoleMapping, SaveSettingsRequest, SayRequest, SceneRolesState, SettleRequest, SongsState, StageState, StreamAction, TurnOutcomeKind, UpdateMemoryRequest, UpsertRoleRequest, WalletAdjustRequest } from "@miyoria/contracts/api";
+import type { ApiInputs } from "@miyoria/contracts/api";
 import type { ContextKey, Timestamp } from "@miyoria/contracts/wire";
 import { type EvalData, loadEvalData } from "@/lib/eval-data";
 import { factEventsInput } from "@/lib/fact-events";
 import { startOfDay } from "@/lib/rules";
 import { fetchTurnEvents } from "@/lib/turn-events";
 import { useApi } from "./connection";
+import { useLivePoll } from "./events-store";
 import { createQueryClient, FINAL } from "./query-client";
 
 export { createQueryClient };
@@ -26,6 +28,8 @@ export const queryKeys = {
   cluster: ["cluster"] as const,
   clusterHosts: ["cluster", "hosts"] as const,
   clusterEndpoints: ["cluster", "endpoints"] as const,
+  clusterCheckout: ["cluster", "checkout"] as const,
+  clusterRouting: ["cluster", "routing"] as const,
   clusterInfo: (host: string) => ["cluster", "info", host] as const,
   decisionsAll: ["decisions"] as const,
   decisions: (q: DecisionsQuery) => ["decisions", q] as const,
@@ -100,6 +104,8 @@ export const queryKeys = {
 
 
 export type ClusterServiceAction = "start" | "stop" | "restart";
+/** Body of `POST /api/cluster/routing/controls` (not exported by name from the contracts). */
+export type ClusterRoutingControlBody = ApiInputs["cluster"]["routingControl"]["body"];
 
 /** Polls every `ms`, but stops once the route turned out not to exist or the token is bad. */
 const poll =
@@ -135,12 +141,24 @@ export function useModuleAction() {
 
 // --- one module: card, settings, history ---------------------------------------
 
+/**
+ * A place a module's settings are read or written for (`?space=&room=`): a server (identity's id),
+ * and optionally one of its channels (the platform's channel id). `null`: the whole install.
+ */
+export interface SettingsPlaceArg {
+  space: string;
+  room?: string | null;
+}
+
+const placeQuery = (place: SettingsPlaceArg | null | undefined) =>
+  place ? { space: place.space, ...(place.room ? { room: place.room } : {}) } : {};
+
 /** Never retried: a 404 (no such module) or a 403 is the answer, not a hiccup. */
 const settingsKeys = {
   detail: (id: string) => ["modules", "detail", id] as const,
-  settings: (id: string) => ["modules", "settings", id] as const,
-  history: (id: string) => ["modules", "history", id] as const,
-  rooms: (kind: string) => ["places", "rooms", kind] as const,
+  settings: (id: string, place?: SettingsPlaceArg | null) => ["modules", "settings", id, place?.space ?? "", place?.room ?? ""] as const,
+  history: (id: string, place?: SettingsPlaceArg | null) => ["modules", "history", id, place?.space ?? "", place?.room ?? ""] as const,
+  rooms: (kind: string, guild: string) => ["places", "rooms", kind, guild] as const,
 };
 
 export function useModuleDetail(id: string) {
@@ -153,23 +171,25 @@ export function useModuleDetail(id: string) {
   });
 }
 
-export function useModuleSettings(id: string) {
+/** A module's settings; with `place`, the values at that server or channel. */
+export function useModuleSettings(id: string, place?: SettingsPlaceArg | null) {
   const api = useApi();
   return useQuery({
-    queryKey: settingsKeys.settings(id),
-    queryFn: ({ signal }) => api.rpc.modules.settings({ params: { id } }, { signal }),
+    queryKey: settingsKeys.settings(id, place),
+    queryFn: ({ signal }) => api.rpc.modules.settings({ params: { id }, query: placeQuery(place) }, { signal }),
     retry: false,
   });
 }
 
-export function useSettingsHistory(id: string) {
+/** The module's change log; with `place`, that place's own changes. */
+export function useSettingsHistory(id: string, place?: SettingsPlaceArg | null) {
   const api = useApi();
   return useInfiniteQuery({
-    queryKey: settingsKeys.history(id),
+    queryKey: settingsKeys.history(id, place),
     initialPageParam: undefined as number | undefined,
     queryFn: ({ signal, pageParam }) =>
       api.rpc.modules.settingsHistory(
-        { params: { id }, query: { limit: "10", ...(pageParam === undefined ? {} : { before: String(pageParam) }) } },
+        { params: { id }, query: { limit: "10", ...placeQuery(place), ...(pageParam === undefined ? {} : { before: String(pageParam) }) } },
         { signal },
       ),
     getNextPageParam: (last) => last.next_before ?? undefined,
@@ -177,22 +197,23 @@ export function useSettingsHistory(id: string) {
   });
 }
 
-/** After a save or a revert: the module's settings, history, card and the list are stale. */
+/** After a save or a revert: the module's settings (every place's), history, card and the list are stale. */
 function useSettingsRefresh(id: string) {
   const qc = useQueryClient();
   return () => {
-    void qc.invalidateQueries({ queryKey: settingsKeys.settings(id) });
-    void qc.invalidateQueries({ queryKey: settingsKeys.history(id) });
+    void qc.invalidateQueries({ queryKey: ["modules", "settings", id] });
+    void qc.invalidateQueries({ queryKey: ["modules", "history", id] });
     void qc.invalidateQueries({ queryKey: settingsKeys.detail(id) });
     void qc.invalidateQueries({ queryKey: queryKeys.modules, exact: true });
   };
 }
 
-export function useSaveSettings(id: string) {
+/** Saves the cluster's values, or with `place` that place's own (in effect at once, no restart). */
+export function useSaveSettings(id: string, place?: SettingsPlaceArg | null) {
   const api = useApi();
   const refresh = useSettingsRefresh(id);
   return useMutation({
-    mutationFn: (body: SaveSettingsRequest) => api.rpc.modules.saveSettings({ params: { id }, body }),
+    mutationFn: (body: SaveSettingsRequest) => api.rpc.modules.saveSettings({ params: { id }, query: placeQuery(place), body }),
     onSuccess: refresh,
   });
 }
@@ -218,12 +239,12 @@ export function useCardAction() {
   });
 }
 
-/** The rooms the channel picker offers; asked only while a picker is open. */
-export function usePlaceRooms(kind: "text" | "voice" | "thread" | null, enabled: boolean) {
+/** The rooms the channel picker offers; asked only while a picker is open. `guild`: one server's (its platform id). */
+export function usePlaceRooms(kind: "text" | "voice" | "thread" | null, enabled: boolean, guild?: string | null) {
   const api = useApi();
   return useQuery({
-    queryKey: settingsKeys.rooms(kind ?? "all"),
-    queryFn: ({ signal }) => api.rpc.places.rooms({ query: kind === null ? {} : { kind } }, { signal }),
+    queryKey: settingsKeys.rooms(kind ?? "all", guild ?? ""),
+    queryFn: ({ signal }) => api.rpc.places.rooms({ query: { ...(kind === null ? {} : { kind }), ...(guild ? { space: guild } : {}) } }, { signal }),
     enabled,
     staleTime: 30_000,
     retry: false,
@@ -240,7 +261,22 @@ export function useClusterHosts() {
   return useQuery({
     queryKey: queryKeys.clusterHosts,
     queryFn: ({ signal }) => api.rpc.cluster.hosts(undefined, { signal }),
-    refetchInterval: poll(10_000),
+    // Every 2 s while a host updates, so its steps show as they happen.
+    refetchInterval: (query) => {
+      const active = query.state.data?.some((h) => h.upgrade?.state === "running" || h.upgrade?.state === "waiting");
+      return poll(active ? 2_000 : 10_000)(query);
+    },
+    retry: clusterRetry,
+  });
+}
+
+/** Core's own checkout: the version an update brings the hosts to. */
+export function useClusterCheckout() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.clusterCheckout,
+    queryFn: ({ signal }) => api.rpc.cluster.checkout(undefined, { signal }),
+    refetchInterval: poll(30_000),
     retry: clusterRetry,
   });
 }
@@ -253,6 +289,17 @@ export function useClusterEndpoints(enabled = true) {
     refetchInterval: poll(10_000),
     retry: clusterRetry,
     enabled,
+  });
+}
+
+/** Job dispatch (v5-hostd §15). An older Core answers 404, one without routing 503. */
+export function useClusterRouting() {
+  const api = useApi();
+  return useQuery({
+    queryKey: queryKeys.clusterRouting,
+    queryFn: ({ signal }) => api.rpc.cluster.routing(undefined, { signal }),
+    refetchInterval: poll(5_000),
+    retry: clusterRetry,
   });
 }
 
@@ -284,6 +331,22 @@ export function useClusterMutations() {
       mutationFn: ({ host, service, action, force }: { host: string; service: string; action: ClusterServiceAction; force?: boolean }) =>
         api.rpc.cluster.service({ params: { name: host, service, action }, body: force ? { force: true } : {} }),
       onSuccess: refresh,
+    }),
+    upgrade: useMutation({
+      mutationFn: (hosts: string[]) => api.rpc.cluster.upgrade({ body: { hosts } }),
+      onSuccess: refresh,
+    }),
+    upgradeCancel: useMutation({
+      mutationFn: (name: string) => api.rpc.cluster.upgradeCancel({ params: { name }, body: {} }),
+      onSuccess: refresh,
+    }),
+    /** Answers the routing as it is now: it replaces the cached one at once. */
+    routingControl: useMutation({
+      mutationFn: (body: ClusterRoutingControlBody) => api.rpc.cluster.routingControl({ body }),
+      onSuccess: (routing) => {
+        qc.setQueryData(queryKeys.clusterRouting, routing);
+        refresh();
+      },
     }),
   };
 }
@@ -342,6 +405,12 @@ export function useCost() {
 export function usePersona() {
   const { q } = useApi();
   return useQuery(q.persona.list.queryOptions());
+}
+
+/** Which profile the Core runs (docs/design/v5-profiles.md): it changes only with a restart. */
+export function useRunningProfile() {
+  const { q } = useApi();
+  return useQuery({ ...q.persona.profile.queryOptions(), staleTime: 5 * 60_000 });
 }
 
 export function usePersonaHistory(key: string | undefined) {
@@ -541,28 +610,36 @@ export function useAccessMutations() {
 
 // --- live --------------------------------------------------------------------
 
-export function useQueue() {
+/** `?space=` of a per-server admin route: left out without a server (the Core's default then). */
+const spaceQuery = (space: string | null | undefined) => (space ? { space } : {});
+
+/** One server's song queue (`space`: identity's id; without it the Core's default). */
+export function useQueue(space?: string | null) {
   const api = useApi();
-  return useQuery({ queryKey: queryKeys.queue, queryFn: ({ signal }) => api.rpc.queue.list(undefined, { signal }), refetchInterval: poll(3_000) });
+  // Fetched again on `queue.changed` while the admin event stream is open (`liveViews`).
+  const every = useLivePoll(3_000);
+  return useQuery({ queryKey: [...queryKeys.queue, space ?? ""], queryFn: ({ signal }) => api.rpc.queue.list({ query: spaceQuery(space) }, { signal }), refetchInterval: poll(every) });
 }
 
-export function useQueueMutations() {
+export function useQueueMutations(space?: string | null) {
   const api = useApi();
   const qc = useQueryClient();
-  const set = (state: QueueState) => qc.setQueryData(queryKeys.queue, state);
+  const set = (state: QueueState) => qc.setQueryData([...queryKeys.queue, space ?? ""], state);
+  const query = spaceQuery(space);
   return {
-    skip: useMutation({ mutationFn: (id: string) => api.rpc.queue.skip({ params: { id } }), onSuccess: set }),
+    skip: useMutation({ mutationFn: (id: string) => api.rpc.queue.skip({ params: { id }, query }), onSuccess: set }),
     move: useMutation({
-      mutationFn: ({ id, position }: { id: string; position: number }) => api.rpc.queue.move({ params: { id }, body: { position } }),
+      mutationFn: ({ id, position }: { id: string; position: number }) => api.rpc.queue.move({ params: { id }, query, body: { position } }),
       onSuccess: set,
     }),
-    pause: useMutation({ mutationFn: (paused: boolean) => (paused ? api.rpc.queue.pause() : api.rpc.queue.resume()), onSuccess: set }),
+    pause: useMutation({ mutationFn: (paused: boolean) => (paused ? api.rpc.queue.pause({ query }) : api.rpc.queue.resume({ query })), onSuccess: set }),
   };
 }
 
 export function useStage() {
   const api = useApi();
-  return useQuery({ queryKey: queryKeys.stage, queryFn: ({ signal }) => api.rpc.stage.status(undefined, { signal }), refetchInterval: poll(5_000) });
+  const every = useLivePoll(5_000);
+  return useQuery({ queryKey: queryKeys.stage, queryFn: ({ signal }) => api.rpc.stage.status(undefined, { signal }), refetchInterval: poll(every) });
 }
 
 export function useStageMutations() {
@@ -601,7 +678,8 @@ export function useSceneRoleMutations() {
 
 export function useVoice() {
   const api = useApi();
-  return useQuery({ queryKey: queryKeys.voice, queryFn: ({ signal }) => api.rpc.voice.state(undefined, { signal }), refetchInterval: poll(5_000) });
+  const every = useLivePoll(5_000);
+  return useQuery({ queryKey: queryKeys.voice, queryFn: ({ signal }) => api.rpc.voice.state(undefined, { signal }), refetchInterval: poll(every) });
 }
 
 // --- inner life --------------------------------------------------------------
@@ -766,7 +844,8 @@ export function useMindMutations() {
 
 export function useSongs() {
   const api = useApi();
-  return useQuery({ queryKey: queryKeys.songs, queryFn: ({ signal }) => api.rpc.songs.list(undefined, { signal }), refetchInterval: poll(3_000) });
+  const every = useLivePoll(3_000);
+  return useQuery({ queryKey: queryKeys.songs, queryFn: ({ signal }) => api.rpc.songs.list(undefined, { signal }), refetchInterval: poll(every) });
 }
 
 export function useSongMutations() {
@@ -1185,9 +1264,9 @@ export function useEconomyHealth() {
   return useQuery({ queryKey: queryKeys.economyHealth, queryFn: ({ signal }) => api.rpc.economy.health(undefined, { signal }), refetchInterval: pollModule(60_000), retry: false });
 }
 
-export function usePredictions() {
+export function usePredictions(space?: string | null) {
   const api = useApi();
-  return useQuery({ queryKey: queryKeys.predictions, queryFn: ({ signal }) => api.rpc.economy.predictions(undefined, { signal }), refetchInterval: pollModule(30_000), retry: false });
+  return useQuery({ queryKey: [...queryKeys.predictions, space ?? ""], queryFn: ({ signal }) => api.rpc.economy.predictions({ query: spaceQuery(space) }, { signal }), refetchInterval: pollModule(30_000), retry: false });
 }
 
 export function useRoom() {
@@ -1196,27 +1275,27 @@ export function useRoom() {
 }
 
 /** The weekly market's lots and lottery weeks, newest first (`GET /api/market/history`). */
-export function useMarketHistory() {
+export function useMarketHistory(space?: string | null) {
   const api = useApi();
-  return useQuery({ queryKey: queryKeys.marketHistory, queryFn: ({ signal }) => api.rpc.marketAdmin.history(undefined, { signal }), refetchInterval: pollModule(60_000), retry: false });
+  return useQuery({ queryKey: [...queryKeys.marketHistory, space ?? ""], queryFn: ({ signal }) => api.rpc.marketAdmin.history({ query: spaceQuery(space) }, { signal }), refetchInterval: pollModule(60_000), retry: false });
 }
 
 /** Sets or skips the coming week's lot (`admin.economy.adjust`). */
-export function usePlanLot() {
+export function usePlanLot(space?: string | null) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (req: LotPlanRequest) => api.rpc.marketAdmin.plan({ body: req }),
+    mutationFn: (req: LotPlanRequest) => api.rpc.marketAdmin.plan({ query: spaceQuery(space), body: req }),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.marketHistory }),
   });
 }
 
 /** Ends the open lot or draws this week's lottery now (`admin.economy.adjust`). */
-export function useSettleMarket() {
+export function useSettleMarket(space?: string | null) {
   const api = useApi();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (what: SettleRequest["what"]) => api.rpc.marketAdmin.settle({ body: { what } }),
+    mutationFn: (what: SettleRequest["what"]) => api.rpc.marketAdmin.settle({ query: spaceQuery(space), body: { what } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.marketHistory }),
   });
 }

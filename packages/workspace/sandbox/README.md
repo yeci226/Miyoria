@@ -1,6 +1,6 @@
 # @miyoria/workspace/sandbox
 
-模組 `sandbox`:讓 DeepSeek-chan 在**不能連外的 Docker 容器**裡執行她自己寫的程式(Python / Node):預設每次一個用完即丟的新容器,要分好幾步做的事可以開一個有名字的**工作階段**(session,`/work` 會留給同名的下一次執行)。另外保存她寫的腳本(工具工作區),以及管理她提出的自寫工具(`tool.propose`)。設計見 [`docs/design/autonomy.md`](../../docs/design/autonomy.md) §7、§8.3(階段 F)。
+模組 `sandbox`:讓 DeepSeek-chan 在**不能連外的 Docker 容器**裡執行她自己寫的程式(Python / Node):預設每次一個用完即丟的新容器,要分好幾步做的事可以開一個有名字的**工作階段**(session,`/work` 會留給同名的下一次執行)。另外保存她寫的腳本(工具工作區),以及管理她提出的自寫工具(`tool.propose`)。設計見 [`docs/design/autonomy.md`](../../../docs/design/autonomy.md) §7、§8.3(階段 F)。
 
 > 這個模組是 **opt-in**:`[modules.sandbox]` 要寫 `enabled = true` 才會啟動(沒有這一節 = 關閉)。啟動後只要 Docker 可用,就在自主層的閘門(`ActuatorRegistryKey`)註冊 `code.run`、`code.session`、`tool.propose` 與她已核准的工具,反應回合(和之後她自己的回合)都能用,見「閘門與工具」。
 

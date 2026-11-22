@@ -6,12 +6,16 @@ import { getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import {
   type AccountRef,
   ActionSinkKey,
+  directoryMatch,
   HandleDirectoryKey,
+  HeartKey,
   isEphemeralHandle,
   ModerationKey,
   MouthKey,
+  nameRefusal,
   newAction,
   newId,
+  type PersonNameMatch,
   PlatformSinksKey,
   type Principal,
   type Priority,
@@ -40,22 +44,41 @@ export function priorityFor(principal: Principal): Priority {
   }
 }
 
-/** The account a name she uses for someone (their handle) belongs to, or `null`. */
-export type NameLookup = (name: string) => AccountRef | null;
+/**
+ * The account a name she uses for someone belongs to, or `null`; `why`, when it can tell, what
+ * to tell her about a name that names nobody (who it may be).
+ */
+export type NameLookup = ((name: string) => AccountRef | null) & {
+  why?: (name: string) => string | null;
+};
 
-/** Names resolved through the handle table: the names she sees for people in her prompts. */
+/**
+ * Names resolved through the handle table (`matchPersonName`): the handle she sees for people in
+ * her prompts, or one person's whole name as their accounts go by now, the name at first sight or
+ * what she calls them. Part of a name, or a name two people go by, is nobody.
+ */
 export function handleLookup(services: ServiceLookup): NameLookup {
-  return (name) => {
+  const match = (name: string): PersonNameMatch | null => {
     if (isEphemeralHandle(name)) return null;
-    const handles = services.get(HandleDirectoryKey);
-    return handles?.resolve(name)?.account ?? null;
+    const calls = services.get(HeartKey)?.callNames?.() ?? [];
+    return directoryMatch(services.get(HandleDirectoryKey), name, calls);
   };
+  const lookup = (name: string): AccountRef | null => {
+    const found = match(name);
+    return found?.kind === "one" ? found.candidate.account : null;
+  };
+  return Object.assign(lookup, {
+    why: (name: string): string | null => {
+      const found = match(name);
+      return found === null || found.kind === "one" ? null : nameRefusal(found);
+    },
+  });
 }
 
 /**
  * The account `to` names: `speaker` (default) is the person asking; otherwise a mention
- * (`<@123>`), a bare id on the requester's platform, or (with `names`) the name she knows them
- * by, `@` optional.
+ * (`<@123>`), a bare id on the requester's platform (or the place's; `null` when neither is
+ * known), or (with `names`) the name she knows them by, `@` optional.
  */
 export function recipient(
   to: string | null | undefined,
@@ -66,8 +89,9 @@ export function recipient(
   if (raw === "" || raw === "speaker") return principal.requester;
   const id = /^<@!?(\d+)>$/.exec(raw)?.[1] ?? (/^\d+$/.test(raw) ? raw : null);
   if (id === null) return names ? (names(raw) ?? names(raw.replace(/^@/, ""))) : null;
-  const platform = principal.requester?.platform ?? principal.context?.platform ?? "discord";
-  return { platform, id };
+  // The requester's platform, else the place's; neither (a panel call): nobody (v5-architecture §6).
+  const platform = principal.requester?.platform ?? principal.context?.platform ?? null;
+  return platform === null ? null : { platform, id };
 }
 
 const DmArgs = z.object({
@@ -89,10 +113,13 @@ export function dmCapability(names: NameLookup | null = null): Capability<DmArgs
       name: "message_dm",
       meta: { effect: "say", speed: "instant", group: "chat", core: true },
       description:
-        "私訊某個人(Discord DM)。to 省略或填 speaker = 正在跟你說話的人;也可以填對方的名字(你看到的那個)" +
+        "私訊某個人(Discord DM)。to 省略或填 speaker = 正在跟你說話的人;也可以填對方的名字(對話紀錄每行開頭那個;他現在的顯示名或你對他的稱呼也可以,要寫完整)" +
         "或 mention(<@id>)。已經在跟對方私訊時直接說就好,不用這個工具。不要私訊陌生人,也不要一直傳。",
       properties: {
-        to: { type: "string", description: "speaker、對方的名字,或 mention <@id>" },
+        to: {
+          type: "string",
+          description: "speaker、對方的名字(對話紀錄每行開頭那個),或 mention <@id>",
+        },
         text: { type: "string", description: "要私訊的內容(用你平常說話的方式)" },
       },
       required: ["text"],
@@ -100,7 +127,8 @@ export function dmCapability(names: NameLookup | null = null): Capability<DmArgs
     target: (args, principal) => recipient(args.to, principal, names),
     check: (args, principal) =>
       recipient(args.to, principal, names) === null
-        ? "`to` must be speaker, a name she knows, a mention or an id"
+        ? (names?.why?.((args.to ?? "").trim()) ??
+          "`to` must be speaker, a name she knows, a mention or an id")
         : null,
     async execute(args, ctx) {
       const to = recipient(args.to, ctx.principal, names);
@@ -128,7 +156,7 @@ export function dmCapability(names: NameLookup | null = null): Capability<DmArgs
           turn: newId(),
           source: "self",
           blocked,
-          ...(audience === undefined ? {} : { audience: [audience] }),
+          ...(audience === undefined ? {} : { audience: [audience], to: [audience] }),
         });
       } else if (actions) {
         await actions.submit(

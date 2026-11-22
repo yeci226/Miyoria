@@ -6,7 +6,7 @@
 
 import { type LlmRouter, systemMessage, userMessage } from "@miyoria/llm/llm";
 import { errorMessage } from "@miyoria/runtime/kernel";
-import { dataBlock, safeName } from "@miyoria/types";
+import { DEFAULT_CURRENCY, dataBlock, safeName } from "@miyoria/types";
 import type { LotKind } from "./config.js";
 
 /** How each lot reads to people. */
@@ -48,9 +48,12 @@ export interface LotPicker {
   ): Promise<LotPick>;
 }
 
-const RULES = `這週的拍賣由你決定要拍什麼。拍賣在一個頻道公開出價一天,得標的魚幣會燒掉。
+/** What she is told before the options; `currency` is the profile's coin name. */
+export function lotRules(currency: string = DEFAULT_CURRENCY): string {
+  return `這週的拍賣由你決定要拍什麼。拍賣在一個頻道公開出價一天,得標的${currency}會燒掉。
 從下面的選項挑一個,只輸出一個 JSON:{"lot": "<代號>", "why": "<一句話,20 字內>"}。
 不用想錢,也不用想誰會得標;照你這週想拍什麼來挑。`;
+}
 
 /** The kind a reply names, if it is one on offer. */
 export function parsePick(text: string, kinds: readonly LotKind[]): LotPick | null {
@@ -74,6 +77,8 @@ export class LlmLotPicker implements LotPicker {
     private readonly router: () => Pick<LlmRouter, "complete"> | null,
     private readonly purpose: string,
     private readonly timeoutMs: number,
+    /** The coins' name of the running profile. */
+    private readonly currency: () => string = () => DEFAULT_CURRENCY,
   ) {}
 
   async pick(
@@ -94,7 +99,7 @@ export class LlmLotPicker implements LotPicker {
         this.purpose,
         {
           messages: [
-            systemMessage(`${RULES}\n\n選項:\n${options}`),
+            systemMessage(`${lotRules(this.currency())}\n\n選項:\n${options}`),
             userMessage(dataBlock("recent", "最近拍過的", last)),
           ],
           temperature: 0.8,

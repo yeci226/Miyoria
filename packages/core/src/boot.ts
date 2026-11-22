@@ -5,14 +5,16 @@
 
 import { authTables } from "@miyoria/auth";
 import { DirectiveModule, DirectiveService, directiveTables } from "@miyoria/brain/directive";
+import { reportTables } from "@miyoria/brain/report";
 import { initiativeTables } from "@miyoria/brain/selfhost";
-import { clusterTables } from "@miyoria/cluster";
+import { ClusterModule, type ClusterTables, clusterTables } from "@miyoria/cluster";
 import {
   BountyStoreKey,
   CoinLedgerStoreKey,
   EconomyDocsKey,
   economyTables,
   FortuneStoreKey,
+  giftTables,
   LedgerStatsKey,
 } from "@miyoria/economy";
 import { ActionsModule, ActuatorRegistry, ActuatorRegistryKey } from "@miyoria/gate/actions";
@@ -22,11 +24,13 @@ import { memoryTables } from "@miyoria/memory/memory";
 import { notesTables } from "@miyoria/memory/notes";
 import { transcriptTables } from "@miyoria/memory/transcript";
 import { cardsTables } from "@miyoria/play/cards";
+import { exchangeTables } from "@miyoria/play/exchange";
 import { karaokeTables } from "@miyoria/play/karaoke";
 import { marketTables } from "@miyoria/play/market";
 import {
   type Config,
   ConfigError,
+  currencyOf,
   EventBus,
   errorMessage,
   getLogger,
@@ -36,7 +40,7 @@ import {
   Supervisor,
   SupervisorKey,
 } from "@miyoria/runtime/kernel";
-import type { Profile } from "@miyoria/runtime/profile";
+import { loadLanding, type Profile } from "@miyoria/runtime/profile";
 import { ReplayRecorderModule } from "@miyoria/runtime/replay-log";
 import {
   ArtifactAttachments,
@@ -61,23 +65,33 @@ import {
 import {
   ActuatorExecutorKey,
   AttachmentSourceKey,
+  CharacterKey,
+  CurrencyKey,
   DirectivesKey,
   Events,
   HandleDirectoryKey,
   is,
   type JsonValue,
   KERNEL_MODULE,
+  PlaceConfigKey,
+  PlaceDirectoryKey,
+  type Places,
+  PlacesKey,
   PlatformHistories,
   PlatformHistoriesKey,
   PlatformSinks,
   PlatformSinksKey,
   type ProfileId,
   ProfileIdKey,
+  ProfileLandingKey,
   PromptContributors,
   PromptContributorsKey,
+  RunningProfileKey,
+  type SpaceRef,
 } from "@miyoria/types";
 import { CliPlatform, type CliPlatformOptions } from "./cli-platform.js";
 import { CLUSTER_GUARDS } from "./cluster-guards.js";
+import { type Machines, openMachines } from "./machines.js";
 import {
   moduleEnabled,
   NEEDS_TOKEN,
@@ -85,6 +99,8 @@ import {
   REQUIRED_MODULES,
 } from "./module-ids.js";
 import { ModuleSettings } from "./module-settings.js";
+import { PlaceConfigs } from "./place-config.js";
+import type { MachineSource } from "./profiles.js";
 import { databaseUrl, loadProfile, resolveDatabaseUrl } from "./settings.js";
 
 const log = getLogger("core.boot");
@@ -103,12 +119,15 @@ export const STORE_PLUGINS: readonly StorePlugin<unknown>[] = [
   clusterTables,
   directiveTables,
   economyTables,
+  exchangeTables,
+  giftTables,
   heartTables,
   initiativeTables,
   karaokeTables,
   marketTables,
   memoryTables,
   notesTables,
+  reportTables,
   transcriptTables,
 ];
 
@@ -120,6 +139,12 @@ export interface ModuleDeps {
   store: Store;
   /** Directory of `miyoria.toml`; relative paths in the config resolve against it. */
   baseDir: string;
+  /**
+   * The machines' tables (`cluster_*`), shared by every profile: the store's, or for a profile
+   * with a database of its own the install's database's (docs/design/v5-profiles.md §7). Absent
+   * (deps made by hand): the store's.
+   */
+  machines?: ClusterTables;
 }
 
 export interface DiscoveredExtension {
@@ -162,12 +187,25 @@ export interface CoreOptions {
   cli?: CliPlatformOptions;
   /** Uses this store instead of opening `core.database_url` (tests). */
   store?: Store;
+  /**
+   * The profile has a config and data of its own (docs/design/v5-profiles.md); `false` (default):
+   * it runs on the install's, as the first character always has. Only shown, never acted on.
+   */
+  ownProfile?: boolean;
+  /**
+   * For a profile with a database of its own (`machineSource`): the install's database, which
+   * holds the machines, and the install's `[modules.cluster]`, which the cluster module runs with
+   * instead of the profile's. Absent: the store's tables and the config's own section, as before
+   * profiles.
+   */
+  machines?: MachineSource | null;
 }
 
 /** A built (not yet started) core node. */
 export class Core {
   readonly #persist = new AbortController();
   #persistTask: Promise<void> | undefined;
+  #membersTask: Promise<void> | undefined;
 
   constructor(
     readonly supervisor: Supervisor,
@@ -176,6 +214,8 @@ export class Core {
     readonly profileId: ProfileId,
     /** The panel's settings layer; `null` in a core built without one. */
     readonly settings: ModuleSettings | null = null,
+    /** The machine database, when it is not the store's: closed after the store. */
+    readonly machines: Pick<Machines, "close"> | null = null,
   ) {}
 
   get bus(): EventBus {
@@ -192,6 +232,11 @@ export class Core {
    */
   persistModuleState(wanted: (module: string) => boolean = () => true): void {
     this.#persistTask = persistModuleState(this.bus, this.store, wanted, this.#persist.signal);
+  }
+
+  /** @internal Started by `buildCore`: a member who leaves a server is marked left there. */
+  followMembers(places: Places): void {
+    this.#membersTask = followMembers(this.bus, places, this.#persist.signal);
   }
 
   /** Starts every enabled module and logs those that are not running. */
@@ -215,7 +260,9 @@ export class Core {
     await this.supervisor.stopAll();
     this.#persist.abort();
     await this.#persistTask;
+    await this.#membersTask;
     await this.store.close();
+    this.machines?.close();
   }
 }
 
@@ -241,13 +288,21 @@ export async function buildCoreWith(
   const supervisor = new Supervisor({ bus, services });
 
   let store = options.store;
+  let storeUrl: string | null = null;
   if (!store) {
     const url = resolveDatabaseUrl(databaseUrl(config), baseDir);
+    storeUrl = url;
     try {
       store = await catalog.openStore(url);
     } catch (error) {
       throw new Error(`connecting to the database: ${errorMessage(error)}`, { cause: error });
     }
+  }
+  let machines: Machines;
+  try {
+    machines = openMachines(store, options.machines, { storeUrl });
+  } catch (error) {
+    throw new Error(`opening the machines' database: ${errorMessage(error)}`, { cause: error });
   }
 
   const k = KERNEL_MODULE;
@@ -266,6 +321,18 @@ export async function buildCoreWith(
       }
       return null;
     },
+    // A module's own values per Space and Room (docs/design/v5-places.md).
+    ...(store.places && store.config
+      ? {
+          places: {
+            places: store.places,
+            settings: store.config.places,
+            ...(store.events ? { events: store.events } : {}),
+            directory: () => services.get(PlaceDirectoryKey),
+            ...roomMaker(store),
+          },
+        }
+      : {}),
   });
   services.provide(k, ModuleSettingsKey, settings);
   services.provide(k, StoreKey, store);
@@ -292,6 +359,18 @@ export async function buildCoreWith(
     services.provide(k, AttachmentSourceKey, new ArtifactAttachments(store.artifacts));
   }
   services.provide(k, ProfileDataStoreKey, store.profileData);
+  // Spaces, Rooms and members, and each module's config per place (docs/design/v5-places.md).
+  if (store.places) {
+    services.provide(k, PlacesKey, store.places);
+    if (store.config) {
+      const placeConfigs = new PlaceConfigs({
+        places: store.places,
+        settings: store.config.places,
+        directory: () => services.get(PlaceDirectoryKey),
+      });
+      services.provide(k, PlaceConfigKey, placeConfigs);
+    }
+  }
   // Her stable names for people (`Owen`, `Owen#2`): never per-call codes (`u1`).
   let handles: PersonHandleDirectory | null = null;
   try {
@@ -321,6 +400,21 @@ export async function buildCoreWith(
   const profileDisplayName = profile.displayName;
   const profileId = profile.id;
   services.provide(k, ProfileIdKey, profileId);
+  // Who she is in this profile, for the texts that name her (`[character]`).
+  services.provide(k, CharacterKey, profile.character);
+  // The coins' name, for every text that names them (`[modules.economy] currency`).
+  services.provide(k, CurrencyKey, currencyOf(config.section("modules.economy")));
+  // Her front page (`profiles/<id>/landing/`): a file that does not read is reported, never fatal.
+  const front = await loadLanding(profile.dir);
+  for (const problem of front.problems)
+    log.warn({ problem }, "front page: part of the profile's landing is left out");
+  services.provide(k, ProfileLandingKey, front.landing);
+  services.provide(k, RunningProfileKey, {
+    id: profileId,
+    own: options.ownProfile ?? false,
+    character: profile.character.name,
+    persona: profileDisplayName,
+  });
   // One database belongs to one character: a memory looked up by id reports this profile.
   store.plugin(memoryTables).forProfile(profileId);
 
@@ -334,7 +428,14 @@ export async function buildCoreWith(
   await directives.refresh();
   services.provide(k, DirectivesKey, directives);
 
-  const deps: ModuleDeps = { config, profile, profileId, store, baseDir };
+  const deps: ModuleDeps = {
+    config,
+    profile,
+    profileId,
+    store,
+    baseDir,
+    machines: machines.tables,
+  };
   catalog.provideServices?.(services, deps);
 
   const modules: Module[] = [
@@ -348,10 +449,13 @@ export async function buildCoreWith(
     modules.push(new CliPlatform(options.cliChatName, profileDisplayName, options.cli));
   }
 
+  // The machines' settings are the install's whichever profile runs: the hosts dial its listener.
+  const machineSection = options.machines?.cluster;
   for (const module of modules) {
     const id = module.manifest.id;
-    const section = config.module(id);
-    let enabled = moduleEnabled(config, id);
+    const machine = id === ClusterModule.ID ? machineSection : undefined;
+    const section = machine ?? config.module(id);
+    let enabled = machine?.enabled ?? moduleEnabled(config, id);
     const required = REQUIRED_MODULES.includes(id);
     // A module disabled at runtime (command / panel) stays disabled. A required one cannot be
     // disabled, so whatever an older build remembered about it is not followed.
@@ -381,9 +485,48 @@ export async function buildCoreWith(
     log.warn({ err: errorMessage(error) }, "extension discovery failed");
   }
 
-  const core = new Core(supervisor, store, profileDisplayName, profileId, settings);
+  const core = new Core(
+    supervisor,
+    store,
+    profileDisplayName,
+    profileId,
+    settings,
+    machines.path === null ? null : machines,
+  );
   core.persistModuleState((id) => moduleEnabled(config, id));
+  if (store.places) core.followMembers(store.places);
   return core;
+}
+
+/** `platform.member` with `left`: the account's membership of that server is marked left. */
+async function followMembers(bus: EventBus, places: Places, signal: AbortSignal): Promise<void> {
+  const sub = bus.subscribe(Events.PlatformMember.type, { signal });
+  for await (const env of sub) {
+    if (!is(Events.PlatformMember, env) || !env.data.left) continue;
+    const { platform, guild, account } = env.data;
+    try {
+      const space = places.ofGuild(platform, guild);
+      if (space !== null) places.memberLeft(space.id, account);
+    } catch (error) {
+      log.warn({ guild, err: errorMessage(error) }, "failed to record a member leaving");
+    }
+  }
+}
+
+/**
+ * Creating a Space's room for a setting before anyone spoke there, when the store's identity can
+ * (the SQLite store's `persons`); test doubles without it only set rooms she has seen.
+ */
+function roomMaker(store: Store): { ensureRoom?: (space: SpaceRef, channel: string) => string } {
+  const persons = (store as { persons?: unknown }).persons as
+    | { ensureRoom?: (p: string, s: string, c: string, k: "text" | "voice") => { id: string } }
+    | undefined;
+  const ensure = persons?.ensureRoom;
+  if (typeof ensure !== "function") return {};
+  return {
+    ensureRoom: (space, channel) =>
+      ensure.call(persons, space.platform, space.external_id, channel, "text").id,
+  };
 }
 
 function tokenMissing(section: JsonValue | null): boolean {

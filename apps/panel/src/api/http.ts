@@ -76,6 +76,8 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   /** Skip the bearer token (only `/api/health` is public). */
   public?: boolean;
+  /** An event stream's: called for every piece of it that arrives, comments too (`watchdog.ts`). */
+  onChunk?: () => void;
 }
 
 export interface Download {
@@ -166,7 +168,19 @@ export class ApiClient {
   async send(method: string, path: string, opts: Omit<RequestOptions, "body" | "query"> = {}, json?: string): Promise<Response> {
     const res = await this.respond(method, path, opts, json);
     if (res.headers.get("content-type")?.startsWith("text/event-stream")) {
-      return new Response(res.body, { status: res.status, headers: { "content-type": "text/event-stream" } });
+      const tap = opts.onChunk;
+      const body =
+        tap && res.body
+          ? res.body.pipeThrough(
+              new TransformStream<Uint8Array, Uint8Array>({
+                transform(chunk, out) {
+                  tap();
+                  out.enqueue(chunk);
+                },
+              }),
+            )
+          : res.body;
+      return new Response(body, { status: res.status, headers: { "content-type": "text/event-stream" } });
     }
     const { status, value } = await this.decode(res, path);
     const body = value === undefined ? null : JSON.stringify(value);

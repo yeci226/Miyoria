@@ -191,6 +191,96 @@ describe("who may ask Core", () => {
   });
 });
 
+describe("cluster.resolve", () => {
+  const ASR_TOKEN = "asr-secret";
+  const TTS_TOKEN = "tts-secret";
+  const registry = () =>
+    new EndpointRegistry({
+      static: {
+        "main-asr": { provides: ["asr"], url: "http://10.0.0.5:8003", token: ASR_TOKEN },
+        "main-tts": { provides: ["tts"], url: "http://10.0.0.5:8002", token: TTS_TOKEN },
+      },
+    });
+  const calls = (uses?: Record<string, { resolve?: string[]; fetch?: string[] }>) =>
+    new ClusterCalls({
+      registry: registry(),
+      complete: null,
+      clock: systemClock,
+      ...(uses === undefined ? {} : { uses }),
+    });
+  const host = (fields: Partial<CallerHost> = {}): CallerHost => ({
+    name: "friend-pc",
+    approved: true,
+    capabilities: ["lyrics", "sing"],
+    services: [
+      service({ name: "lyrics", provides: ["lyrics"] }),
+      service({ name: "sing", provides: ["sing"] }),
+      service({ name: "tts", provides: ["tts"] }),
+    ],
+    ...fields,
+  });
+
+  /** What a refusal carried, so no token can hide in it. */
+  function refusal(fn: () => unknown): { code: number; text: string } {
+    try {
+      fn();
+    } catch (error) {
+      return {
+        code: (error as { code: number }).code,
+        text: JSON.stringify(error, Object.getOwnPropertyNames(error)),
+      };
+    }
+    throw new Error("expected a refusal");
+  }
+
+  it("gives a granted service the capability's endpoints with their token", () => {
+    const c = calls({ lyrics: { resolve: ["asr"] } });
+    const got = c.resolve(host(), { capability: "asr", service: "lyrics" });
+    expect(got.endpoints).toMatchObject([
+      {
+        host: "main-asr",
+        url: "http://10.0.0.5:8003",
+        headers: { authorization: `Bearer ${ASR_TOKEN}` },
+      },
+    ]);
+    // Only that capability's: the other service's token is not in the answer.
+    expect(JSON.stringify(got)).not.toContain(TTS_TOKEN);
+  });
+
+  it("refuses everything else, and the refusal carries no endpoint or token", () => {
+    const granted = calls({ lyrics: { resolve: ["asr"] } });
+    const cases: Array<[CallerHost, unknown]> = [
+      // A capability it was not granted.
+      [host(), { capability: "tts", service: "lyrics" }],
+      // A service of the host the table grants nothing.
+      [host(), { capability: "asr", service: "sing" }],
+      // No service named (hostd adds it): the operator's own call.
+      [host(), { capability: "asr" }],
+      // A service the host does not report.
+      [host(), { capability: "asr", service: "ghost" }],
+      // It runs, but the host is not approved for what it provides.
+      [host({ capabilities: ["sing"] }), { capability: "asr", service: "lyrics" }],
+      // A host that is not approved.
+      [host({ approved: false }), { capability: "asr", service: "lyrics" }],
+    ];
+    for (const [caller, params] of cases) {
+      const r = refusal(() => granted.resolve(caller, params));
+      expect(r.code).toBe(HOST_ERROR_CODE.NotAllowed);
+      expect(r.text).not.toContain(ASR_TOKEN);
+      expect(r.text).not.toContain(TTS_TOKEN);
+      expect(r.text).not.toContain("10.0.0.5");
+    }
+    expect(refusal(() => granted.resolve(host(), { service: "lyrics" })).code).toBe(-32602);
+  });
+
+  it("by default nothing may resolve, not even what a service may fetch", () => {
+    // `sing` may fetch from `asr` (DEFAULT_CLUSTER_USES): that never hands it the ASR token.
+    const r = refusal(() => calls().resolve(host(), { capability: "asr", service: "sing" }));
+    expect(r.code).toBe(HOST_ERROR_CODE.NotAllowed);
+    expect(r.text).not.toContain(ASR_TOKEN);
+  });
+});
+
 describe("cluster.fetch", () => {
   const caller: CallerHost = {
     name: "pc",

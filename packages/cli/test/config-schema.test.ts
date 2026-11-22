@@ -108,4 +108,14 @@ describe("prompts with the root schema", () => {
     expect(field?.kind).toEqual({ type: "choice", options: ["selective", "stop", "ignore"] });
     expect(field?.default).toBe("selective");
   });
+
+  it("suggest the ports the asr and tts services run on", () => {
+    for (const name of ["asr", "tts"]) {
+      const toml = readFileSync(join(ROOT, "workers", name, "service.toml"), "utf8");
+      const port = /^port = (\d+)$/m.exec(toml)?.[1];
+      const field = settings.VOICE.find((f) => f.key === `speech.${name}.local.url`);
+      expect(port).toBeDefined();
+      expect(field?.default).toBe(`http://127.0.0.1:${port}`);
+    }
+  });
 });

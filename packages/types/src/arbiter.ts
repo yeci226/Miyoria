@@ -9,7 +9,7 @@
 // `ArbiterDecision` (`Events.ArbiterDecided`).
 //
 // Until the Arbiter lands, sources keep publishing `agent.initiative` as today; the Arbiter
-// takes those over source by source (see docs/design/v2-implementation.md).
+// takes those over source by source (docs/design/v2-architecture.md §3.3).
 
 import type { ArbiterDecisionData, ImpulseData, LedgerEntryData } from "@miyoria/contracts/events";
 import type { Handle } from "./handle.js";
@@ -170,6 +170,12 @@ export interface LedgerLimits {
   paused: boolean;
   /** Capabilities on hold and why (`game.start`: "Minecraft 沒開"), with when it may work. */
   blocked: { capability: string; reason: string; until: Timestamp | null }[];
+  /**
+   * What did not work lately: a task that failed after the gate let it run (a name that named
+   * nobody, a service that was down). A result she may try again differently, never a rule; each
+   * is gone at `until`. Missing: none (older producers).
+   */
+  failed?: { capability: string; reason: string; at: Timestamp; until: Timestamp }[];
   /** `max_unanswered` reached here: she starts nothing until a person speaks. */
   waiting_for_response?: boolean;
 }

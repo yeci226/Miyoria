@@ -1,0 +1,88 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "TWD",
+          "symbol": "6488.TWO",
+          "exchangeName": "TWO",
+          "fullExchangeName": "Taipei Exchange",
+          "instrumentType": "EQUITY",
+          "firstTradeDate": 1414630800,
+          "regularMarketTime": 1795152605,
+          "hasPrePostMarketData": false,
+          "gmtoffset": 28800,
+          "timezone": "CST",
+          "exchangeTimezoneName": "Asia/Taipei",
+          "regularMarketPrice": 441.5,
+          "regularMarketChangePercent": -9.898,
+          "fulldayPrice": 441.5,
+          "fulldayChange": -48.5,
+          "fulldayChangePercent": -9.898,
+          "fiftyTwoWeekHigh": 1600,
+          "fiftyTwoWeekLow": 333,
+          "regularMarketDayHigh": 461.5,
+          "regularMarketDayLow": 441,
+          "regularMarketVolume": 7958762,
+          "longName": "GlobalWafers Co., Ltd.",
+          "shortName": "GLOBALWAFERS CO LTD",
+          "chartPreviousClose": 490,
+          "previousClose": 490,
+          "scale": 3,
+          "priceHint": 2,
+          "currentTradingPeriod": {
+            "pre": {
+              "timezone": "CST",
+              "start": 1795136400,
+              "end": 1795136400,
+              "gmtoffset": 28800
+            },
+            "regular": {
+              "timezone": "CST",
+              "start": 1795136400,
+              "end": 1795152600,
+              "gmtoffset": 28800
+            },
+            "post": {
+              "timezone": "CST",
+              "start": 1795152600,
+              "end": 1795152600,
+              "gmtoffset": 28800
+            }
+          },
+          "tradingPeriods": [
+            [
+              {
+                "timezone": "CST",
+                "start": 1795136400,
+                "end": 1795152600,
+                "gmtoffset": 28800
+              }
+            ]
+          ],
+          "dataGranularity": "5m",
+          "range": "1d",
+          "validRanges": ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
+        },
+        "timestamp": [
+          1795149300, 1795149600, 1795149900, 1795150200, 1795150500, 1795150800, 1795151100,
+          1795151400, 1795151700, 1795152000, 1795152300, 1795152600
+        ],
+        "indicators": {
+          "quote": [
+            {
+              "high": [442.5, 443, 442.5, 443, 442, 443, 441.5, 442.5, 441.5, 443, null, 441.5],
+              "volume": [
+                66603, 43647, 142723, 69087, 56974, 149293, 61236, 204421, 79597, 113951, 0, 0
+              ],
+              "close": [442.5, 442.5, 442.5, 441.5, 442, 441.5, 441, 441, 441, 441, null, 441.5],
+              "low": [442, 442, 441, 441.5, 441, 441, 441, 441, 441, 441, null, 441.5],
+              "open": [442, 442, 442.5, 442.5, 441, 442, 441.5, 441, 441, 441, null, 441.5]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

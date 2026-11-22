@@ -12,6 +12,8 @@ import {
   type ServiceLookup,
 } from "@miyoria/runtime/kernel";
 import {
+  CurrencyKey,
+  DEFAULT_CURRENCY,
   Events,
   type KaraokeWorker,
   KaraokeWorkerKey,
@@ -34,6 +36,7 @@ import { registerCommands } from "./commands.js";
 import { SingConfigSchema } from "./config.js";
 import type { Endpoint, EndpointSource, EndpointsOption } from "./endpoints.js";
 import { type FailoverEntry, FailoverSingWorker } from "./failover.js";
+import { localVideoFetcher, type VideoSpawner } from "./local-video.js";
 import { PROMPT_KEY, SingPrompt } from "./prompt.js";
 import { ROOM_PROMPT_KEY, VoiceRoom, VoiceRoomPrompt } from "./room.js";
 import { Singer } from "./singer.js";
@@ -124,6 +127,7 @@ export class SingModule implements Module {
   readonly #endpoints: EndpointsOption | null;
   readonly #context: GpuContextSink | null;
   readonly #audio: SongAudioFactory | null;
+  readonly #videoSpawner: VideoSpawner | null;
   #running: Running | null = null;
 
   /**
@@ -131,6 +135,7 @@ export class SingModule implements Module {
    * `audio_dir` is relative to (the directory of `miyoria.toml`; default the working directory).
    * `endpoints`: Core's endpoint registry, where the song workers are. `context`: where else the
    * audience context goes (`GpuContextSink`). `audio`: replaces the songs' audio on disk (tests).
+   * `videoSpawner`: starts yt-dlp for `video_source = "local"` (tests give a fake one).
    */
   constructor(
     worker: SingWorkerFactory | null = null,
@@ -139,6 +144,7 @@ export class SingModule implements Module {
       endpoints?: EndpointsOption;
       context?: GpuContextSink;
       audio?: SongAudioFactory;
+      videoSpawner?: VideoSpawner;
     } = {},
   ) {
     this.#worker = worker;
@@ -146,6 +152,7 @@ export class SingModule implements Module {
     this.#endpoints = options.endpoints ?? null;
     this.#context = options.context ?? null;
     this.#audio = options.audio ?? null;
+    this.#videoSpawner = options.videoSpawner ?? null;
   }
 
   async start(ctx: ModuleContext): Promise<void> {
@@ -165,11 +172,26 @@ export class SingModule implements Module {
       // The registry is looked up again at every use: one that was not there when this module
       // started (the `cluster` module restarted, or started later) is found then.
       refresh: () => follow(),
+      // Each new song counts on its worker in the registry until its job ends (v5-hostd §15).
+      reserve: (id, what) => {
+        const client = clients.get(id);
+        if (client === undefined || source?.reserve === undefined) return null;
+        return source.reserve(client.endpoint, what === undefined ? {} : { what });
+      },
+      openSession: (room) => {
+        const endpoint = source?.openSession?.("sing", `karaoke:${room}`) ?? null;
+        return endpoint === null ? null : endpointId(endpoint);
+      },
     });
     const follow = () => {
       if (source === null) return;
+      // In the registry's order (for `job` work, its dispatch order), with the workers that take
+      // no new work now (drained, excluded, her speech host) still listed for what they hold.
+      const taking = new Set(
+        source.candidates("sing", { ignoreResting: true }).map((endpoint) => endpointId(endpoint)),
+      );
       const entries: FailoverEntry[] = source
-        .candidates("sing", { ignoreResting: true })
+        .candidates("sing", { ignoreResting: true, all: true })
         .map((endpoint) => {
           const id = endpointId(endpoint);
           const key = JSON.stringify([endpoint.via, endpoint.url, endpoint.headers]);
@@ -183,7 +205,13 @@ export class SingModule implements Module {
             client = { key, endpoint, worker: made };
             clients.set(id, client);
           } else client.endpoint = endpoint;
-          return { id, name: endpoint.url, url: endpoint.url, worker: client.worker };
+          return {
+            id,
+            name: endpoint.url,
+            url: endpoint.url,
+            worker: client.worker,
+            takesWork: taking.has(id),
+          };
         });
       worker.update(entries);
     };
@@ -217,6 +245,7 @@ export class SingModule implements Module {
       videoDir,
       sink === null ? null : (context) => sink(ctx.services, context),
       audio,
+      localVideoFetcher(cfg, this.#videoSpawner ?? undefined),
     );
     listed = singer;
     const actuators = actuatorsFor(ctx);
@@ -225,10 +254,11 @@ export class SingModule implements Module {
     );
 
     let paths: string[] = [];
+    const coin = () => ctx.services.get(CurrencyKey) ?? DEFAULT_CURRENCY;
     const commands = new CommandMount(
       "sing",
       (registry) => {
-        paths = registerCommands(registry, cfg.permissions, actuators, singer);
+        paths = registerCommands(registry, cfg.permissions, actuators, singer, coin());
       },
       (registry) => {
         for (const path of paths) registry.unregister(path);
@@ -236,7 +266,7 @@ export class SingModule implements Module {
     );
     commands.attach(ctx);
     const prompts = ctx.services.get(PromptContributorsKey) ?? null;
-    prompts?.register(new SingPrompt(singer));
+    prompts?.register(new SingPrompt(singer, coin));
     const room = new VoiceRoom(() => ctx.clock.now());
     prompts?.register(new VoiceRoomPrompt(room, singer.list));
     singer.setPresence((guild, who) => room.present(guild, who));

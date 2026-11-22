@@ -61,6 +61,8 @@ interface ControlProps {
   invalid: boolean;
   describedBy: string | undefined;
   currency: string;
+  /** A channel picker for one server's value offers only that server's channels (its platform id). */
+  guild?: string | null;
 }
 
 /** A number typed in a text box: the text while it is not a number, so Core can say why. */
@@ -124,10 +126,10 @@ function RoomName({ room, id }: { room: PlaceRoom | undefined; id: string }) {
  * `GET /api/places/rooms`. A room she cannot use is shown but cannot be picked, with why. A stored
  * room that is gone keeps its id and says so.
  */
-function ChannelPicker({ field, id, value, onChange, disabled, invalid, describedBy }: Omit<ControlProps, "currency">) {
+function ChannelPicker({ field, id, value, onChange, disabled, invalid, describedBy, guild }: Omit<ControlProps, "currency">) {
   const [open, setOpen] = useState(false);
   // The names of what is stored are wanted before the picker opens.
-  const rooms = usePlaceRooms(field.room, true);
+  const rooms = usePlaceRooms(field.room, true, guild);
   const list = rooms.data?.rooms ?? [];
   const index = roomIndex(field, list);
   const picked = field.multiple ? (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []) : typeof value === "string" && value !== "" ? [value] : [];
@@ -211,6 +213,53 @@ function ChannelPicker({ field, id, value, onChange, disabled, invalid, describe
       </Popover>
       {!field.multiple && picked.length === 0 && <span className="sr-only">沒設</span>}
     </div>
+  );
+}
+
+/** The descriptor of a one-channel pick, for choosing which channel's values to edit. */
+const ROOM_FIELD: SettingField = {
+  path: "",
+  keys: [],
+  kind: "channel",
+  label: "頻道",
+  help: null,
+  group: null,
+  order: 0,
+  apply: "module",
+  danger: null,
+  secret: false,
+  scope: "room",
+  merge: "replace",
+  unit: null,
+  labels: null,
+  room: "text",
+  multiple: false,
+  ref: "id",
+  min: null,
+  max: null,
+  step: null,
+  int: false,
+  max_length: null,
+  pattern: null,
+  options: null,
+  slider: false,
+  long: false,
+  default: null,
+};
+
+/** Which of a server's text channels to read and change the per-channel values of. */
+export function RoomPicker({ id, guild, value, onChange }: { id: string; guild: string | null; value: string | null; onChange: (room: string | null) => void }) {
+  return (
+    <ChannelPicker
+      field={ROOM_FIELD}
+      id={id}
+      value={value ?? ""}
+      onChange={(v) => onChange(typeof v === "string" && v !== "" ? v : null)}
+      disabled={false}
+      invalid={false}
+      describedBy={undefined}
+      guild={guild}
+    />
   );
 }
 

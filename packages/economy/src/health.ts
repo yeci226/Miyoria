@@ -7,7 +7,7 @@
 // store answers `dailyTotals` with one `GROUP BY` (`LedgerStatsStore`, provided by the app); with
 // none, the table says it is not available rather than inventing numbers.
 
-import { CARD_REASONS, KARAOKE_REASONS, MARKET_REASONS } from "@miyoria/types";
+import { CARD_REASONS, EXCHANGE_REASONS, KARAOKE_REASONS, MARKET_REASONS } from "@miyoria/types";
 import type { EconomyService } from "./economy.js";
 import { type LedgerDayTotal, LedgerStatsKey, type LedgerStatsStore } from "./records.js";
 import { DANMAKU_REASON, DANMAKU_REFUND_REASON } from "./types.js";
@@ -28,11 +28,15 @@ export const ISSUED_REASONS: readonly string[] = [
   // Karaoke rooms (docs/design/karaoke.md 「做了什麼第四步」): a round's winner and its finishers.
   KARAOKE_REASONS.prize,
   KARAOKE_REASONS.finish,
+  // The exchange's real instruments: a sale mints the position's value back (the house pays).
+  EXCHANGE_REASONS.mint,
 ];
 
 /** Reasons that take coins out for good: they were spent on something that does not give them back. */
 export const RECOVERED_REASONS: readonly string[] = [
   "feed",
+  // A gift named in words (gifts.ts): burned but for her share; one she said no to is refunded.
+  "gift",
   "screen_message",
   "dedication",
   "draw", // drawing collectibles, removed: the days before still count
@@ -50,6 +54,12 @@ export const RECOVERED_REASONS: readonly string[] = [
   DANMAKU_REASON,
   // Opening a karaoke room is burned; a room that sang no round through gives it back.
   KARAOKE_REASONS.room,
+  // The exchange's fees, tax and carry are burned (docs/design/exchange.md §3). What goes into
+  // its vault is neither issued nor recovered: it comes back out when people sell.
+  EXCHANGE_REASONS.fee,
+  // A real buy burns its coins into the position; a loss past the margin is burned too.
+  EXCHANGE_REASONS.burn,
+  EXCHANGE_REASONS.loss,
 ];
 
 /**
@@ -65,6 +75,8 @@ export const GIVEN_BACK_REASONS: readonly string[] = [
   MARKET_REASONS.lotteryPrize,
   DANMAKU_REFUND_REASON,
   KARAOKE_REASONS.roomRefund,
+  EXCHANGE_REASONS.feeBack,
+  EXCHANGE_REASONS.burnBack,
 ];
 
 const WEEK = 7;

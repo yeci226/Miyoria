@@ -895,6 +895,22 @@ ${selfRules(notes.limits.selfLines, notes.limits.lineChars)}`,
     return !(this.#people.day === day && this.#people.finished);
   }
 
+  /**
+   * Whether tonight's reflections are over and it is quiet now: the daily reflection ran today
+   * (her local day), the pass on people finished today or is off, nothing else of hers runs, the
+   * budget is not exhausted and nobody talked for `quiet_mins`. What may follow them (the tidy of
+   * her notes, `tidy.ts`) waits for this.
+   */
+  nightOver(now: number, budget: BudgetState): boolean {
+    if (this.#running || budget === "exhausted") return false;
+    const cfg = this.#d.config;
+    const { day } = localParts(now, cfg.utc_offset_minutes);
+    if (this.#lastDaily !== day) return false;
+    const people =
+      cfg.people_per_night === 0 || (this.#people.day === day && this.#people.finished);
+    return people && now - this.#lastLineMs >= cfg.quiet_mins * MINUTE_MS;
+  }
+
   /** The pass is over for today (the budget ran out, or nothing ran under the guard). */
   peopleFinished(now: number): void {
     const { day } = localParts(now, this.#d.config.utc_offset_minutes);

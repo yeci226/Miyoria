@@ -1,7 +1,13 @@
 // The shapes shared with the panel, the stage overlay and the Discord commands. Changing one
 // changes the contract (docs/design/economy.md).
 
-import { type AccountRef, Events, serviceKey } from "@miyoria/types";
+import {
+  type AccountRef,
+  type ContextKey,
+  Events,
+  type PersonId,
+  serviceKey,
+} from "@miyoria/types";
 import type { AchievementUnlocked } from "./v2-types.js";
 
 export type FeedItem = "rice" | "big_bowl" | "dessert";
@@ -231,8 +237,19 @@ export interface Economy {
   refund(account: AccountRef, entryId: string): Promise<boolean>;
   /** What `item` costs now, and how many one person may buy a day (`0`: off sale). */
   price(item: PaidItem): { price: number; per_day: number };
-  /** The bounties she has open. */
-  bounties(): Promise<BountyView[]>;
+  /**
+   * The bounties she has open; `spaces`: only those servers' (and the ones of no server), every
+   * one without.
+   */
+  bounties(spaces?: readonly string[]): Promise<BountyView[]>;
+  /**
+   * The servers a list shown in `ctx` covers: that server, or in a DM the ones the person of
+   * `account` is a member of (`spaces.ts`). `undefined`: no filter (no identity).
+   */
+  spacesFor(
+    ctx: ContextKey | null | undefined,
+    account: AccountRef | null,
+  ): Promise<string[] | undefined>;
   /**
    * Coins from one person to another she knows, plus a fee of the sender's that is burned
    * (`transfer_fee`; `EconomyError`: 400 a bad amount or yourself, 402 short of the amount and the
@@ -240,8 +257,11 @@ export interface Economy {
    * to her. The same key twice answers what the first did.
    */
   transfer(from: AccountRef, to: AccountRef, amount: number, key: string): Promise<TransferResult>;
-  /** The sponsor board: everyone who left no wish to be off it, by what they spent on her lately, biggest first. */
-  board(limit?: number): Promise<BoardLine[]>;
+  /**
+   * The sponsor board: everyone who left no wish to be off it, by what they spent on her lately,
+   * biggest first. `members`: only these persons (one server's members); everyone without.
+   */
+  board(limit?: number, members?: ReadonlySet<PersonId>): Promise<BoardLine[]>;
   /** Puts them on the board or takes them off; `false` when they are a stranger. */
   setOnBoard(account: AccountRef, on: boolean): Promise<boolean>;
 }

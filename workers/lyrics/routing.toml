@@ -1,0 +1,6 @@
+# [routing] of the lyrics service (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# job: each lookup stands alone and may be answered by any host that runs the service.
+class = "job"
+latency = "batch"
+concurrency = 2

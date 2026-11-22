@@ -399,9 +399,22 @@ export function schemaVersions(db: Db, plugin: string): number[] {
     .sort((a, b) => a - b);
 }
 
+/** `core` with only its bookkeeping (`_migrations`): for a database of a few plugins' tables. */
+const BOOKKEEPING_ONLY: PluginSchema = {
+  plugin: "core",
+  migrations: coreSchema.migrations.filter((m) => m.version === 1),
+};
+
 export interface MigrateOptions {
   /** Names the database in errors and logs: its file path, or `:memory:`. */
   location?: string;
+  /**
+   * `all` (default): core's own tables, the event log among them. `bookkeeping`: only
+   * `_migrations`, for a database that holds just `schemas` (the install's machine database,
+   * `openPluginDatabase`). Core's later migrations recorded in the file (a full store's) are left
+   * alone, and a full store opened on the file later applies them.
+   */
+  core?: "all" | "bookkeeping";
 }
 
 /**
@@ -415,7 +428,8 @@ export function migrate(
   options: MigrateOptions = {},
 ): AppliedMigration[] {
   const location = options.location ?? "the database";
-  const ordered = orderSchemas([coreSchema, ...schemas]);
+  const bookkeeping = options.core === "bookkeeping";
+  const ordered = orderSchemas([bookkeeping ? BOOKKEEPING_ONLY : coreSchema, ...schemas]);
   const problems = lintSchemas(ordered);
   if (problems.length > 0) {
     throw new SchemaError("lint", `schema names fail the lint: ${problems.join("; ")}`);
@@ -432,6 +446,8 @@ export function migrate(
     const versions = done.get(row.plugin) ?? new Set<number>();
     versions.add(row.version);
     done.set(row.plugin, versions);
+    // Core's tables past its bookkeeping belong to a full store, which checks them itself.
+    if (bookkeeping && row.plugin === "core" && row.version !== 1) continue;
     const schema = byPlugin.get(row.plugin);
     if (schema === undefined) continue;
     const what = `${row.plugin} migration ${row.version} (${row.name})`;

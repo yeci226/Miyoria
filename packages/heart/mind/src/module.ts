@@ -18,10 +18,13 @@ import { type SettingsStore, SettingsStoreKey } from "@miyoria/store";
 import {
   type Clock,
   dataBlock,
+  directoryMatch,
   EventLogKey,
   Events,
   type Goal,
   GoalAgendaKey,
+  HandleDirectoryKey,
+  HeartKey,
   isJsonObject,
   LifeLogKey,
   MindKey,
@@ -82,6 +85,18 @@ export const MIND_TOPICS = [
  * whose trigger fires becomes an item of her inbox on the new runner), her life log and her old
  * timers. It calls no model except to condense old journal entries.
  */
+/** The handle of the one person a name she wrote for a goal or a timer means (`directoryMatch`). */
+function handleOfName(services: ModuleContext["services"]): (name: string) => string | null {
+  return (name) => {
+    const handles = services.get(HandleDirectoryKey);
+    const calls = services.get(HeartKey)?.callNames?.() ?? [];
+    const match = directoryMatch(handles, name, calls);
+    if (match.kind !== "one") return null;
+    const person = match.candidate.person;
+    return (person === null ? null : handles?.ofPerson(person)) ?? match.candidate.handle;
+  };
+}
+
 export class MindModule implements Module {
   static readonly ID = "mind";
   readonly manifest = defineManifest(MindModule.ID, "Mind", {
@@ -139,6 +154,7 @@ export class MindModule implements Module {
       defaultDays: config.goal_default_days,
       publish: (goal) => ctx.publish(Events.PlanGoal, JSON.parse(JSON.stringify(goal)) as Goal),
       wishes: () => ctx.services.get(WishesKey) ?? null,
+      handleOf: handleOfName(ctx.services),
     });
     if (store) {
       try {
@@ -221,6 +237,7 @@ export class MindModule implements Module {
           reminder: JSON.parse(JSON.stringify(reminder)) as Reminder,
         }),
       wishes: () => ctx.services.get(WishesKey) ?? null,
+      handleOf: handleOfName(ctx.services),
     });
     if (store) {
       for (const [what, load] of [

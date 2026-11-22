@@ -86,6 +86,11 @@ export function cleanText(text: string, max: number): string | null {
   return repaired === null ? null : cut(repaired, max);
 }
 
+/** `when_online` of a person's handle, else `whenever`. */
+function whenOnline(person: string | null): GoalTrigger {
+  return person === null ? { kind: "whenever" } : { kind: "when_online", person };
+}
+
 /** A trigger with valid fields, else `whenever`. */
 export function cleanTrigger(trigger: GoalTrigger): GoalTrigger {
   switch (trigger.kind) {
@@ -177,6 +182,11 @@ export interface GoalBookOptions {
   publish?: (goal: Goal) => void;
   /** What she wants to ask whom (the arbiter's `WishesKey`), when it runs. */
   wishes?: () => Wishes | null;
+  /**
+   * The handle of the one person a name she wrote means (`directoryMatch`), `null`: nobody or
+   * more than one. Unset: a name that may be a handle is taken as written.
+   */
+  handleOf?: (name: string) => string | null;
 }
 
 /** Why a goal about a wish ends, in her words. */
@@ -284,22 +294,34 @@ export class GoalBook implements GoalAgenda {
     return open.find((g) => goalKey(g) === k || g.id.toUpperCase() === k) ?? null;
   }
 
+  /** The handle of the person a goal names (`handleOf`), else what she wrote when it may be one. */
+  #person(name: string | null): string | null {
+    const named = name?.trim() ?? "";
+    if (named === "") return null;
+    if (this.#o.handleOf !== undefined) return this.#o.handleOf(named);
+    return isValidHandle(named) ? named : null;
+  }
+
   add(input: GoalInput, id: string = newId()): Goal {
     const now = this.#now();
     const what = cleanText(input.what, MAX_WHAT);
     if (what === null) throw new GoalError("a goal needs a `what`");
+    const trigger = cleanTrigger(input.trigger);
     const goal: Goal = {
       id,
       what,
       why: cleanText(input.why, MAX_WHY) ?? "",
-      trigger: cleanTrigger(input.trigger),
+      trigger:
+        trigger.kind === "when_online" && this.#o.handleOf !== undefined
+          ? whenOnline(this.#o.handleOf(trigger.person))
+          : trigger,
       steps: (input.steps ?? [])
         .map((s) => cleanText(s, MAX_STEP))
         .filter((s): s is string => s !== null)
         .slice(0, MAX_STEPS),
       status: "pending",
       expires: this.#expiry(input.expires, now),
-      person: input.person && isValidHandle(input.person) ? input.person : null,
+      person: this.#person(input.person ?? null),
       context: input.context ?? null,
       source: input.source,
       created_at: toTimestamp(now),

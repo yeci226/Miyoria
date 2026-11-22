@@ -12,7 +12,9 @@ import {
   toTimestamp,
 } from "@miyoria/types";
 import type { Context } from "hono";
+import type { FailureLimiter } from "./admin-limit.js";
 import { ApiError } from "./errors.js";
+import type { FilesSide } from "./files/side.js";
 import { ContextLabels } from "./labels.js";
 import type { Monitor } from "./monitor.js";
 import type { OAuth } from "./oauth.js";
@@ -45,9 +47,14 @@ export interface PanelAuth {
   sessions: Sessions;
   oauth: OAuth | null;
   cookieSecure: boolean;
+  /** Wrong bearer tokens per address (`admin-limit.ts`); none: not limited. */
+  limiter?: FailureLimiter;
 }
 
 export class ApiState {
+  /** The file origin and share links (`[modules.api.files]`); `null` until the module sets it. */
+  files: FilesSide | null = null;
+
   constructor(
     readonly ctx: ModuleContext,
     readonly auth: PanelAuth,

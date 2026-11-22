@@ -1,6 +1,8 @@
 # 自主層設計(草案)
 
 > 狀態:**已確認方向**(2026-11-02),第 12 節的決定已定案。**階段 A–G 已完成**(實作紀錄與偏差見第 13–19 節,實測修正見第 20 節,頻道聊天等級見第 21 節,唱歌見第 22 節,七情六欲見第 23 節);下一步是實測與人設重寫。這份文件描述把 DeepSeek-chan 從「被叫才醒來的聊天機器人」改成「有自己內心、自己決定做事的角色」的架構改動。終極目標是 Neuro-sama 等級的自主 AI VTuber。現有架構見 [ARCHITECTURE.md](../ARCHITECTURE.md)。
+>
+> 2026-11-21 補註:V5 階段 1 把套件搬進 `packages/<領域>/`,階段 3 換掉了舊的回合和 attention(見 [v5-brain.md](v5-brain.md))。文中搬過的檔案已改成現在的位置,刪掉的註明刪掉;其餘內容是當時的紀錄,沒有照現在的程式改寫。
 
 ## 0. 原則
 
@@ -15,7 +17,7 @@
 
 | 面向 | 現況 | 差距 |
 |---|---|---|
-| 觸發 | 事件進來 → attention 用固定數字算分數、抽樣(`agent/src/attention.ts`) | 沒有自己的時間;一堆門檻(`ambient_factor`、`cooldown_ms`、`gray_low/high`、`interrupt_scale`)由人調 |
+| 觸發 | 事件進來 → attention 用固定數字算分數、抽樣(`agent/src/attention.ts`,V5 階段 3 已刪,改由 `packages/brain/arbiter` 判斷) | 沒有自己的時間;一堆門檻(`ambient_factor`、`cooldown_ms`、`gray_low/high`、`interrupt_scale`)由人調 |
 | 主動 | `initiative` 只有四種:冷場丟話題、打招呼、進語音問候、後續追問;只發 `agent.initiative`,而且 initiative 回合**不提供工具**(`turn.ts:766`) | 不能主動「做事」,只能主動講話 |
 | 內在狀態 | 心情(valence / arousal / energy)、人際數值(affinity / trust / familiarity + 筆記) | 沒有慾望、無聊、想做的事、對人的「感情」描述、計畫 |
 | 行動 | `VoiceLinkKey`、`StageLinkKey`、`GameControlKey` 都能程式呼叫,但**沒有任何 LLM 工具包裝它們**;排程器只有 `send_message / react / typing / speak` | 她不能自己進語音、開台、切場景、玩遊戲 |
@@ -101,7 +103,7 @@ interface SelfState {
 
 ## 5. 心智迴圈 Mind
 
-新模組 `mind`(結構參考 `initiative/module.ts` 的訂閱 + tick,與 `game/director.ts` 的 JSON 慢迴圈)。
+新模組 `mind`(結構參考 `initiative/module.ts`(舊的 initiative 模組,現在併進 `packages/brain/selfhost/src/initiative.ts`)的訂閱 + tick,與 `game/director.ts`(現在是 `packages/play/game/src/director.ts`)的 JSON 慢迴圈)。
 
 **觸發**:
 
@@ -471,7 +473,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
 
 實測時文字頻道還是太吵:沒設定的頻道都是 `ambient`(插話倍率 ×1、冷卻 5 秒),她自己又能把多話程度拉到 ×4。擁有者要的是「幾個等級當上限 + 可以直接叫她安靜」。
 
-- **五個等級**(`agent/src/levels.ts`,數字都在這裡):關閉 `off`、只回提及 `mention-only`、安靜 `quiet`、一般 `normal`、活躍 `lively`;`always`(每則都回)保留給測試與已經在用的人,指令與面板列在最後。舊的 `ambient` 讀成 `normal`(設定檔、資料庫裡存的值、profile 都一樣),不用遷移。沒設定的文字頻道預設 `quiet`(profile `behavior.default_channel_mode`,範本與內建角色都改了)。
+- **五個等級**(`packages/brain/agent/src/levels.ts`,數字都在這裡):關閉 `off`、只回提及 `mention-only`、安靜 `quiet`、一般 `normal`、活躍 `lively`;`always`(每則都回)保留給測試與已經在用的人,指令與面板列在最後。舊的 `ambient` 讀成 `normal`(設定檔、資料庫裡存的值、profile 都一樣),不用遷移。沒設定的文字頻道預設 `quiet`(profile `behavior.default_channel_mode`,範本與內建角色都改了)。
 - **等級是上限,不是個性**:她照樣用自己的 talkativeness 決定(心智迴圈、`channel_activeness`、學到的事),但在文字頻道會被限制在等級內。talkativeness 上限 / 沒定時的預設:安靜 0.5 / 0.25(插話 ×0.5,最多 ×1)、一般 0.75 / 0.5(×1,最多 ×2)、活躍 1 / 0.65(×1.5,最多 ×4);好感與精神的倍率乘上去也不超過上限。安靜另外有最低分數 0.45(普通的問句不夠,要她的話題或接著她說的話)、說完話後 10 分鐘不再插話(接著她剛說的話不算)、近期佔比上限 15%。
 - **她自己開話題也受限**:安靜的頻道兩次自己開口至少隔 3 小時。心智迴圈的 `chat.start`、其他意圖在那裡的開場、initiative 回合(冷場、打招呼、追問)都算,遊戲導演的實況(`game`)與動作結果的後續回合(`action_result`)不算;initiative 回合在安靜的頻道也要等 10 分鐘的冷卻。檢查在 agent(`Agent.startBlocked`:意圖送達、initiative 進來、coordinator 真的開回合前各一次,開回合時記下時間);`IntentSink.ceiling` 讓心智迴圈先知道,地點旁寫「聊天等級「安靜」」與「現在不能主動開口」,被擋的 `chat.start` 直接丟掉並寫明原因。一般與活躍沒有自己的間隔(照 mind 的退避與 initiative 的限制)。
 - **叫她安靜點**:`channel_activeness` 多了 `silent`(先不插話,被叫到照常回),最長一天(原本 4 小時);說明寫明「安靜點」「少講話」「好吵」「可以多聊」時用它、多少與多久她自己決定、等級是上限,結果也會說被等級限制了。回合情境(system)寫出這個頻道的等級,所以她知道「這個頻道設定為安靜」。
@@ -532,7 +534,7 @@ Attention 的第一層(被直接叫到、語音偵測、名字比對)保留當�
 
 **情緒怎麼來**:對照她在乎的事(對方是誰、她多在乎、是不是暗戀的人、她現在想要什麼)評估發生的事。
 
-- 便宜的規則(`self/src/rules.ts`):被誇 → 喜 + 害羞 + 得意(唱完歌 10 分鐘內被誇是「歌被稱讚」,得意更多);被罵 / 騷擾 → 怒(與厭、懼)+ 對那個人不爽;送禮 → 感激(也餵飽 `hunger`);遊戲裡死掉 → 不甘心 + 怒,達成成就 → 得意;歌唱完 → 得意,被切掉 → 哀 + 不甘心;她在乎的人好幾天沒出現 → 想念(回來時變成喜,暗戀的人還會害羞);她在乎的人一直回覆別人、不理她 → 嫉妒(暗戀的人更多,`longing` 也上升);答應某人的議程過期沒做 → 愧疚,做完 → 得意一點;LLM 預算被限制 → 餓 + 不甘心。
+- 便宜的規則(`packages/heart/self/src/rules.ts`):被誇 → 喜 + 害羞 + 得意(唱完歌 10 分鐘內被誇是「歌被稱讚」,得意更多);被罵 / 騷擾 → 怒(與厭、懼)+ 對那個人不爽;送禮 → 感激(也餵飽 `hunger`);遊戲裡死掉 → 不甘心 + 怒,達成成就 → 得意;歌唱完 → 得意,被切掉 → 哀 + 不甘心;她在乎的人好幾天沒出現 → 想念(回來時變成喜,暗戀的人還會害羞);她在乎的人一直回覆別人、不理她 → 嫉妒(暗戀的人更多,`longing` 也上升);答應某人的議程過期沒做 → 愧疚,做完 → 得意一點;LLM 預算被限制 → 餓 + 不甘心。
 - 社交模組現在對**每一個**事件發 `social.event`(不管每日上限有沒有擋下數值),情緒照樣反應——擁有者說對個人的負面情緒不設上限。
 - 其他的交給社交模組原本的批次評估(`fast` 用途,同一次呼叫):有她的情緒時(`setConcerns`,「她在乎的事」放在 user 訊息、跳脫分隔符),回覆多了每個人的 `romance`(曖昧、撒嬌、體貼)、`others`(跟別人熱絡卻晾著她)、`promise`(說到做到 / 食言)和她自己的 `her` 情緒,發成 `social.appraisal`;self 取一半、有上限。
 - 遊戲與擴充可以發 `self.feel`(`{emotion, amount, cause}`、`{emotions:{…}}`,或對人的 `{toward, person, amount}`,每次最多 ±0.5)。

@@ -5,6 +5,7 @@
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { join, resolve } from "node:path";
 import type { Writable } from "node:stream";
@@ -13,12 +14,14 @@ import {
   HOST_FETCH_LIMITS,
   HOST_METHOD,
   HOST_PROTOCOL_VERSION,
+  type HostCheckout,
   type HostClusterContext,
   type HostGuardState,
   type HostInfo,
   type HostLinkState,
   type HostLinks,
   type HostRelinkResult,
+  type HostRemoteUpdate,
   type HostReport,
   type HostServiceControlResult,
   HostServiceControlSchema,
@@ -34,6 +37,9 @@ import {
   HostShutdownSchema,
   type HostUpdateResult,
   HostUpdateSchema,
+  type HostUpgradeCancelResult,
+  type HostUpgradeMissing,
+  HostUpgradeSchema,
 } from "@miyoria/contracts/host";
 import { type Logger, pino } from "pino";
 import type { RotatingFileStream } from "rotating-file-stream";
@@ -47,14 +53,23 @@ import {
 } from "./api.js";
 import { type Catalog, type LinkPlaceholder, loadCatalog, placeholdersIn } from "./catalog.js";
 import { HostdClient } from "./client.js";
+import { createGateway } from "./gateway.js";
 import { CardReader, cudaIndex, freeOf, GpuCache, type GpuReader, type GpuSample } from "./gpu.js";
 import { type ArbiterService, GPU_PROFILE_FILE, GpuArbitration } from "./gpu-arbiter.js";
 import { coreStatusGuard, guardedMessage, guardUnknownMessage } from "./guard.js";
 import { type LoadedHostConfig, loadHostConfig } from "./host-config.js";
-import { type InstallDeps, installService, removeService } from "./install/index.js";
+import {
+  type CommandRunner,
+  execaRunner,
+  type InstallDeps,
+  inspectService,
+  installService,
+  removeService,
+} from "./install/index.js";
 import { CoreLink, type CoreLinkOptions, type CoreLinkState } from "./link/index.js";
 import { linkValues } from "./links.js";
 import { rotatingLog, ServiceLog } from "./logs.js";
+import { localAddress } from "./ports.js";
 import {
   localUrl,
   offloadUrls,
@@ -62,6 +77,8 @@ import {
   type ResolveContext,
   type ServicePlan,
 } from "./resolve.js";
+import { type LoadedRoutes, loadRoutes, reachOf, reportRoutes, withLocal } from "./routes.js";
+import { serviceRouting, VariantHasher } from "./routing.js";
 import {
   pidAlive,
   type RunInfo,
@@ -72,6 +89,8 @@ import {
 } from "./run-file.js";
 import { createLocalApi, JSON_RPC } from "./server.js";
 import { DEFAULT_TIMING, ManagedService, type ServiceHost, type Timing } from "./service.js";
+import { readCheckout } from "./upgrade/git.js";
+import { type UpgradeHost, Upgrader } from "./upgrade/upgrader.js";
 
 export interface DaemonOptions {
   /** `host.toml`; its folder is the workspace. */
@@ -105,6 +124,24 @@ export interface DaemonOptions {
   installDeps?: Omit<InstallDeps, "root">;
   /** Makes the control link (tests). Default a `CoreLink`. */
   linkFactory?: (api: HostApi, options: CoreLinkOptions) => LinkHandle;
+  /** What reading the checkout and a remote update (`host.upgrade`) use; tests replace these. */
+  upgrade?: UpgradeOptions;
+}
+
+/** The seams of the checkout reading and of `host.upgrade`. */
+export interface UpgradeOptions {
+  /** Runs git and pnpm (default the installer's runner, else execa). */
+  runner?: CommandRunner;
+  /** Asks a service's health for `busy` (default `fetch`). */
+  fetch?: typeof fetch;
+  /** How often the checkout is read again for the report. Default 60 s. */
+  checkoutEveryMs?: number;
+  /** How often a waiting update asks whether the host is idle. Default 5 s. */
+  pollMs?: number;
+  /** How long restarted services have to become healthy. Default 10 minutes. */
+  healthyMs?: number;
+  /** The pnpm program. */
+  pnpm?: string;
 }
 
 /** What the daemon needs of its control link; `CoreLink` is one. */
@@ -163,7 +200,15 @@ const SERVED: ReadonlySet<string> = new Set([
   HOST_METHOD.GpuRelease,
   HOST_METHOD.GpuBusy,
   HOST_METHOD.GpuState,
+  HOST_METHOD.HostUpgrade,
+  HOST_METHOD.HostUpgradeCancel,
 ]);
+
+/**
+ * Methods only Core may call: the operator on this machine updates with `miyoria update`, which
+ * asks before it downloads and shows everything it does.
+ */
+const CORE_ONLY: ReadonlySet<string> = new Set([HOST_METHOD.HostUpgrade]);
 
 /** The lease methods: a holder service's only (`gpu.state` may be read by the operator and Core). */
 const GPU_LEASE: ReadonlySet<string> = new Set([
@@ -204,7 +249,7 @@ const OPERATOR_ONLY: ReadonlySet<string> = new Set([
 function allowed(caller: Caller, method: string): boolean {
   switch (caller.kind) {
     case "operator":
-      return !GPU_LEASE.has(method);
+      return !GPU_LEASE.has(method) && !CORE_ONLY.has(method);
     case "core":
       return !OPERATOR_ONLY.has(method) && !FORWARDED.has(method) && !GPU_LEASE.has(method);
     case "service":
@@ -272,6 +317,33 @@ export class Daemon implements HostApi {
   #links: HostLinks["links"] = {};
   /** Serialises the restarts new link values cause. */
   #linkChecks: Promise<unknown> = Promise.resolve();
+  /** The checkout as last read; `null` when it is not one, `undefined` before the first read. */
+  #checkout: HostCheckout | null | undefined = undefined;
+  #checkoutTimer: ReturnType<typeof setInterval> | null = null;
+  /** Looks at the services' `[routing]` readiness and variant again (a file that appeared). */
+  #routingTimer: ReturnType<typeof setInterval> | null = null;
+  /** What that look found last, as JSON. */
+  #routingSeen = "";
+  #checkoutReading: Promise<void> | null = null;
+  /**
+   * `host.toml [update] allow_remote` (default `true`, also without the table), read at start and
+   * with each checkout reading. `false` until the file was read.
+   */
+  #allowRemote = false;
+  /** `host.upgrade` (v5-hostd §14); made at start. */
+  #upgrader: Upgrader | null = null;
+  /** The variant hashes of `[routing]` (v5-hostd §15), with what they read cached. */
+  readonly #variants = new VariantHasher();
+  /** The card's total memory as last read, to tell when it changed. */
+  #gpuTotal: number | null = null;
+  /** `routes.toml` as read at start (v5-hostd §16); `null` without the file. */
+  #routes: LoadedRoutes | null = null;
+  /** What Core sends to probe the gateway; only Core learns it, over the control link. */
+  readonly #routeToken = randomBytes(24).toString("base64url");
+  /** The gateway of the `direct` and `tunnel` routes while it listens. */
+  #gateway: Server | null = null;
+  /** Why the gateway does not listen, when a route needs it. */
+  #gatewayProblem: string | null = null;
 
   constructor(options: DaemonOptions) {
     this.#options = options;
@@ -314,6 +386,15 @@ export class Daemon implements HostApi {
       { base: { pid: process.pid }, timestamp: pino.stdTimeFunctions.isoTime },
       this.#logStream,
     );
+
+    this.#routes = loadRoutes({
+      workspace: host.workspace,
+      advertise: host.config.network.advertise,
+      bind: host.config.network.bind,
+    });
+    for (const problem of this.#routes?.problems ?? []) {
+      this.#log.warn({ file: this.#routes?.file, problem }, "routes problem");
+    }
 
     const catalog = loadCatalog(this.#options.catalogRoot);
     this.#catalog = catalog;
@@ -380,6 +461,9 @@ export class Daemon implements HostApi {
       spawned: (name) => {
         if (!this.#spawnOrder.includes(name)) this.#spawnOrder.push(name);
       },
+      routing: (service) => this.#routingOf(service),
+      outside: (name) => this.#outside(name),
+      reach: (service, port) => this.#reachOf(service.name, port),
     };
     this.#ctx = ctx;
     this.#serviceHost = serviceHost;
@@ -438,7 +522,33 @@ export class Daemon implements HostApi {
       workspace: host.workspace,
     });
 
+    await this.#startGateway();
     for (const service of this.#services.values()) service.watchExternal();
+    this.#allowRemote = host.config.update.allow_remote;
+    this.#upgrader = new Upgrader({
+      root: this.#options.catalogRoot,
+      runner: this.#upgradeRunner(),
+      env: ctx.env,
+      platform: ctx.platform,
+      host: this.#upgradeHost(),
+      ...(this.#options.upgrade?.pollMs !== undefined
+        ? { pollMs: this.#options.upgrade.pollMs }
+        : {}),
+      ...(this.#options.upgrade?.healthyMs !== undefined
+        ? { healthyMs: this.#options.upgrade.healthyMs }
+        : {}),
+      ...(this.#options.upgrade?.pnpm !== undefined ? { pnpm: this.#options.upgrade.pnpm } : {}),
+    });
+    // The first reading before the link's first report, so Core sees the version at once.
+    await this.#readCheckout();
+    const every = this.#options.upgrade?.checkoutEveryMs ?? 60_000;
+    this.#checkoutTimer = setInterval(() => void this.#readCheckout(), every);
+    this.#checkoutTimer.unref();
+    this.#routingTimer = setInterval(
+      () => this.#checkRouting(),
+      this.#options.upgrade?.checkoutEveryMs === undefined ? 30_000 : every,
+    );
+    this.#routingTimer.unref();
     this.#startLink(host);
     void this.#gpu.read();
     if (this.#arbitration.mode === "hostd") await this.#arbitration.ensure();
@@ -463,6 +573,12 @@ export class Daemon implements HostApi {
   }
 
   async #stop(): Promise<void> {
+    if (this.#checkoutTimer !== null) clearInterval(this.#checkoutTimer);
+    this.#checkoutTimer = null;
+    if (this.#routingTimer !== null) clearInterval(this.#routingTimer);
+    this.#routingTimer = null;
+    // An update still waiting goes away; one that changed something already finishes its step.
+    this.#upgrader?.cancel();
     // Before the services: a holder stopping now gives nothing back by itself.
     this.#arbitration?.close();
     await this.#stopServices();
@@ -475,6 +591,14 @@ export class Daemon implements HostApi {
       } catch (error) {
         this.#log.warn({ err: error }, "control link did not stop cleanly");
       }
+    }
+    const gateway = this.#gateway;
+    this.#gateway = null;
+    if (gateway !== null) {
+      await new Promise<void>((done) => {
+        gateway.close(() => done());
+        gateway.closeAllConnections();
+      });
     }
     const server = this.#server;
     this.#server = null;
@@ -666,7 +790,105 @@ export class Daemon implements HostApi {
       services: [...this.#services.values()].map((s) => s.status(withTokens)),
       link: this.linkState,
       ...(this.#arbitration === null ? {} : { arbiter: this.#arbitration.status() }),
+      ...(this.#checkout === undefined ? {} : { checkout: this.#checkout }),
+      remote_update: this.remoteUpdate(),
+      upgrade: this.#upgrader?.job ?? null,
+      ...this.#routesReport(withTokens),
     };
+  }
+
+  // ---- routes (v5-hostd §16) -------------------------------------------------------------------
+
+  /** The routes now: `routes.toml` with `local` first while Core runs on this machine. */
+  #routesNow(): LoadedRoutes | null {
+    const loaded = this.#routes;
+    const host = this.#host;
+    if (loaded === null || host === null) return null;
+    const local = isLoopbackUrl(host.config.cluster?.url)
+      ? localAddress(host.config.network.bind)
+      : null;
+    return withLocal(loaded, local);
+  }
+
+  #routesReport(withTokens: boolean): Pick<HostInfo, "routes" | "route_token"> {
+    const routes = this.#routesNow();
+    if (routes === null) return {};
+    return {
+      routes: reportRoutes(routes, this.#gatewayProblem),
+      ...(withTokens ? { route_token: this.#routeToken } : {}),
+    };
+  }
+
+  #reachOf(name: string, port: number): Record<string, string> | undefined {
+    const routes = this.#routesNow();
+    if (routes === null) return undefined;
+    return reachOf(
+      routes,
+      name,
+      port,
+      this.#gatewayToken(name) !== undefined,
+      this.#gateway !== null,
+    );
+  }
+
+  /**
+   * The token a gateway request for `name` must carry: its own token, for a worker that is not
+   * Core. Core's own service and the nodes are never behind the gateway.
+   */
+  #gatewayToken(name: string): string | undefined {
+    const managed = this.#services.get(name);
+    if (managed === undefined || managed.plan.kind !== "worker") return undefined;
+    if (name === "core" || managed.plan.provides.includes("core")) return undefined;
+    return managed.token;
+  }
+
+  /** Starts the gateway when a route of `routes.toml` needs one. A failure is a route problem. */
+  async #startGateway(): Promise<void> {
+    const plan = this.#routes?.gateway ?? null;
+    if (plan === null) return;
+    let tls: { cert: Buffer; key: Buffer } | null = null;
+    if (plan.tls !== null) {
+      try {
+        tls = { cert: await readFile(plan.tls.cert), key: await readFile(plan.tls.key) };
+      } catch (error) {
+        this.#gatewayProblem = `閘道讀不到憑證:${error instanceof Error ? error.message : String(error)}`;
+        this.#log.warn({ problem: this.#gatewayProblem }, "gateway not started");
+        return;
+      }
+    }
+    const gateway = createGateway({
+      tls,
+      logger: this.#log,
+      host: {
+        target: (name) => this.target(name),
+        tokenOf: (name) => this.#gatewayToken(name),
+        routeToken: () => this.#routeToken,
+      },
+    });
+    try {
+      await new Promise<void>((done, fail) => {
+        gateway.once("error", fail);
+        gateway.listen({ host: plan.bind, port: plan.port }, () => {
+          gateway.off("error", fail);
+          done();
+        });
+      });
+    } catch (error) {
+      this.#gatewayProblem = `閘道沒辦法聽 ${plan.bind}:${plan.port}:${error instanceof Error ? error.message : String(error)}`;
+      this.#log.warn({ problem: this.#gatewayProblem }, "gateway not started");
+      return;
+    }
+    gateway.on("error", (error) => this.#log.error({ err: error }, "gateway failed"));
+    this.#gateway = gateway;
+    this.#gatewayProblem = null;
+    this.#log.info({ bind: plan.bind, port: plan.port, tls: tls !== null }, "gateway listening");
+  }
+
+  /** Where the gateway listens, while it does. */
+  get gatewayAddress(): { host: string; port: number } | null {
+    const address = this.#gateway?.address();
+    if (address === undefined || address === null || typeof address !== "object") return null;
+    return { host: address.address, port: address.port };
   }
 
   onEvent(listener: (event: HostServiceEvent) => void): () => void {
@@ -834,6 +1056,15 @@ export class Daemon implements HostApi {
       }
       case HOST_METHOD.HostRelink:
         return await this.relink();
+      case HOST_METHOD.HostUpgrade:
+        return await this.#upgrade(params);
+      case HOST_METHOD.HostUpgradeCancel: {
+        const upgrader = this.#upgrader;
+        return {
+          cancelled: upgrader?.cancel() ?? false,
+          job: upgrader?.job ?? null,
+        } satisfies HostUpgradeCancelResult;
+      }
       case HOST_METHOD.ClusterResolve:
       case HOST_METHOD.ClusterLlm:
       case HOST_METHOD.ClusterFetch:
@@ -897,12 +1128,70 @@ export class Daemon implements HostApi {
     );
   }
 
+  // ---- routing (v5-hostd §15) ------------------------------------------------------------------
+
+  /** A service's `[routing]` as it applies here: readiness, variant, the owner's limits. */
+  #routingOf(service: ManagedService) {
+    const host = this.#host;
+    const ctx = this.#ctx;
+    if (host === null || ctx === null) return undefined;
+    const plan = service.plan;
+    return serviceRouting(plan.entry, plan.override, {
+      paths: {
+        root: this.#options.catalogRoot,
+        workspace: host.workspace,
+        state: host.state.root,
+        models: host.state.models,
+      },
+      env: (name) =>
+        plan.override.env[name] ?? plan.entry?.descriptor.run?.env[name] ?? ctx.env[name],
+      gpuTotalMb: () => this.#gpu.last?.total_mb ?? null,
+      hasher: this.#variants,
+    });
+  }
+
+  /**
+   * Reports again when a service's readiness or variant changed without anything else changing
+   * (a model file was put in place): those are read when a report is made, and nothing else would
+   * make one.
+   */
+  #checkRouting(): void {
+    const now = JSON.stringify(
+      [...this.#services.values()].map((s) => {
+        const r = this.#routingOf(s);
+        return r === undefined ? null : [s.name, r.ready, r.reason ?? null, r.variant ?? null];
+      }),
+    );
+    if (now === this.#routingSeen) return;
+    this.#routingSeen = now;
+    this.#serviceHost?.changed();
+  }
+
+  /** Why a service that uses the card is held up from outside: another service holds a lease. */
+  #outside(name: string): string | undefined {
+    const service = this.#services.get(name);
+    if (service?.plan.gpuPolicy === undefined) return undefined;
+    const other = this.#arbitration?.status().leases.find((lease) => lease.holder !== name);
+    return other === undefined ? undefined : `${other.holder} 正在用顯卡(${other.stage})`;
+  }
+
   // ---- GPU arbitration (H7) --------------------------------------------------------------------
 
-  /** One read of the card; `null` when it cannot be read. */
+  /**
+   * One read of the card; `null` when it cannot be read. A new total (the first reading) is a
+   * change of the report: a service's `[routing] needs.vram_gb` is judged by it (§15.1).
+   */
   #readGpu(): Promise<GpuSample | null> {
     const read = this.#readCard;
-    return read === null ? Promise.resolve(null) : read().catch(() => null);
+    const sample = read === null ? Promise.resolve(null) : read().catch(() => null);
+    return sample.then((s) => {
+      const total = s?.total_mb ?? null;
+      if (total !== this.#gpuTotal) {
+        this.#gpuTotal = total;
+        this.#serviceHost?.changed();
+      }
+      return s;
+    });
   }
 
   /**
@@ -1144,6 +1433,276 @@ export class Daemon implements HostApi {
       );
     }
     return entry;
+  }
+
+  // ---- the checkout and remote updates (v5-hostd §14) ----------------------------------------
+
+  /**
+   * Whether this host takes `host.upgrade` now, and why not. Core's own machine never does: an
+   * update there restarts Core and rebuilds the panel under it, which `miyoria update` on that
+   * machine does with a person watching.
+   */
+  remoteUpdate(): HostRemoteUpdate {
+    if (!this.#allowRemote) {
+      return {
+        allowed: false,
+        reason: "這台的主人關掉了遠端更新(host.toml 的 [update] allow_remote = false)",
+      };
+    }
+    const core = this.#services.get("core");
+    // Core started by hand beside this daemon is still Core's machine: its link is local.
+    if (
+      (core?.plan.override.enabled && core.plan.entry !== null) ||
+      isLoopbackUrl(this.#host?.config.cluster?.url)
+    ) {
+      return {
+        allowed: false,
+        reason: "這台跑著 Core,不能從面板更新;請在這台執行 miyoria update",
+      };
+    }
+    if (this.#checkout === null) {
+      return { allowed: false, reason: "這台不是從 git checkout 執行的,不能遠端更新" };
+    }
+    return { allowed: true };
+  }
+
+  /** The runner of git and pnpm. */
+  #upgradeRunner(): CommandRunner {
+    return this.#options.upgrade?.runner ?? this.#options.installDeps?.runner ?? execaRunner;
+  }
+
+  /** Reads `[update]` of host.toml and the checkout again; reports when either changed. */
+  #readCheckout(): Promise<void> {
+    this.#checkoutReading ??= (async () => {
+      const host = this.#host;
+      if (host !== null) {
+        try {
+          this.#allowRemote = loadHostConfig(host.file).config.update.allow_remote;
+        } catch {
+          // A host.toml that does not load keeps the value read before.
+        }
+      }
+      let next: HostCheckout | null;
+      try {
+        next = await readCheckout({
+          root: this.#options.catalogRoot,
+          runner: this.#upgradeRunner(),
+          env: this.#ctx?.env ?? process.env,
+          now: () => Date.now(),
+          platform: this.#ctx?.platform ?? process.platform,
+        });
+      } catch (error) {
+        this.#log.warn({ err: error }, "cannot read the checkout");
+        next = null;
+      }
+      const before = this.#checkout;
+      this.#checkout = next;
+      const same =
+        before !== undefined &&
+        before?.commit === next?.commit &&
+        before?.branch === next?.branch &&
+        before?.dirty === next?.dirty &&
+        before?.behind === next?.behind &&
+        before?.ahead === next?.ahead;
+      if (!same) this.#serviceHost?.changed();
+    })().finally(() => {
+      this.#checkoutReading = null;
+    });
+    return this.#checkoutReading;
+  }
+
+  async #upgrade(params: unknown): Promise<unknown> {
+    const upgrader = this.#upgrader;
+    if (upgrader === null || this.#stopping !== null) {
+      throw new HostRpcError(HOST_ERROR_CODE.Busy, "the daemon is not running");
+    }
+    const parsed = parseParams(HostUpgradeSchema, params);
+    // The file decides at the moment of asking, not what the last report said.
+    await this.#readCheckout();
+    const remote = this.remoteUpdate();
+    if (!remote.allowed) {
+      throw new HostRpcError(HOST_ERROR_CODE.NotAllowed, remote.reason ?? "不能遠端更新");
+    }
+    this.#log.info({ target: parsed.commit, by: parsed.by }, "Core asked for an update");
+    return await upgrader.begin(parsed);
+  }
+
+  /** What `Upgrader` needs of this daemon. */
+  #upgradeHost(): UpgradeHost {
+    const RUNNING = new Set(["running", "starting", "backoff"]);
+    return {
+      services: () =>
+        [...this.#services.values()].map((s) => ({
+          name: s.name,
+          entry: s.plan.entry,
+          running: RUNNING.has(s.state),
+        })),
+      busy: (signal) => this.#busyReasons(signal),
+      reload: () => {
+        this.#reload();
+      },
+      staleEnvs: () => {
+        const host = this.#host;
+        const catalog = this.#catalog;
+        if (host === null || catalog === null) return [];
+        const out: string[] = [];
+        for (const [name, override] of Object.entries(host.config.services)) {
+          const entry = catalog.services.get(name);
+          if (!override.enabled || entry === undefined) continue;
+          if (entry.descriptor.install.runtime !== "python") continue;
+          const inspected = inspectService(entry, host, this.#installDeps());
+          if (inspected.runtime.kind !== "managed") continue;
+          if (inspected.runtime.state?.state !== "ready") out.push(name);
+        }
+        return out;
+      },
+      sync: (name, signal, onLine) =>
+        this.#exclusive(async () => {
+          const result = await this.#install(
+            { service: name, only_stale: true, no_files: true },
+            signal,
+            onLine,
+          );
+          return {
+            ok: result.ok,
+            ...(result.runtime.detail !== undefined ? { detail: result.runtime.detail } : {}),
+          };
+        }),
+      stop: async (name) => {
+        await this.#services.get(name)?.stop();
+      },
+      start: async (name) => {
+        const managed = this.#service(name);
+        const fresh = this.#replan([name]) ?? managed;
+        await fresh.start();
+      },
+      restart: async (name) => {
+        const managed = this.#service(name);
+        await managed.stop();
+        const fresh = this.#replan([name]) ?? managed;
+        await fresh.start();
+      },
+      healthy: (names, timeoutMs, signal) => this.#waitHealthy(names, timeoutMs, signal),
+      missing: () => this.#missingForUpgrade(),
+      changed: () => {
+        this.#serviceHost?.changed();
+        if (this.#upgrader !== null && !this.#upgrader.busy) void this.#readCheckout();
+      },
+      log: this.#log,
+    };
+  }
+
+  /**
+   * Why this host is not idle, in words: a GPU lease, a guarded state Core reports for a service
+   * that guards it (or Core cannot be asked), or a running service whose health says `busy` or a
+   * queue (the song worker's `/health`).
+   */
+  async #busyReasons(signal: AbortSignal): Promise<string[]> {
+    const reasons: string[] = [];
+    for (const lease of this.#arbitration?.status().leases ?? []) {
+      reasons.push(`${lease.holder} 正在用顯卡(${lease.stage})`);
+    }
+    const guarded = new Set<HostGuardState>();
+    for (const service of this.#services.values()) {
+      if (!service.active) continue;
+      for (const state of service.plan.entry?.descriptor.run?.guard ?? []) guarded.add(state);
+    }
+    if (guarded.size > 0) {
+      try {
+        const states = await (this.#guard ?? this.#defaultGuard).states(
+          AbortSignal.any([signal, AbortSignal.timeout(4000)]),
+        );
+        if (states.includes("singing") && guarded.has("singing")) reasons.push("她正在唱歌");
+        if (states.includes("live") && guarded.has("live")) reasons.push("她正在直播");
+      } catch {
+        reasons.push("問不到 Core 她現在忙不忙");
+      }
+    }
+    const fetchImpl = this.#options.upgrade?.fetch ?? fetch;
+    for (const service of this.#services.values()) {
+      if (service.state !== "running") continue;
+      const path = service.plan.entry?.descriptor.run?.health.http;
+      const target = this.target(service.name);
+      if (path === undefined || target === null) continue;
+      try {
+        const res = await fetchImpl(`${target.url}${path}`, {
+          headers: target.headers,
+          signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]),
+        });
+        const body: unknown = await res.json();
+        if (typeof body !== "object" || body === null) continue;
+        const { busy, queued } = body as { busy?: unknown; queued?: unknown };
+        if (busy === true) reasons.push(`${service.name} 正在處理工作`);
+        else if (typeof queued === "number" && queued > 0) {
+          reasons.push(`${service.name} 還有 ${queued} 個工作在排隊`);
+        }
+      } catch {
+        // A health answer that is not JSON says nothing about work.
+      }
+    }
+    return reasons;
+  }
+
+  /** Waits until each named service runs healthy; the rest with why, at the deadline. */
+  async #waitHealthy(
+    names: readonly string[],
+    timeoutMs: number,
+    signal: AbortSignal,
+  ): Promise<Array<{ service: string; reason: string }>> {
+    const deadline = Date.now() + timeoutMs;
+    const pending = new Set(names);
+    const out: Array<{ service: string; reason: string }> = [];
+    while (pending.size > 0) {
+      for (const name of [...pending]) {
+        const s = this.#services.get(name);
+        if (s === undefined) {
+          pending.delete(name);
+          out.push({ service: name, reason: "這台已經沒有這個服務" });
+          continue;
+        }
+        const status = s.status(false);
+        if (status.state === "running" && status.healthy) pending.delete(name);
+        else if (
+          status.state === "failed" ||
+          status.state === "disabled" ||
+          status.state === "stopped"
+        ) {
+          pending.delete(name);
+          out.push({ service: name, reason: status.reason ?? status.state });
+        }
+      }
+      if (pending.size === 0 || signal.aborted) break;
+      if (Date.now() >= deadline) {
+        for (const name of pending) out.push({ service: name, reason: "時間內沒有變成健康" });
+        break;
+      }
+      await new Promise((done) => setTimeout(done, Math.min(1000, this.#timing.pollMs * 5)));
+    }
+    return out;
+  }
+
+  /** What the enabled services lack that an update never fetches. */
+  #missingForUpgrade(): HostUpgradeMissing[] {
+    const host = this.#host;
+    const catalog = this.#catalog;
+    if (host === null || catalog === null) return [];
+    const out: HostUpgradeMissing[] = [];
+    for (const [name, override] of Object.entries(host.config.services)) {
+      const entry = catalog.services.get(name);
+      if (!override.enabled || entry === undefined) continue;
+      const inspected = inspectService(entry, host, this.#installDeps());
+      for (const file of inspected.files) {
+        if (file.optional || file.state === "verified" || file.state === "present") continue;
+        out.push({ service: name, kind: "file", what: file.path });
+      }
+      for (const model of inspected.models) {
+        if (!model.present) out.push({ service: name, kind: "model", what: model.repo });
+      }
+      for (const item of inspected.manual) {
+        if (!item.present) out.push({ service: name, kind: "manual", what: item.what });
+      }
+    }
+    return out;
   }
 
   // ---- helpers ---------------------------------------------------------------------------------

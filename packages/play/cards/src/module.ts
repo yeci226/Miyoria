@@ -30,6 +30,8 @@ import {
 import { type Store, StoreKey } from "@miyoria/store";
 import {
   type Clock,
+  CurrencyKey,
+  DEFAULT_CURRENCY,
   EventLogKey,
   HandleDirectoryKey,
   type PersonId,
@@ -55,8 +57,6 @@ const WRITER = "cards";
 const MAX_ENTRIES = 6;
 
 const DAY_MS = 86_400_000;
-/** The coins' name on the panel's card: the cards' config does not carry the economy's. */
-const COIN_UNIT = "魚幣";
 
 /**
  * A card worth a word (`notes.ts`) as a note she may react to: an observation on the event log,
@@ -138,7 +138,13 @@ export class CardsModule implements Module {
   #writing: Promise<void> | null = null;
   #portrait: Live2dPortrait | null = null;
   /** What the card on the panel reads, while the module runs with a store. */
-  #running: { cards: CardStore; config: CardsConfig; clock: Clock } | null = null;
+  #running: {
+    cards: CardStore;
+    config: CardsConfig;
+    clock: Clock;
+    /** The coins' name on the panel's card: the profile's (`CurrencyKey`). */
+    coin: string;
+  } | null = null;
 
   constructor(options: CardsModuleOptions = {}) {
     this.#options = options;
@@ -185,7 +191,12 @@ export class CardsModule implements Module {
       ...(this.#options.newSerial === undefined ? {} : { newSerial: this.#options.newSerial }),
     });
     ctx.provide(CardsKey, service);
-    this.#running = { cards, config, clock: this.#options.clock ?? ctx.clock };
+    this.#running = {
+      cards,
+      config,
+      clock: this.#options.clock ?? ctx.clock,
+      coin: ctx.services.get(CurrencyKey) ?? DEFAULT_CURRENCY,
+    };
     // A paid card charged and never written (Core stopped in between, or the refund failed), that
     // nobody retried: its coins go back now and every few minutes while the module runs. The
     // economy starts in its own order, so a pass without the wallet leaves the row for the next.
@@ -275,7 +286,7 @@ export class CardsModule implements Module {
     return {
       facts: [
         { label: "今天發出", value: day.cards, unit: "張" },
-        { label: "今天收入", value: day.coins, unit: COIN_UNIT },
+        { label: "今天收入", value: day.coins, unit: running.coin },
         { label: "今天掉落", value: day.drops, unit: "次" },
         { label: "保底觸發", value: day.pity, unit: "次" },
       ],

@@ -214,6 +214,14 @@ describe("person profiles", () => {
     // Nobody known yet still says so.
     const bare = { ...evil, handle: "X", label: null, level: null, feeling: null, points: [] };
     expect(profileLine(bare, () => "")).toBe('<person name="X" note="還不太認識"/>');
+    // What their accounts are called now comes right after the name and is the last to go.
+    const renamed = { ...evil, handle: "Nobu", shown_as: ["Model-9 Lumen"] };
+    expect(profileLine(renamed, () => "", 20)).toMatch(
+      /^<person name="Nobu" shown_as="Model-9 Lumen"/,
+    );
+    expect(profileLine({ ...bare, shown_as: ["Model-9 Lumen"] }, () => "")).toBe(
+      '<person name="X" shown_as="Model-9 Lumen" note="還不太認識"/>',
+    );
   });
 
   it("carry her questions to the person she is talking with, and keep their DM private", async () => {

@@ -7,7 +7,8 @@
 //
 // `/channel mode` sets the channel's level (關閉 / 只回提及 / 安靜 / 一般 / 活躍, and 每則都回 for
 // tests), a ceiling on how much she talks there (`levels.ts`); `/voice mode` offers the modes
-// that differ in voice.
+// that differ in voice. `/channel mode` and `/channel activeness` take `範圍: 這個頻道|整個伺服器`:
+// the whole server's value is for its channels that have none of their own (v5-places.md).
 //
 // The voice module registers the other `voice` commands (`join`, `leave`, `consent`, `golive`).
 
@@ -35,7 +36,7 @@ import {
   parseActiveness,
   parseChannelMode,
 } from "./config.js";
-import type { AgentHandle } from "./handle.js";
+import { type AgentHandle, type LevelScope, UnknownPlaceError } from "./handle.js";
 import { modeDescription, modeLabel } from "./levels.js";
 import type { PersonaHandle } from "./persona.js";
 import { charCount } from "./util.js";
@@ -54,6 +55,7 @@ const VOICE_MODES: readonly ChannelMode[] = ["off", "mention-only", "normal", "a
 const LEVELS: readonly Activeness[] = ["low", "medium", "high"];
 const LEVEL_NOTE =
   "等級是上限：她在等級之內自己決定要多話，有人請她安靜或多聊時她會自己調整（最多一天），但不會超過這裡的設定。";
+const SPACE_NOTE = "整個伺服器的設定用在這個伺服器裡沒有自己設定的頻道。";
 
 const NODES = {
   modeView: "channel.mode.view",
@@ -66,7 +68,9 @@ const NODES = {
 
 const R = {
   mode: "channel:mode:set",
+  modeSpace: "channel:mode:space",
   activeness: "channel:activeness:set",
+  activenessSpace: "channel:activeness:space",
   voice: "voice:mode:set",
 } as const;
 
@@ -140,6 +144,16 @@ function cannotChange(node: string): CommandReply {
   return notice("error", "你沒有變更這項設定的權限。", `需要權限：${node}`);
 }
 
+/** The option that says where a level is set: this channel (default) or the whole server. */
+export const SCOPE_ARG = "範圍";
+export const SCOPE_ROOM = "這個頻道";
+export const SCOPE_SPACE = "整個伺服器";
+const SCOPES = [SCOPE_ROOM, SCOPE_SPACE] as const;
+const UNKNOWN_ROOM =
+  "她還不認得這個頻道（這裡還沒有人說過話），設定只到重新啟動為止；有人在這裡說句話後再設定一次就會保存。";
+const NO_SERVER = "私訊裡沒有伺服器，只能設定這個頻道。";
+const UNKNOWN_SERVER = "她還不認得這個伺服器，沒辦法設定整個伺服器。";
+
 /** One setting: how to read, label and write it in a context. */
 interface Setting<T extends string> {
   title: string;
@@ -153,10 +167,13 @@ interface Setting<T extends string> {
   hint?: string;
   parse: (raw: string) => T;
   current: (ctx: ContextKey) => T;
-  override: (ctx: ContextKey) => T | null;
-  set: (ctx: ContextKey, value: T | null) => Promise<void>;
+  /** Where the current value comes from, in words (`（已自訂）`). */
+  source: (ctx: ContextKey) => string;
+  set: (ctx: ContextKey, value: T | null, by: string) => Promise<void>;
   setNode: string;
   route: string;
+  /** Where it is set; `space`: the whole server `ctx` is in. */
+  scope: LevelScope;
 }
 
 function settingCard<T extends string>(
@@ -165,9 +182,8 @@ function settingCard<T extends string>(
   note: string | null = null,
 ): CommandReply {
   const current = s.current(ctx);
-  const source = s.override(ctx) !== null ? "（已自訂）" : "（預設）";
   const blocks: CardBlock[] = [
-    { type: "text", text: `${s.subject}：\`${current}\` ${s.label(current)}${source}` },
+    { type: "text", text: `${s.subject}：\`${current}\` ${s.label(current)}${s.source(ctx)}` },
   ];
   const about = s.describe?.(current);
   if (about || s.hint) {
@@ -197,27 +213,35 @@ async function change<T extends string>(
   s: Setting<T>,
   ctx: ContextKey,
   raw: string,
+  by: string,
 ): Promise<CommandReply> {
   let value: T | null = null;
   if (raw !== "reset") {
     value = tryParse(s.parse, raw);
     if (value === null) return notice("warn", `不認得的設定值 \`${raw}\`。`);
   }
-  const saved = await save(s.set(ctx, value));
+  const saved = await save(s.set(ctx, value, by));
+  if (saved instanceof UnknownPlaceError && s.scope === "space") {
+    return notice("warn", UNKNOWN_SERVER);
+  }
   if (saved !== null) log.warn({ error: errorMessage(saved) }, "could not persist agent setting");
   const current = s.current(ctx);
   const text =
     value === null
       ? `已將${s.subject}恢復為預設：\`${current}\` ${s.label(current)}。`
       : `已將${s.subject}設為 \`${current}\` ${s.label(current)}。`;
-  return notice("success", text, saved === null ? null : NOT_SAVED);
+  const note =
+    saved === null ? null : saved instanceof UnknownPlaceError ? UNKNOWN_ROOM : NOT_SAVED;
+  return notice("success", text, note);
 }
 
+type Found<T extends string> = { s: Setting<T>; ctx: ContextKey } | CommandReply;
+
+/** Who changed it, for the place setting's record. */
+const byOf = (inv: Invocation): string => `${inv.invoker.platform}:${inv.invoker.id}`;
+
 /** The command handler: show the card, or change the value when an argument was given. */
-function settingCommand<T extends string>(
-  setting: (inv: Invocation) => { s: Setting<T>; ctx: ContextKey } | CommandReply,
-  arg: string,
-) {
+function settingCommand<T extends string>(setting: (inv: Invocation) => Found<T>, arg: string) {
   return async (inv: Invocation): Promise<CommandReply> => {
     const found = setting(inv);
     if ("text" in found) return found;
@@ -225,7 +249,7 @@ function settingCommand<T extends string>(
     const raw = inv.str(arg);
     if (raw === null) return settingCard(s, ctx);
     if (!(await inv.allowed(s.setNode))) return cannotChange(s.setNode);
-    return change(s, ctx, raw);
+    return change(s, ctx, raw, byOf(inv));
   };
 }
 
@@ -233,7 +257,7 @@ function settingCommand<T extends string>(
 function settingRoute<T extends string>(
   route: string,
   setNode: string,
-  setting: (inv: Invocation) => { s: Setting<T>; ctx: ContextKey } | CommandReply,
+  setting: (inv: Invocation) => Found<T>,
 ) {
   return {
     route,
@@ -243,68 +267,107 @@ function settingRoute<T extends string>(
       if ("text" in found) return ComponentResult.reply(found);
       const raw = inv.values[0];
       if (raw === undefined) return ComponentResult.update(settingCard(found.s, found.ctx));
-      const result = await change(found.s, found.ctx, raw);
+      const result = await change(found.s, found.ctx, raw, byOf(inv));
       if (result.tone === "warn" || result.tone === "error") return ComponentResult.reply(result);
       return ComponentResult.update(settingCard(found.s, found.ctx, result.text));
     },
   };
 }
 
-function register(registry: CommandRegistry, handle: AgentHandle, persona: PersonaHandle): void {
-  const modeSetting = (
-    title: string,
-    subject: string,
-    values: readonly ChannelMode[],
-    setNode: string,
-    route: string,
-    text: Pick<Setting<ChannelMode>, "describe" | "hint"> = {},
-  ) =>
-    ({
-      title,
-      subject,
-      values,
-      label: modeLabel,
-      ...text,
-      parse: parseChannelMode,
-      current: (ctx) => handle.channelMode(ctx),
-      override: (ctx) => handle.channelModeOverride(ctx),
-      set: (ctx, value) => handle.setChannelMode(ctx, value),
-      setNode,
-      route,
-    }) satisfies Setting<ChannelMode>;
-
-  const channelMode = modeSetting(
-    "聊天等級",
-    "她在這個頻道的聊天等級",
-    CHANNEL_MODES,
-    NODES.modeSet,
-    R.mode,
-    { describe: modeDescription, hint: LEVEL_NOTE },
+/** The `範圍` option of `/channel mode` and `/channel activeness`. */
+function scopeArg() {
+  return argSpec(
+    SCOPE_ARG,
+    "設定這個頻道（預設），還是整個伺服器沒有自己設定的頻道",
+    ArgKind.choice(SCOPES),
+    {
+      required: false,
+    },
   );
-  const activeness: Setting<Activeness> = {
+}
+
+/** Where the room's value comes from, in words. */
+function roomSource(own: boolean, space: boolean): string {
+  return own ? "（這個頻道自訂）" : space ? "（照整個伺服器的設定）" : "（預設）";
+}
+
+function register(registry: CommandRegistry, handle: AgentHandle, persona: PersonaHandle): void {
+  const channelMode = (scope: LevelScope): Setting<ChannelMode> => ({
+    title: "聊天等級",
+    subject: scope === "space" ? "她在這個伺服器的聊天等級" : "她在這個頻道的聊天等級",
+    values: CHANNEL_MODES,
+    label: modeLabel,
+    describe: modeDescription,
+    hint: scope === "space" ? `${LEVEL_NOTE}\n${SPACE_NOTE}` : LEVEL_NOTE,
+    parse: parseChannelMode,
+    current: (ctx) =>
+      scope === "space"
+        ? (handle.spaceChannelMode(ctx) ?? handle.configuredSpaceMode(ctx))
+        : handle.channelMode(ctx),
+    source: (ctx) =>
+      scope === "space"
+        ? handle.spaceChannelMode(ctx) !== null
+          ? "（已自訂）"
+          : "（預設）"
+        : roomSource(
+            handle.channelModeOverride(ctx) !== null,
+            handle.spaceChannelMode(ctx) !== null,
+          ),
+    set: (ctx, value, by) => handle.setChannelMode(ctx, value, { scope, by }),
+    setNode: NODES.modeSet,
+    route: scope === "space" ? R.modeSpace : R.mode,
+    scope,
+  });
+  const activeness = (scope: LevelScope): Setting<Activeness> => ({
     title: "主動程度",
-    subject: "她在這個頻道主動發話的程度",
+    subject: scope === "space" ? "她在這個伺服器主動發話的程度" : "她在這個頻道主動發話的程度",
     values: LEVELS,
     label: activenessLabel,
+    ...(scope === "space" ? { hint: SPACE_NOTE } : {}),
     parse: parseActiveness,
-    current: (ctx) => handle.activeness(ctx),
-    override: (ctx) => handle.activenessOverride(ctx),
-    set: (ctx, value) => handle.setActiveness(ctx, value),
+    current: (ctx) =>
+      scope === "space"
+        ? (handle.spaceActiveness(ctx) ?? handle.configuredSpaceActiveness(ctx))
+        : handle.activeness(ctx),
+    source: (ctx) =>
+      scope === "space"
+        ? handle.spaceActiveness(ctx) !== null
+          ? "（已自訂）"
+          : "（預設）"
+        : roomSource(handle.activenessOverride(ctx) !== null, handle.spaceActiveness(ctx) !== null),
+    set: (ctx, value, by) => handle.setActiveness(ctx, value, { scope, by }),
     setNode: NODES.activenessSet,
-    route: R.activeness,
+    route: scope === "space" ? R.activenessSpace : R.activeness,
+    scope,
+  });
+  const voiceMode: Setting<ChannelMode> = {
+    title: "語音模式",
+    subject: "她在語音頻道的聊天模式",
+    values: VOICE_MODES,
+    label: modeLabel,
+    parse: parseChannelMode,
+    current: (ctx) => handle.channelMode(ctx),
+    source: (ctx) =>
+      roomSource(handle.channelModeOverride(ctx) !== null, handle.spaceChannelMode(ctx) !== null),
+    set: (ctx, value, by) => handle.setChannelMode(ctx, value, { by }),
+    setNode: NODES.voiceSet,
+    route: R.voice,
+    scope: "room",
   };
-  const voiceMode = modeSetting(
-    "語音模式",
-    "她在語音頻道的聊天模式",
-    VOICE_MODES,
-    NODES.voiceSet,
-    R.voice,
-  );
+  const modes = { room: channelMode("room"), space: channelMode("space") };
+  const levels = { room: activeness("room"), space: activeness("space") };
 
-  const here =
-    <T extends string>(s: Setting<T>) =>
-    (inv: Invocation) => ({ s, ctx: inv.context });
-  const inVoice = (inv: Invocation) => {
+  /** The setting the `範圍` option asks for; a server-wide one needs a server. */
+  const scoped =
+    <T extends string>(settings: { room: Setting<T>; space: Setting<T> }, fixed?: LevelScope) =>
+    (inv: Invocation): Found<T> => {
+      const asked = fixed ?? (inv.str(SCOPE_ARG) === SCOPE_SPACE ? "space" : "room");
+      if (asked === "room") return { s: settings.room, ctx: inv.context };
+      if (inv.context.scope === null) return notice("warn", NO_SERVER);
+      if (!handle.perPlace) return notice("warn", UNKNOWN_SERVER);
+      return { s: settings.space, ctx: inv.context };
+    };
+  const inVoice = (inv: Invocation): Found<ChannelMode> => {
     const guild = inv.context.scope;
     const ctx = guild === null ? null : handle.voiceContext(inv.context.platform, guild);
     if (ctx === null) {
@@ -318,35 +381,55 @@ function register(registry: CommandRegistry, handle: AgentHandle, persona: Perso
   };
 
   registry.register(
-    commandSpec("channel mode", "查看或設定她在這個頻道的聊天等級（她多話的上限）", {
-      args: [
-        argSpec(
-          "mode",
-          "off 關閉 / mention-only 只回提及 / quiet 安靜 / normal 一般 / lively 活躍 / reset 恢復預設",
-          ArgKind.choice([...CHANNEL_MODES, "reset"]),
-          { required: false },
-        ),
+    commandSpec(
+      "channel mode",
+      "查看或設定她在這個頻道（或整個伺服器）的聊天等級（她多話的上限）",
+      {
+        args: [
+          argSpec(
+            "mode",
+            "off 關閉 / mention-only 只回提及 / quiet 安靜 / normal 一般 / lively 活躍 / reset 恢復預設",
+            ArgKind.choice([...CHANNEL_MODES, "reset"]),
+            { required: false },
+          ),
+          scopeArg(),
+        ],
+        permission: NODES.modeView,
+      },
+    ),
+    settingCommand(scoped(modes), "mode"),
+    {
+      components: [
+        settingRoute(R.mode, NODES.modeSet, scoped(modes, "room")),
+        settingRoute(R.modeSpace, NODES.modeSet, scoped(modes, "space")),
       ],
-      permission: NODES.modeView,
-    }),
-    settingCommand(here(channelMode), "mode"),
-    { components: [settingRoute(R.mode, NODES.modeSet, here(channelMode))] },
+    },
   );
 
   registry.register(
-    commandSpec("channel activeness", "查看或設定她在這個頻道主動發話的程度（不超過聊天等級）", {
-      args: [
-        argSpec(
-          "level",
-          "low / medium / high / reset（恢復預設）",
-          ArgKind.choice([...LEVELS, "reset"]),
-          { required: false },
-        ),
+    commandSpec(
+      "channel activeness",
+      "查看或設定她在這個頻道（或整個伺服器）主動發話的程度（不超過聊天等級）",
+      {
+        args: [
+          argSpec(
+            "level",
+            "low / medium / high / reset（恢復預設）",
+            ArgKind.choice([...LEVELS, "reset"]),
+            { required: false },
+          ),
+          scopeArg(),
+        ],
+        permission: NODES.activenessView,
+      },
+    ),
+    settingCommand(scoped(levels), "level"),
+    {
+      components: [
+        settingRoute(R.activeness, NODES.activenessSet, scoped(levels, "room")),
+        settingRoute(R.activenessSpace, NODES.activenessSet, scoped(levels, "space")),
       ],
-      permission: NODES.activenessView,
-    }),
-    settingCommand(here(activeness), "level"),
-    { components: [settingRoute(R.activeness, NODES.activenessSet, here(activeness))] },
+    },
   );
 
   registry.register(

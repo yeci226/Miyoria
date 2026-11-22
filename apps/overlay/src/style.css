@@ -2441,3 +2441,379 @@ body {
     animation: none;
   }
 }
+
+/* ── karaoke: spectating (「卡拉 OK 第二次實測留下的」) ─────────────────── */
+
+/* A singer's mark: their name's first letter on their colour (a ring for colours six to eight). */
+.k-avatar {
+  --k-c: var(--k-c1);
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: var(--k-c);
+  color: rgb(18 16 22);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.k-avatar--2 { --k-c: var(--k-c2); color: #fff; }
+.k-avatar--3 { --k-c: var(--k-c3); }
+.k-avatar--4 { --k-c: var(--k-c4); color: #fff; }
+.k-avatar--5 { --k-c: var(--k-c5); color: #fff; }
+
+.k-avatar.is-hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 0.15rem var(--k-c);
+  color: var(--k-c);
+}
+
+/* The lanes: who (mark, name, place, score, run, cheers) beside the track. */
+.k-lane {
+  position: relative;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  animation: k-rise var(--t-enter) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+.k-lane__who {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  transition: box-shadow var(--t-change) var(--ease-out);
+}
+
+.k-lane__id {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.k-lane__rank {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.k-lane__nums {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.k-lane .k-lane__score {
+  padding-left: 0;
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.k-lane__combo {
+  color: var(--k-primary);
+  font-size: 0.85rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.k-lane__cheers {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+}
+
+.k-lanes.is-compact .k-avatar {
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 0.8rem;
+}
+
+/* The leader's lane: the primary hairline (no glow). */
+.k-lane.is-lead .k-lane__who,
+.k-lane.is-lead .k-lane__track {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--k-primary) 55%, transparent);
+}
+
+/* A lyric line sung clean: the lane lights once. */
+.k-lane__flash {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: color-mix(in oklab, var(--k-primary) 16%, transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* A cheer floats up from the singer's name and fades. */
+.k-cheer {
+  position: absolute;
+  left: 0.6rem;
+  bottom: 55%;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 16rem;
+  padding: 0.25rem 0.65rem 0.25rem 0.45rem;
+  border: 1px solid var(--plate-edge);
+  border-radius: 999px;
+  background: rgb(24 24 27 / 0.9);
+  font-size: 0.95rem;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: k-cheer-float 2600ms var(--ease-out) forwards;
+}
+
+.k-cheer__by {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-dim);
+  text-overflow: ellipsis;
+}
+
+.k-cheer__word {
+  flex: none;
+  color: var(--k-primary);
+  font-weight: 650;
+}
+
+@keyframes k-cheer-float {
+  0% {
+    opacity: 0;
+    transform: translate(var(--k-cheer-x, 0), 0.5rem);
+  }
+  12% {
+    opacity: 1;
+    transform: translate(var(--k-cheer-x, 0), 0);
+  }
+  72% {
+    opacity: 1;
+    transform: translate(var(--k-cheer-x, 0), -1.8rem);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--k-cheer-x, 0), -2.4rem);
+  }
+}
+
+.k-cheer.is-still {
+  animation: none;
+  transform: translate(var(--k-cheer-x, 0), -1rem);
+}
+
+/* The round's intro while it counts down: which round, the song, who sings it, the seconds. */
+.k-intro {
+  text-shadow: none;
+}
+
+/* The intro stands on its own glass over the lanes coming in. */
+.k-intro__card {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  min-width: 36rem;
+  max-width: 76rem;
+  padding: 1.8rem 3rem 1.6rem;
+  transform: none;
+  transition: transform var(--t-enter) var(--ease-out);
+}
+
+.k-intro.is-out .k-intro__card {
+  transform: scale(0.97);
+}
+
+.k-intro__head {
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  max-width: 70rem;
+  text-align: center;
+}
+
+.k-intro__kicker {
+  color: var(--ink-dim);
+  font-size: 1.15rem;
+  letter-spacing: 0.06em;
+}
+
+.k-intro__song {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 3.4rem;
+  font-weight: 650;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.k-intro__artist {
+  color: var(--ink-dim);
+  font-size: 1.5rem;
+}
+
+.k-lineup {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem 0.8rem;
+  margin: 1.1rem 0 0.4rem;
+  padding: 0;
+  list-style: none;
+  text-shadow: none;
+}
+
+.k-lineup__who {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0.9rem 0.35rem 0.4rem;
+  border: 1px solid var(--plate-edge);
+  border-radius: 999px;
+  background: var(--plate);
+  font-size: 1.3rem;
+  animation: k-rise var(--t-enter) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 140ms + 200ms);
+}
+
+.k-intro .k-count__n {
+  font-size: 7rem;
+}
+
+/* What happens, top right of the screen: who came, left, took the lead, sang a line clean. */
+.k-feed {
+  position: absolute;
+  top: calc(var(--k-screen-y) + var(--k-inset));
+  right: calc(100% - var(--k-screen-x) - var(--k-screen-w) + var(--k-inset));
+  display: grid;
+  justify-items: end;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  transition: transform var(--t-move) var(--ease-out);
+}
+
+.k-feed.is-beside-qr {
+  transform: translateX(-10rem);
+}
+
+.k-feed__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: 30rem;
+  padding: 0.35rem 0.9rem 0.35rem 0.4rem;
+  border-radius: 999px;
+  font-size: 1.1rem;
+  white-space: nowrap;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--t-enter) var(--ease-out),
+    transform var(--t-enter) var(--ease-out);
+}
+
+.k-feed__item.is-out {
+  opacity: 0;
+  transform: translateX(var(--shift));
+  transition-duration: var(--t-exit);
+  transition-timing-function: var(--ease-exit);
+}
+
+.k-feed__item .k-avatar {
+  width: 1.6rem;
+  height: 1.6rem;
+  font-size: 0.85rem;
+}
+
+.k-feed__name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+}
+
+.k-feed__what {
+  flex: none;
+  color: var(--ink-dim);
+}
+
+.k-feed__item.is-lead .k-feed__what,
+.k-feed__item.is-phrase .k-feed__what {
+  color: var(--k-primary);
+}
+
+/* The song after this one, under the board. */
+.k-next {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  min-width: 0;
+  margin: 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--rule);
+  font-size: 1rem;
+  white-space: nowrap;
+}
+
+.k-next__label {
+  flex: none;
+  color: var(--ink-faint);
+}
+
+.k-next__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.k-next__by {
+  flex: none;
+  max-width: 8rem;
+  overflow: hidden;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+}
+
+/* A person who just came into the lobby. */
+.k-person.is-new {
+  animation: k-rise var(--t-enter) var(--ease-out) both;
+}
+
+/* The results come in from the last place up; the winner's row marks itself once it is in. */
+.k-result.is-winner {
+  animation:
+    k-rise var(--t-enter) var(--ease-out) both,
+    k-win 1200ms var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 140ms), calc(var(--i, 0) * 140ms + 300ms);
+}
+
+.k-result {
+  animation-delay: calc(var(--i, 0) * 140ms);
+}
+
+@keyframes k-win {
+  from {
+    transform: scale(1.02);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .k-lane,
+  .k-cheer,
+  .k-lineup__who,
+  .k-person.is-new,
+  .k-result,
+  .k-result.is-winner {
+    animation: none;
+  }
+
+  .k-cheer {
+    transform: translate(var(--k-cheer-x, 0), -1rem);
+  }
+}

@@ -30,12 +30,18 @@ const once = <T extends unknown[]>(link: CoreLink, ev: "ready" | "fatal" | "down
 describe("CoreLink", () => {
   it("sends hello with the self account, becomes ready on welcome, answers ping", async () => {
     let hello: Record<string, unknown> | undefined;
-    const pongs: string[] = [];
+    // Waits for the pong itself, not for a fixed time (a busy machine is slow, not wrong).
+    let ponged: (text: string) => void = () => {};
+    const pong = new Promise<string>((resolve) => (ponged = resolve));
+    const frames: string[] = [];
     const url = await startServer((ws, h) => {
       hello = h;
-      ws.on("message", (d: RawData) => pongs.push(d.toString()));
+      ws.on("message", (d: RawData) => {
+        frames.push(d.toString());
+        if (d.toString() === '{"type":"pong"}') ponged(d.toString());
+      });
       ws.send(JSON.stringify({ type: "welcome", session: "S1" }));
-      setTimeout(() => ws.send(JSON.stringify({ type: "ping" })), 20);
+      ws.send(JSON.stringify({ type: "ping" }));
     });
     link = new CoreLink({ url, token: "secret", selfAccountId: "42" });
     const ready = once<[string]>(link, "ready");
@@ -49,8 +55,8 @@ describe("CoreLink", () => {
       self_account: { platform: "discord", id: "42" },
       capabilities: ["play_duck", "play_pause", "watch"],
     });
-    await new Promise((r) => setTimeout(r, 80));
-    expect(pongs).toContain('{"type":"pong"}');
+    await pong;
+    expect(frames).toContain('{"type":"pong"}');
     expect(link.send({ type: "error", message: "x" })).toBe(true);
   });
 

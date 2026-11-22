@@ -14,7 +14,7 @@ export type { Drawn, Surface };
 export { SCALE, WIDTH };
 
 /** Bump when a template's look changes, so cached pictures are drawn again. */
-export const PICTURES_VERSION = "1";
+export const PICTURES_VERSION = "2";
 
 /** A template laid out: what the renderer needs to prepare the backdrop and draw it. */
 export interface PictureLayout {

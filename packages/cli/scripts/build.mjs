@@ -111,9 +111,15 @@ if (!existsSync(profiles)) {
   console.error(`build: ${profiles} not found`);
   process.exit(1);
 }
+// A profile with its own character (docs/design/v5-profiles.md) also holds that character's
+// config, secrets and database; none of those may ever enter the package.
 const localOnly = (path) => {
   const p = path.replaceAll("\\", "/");
-  return /\/avatar\/model(\/|$)/.test(p) || /\/voice\/[^/]+\.(wav|txt)$/.test(p);
+  return (
+    /\/avatar\/model(\/|$)/.test(p) ||
+    /\/voice\/[^/]+\.(wav|txt)$/.test(p) ||
+    /\/profiles\/[^/]+\/(miyoria\.toml|host\.toml|routes\.toml|data|\.env[^/]*)(\/|$)/.test(p)
+  );
 };
 rmSync(join(root, "assets", "profiles"), { recursive: true, force: true });
 cpSync(profiles, join(root, "assets", "profiles"), {
@@ -185,13 +191,23 @@ function copyCatalog() {
     copied.push(to.replaceAll("\\", "/"));
   };
 
+  // A descriptor's `[routing]` beside it (v5-hostd §15), when it has one.
+  const copyRouting = (dir) => {
+    const file = join(dir, "routing.toml");
+    if (existsSync(join(repo, file))) copy(file, file);
+  };
+
   // Descriptors that run from the package: core, stage and every `services/*`.
   for (const dir of [join("packages", "core"), join("packages", "stage")]) {
     copy(join(dir, "service.toml"), join(dir, "service.toml"));
+    copyRouting(dir);
   }
   for (const entry of readdirSync(join(repo, "services"), { withFileTypes: true })) {
     const file = join("services", entry.name, "service.toml");
-    if (entry.isDirectory() && existsSync(join(repo, file))) copy(file, file);
+    if (entry.isDirectory() && existsSync(join(repo, file))) {
+      copy(file, file);
+      copyRouting(join("services", entry.name));
+    }
   }
 
   // Workers: the Python ones with sources and the locked project, the others with their config.
@@ -215,6 +231,7 @@ function copyCatalog() {
     const descriptor = join(dir, "service.toml");
     if (!existsSync(join(repo, descriptor))) continue;
     copy(descriptor, descriptor);
+    copyRouting(dir);
     const runtime = parseToml(readFileSync(join(repo, descriptor), "utf8")).install?.runtime;
     if (runtime === "python") {
       for (const file of ["pyproject.toml", "uv.lock"]) copy(join(dir, file), join(dir, file));

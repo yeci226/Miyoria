@@ -3,7 +3,10 @@
 
 import { z } from "zod";
 import { HostGpuArbitrationSchema } from "./gpu.js";
+import { HostRouteSchema } from "./routes.js";
+import { HostServiceLoadSchema, HostServiceRoutingSchema } from "./routing.js";
 import { HostGpuPolicySchema, HostGuardStateSchema } from "./service.js";
+import { HostCheckoutSchema, HostRemoteUpdateSchema, HostUpgradeJobSchema } from "./upgrade.js";
 
 /** First message of the control link, host → Core. `host` is the id Core's `join` gave it. */
 export const HostHelloSchema = z
@@ -65,6 +68,12 @@ export const HostServiceStatusSchema = z
      * through the host's control link.
      */
     advertised: z.string().optional(),
+    /**
+     * By route name (`routes.toml`, v5-hostd §16): the base URL of this service on that route
+     * (`http://<address>:<port>` on a `tailnet` route, `<gateway url>/svc/<name>` on `direct` and
+     * `tunnel`). Absent on a host without `routes.toml`, and from older daemons.
+     */
+    reach: z.record(z.string(), z.string()).optional(),
     healthy: z.boolean(),
     /** Restarts within the current give-up window. */
     restarts: z.number().int().nonnegative(),
@@ -80,6 +89,10 @@ export const HostServiceStatusSchema = z
         leased: z.boolean(),
       })
       .optional(),
+    /** Its `[routing]` as it applies here (v5-hostd §15); older daemons leave it out. */
+    routing: HostServiceRoutingSchema.optional(),
+    /** Its last load reading, for a service that reports one (`[routing] queue`). */
+    load: HostServiceLoadSchema.optional(),
   })
   .meta({ id: "HostServiceStatus" });
 export type HostServiceStatus = z.output<typeof HostServiceStatusSchema>;
@@ -162,6 +175,22 @@ export const HostInfoSchema = z
     link: HostLinkStateSchema.optional(),
     /** GPU arbitration on this host; older daemons leave it out. */
     arbiter: HostGpuArbiterStatusSchema.optional(),
+    /** The git checkout it runs from; `null` when it is not one. Older daemons leave it out. */
+    checkout: HostCheckoutSchema.nullable().optional(),
+    /** Whether it takes `host.upgrade`. Older daemons leave it out: they never do. */
+    remote_update: HostRemoteUpdateSchema.optional(),
+    /** The running update, or the last one; `null` before the first. */
+    upgrade: HostUpgradeJobSchema.nullable().optional(),
+    /**
+     * The routes Core may reach this host by (v5-hostd §16), the implicit ones included. Absent on
+     * a host without `routes.toml` and from older daemons: Core then routes it as before.
+     */
+    routes: z.array(HostRouteSchema).optional(),
+    /**
+     * What Core sends to probe this host's gateway (`/_miyoria/probe`); new at each daemon start.
+     * Only in reports on the control link, like the service tokens.
+     */
+    route_token: z.string().optional(),
   })
   .meta({ id: "HostInfo" });
 export type HostInfo = z.output<typeof HostInfoSchema>;
@@ -274,6 +303,11 @@ export const HostEndpointSchema = z
     headers: z.record(z.string(), z.string()),
     healthy: z.boolean(),
     version: z.string().nullable(),
+    /**
+     * Set on what a `direct` query returned from a host with routes (v5-hostd §16): its requests
+     * go only over routes fit for real-time work (`tailnet`, `direct`), never a tunnel or the relay.
+     */
+    direct_only: z.boolean().optional(),
   })
   .meta({ id: "HostEndpoint" });
 export type HostEndpoint = z.output<typeof HostEndpointSchema>;
@@ -282,7 +316,10 @@ export type HostEndpoint = z.output<typeof HostEndpointSchema>;
 export const HostResolveSchema = z
   .object({
     capability: z.string(),
-    /** Set by hostd: the service of the host that asked. Core does not use it for `resolve`. */
+    /**
+     * Set by hostd: the service of the host that asked. Core gives the endpoints (and their
+     * tokens) only of a capability the `uses` table lets that service resolve.
+     */
     service: z.string().optional(),
   })
   .meta({ id: "HostResolve" });

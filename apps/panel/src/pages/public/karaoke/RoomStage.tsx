@@ -1,7 +1,7 @@
 // A room singer's stage (docs/design/karaoke.md 「做了什麼第四步」): the singing screen of step 3
 // with the round's session, started by itself at the room's moment of Core's clock, and beside the
 // song the microphone's stream (`ChunkScheduler` over the stream worklet), the browser's own pitch
-// once a second (`PitchFeed`), and the MediaRecorder recording kept as before for when the stream
+// four times a second (`PitchFeed`), and the MediaRecorder recording kept as before for when the stream
 // does not hold. The one plate it adds is the singer's trend (上升中 / 下降中 / 保持, and whether the
 // live score is 正式 or 預估): never a rank, never anyone else's score. The corner number is the
 // singer's own running total from the trend once one comes (labelled 正式 or 預估), before that
@@ -16,12 +16,16 @@ import { useReducedMotion } from "./bits";
 import { postAudio, postPitch } from "./room-api";
 import { contextTimeFor } from "./room-clock";
 import { AirPlate } from "./RoomAir";
+import { CheerNote } from "./RoomCheers";
 import { ChunkScheduler, PitchFeed } from "./room-stream";
-import { stageScore, type TrendEvent, trendView } from "./room-text";
+import { type CheerEvent, stageScore, type TrendEvent, trendView } from "./room-text";
 import { type Finished, PLATE, Singing, type StageRoom, type StageRun } from "./Singing";
 
-/** The browser's own pitch goes this often, in ms. */
-export const PITCH_EVERY_MS = 1_000;
+/**
+ * The browser's own pitch goes this often, in ms: it is what the people watching and her stream see
+ * of this singer (Core relays it a few times a second), and the estimate.
+ */
+export const PITCH_EVERY_MS = 250;
 /** The worklet's last piece arrives a moment after it is told to stop, in ms. */
 const LAST_PIECE_MS = 150;
 
@@ -114,12 +118,15 @@ export function RoomStage({
   startAtMs,
   offset,
   trend,
+  cheers = [],
   engine,
   latency,
   floor,
   onFinished,
   onQuit,
 }: {
+  /** Cheers for this singer from the people watching (never anyone else's, never a rank). */
+  cheers?: readonly (CheerEvent & { at: number })[];
   /** The room as this singer sees it (for what goes out on her stream). */
   room: KaraokeRoomView;
   onRoom: (room: KaraokeRoomView) => void;
@@ -142,6 +149,7 @@ export function RoomStage({
   const plate = (
     <>
       <TrendPlate trend={trend} />
+      <CheerNote cheers={cheers} />
       {room.me && <AirPlate room={room} me={room.me} onRoom={onRoom} />}
     </>
   );

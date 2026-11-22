@@ -50,15 +50,15 @@ describe("syncCommands", () => {
     ]);
   });
 
-  test("guild_mode_clears_the_global_set_and_other_guilds_once", async () => {
+  test("guild_mode_clears_the_global_set_once_and_leaves_other_guilds_alone", async () => {
     const registry = new CommandRegistry();
     registry.register(commandSpec("help", "Help"), handler);
     const rest = new FakeRest();
     await syncCommands(rest, "app1", registry, ["g1"], { cleanup: { guilds: ["g1", "g9"] } });
+    // g9 keeps its set: clearing it left a second server with no commands (phase 6).
     expect(rest.puts).toEqual([
       { route: "/applications/app1/guilds/g1/commands", body: expect.any(Array) },
       { route: "/applications/app1/commands", body: [] },
-      { route: "/applications/app1/guilds/g9/commands", body: [] },
     ]);
     // Later syncs only touch the command guilds.
     rest.puts = [];
@@ -332,11 +332,8 @@ describe("the slash surface", () => {
       expect.arrayContaining(["join", "leave", "mode", "consent", "golive"]),
     );
     expect(names("help")).toEqual([]);
-    // Other scopes are emptied once.
-    expect(rest.puts.slice(1)).toEqual([
-      { route: "/applications/app1/commands", body: [] },
-      { route: "/applications/app1/guilds/g9/commands", body: [] },
-    ]);
+    // The global scope is emptied once; another guild's set is left alone.
+    expect(rest.puts.slice(1)).toEqual([{ route: "/applications/app1/commands", body: [] }]);
   });
 
   test("everything_fits_discords_limits_and_nothing_is_left_out", () => {
@@ -397,11 +394,8 @@ describe("the slash surface", () => {
     const registry = new CommandRegistry();
     const rest = new FakeRest();
     await syncCommands(rest, "app1", registry, ["g1"], { cleanup: { guilds: ["g1", "g9"] } });
-    // Nothing is written to the command guild; only the scopes not in use are cleared.
-    expect(rest.puts.map((p) => p.route)).toEqual([
-      "/applications/app1/commands",
-      "/applications/app1/guilds/g9/commands",
-    ]);
+    // Nothing is written to the command guild; only the global scope is cleared.
+    expect(rest.puts.map((p) => p.route)).toEqual(["/applications/app1/commands"]);
   });
 
   test("the_runner_skips_a_sync_when_the_slash_set_did_not_change", async () => {
@@ -415,7 +409,7 @@ describe("the slash surface", () => {
       guilds: () => ["g1", "g9"],
     });
     await sync(true);
-    expect(rest.puts).toHaveLength(3);
+    expect(rest.puts).toHaveLength(2);
     rest.puts = [];
     // A change Discord does not show (who sees the replies) is not sent.
     registry.setVisibility({ "me wallet": "private" });
@@ -434,6 +428,58 @@ describe("the slash surface", () => {
     // The first sync of a run always goes out.
     rest.puts = [];
     await sync(true);
-    expect(rest.puts).toHaveLength(3);
+    expect(rest.puts).toHaveLength(2);
+  });
+
+  test("a_star_registers_in_every_guild_she_is_in_and_in_a_new_one_alone", async () => {
+    const registry = fullRegistry();
+    const rest = new FakeRest();
+    const guilds = ["g1", "g2"];
+    const sync = syncRunner({
+      rest,
+      applicationId: "app1",
+      registry,
+      commandGuilds: ["*"],
+      guilds: () => guilds,
+    });
+    await sync(true);
+    expect(rest.puts.map((p) => p.route)).toEqual([
+      "/applications/app1/guilds/g1/commands",
+      "/applications/app1/guilds/g2/commands",
+      "/applications/app1/commands",
+    ]);
+    // Nothing changed: nothing goes out.
+    rest.puts = [];
+    await sync(false);
+    expect(rest.puts).toEqual([]);
+    // A guild she joined gets the set; the others already have it.
+    guilds.push("g3");
+    await sync(false);
+    expect(rest.puts.map((p) => p.route)).toEqual(["/applications/app1/guilds/g3/commands"]);
+    // A failed guild is tried again at the next sync.
+    rest.puts = [];
+    guilds.push("g4");
+    rest.failFor = "/guilds/g4/";
+    await sync(false);
+    rest.failFor = null;
+    await sync(false);
+    expect(rest.puts.map((p) => p.route)).toEqual([
+      "/applications/app1/guilds/g4/commands",
+      "/applications/app1/guilds/g4/commands",
+    ]);
+  });
+
+  test("a_star_in_no_guild_registers_nothing_globally", async () => {
+    const registry = fullRegistry();
+    const rest = new FakeRest();
+    const sync = syncRunner({
+      rest,
+      applicationId: "app1",
+      registry,
+      commandGuilds: ["*"],
+      guilds: () => [],
+    });
+    await sync(true);
+    expect(rest.puts).toEqual([{ route: "/applications/app1/commands", body: [] }]);
   });
 });

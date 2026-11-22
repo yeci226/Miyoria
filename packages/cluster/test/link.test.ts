@@ -228,22 +228,31 @@ describe("what Core serves and calls", () => {
     expect(await host.peer.request("cluster.guard", null)).toEqual({ states: ["singing"] });
   });
 
-  it("answers cluster.resolve for an approved host only", async () => {
-    const h = await start({ static: { friend: { provides: ["sing"], url: "http://f:8005" } } });
+  it("answers cluster.resolve for an approved host's granted service only", async () => {
+    const h = await start(
+      { static: { friend: { provides: ["sing"], url: "http://f:8005" } } },
+      { module: { uses: { lyrics: { resolve: ["sing"] } } } },
+    );
     const cluster = h.cluster();
-    const approved = approvedHost(cluster, "pc", []);
+    const approved = approvedHost(cluster, "pc", ["lyrics"]);
     const pending = cluster.hosts.create({ name: "new-pc" });
     const a = await FakeHost.connect(h.url(), { host: approved.id, key: approved.key });
-    const result = (await a.peer.request("cluster.resolve", { capability: "sing" })) as {
-      endpoints: { host: string; via: string }[];
-    };
+    a.peer.notify("host.report", report([service({ name: "lyrics" })]));
+    await a.peer.request("cluster.guard", {});
+    const result = (await a.peer.request("cluster.resolve", {
+      capability: "sing",
+      service: "lyrics",
+    })) as { endpoints: { host: string; via: string }[] };
     expect(result.endpoints).toMatchObject([{ host: "friend", via: "direct" }]);
     await expect(a.peer.request("cluster.resolve", {})).rejects.toMatchObject({ code: -32602 });
-    await expect(a.peer.request("cluster.nothing", {})).rejects.toMatchObject({ code: -32601 });
-    const p = await FakeHost.connect(h.url(), { host: pending.host.id, key: pending.key });
-    await expect(p.peer.request("cluster.resolve", { capability: "sing" })).rejects.toMatchObject({
+    await expect(a.peer.request("cluster.resolve", { capability: "sing" })).rejects.toMatchObject({
       code: HOST_ERROR_CODE.NotAllowed,
     });
+    await expect(a.peer.request("cluster.nothing", {})).rejects.toMatchObject({ code: -32601 });
+    const p = await FakeHost.connect(h.url(), { host: pending.host.id, key: pending.key });
+    await expect(
+      p.peer.request("cluster.resolve", { capability: "sing", service: "lyrics" }),
+    ).rejects.toMatchObject({ code: HOST_ERROR_CODE.NotAllowed });
   });
 
   it("calls a connected host, and fails for one that is not", async () => {

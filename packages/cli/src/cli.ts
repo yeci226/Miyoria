@@ -1,5 +1,6 @@
 // Command line: a small declarative parser with Traditional Chinese help.
 
+import type { ResolvedProfile } from "@miyoria/core/light";
 import { loadDotenv } from "@miyoria/runtime/kernel";
 import { cliVersion } from "./assets.js";
 import * as autostart from "./commands/autostart.js";
@@ -14,10 +15,12 @@ import * as memoryCmd from "./commands/memory.js";
 import * as migrate from "./commands/migrate.js";
 import * as modelsCmd from "./commands/models.js";
 import * as nodeCmd from "./commands/node.js";
+import * as profileCmd from "./commands/profile.js";
 import * as remote from "./commands/remote.js";
 import * as servicesCmd from "./commands/services.js";
 import * as update from "./commands/update.js";
 import { captureProcessEnv } from "./process-env.js";
+import { installHostToml, loadProfileEnv, selectProfile } from "./profile.js";
 import {
   ClackPrompter,
   DefaultsPrompter,
@@ -45,8 +48,15 @@ export interface ArgSpec {
 }
 
 export interface RunContext {
-  /** `--config` */
+  /**
+   * The config the command works on: `--config`, or for a command about her (`isCharacterCommand`)
+   * the running profile's own `miyoria.toml` when it has one (docs/design/v5-profiles.md).
+   */
   config: string;
+  /** `--config` itself: the install's config, beside which `host.toml` and the machines are. */
+  install: string;
+  /** The running profile, for a command about her; `undefined` for the others. */
+  profile?: ResolvedProfile;
   /** `--yes` */
   yes: boolean;
   options: Record<string, string | boolean | undefined>;
@@ -115,7 +125,7 @@ const HOST_CONFIG_OPTION: OptionSpec = {
 const FORCE_OPTION: OptionSpec = { name: "force", help: "她在唱歌或直播時也照樣停止" };
 
 function hostTargetOf(ctx: RunContext): host.HostTarget {
-  return host.hostTarget(ctx.config, str(ctx, "host-config"));
+  return host.hostTarget(ctx.install, str(ctx, "host-config"));
 }
 
 /** The installer's confirmation: `--yes` agrees, a script without a terminal refuses. */
@@ -288,6 +298,23 @@ export const COMMANDS: CommandSpec = {
           name: "bake",
           help: "把面板改過的設定寫進 miyoria.toml(保留註解),再清掉資料庫裡的這些值",
           run: (ctx) => configCmd.bake(ctx.config, ctx.yes, ctx.yes ? null : interactivePrompter()),
+        },
+        {
+          name: "import",
+          help: "把 miyoria.toml 匯入資料庫成為下一版設定(保留面板改過的值;每個頻道、每個伺服器的值搬到那個地方);先備份資料庫,先用 --dry-run 看",
+          options: [
+            { name: "dry-run", help: "只列出會改什麼,不寫入" },
+            {
+              name: "replace",
+              help: "用檔案原樣蓋掉資料庫的設定(面板改過的值會拿掉,版本紀錄還在);已經匯入過時再匯入一次要用它",
+            },
+          ],
+          run: (ctx) =>
+            configCmd.importConfig(
+              ctx.config,
+              { replace: flag(ctx, "replace"), dryRun: flag(ctx, "dry-run"), yes: ctx.yes },
+              ctx.yes || !isInteractive() ? null : interactivePrompter(),
+            ),
         },
       ],
     },
@@ -749,7 +776,7 @@ export const COMMANDS: CommandSpec = {
     {
       name: "core",
       help: "啟動 core 節點(Discord bot、agent ...)",
-      run: (ctx) => nodeCmd.core(ctx.config),
+      run: (ctx) => nodeCmd.core(ctx.config, ctx.profile),
     },
     {
       name: "stage",
@@ -799,7 +826,8 @@ export const COMMANDS: CommandSpec = {
         { name: "name", value: "NAME", help: "你在對話裡的名字", default: "你" },
         { name: "with-discord", help: "聊天時也連上 Discord bot" },
       ],
-      run: (ctx) => nodeCmd.chat(ctx.config, str(ctx, "name") ?? "你", flag(ctx, "with-discord")),
+      run: (ctx) =>
+        nodeCmd.chat(ctx.config, str(ctx, "name") ?? "你", flag(ctx, "with-discord"), ctx.profile),
     },
     {
       name: "module",
@@ -886,12 +914,38 @@ export const COMMANDS: CommandSpec = {
     },
     {
       name: "profile",
-      help: "角色工具(離線)",
+      help: "角色(profile):一次只跑一個,每個有自己的人格、設定和資料;電腦和配對是共用的",
       subcommands: [
+        {
+          name: "list",
+          help: "列出這個安裝的 profile(● 是會跑的那個)",
+          run: (ctx) => profileCmd.list(ctx.install),
+        },
+        {
+          name: "show",
+          help: "現在跑哪個 profile:她的名字、設定檔、資料夾",
+          run: (ctx) => profileCmd.show(ctx.install),
+        },
+        {
+          name: "use",
+          help: "下次啟動 core 時跑這個 profile(寫進 miyoria.toml 的 core.profile;正在跑的 core 要重啟)",
+          args: [{ name: "id", help: "profiles/ 底下的資料夾名稱" }],
+          run: (ctx) => profileCmd.use(ctx.install, ctx.args[0] as string),
+        },
+        {
+          name: "new",
+          help: "建立一個新的空白角色:profiles/<id>/ 底下的人格範本、她自己的 miyoria.toml、.env 和 data/",
+          args: [{ name: "id", help: "資料夾名稱(小寫英文、數字、- 或 _)" }],
+          options: [{ name: "name", value: "NAME", help: "她的名字(預設:id)" }],
+          run: (ctx) =>
+            profileCmd.create(ctx.install, ctx.args[0] as string, {
+              ...optionalString("name", str(ctx, "name")),
+            }),
+        },
         {
           name: "validate",
           help: "載入並檢查目前的角色",
-          run: (ctx) => nodeCmd.profileValidate(ctx.config),
+          run: (ctx) => nodeCmd.profileValidate(ctx.config, ctx.profile),
         },
       ],
     },
@@ -1020,6 +1074,7 @@ export function parseArgs(argv: readonly string[], root: CommandSpec = COMMANDS)
     version: options.version === true,
     ctx: {
       config: (options.config as string | undefined) ?? "miyoria.toml",
+      install: (options.config as string | undefined) ?? "miyoria.toml",
       yes: options.yes === true,
       options,
       args: target.run || target.args ? args : args,
@@ -1096,6 +1151,58 @@ export function helpText(path: CommandSpec[]): string {
   return lines.join("\n");
 }
 
+// ---- profiles ----------------------------------------------------------------------------
+
+/** Top-level commands about her (her config, `.env` and data) rather than about this machine. */
+const CHARACTER_COMMANDS = new Set([
+  "config",
+  "doctor",
+  "db",
+  "memory",
+  "core",
+  "stage",
+  "chat",
+  "module",
+  "decisions",
+  "events",
+  "persona",
+  "discord",
+  "ext",
+]);
+
+/**
+ * Whether a command works on the running profile (docs/design/v5-profiles.md). The others
+ * (`init`, `update`, `hostd`, `up`, `add`, `host` ..., `profile list/show/use/new`)
+ * are about the install and this machine and keep its files.
+ */
+export function isCharacterCommand(path: readonly CommandSpec[]): boolean {
+  const [, top, sub] = path;
+  if (top === undefined) return false;
+  if (top.name === "profile") return sub?.name === "validate";
+  return CHARACTER_COMMANDS.has(top.name);
+}
+
+/**
+ * Points a command about her at the running profile and loads the `.env` it runs with. A profile
+ * of its own swaps `ctx.config` for its `miyoria.toml`; `host.toml` stays the install's.
+ */
+export function enterProfile(
+  parsed: Parsed,
+  env: Record<string, string | undefined> = process.env,
+): void {
+  if (!isCharacterCommand(parsed.path)) {
+    loadDotenv(parsed.ctx.config, env);
+    return;
+  }
+  const profile = selectProfile(parsed.ctx.install, env);
+  loadProfileEnv(profile, env);
+  parsed.ctx.profile = profile;
+  if (profile.own) {
+    parsed.ctx.config = profile.configPath;
+    parsed.ctx.options["host-config"] ??= installHostToml(profile);
+  }
+}
+
 // ---- main --------------------------------------------------------------------------------
 
 /** Runs the CLI; resolves to the exit code. */
@@ -1129,8 +1236,8 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 
   captureProcessEnv();
-  loadDotenv(parsed.ctx.config);
   try {
+    enterProfile(parsed);
     await (parsed.path.at(-1) as CommandSpec).run?.(parsed.ctx);
     return 0;
   } catch (error) {

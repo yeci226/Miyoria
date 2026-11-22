@@ -1,7 +1,8 @@
 // Her bounties on the member page (docs/design/economy.md §13), through the `economy`
 // module: the session's person, and nobody else's.
 //
-// * `GET /api/member/bounties`: the bounties she has open.
+// * `GET /api/member/bounties` (`?space=`): the bounties she has open in a server they are in (their
+//   own by default; someone who is a member nowhere reads the primary server's).
 //
 // Responses are built field by field. The routes are on the route table (`agencyRpc`).
 
@@ -9,6 +10,7 @@ import { type BountyView, type Economy, EconomyError, EconomyKey } from "@miyori
 import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
 import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
+import { memberSpaces } from "./play-routes.js";
 import type { ApiState } from "./state.js";
 
 const log = getLogger("api.agency");
@@ -39,8 +41,9 @@ const bountyView = (b: BountyView): BountyView => ({
 
 /** The bounty route; served only while the public side is on (see `rpc.ts`). */
 export const agencyRpc = {
-  bounties: os.agency.bounties.handler(async ({ context: { state } }) => {
-    const bounties = await withEconomy(state, (e) => e.bounties());
+  bounties: os.agency.bounties.handler(async ({ input, context: { state, c } }) => {
+    const spaces = await memberSpaces(state, c, input?.query.space);
+    const bounties = await withEconomy(state, (e) => e.bounties(spaces));
     return { bounties: bounties.map(bountyView) };
   }),
 };

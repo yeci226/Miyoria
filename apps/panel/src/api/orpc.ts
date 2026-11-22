@@ -34,7 +34,7 @@ function metaAt(path: readonly string[]): RouteMeta | undefined {
 export function createRpc(client: ApiClient): ApiRpc {
   const link = new OpenAPILink(table, {
     url: PLACEHOLDER,
-    fetch: async (request, _init, _options, path) => {
+    fetch: async (request, _init, options, path) => {
       const url = new URL(request.url);
       const method = request.method;
       const json = method === "GET" || method === "HEAD" ? "" : await request.text();
@@ -46,7 +46,9 @@ export function createRpc(client: ApiClient): ApiRpc {
       if (key) headers["Idempotency-Key"] = key;
       const lastEventId = request.headers.get("last-event-id");
       if (lastEventId) headers["Last-Event-ID"] = lastEventId;
-      const opts = { signal: request.signal, public: isPublic, headers };
+      // A stream's watchdog hears every piece that arrives (`{ context: { onActivity } }`).
+      const onChunk = (options.context as { onActivity?: () => void } | undefined)?.onActivity;
+      const opts = { signal: request.signal, public: isPublic, headers, ...(onChunk ? { onChunk } : {}) };
       return client.send(method, url.pathname + url.search, opts, json === "" ? undefined : json);
     },
   });

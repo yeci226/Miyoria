@@ -10,8 +10,10 @@
 // * `GET /api/member/export`: the same as a file, with what `/me memory export` would give, minus
 //   what belongs to others.
 // * `POST /api/member/forget` `{ confirm: true }`: `/me memory forget all`.
-// * `POST /api/member/songs` `{ query, priority? }`: a song request, as if said in chat; with
-//   `priority`, paid with a song priority ticket (`409` with the reason when it cannot be).
+// * `POST /api/member/songs?space=` `{ query, priority? }`: a song request, as if said in chat; with
+//   `priority`, paid with a song priority ticket (`409` with the reason when it cannot be). It is
+//   sung in one server: the one asked for (`404` / `403` as every member route), else their own;
+//   while she is in voice in another server it waits for her there, and the answer says so.
 // * `GET /api/member/card`, `POST /api/member/card` `{ foil? }`: the daily card she gives them,
 //   the card view below frozen with a serial and the parts drawn onto it (`card.ts`); the rest of
 //   their cards (the dex, the pity, the wishlist) is `cards-routes.ts`.
@@ -64,6 +66,7 @@ import {
   inspectInput,
   mentionsAnother,
   type NameSplit,
+  PlacesKey,
   Principals,
   SocialSignalsKey,
   sameAccount,
@@ -82,6 +85,7 @@ import { heartRows } from "./heart-rows.js";
 import { dateOf, localDay, tooMany } from "./public.js";
 import type { Route } from "./route.js";
 import type { SessionRecord } from "./session.js";
+import { memberSpace } from "./space-param.js";
 import type { ApiContext, ApiState } from "./state.js";
 import { keyOf, walletExport } from "./wallet.js";
 
@@ -117,6 +121,8 @@ const MAX_NAME_CHARS = 64;
 
 /** The one answer to a song the page will not pass on, whatever the reason. */
 const SONG_REFUSED = "目前沒辦法點這首歌";
+/** A song taken while she is in voice in another server. */
+const SONG_WAITS = "她現在在別的伺服器的語音裡,這首歌排在你選的伺服器,等她下次到那裡的語音就會唱。";
 
 // ---- bands ----------------------------------------------------------------------------------
 
@@ -478,6 +484,7 @@ async function requestSong(
   c: ApiContext,
   query: string,
   priority = false,
+  requested?: string,
 ): Promise<SongAccepted> {
   const session = record(c);
   const { account } = session;
@@ -492,11 +499,25 @@ async function requestSong(
   const actuators = state.optional(ActuatorRegistryKey);
   if (!actuators) throw ApiError.unavailable("not available right now");
   const by = [...session.name.trim()].slice(0, MAX_NAME_CHARS).join("");
+  // The server it is sung in (phase 6): the one they picked, else their own. Where she is in
+  // voice there, it is asked for there; else it waits for her to be in voice there.
+  const singer = state.optional(SingerKey);
+  let context = state.monitor.voiceContext();
+  let guild: string | null = null;
+  if (state.optional(PlacesKey) !== undefined) {
+    guild = memberSpace(state, who.person?.id ?? null, requested).external_id;
+    context = singer?.voiceContext(guild) ?? null;
+  }
   const outcome = await actuators.invoke({
-    principal: Principals.user(account, state.monitor.voiceContext()),
+    principal: Principals.user(account, context),
     capability: "sing.request",
     // A song priority ticket is theirs to use here: their own request, with no turn of hers.
-    args: { query, ...(by === "" ? {} : { by }), ...(priority ? { priority: true } : {}) },
+    args: {
+      query,
+      ...(by === "" ? {} : { by }),
+      ...(priority ? { priority: true } : {}),
+      ...(guild === null ? {} : { guild }),
+    },
     why: "公開頁點歌",
     turn: null,
   });
@@ -510,7 +531,9 @@ async function requestSong(
     if (outcome.cause instanceof SongPriorityError) throw new ApiError(409, outcome.error);
     throw new ApiError(502, "歌曲服務暫時無法使用");
   }
-  return { accepted: true };
+  return singer?.waitsElsewhere(guild) === true
+    ? { accepted: true, waiting: SONG_WAITS }
+    : { accepted: true };
 }
 
 function holderOf(c: ApiContext, who: Member): CardHolder {
@@ -602,7 +625,13 @@ export const memberRpc = {
   me: os.member.me.handler(({ context }) => memberView(context.state, context.c)),
   forget: os.member.forget.handler(({ context }) => forgetMine(context.state, context.c)),
   requestSong: os.member.requestSong.handler(({ input, context }) =>
-    requestSong(context.state, context.c, input.body.query, input.body.priority === true),
+    requestSong(
+      context.state,
+      context.c,
+      input.body.query,
+      input.body.priority === true,
+      input.query?.space,
+    ),
   ),
   cards: os.member.cards.handler(({ context }) => cardsMine(context.state, context.c)),
   issueCard: os.member.issueCard.handler(({ input, context }) => {

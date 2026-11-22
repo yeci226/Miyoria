@@ -38,6 +38,18 @@ export {
 export type { Endpoint, EndpointQuery, EndpointSource, EndpointsOption } from "./endpoints.js";
 export { type FailoverEntry, type FailoverOptions, FailoverSingWorker } from "./failover.js";
 export {
+  downloadVideo,
+  LOCAL_VIDEO_TIMEOUT_MS,
+  type LocalVideoFetcher,
+  type LocalVideoOptions,
+  localVideoFetcher,
+  songSourceUrl,
+  spawnVideoProcess,
+  type VideoProcess,
+  type VideoSpawner,
+  ytdlpArgs,
+} from "./local-video.js";
+export {
   type GpuContextSink,
   karaokeWorker,
   SingerKey,
@@ -58,6 +70,7 @@ export {
   type SongEntry,
   type SongNo,
   type SongState,
+  songGuild,
   songLabel,
 } from "./setlist.js";
 export {

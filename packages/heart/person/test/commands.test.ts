@@ -143,3 +143,29 @@ describe("/admin person", () => {
     expect(toTimestamp(T0)).toBe(heart.get(amy)?.updated_at);
   });
 });
+
+describe("`/me profile` in the profile's words", () => {
+  const texts = (words?: { coin: string; her: string }) => {
+    const registry = new CommandRegistry(Permissions.fromStrings([`discord:${OWNER}`]));
+    registerCommands(
+      registry,
+      {} as PeopleDirectory,
+      undefined,
+      undefined,
+      undefined,
+      ...(words ? [words] : []),
+    );
+    const spec = registry.get(["me", "profile"]);
+    return [spec?.description ?? "", ...(spec?.args.map((a) => a.description) ?? [])].join("\n");
+  };
+
+  it("are today's with no profile, and another profile's coins and pronoun with one", () => {
+    expect(texts()).toBe(
+      "查看她對你的印象與她怎麼稱呼你\n看你這一週的回顧（聊天、點歌、抽卡、魚幣）\n附上圖（預設附上；false 只要文字）",
+    );
+    const kuro = texts({ coin: "貝殼", her: "牠" });
+    expect(kuro).toContain("查看牠對你的印象與牠怎麼稱呼你");
+    expect(kuro).toContain("抽卡、貝殼）");
+    expect(kuro).not.toContain("魚幣");
+  });
+});

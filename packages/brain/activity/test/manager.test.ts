@@ -182,7 +182,13 @@ describe("broadcast", () => {
 
   it("OBS follows a Go Live started elsewhere, and stops when it ends", async () => {
     const w = new FakeWorld();
-    w.emit(Events.VoiceGoLive, { guild: GUILD, state: "live", error: null, reason: null });
+    w.emit(Events.VoiceGoLive, {
+      platform: "discord",
+      guild: GUILD,
+      state: "live",
+      error: null,
+      reason: null,
+    });
     w.golive.set(GUILD, "live");
     await until(() => w.obsStreaming);
     expect(w.calls.map((c) => c.capability)).toEqual(["stream.start", "stage.stream"]);
@@ -341,7 +347,13 @@ describe("broadcast through the hub (obs_hub)", () => {
     w.obsStreaming = true;
     w.setObs(true);
     w.golive.set(GUILD, "live");
-    w.emit(Events.VoiceGoLive, { guild: GUILD, state: "live", error: null, reason: null });
+    w.emit(Events.VoiceGoLive, {
+      platform: "discord",
+      guild: GUILD,
+      state: "live",
+      error: null,
+      reason: null,
+    });
     expect(w.service.snapshot().broadcast).toMatchObject({ type: "live", golive: true, obs: true });
     w.golive.delete(GUILD);
     w.emit(Events.VoiceGoLive, {
@@ -359,7 +371,13 @@ describe("broadcast through the hub (obs_hub)", () => {
   it("a Go Live started elsewhere while OBS is off brings OBS up", async () => {
     const w = new FakeWorld({ config: HUB });
     w.golive.set(GUILD, "live");
-    w.emit(Events.VoiceGoLive, { guild: GUILD, state: "live", error: null, reason: null });
+    w.emit(Events.VoiceGoLive, {
+      platform: "discord",
+      guild: GUILD,
+      state: "live",
+      error: null,
+      reason: null,
+    });
     await until(() => w.obsStreaming);
     await until(() => w.count("stream.start") === 1);
     expect(order(w)).toEqual(["stage.stream:start", "stream.start"]);

@@ -8,6 +8,7 @@ import {
   errorMessage,
   type Module,
   type ModuleContext,
+  placeConfig,
 } from "@miyoria/runtime/kernel";
 import { SettingsStoreKey } from "@miyoria/store";
 import { PresencePrivacyKey } from "@miyoria/types";
@@ -65,7 +66,8 @@ export class ActionsModule implements Module {
       ctx.log.warn("no actuator registry provided by the app; the gate cannot be configured");
       return;
     }
-    registry.configure(config, this.#name);
+    // What is forbidden may differ per Space and room, always on top of the cluster's list.
+    registry.configure(config, this.#name, placeConfig(ctx, ActionsConfigSchema));
     let paused = config.paused;
     try {
       const saved = await ctx.services.get(SettingsStoreKey)?.get(PRIVACY_PROFILE, PAUSED_KEY);

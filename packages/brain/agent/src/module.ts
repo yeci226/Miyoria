@@ -6,11 +6,13 @@ import {
   errorMessage,
   type Module,
   type ModuleContext,
+  placeConfig,
 } from "@miyoria/runtime/kernel";
 import type { Profile } from "@miyoria/runtime/profile";
-import { SettingsStoreKey } from "@miyoria/store";
+import { SettingsStoreKey, StoreKey } from "@miyoria/store";
 import {
   MouthKey,
+  PlacesKey,
   PromiseBookKey,
   PromptContributorsKey,
   SelfStateKey,
@@ -27,6 +29,7 @@ import {
   AgentHandle,
   AgentHandleKey,
   type BudgetBox,
+  type LevelPlaces,
   newOverrides,
   type Overrides,
   type VoiceRooms,
@@ -134,6 +137,13 @@ export class AgentModule implements Module {
   async start(ctx: ModuleContext): Promise<void> {
     const config = ctx.config(AgentConfigSchema);
     const store = ctx.services.get(SettingsStoreKey) ?? null;
+    // The levels per place (docs/design/v5-places.md), when Core has the places and their settings.
+    const places = ctx.services.get(PlacesKey);
+    const placeSettings = ctx.services.get(StoreKey)?.config?.places;
+    const levels: LevelPlaces | null =
+      places && placeSettings
+        ? { places, settings: placeSettings, config: placeConfig(ctx, AgentConfigSchema) }
+        : null;
     const handle = new AgentHandle(
       config,
       this.#persona,
@@ -142,6 +152,7 @@ export class AgentModule implements Module {
       this.#budget,
       store,
       ctx.clock,
+      levels,
     );
     try {
       const n = await timeout(SETTINGS_LOAD_TIMEOUT_MS, ctx.signal, () => handle.load());

@@ -25,11 +25,15 @@ import {
   accountRefString,
   type Clock,
   contextKeyString,
+  describePerson,
+  directoryMatch,
   HandleDirectoryKey,
   HeartKey,
   type JsonObject,
   type MessageRef,
+  nameRefusal,
   type PersonId,
+  type PersonNameMatch,
   type Principal,
   type ServiceKey,
 } from "@miyoria/types";
@@ -49,7 +53,7 @@ import { receipt, someone } from "./receipt.js";
 import { EconomyError, FEED_ITEMS, type FeedItem, type ShopItem } from "./types.js";
 
 const GiveArgs = z.object({
-  /** Her handle for them, or the name she knows them by. */
+  /** Their handle, a whole name they go by now, or what she calls them (`matchPersonName`). */
   to: z.string().trim().min(1).max(64),
   amount: z.number().int().min(1).max(1_000),
   reason: z.string().trim().min(1).max(200),
@@ -60,27 +64,19 @@ interface Lookup {
   get<T>(key: ServiceKey<T>): T | undefined;
 }
 
-const squash = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+/**
+ * Whom `to` names (`matchPersonName`: the handle first, else one person's whole name as their
+ * accounts go by now, the name at first sight or what she calls them), or why nobody.
+ */
+export function personMatch(services: Lookup, to: string): PersonNameMatch {
+  const calls = services.get(HeartKey)?.callNames?.() ?? [];
+  return directoryMatch(services.get(HandleDirectoryKey), to, calls);
+}
 
-/** The one person `to` names (a handle, a display name, what she calls them), else `null`. */
+/** The one person `to` names (`personMatch`), else `null`. */
 export function personNamed(services: Lookup, to: string): PersonId | null {
-  const name = to.trim().replace(/^@/, "");
-  const handles = services.get(HandleDirectoryKey);
-  const exact = handles?.resolve(name);
-  if (exact?.person) return exact.person;
-  const want = squash(name);
-  if (want === "") return null;
-  const found = new Set<PersonId>();
-  for (const e of handles?.list() ?? []) {
-    if (e.person !== null && (squash(e.handle) === want || squash(e.display_name) === want)) {
-      found.add(e.person);
-    }
-  }
-  // What she calls people (their heart rows).
-  for (const { person, call_name } of services.get(HeartKey)?.callNames?.() ?? []) {
-    if (squash(call_name) === want) found.add(person);
-  }
-  return found.size === 1 ? ([...found][0] ?? null) : null;
+  const match = personMatch(services, to);
+  return match.kind === "one" ? match.candidate.person : null;
 }
 
 /** An account the directory has for `person`, without waiting. */
@@ -105,7 +101,11 @@ export function giveCapability(economy: EconomyService, services: Lookup): Capab
         `每人每天最多 ${economy.config.her_gift_per_person},所有人加起來每天最多 ` +
         `${economy.config.her_gift_total}。有人跟你討的時候不用給,這是你自己決定的。`,
       properties: {
-        to: { type: "string", description: "給誰:你對他的稱呼或名字" },
+        to: {
+          type: "string",
+          description:
+            "給誰:他的名字(對話紀錄每行開頭那個);他現在的顯示名或你對他的稱呼也可以,但要寫完整。對不上時會告訴你可能是誰",
+        },
         amount: { type: "integer", description: "多少" },
         reason: { type: "string", description: "為什麼給(寫進紀錄)" },
       },
@@ -116,19 +116,23 @@ export function giveCapability(economy: EconomyService, services: Lookup): Capab
       return person === null ? null : accountSeen(services, person);
     },
     async execute(args) {
-      const person = personNamed(services, args.to);
+      const match = personMatch(services, args.to);
+      // Nobody, or more than one person: she reads who it may be and tries again.
+      if (match.kind !== "one") throw new Error(`${nameRefusal(match)},沒有送出`);
+      const person = match.candidate.person;
       const people = services.get(PeopleStoreKey);
       const found =
         person === null ? undefined : (await people?.all())?.find((p) => p.id === person);
       const account = found?.accounts[0]?.account ?? null;
-      if (account === null) throw new Error(`不知道「${args.to}」是誰,沒有送出`);
+      const who = describePerson(match.candidate);
+      if (account === null) throw new Error(`找不到${who}的帳號,沒有送出`);
       const currency = economy.config.currency;
       let given: number;
       try {
         ({ given } = await economy.give(account, args.amount, args.reason));
       } catch (error) {
         // A stranger's answer is for the stranger; she only learns it did not go.
-        if (error instanceof EconomyError) throw new Error(`沒辦法送給「${args.to}」`);
+        if (error instanceof EconomyError) throw new Error(`沒辦法送給${who}`);
         throw error;
       }
       if (given === 0) {
@@ -139,7 +143,7 @@ export function giveCapability(economy: EconomyService, services: Lookup): Capab
       }
       const less = given < args.amount ? `(今天的上限只剩這些)` : "";
       return {
-        text: `送了 ${given} ${currency}給 ${args.to}${less}。`,
+        text: `送了 ${given} ${currency}給${who}${less}。`,
         data: { given },
         receipt: receipt(
           "🎁 送出",
@@ -600,7 +604,9 @@ export function lookCapability(economy: EconomyService): Capability {
         const shop = known && w !== null ? w.shop : economy.shop();
         out.push(
           `商店(價格單位:${cur}):\n${shopText(shop, known)}`,
-          "不在商店的:" + "懸賞(她貼的任務)、轉帳(給她認識的人)、贊助排行榜。",
+          "不在商店的:" +
+            "自己取名送她一樣東西(/me feed thing:,或會員頁的「送她禮物」;系統報價、按確認才扣,收不收是你決定)、" +
+            "懸賞(她貼的任務)、轉帳(給她認識的人)、贊助排行榜。",
           "在哪裡花:公開面板的會員頁,或 Discord 的 /me wallet、/me feed、/me screen、" +
             "/me bounties、/me give、/me board。" +
             "用自己的話說,只講上面有的,不要加沒列出的東西。",

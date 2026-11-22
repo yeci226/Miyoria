@@ -20,13 +20,16 @@
 //   `admin.panel.write`), `POST .../edit/restore`; and its backing track as a plain member route
 //   (`GET /api/member/karaoke/edit/:song/backing`, served like the session files, a 404 to anyone
 //   else). A session's signed `reference.json` of a song with an edit is the edit.
-// * Admin (`karaokeAdmin`): `GET /api/karaoke/results`, the latest results with their flags.
+// * Admin (`karaokeAdmin`): `GET /api/karaoke/results?space=`, the latest results with their flags
+//   (with `space`: that server's rooms and the results sung alone).
 // * Rooms (step 4, `karaokeRooms` over `KaraokeRoomsKey`): the table routes (open, join, ready,
 //   queue, start, close, ...) and four plain member routes: the room's event stream (SSE, what each
 //   connection gets is decided per person by the rooms: a singer of the running round never gets
 //   the board), the clock sync, a singer's microphone (µ-law, read with a cap, relayed, never
 //   stored) and a singer's own detected pitch. These are not counted against the member rate limit
-//   (a song is several requests a second); the rooms cap them per singer instead.
+//   (a song is several requests a second); the rooms cap them per singer instead. Rooms are per
+//   server (phase 6): the list and opening take `?space=` through `memberSpace` (404 a server she
+//   is not in, 403 one the person is not a member of; default: their own, the primary first).
 //
 // A panel admin (session tier `admin`) may use everything while karaoke is not open, to try it;
 // members see it closed. Without the `karaoke` module every route is a `503` that names it.
@@ -40,7 +43,12 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
-import { KARAOKE_ROOM_CODE, KaraokeClockSchema, KaraokePitchSchema } from "@miyoria/contracts/api";
+import {
+  KARAOKE_ROOM_CODE,
+  KaraokeClockSchema,
+  KaraokePitchSchema,
+  type KaraokeRooms,
+} from "@miyoria/contracts/api";
 import { KARAOKE_VOICE_MAX_BYTES } from "@miyoria/contracts/workers";
 import {
   KaraokeError,
@@ -51,12 +59,14 @@ import {
   type RoomDesk,
 } from "@miyoria/play/karaoke";
 import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
-import { type AccountRef, accountRefString } from "@miyoria/types";
+import { type AccountRef, accountRefString, PlacesKey } from "@miyoria/types";
 import { os } from "./contract.js";
 import { ApiError } from "./errors.js";
 import { json, noContent, param, type Route } from "./route.js";
 import type { SessionRecord } from "./session.js";
+import { adminSpace, memberPerson, memberSpace } from "./space-param.js";
 import type { ApiContext, ApiState } from "./state.js";
+import type { Watch } from "./watch.js";
 
 const log = getLogger("api.karaoke");
 
@@ -211,9 +221,11 @@ export const karaokeRpc = {
 };
 
 export const karaokeAdminRpc = {
-  results: os.karaokeAdmin.results.handler(({ context: { state } }) =>
-    service(state).adminResults(),
-  ),
+  results: os.karaokeAdmin.results.handler(({ input, context: { state } }) => {
+    const asked = input?.query.space;
+    const space = asked === undefined ? undefined : (adminSpace(state, asked)?.id ?? undefined);
+    return service(state).adminResults(50, space);
+  }),
 };
 
 // ---- rooms (step 4) ---------------------------------------------------------------------------
@@ -222,21 +234,54 @@ function rooms(state: ApiState): RoomDesk {
   return state.service(KaraokeRoomsKey, "karaoke module");
 }
 
+/**
+ * The server a rooms route is about: `?space=` checked against the person (`memberSpace`: 404,
+ * 403), else their own. Left out (the rooms' own default, the primary) when Core has no places.
+ */
+async function roomSpace(
+  state: ApiState,
+  c: ApiContext,
+  requested: string | undefined,
+): Promise<string | undefined> {
+  if (state.optional(PlacesKey) === undefined) return undefined;
+  return memberSpace(state, await memberPerson(state, c), requested).id;
+}
+
+/**
+ * `GET /api/member/karaoke/rooms?space=` as a view (also the `rooms` push topic): the server is
+ * checked against the person here (`404`, `403`), for both.
+ */
+export async function roomsWatch(
+  state: ApiState,
+  c: ApiContext,
+  requested: string | undefined,
+): Promise<Watch<KaraokeRooms>> {
+  const space = await roomSpace(state, c, requested);
+  const account = accountOf(c);
+  const admin = adminOf(c);
+  return {
+    key: `rooms:${accountRefString(account)}:${admin ? "admin" : "member"}:${space ?? ""}`,
+    build: () => refusals(() => rooms(state).overview(account, admin, space)),
+  };
+}
+
 export const karaokeRoomsRpc = {
-  overview: os.karaokeRooms.overview.handler(({ context: { state, c } }) =>
-    refusals(() => rooms(state).overview(accountOf(c), adminOf(c))),
+  overview: os.karaokeRooms.overview.handler(async ({ input, context: { state, c } }) =>
+    (await roomsWatch(state, c, input?.query.space)).build(),
   ),
-  open: os.karaokeRooms.open.handler(({ input, context: { state, c } }) =>
-    refusals(() =>
+  open: os.karaokeRooms.open.handler(async ({ input, context: { state, c } }) => {
+    const space = await roomSpace(state, c, input.query?.space);
+    return refusals(() =>
       rooms(state).open(
         accountOf(c),
         memberOf(c).name,
         input.body.song ?? null,
         input.body.shift,
         adminOf(c),
+        space,
       ),
-    ),
-  ),
+    );
+  }),
   room: os.karaokeRooms.room.handler(({ input, context: { state, c } }) =>
     refusals(() => rooms(state).view(input.params.code, accountOf(c))),
   ),
@@ -286,6 +331,9 @@ export const karaokeRoomsRpc = {
   ),
   relay: os.karaokeRooms.relay.handler(({ input, context: { state, c } }) =>
     refusals(() => rooms(state).relay(input.params.code, accountOf(c), input.body, adminOf(c))),
+  ),
+  cheer: os.karaokeRooms.cheer.handler(({ input, context: { state, c } }) =>
+    refusals(() => rooms(state).cheer(input.params.code, accountOf(c), input.body)),
   ),
   start: os.karaokeRooms.start.handler(({ input, context: { state, c } }) =>
     refusals(() => rooms(state).start(input.params.code, accountOf(c))),

@@ -29,8 +29,30 @@ import { data } from "./data.js";
 import { directives } from "./directives.js";
 import { economy, peopleEconomy } from "./economy.js";
 import { evalRoutes } from "./eval.js";
+import { exchange, exchangeAdmin } from "./exchange.js";
 import { facts } from "./facts.js";
+import { filesAdmin, memberFiles } from "./files.js";
 import { fortune } from "./fortune.js";
+import { gifts, giftsAdmin, giftsPublic } from "./gifts.js";
+import { githubLink } from "./github-link.js";
+
+export {
+  type AdminFile,
+  AdminFileSchema,
+  type AdminFiles,
+  AdminFilesSchema,
+  type FileHistoryEntry,
+  FileHistoryEntrySchema,
+  type FileVisibility,
+  FileVisibilitySchema,
+  type MemberFile,
+  MemberFileSchema,
+  type MemberFiles,
+  MemberFilesSchema,
+  type MemberFileVisibilityRequest,
+  type MemberFileVisibilityResult,
+} from "./files.js";
+
 import { self, world } from "./inner.js";
 import { karaoke, karaokeAdmin } from "./karaoke.js";
 import { karaokeRooms } from "./karaoke-rooms.js";
@@ -49,9 +71,12 @@ import { persona } from "./persona.js";
 import { mindPlan } from "./plan.js";
 import { prompts } from "./prompts.js";
 import { publicView } from "./public.js";
+import { push } from "./push.js";
+import { reports } from "./reports.js";
 import { roles } from "./roles.js";
 import { sandbox } from "./sandbox.js";
 import { moduleSettings, places } from "./settings.js";
+import { memberSpaces, placesSpaces } from "./spaces.js";
 import { telemetry } from "./telemetry.js";
 import { turns } from "./turns.js";
 import { wallet } from "./wallet.js";
@@ -173,6 +198,10 @@ export {
   ChannelLevelViewSchema,
   type SetChannelLevelRequest,
   SetChannelLevelRequestSchema,
+  type SetSpaceLevelRequest,
+  SetSpaceLevelRequestSchema,
+  type SpaceLevelView,
+  SpaceLevelViewSchema,
 } from "./channels.js";
 export {
   type ClusterApproveRequest,
@@ -323,6 +352,8 @@ export {
   EconomyHealthSchema,
   type HealthDay,
   HealthDaySchema,
+  type ListedSpace,
+  ListedSpaceSchema,
   type PredictionView,
   PredictionViewSchema,
   type QuestsView,
@@ -338,6 +369,44 @@ export {
   type EvalNightlyState,
   EvalNightlyStateSchema,
 } from "./eval.js";
+export {
+  type ExchangeAccount,
+  ExchangeAccountSchema,
+  type ExchangeAdmin,
+  ExchangeAdminSchema,
+  ExchangeAdminSellRequestSchema,
+  type ExchangeBoards,
+  ExchangeBoardsSchema,
+  ExchangeCancelRequestSchema,
+  type ExchangeCandles,
+  ExchangeCandlesSchema,
+  ExchangeLeverageRequestSchema,
+  type ExchangeLine,
+  ExchangeLineSchema,
+  type ExchangeList,
+  ExchangeListSchema,
+  ExchangeLookupRequestSchema,
+  type ExchangeMap,
+  ExchangeMapSchema,
+  type ExchangeMarket,
+  ExchangeMarketSchema,
+  ExchangeNameRequestSchema,
+  type ExchangeOrder,
+  type ExchangeOrderRequest,
+  ExchangeOrderRequestSchema,
+  ExchangeOrderSchema,
+  type ExchangePortfolio,
+  ExchangePortfolioSchema,
+  type ExchangeQuote,
+  ExchangeQuoteSchema,
+  ExchangeSettleRequestSchema,
+  ExchangeSplitRequestSchema,
+  type ExchangeTicker,
+  ExchangeTickerRequestSchema,
+  ExchangeTickerSchema,
+  ExchangeVisibilityRequestSchema,
+  ExchangeWatchRequestSchema,
+} from "./exchange.js";
 export {
   type CauseChain,
   CauseChainSchema,
@@ -356,6 +425,44 @@ export {
   type IssuedFortune,
   IssuedFortuneSchema,
 } from "./fortune.js";
+export {
+  type AdminGiftItem,
+  AdminGiftSchema,
+  type AdminGifts,
+  AdminGiftsSchema,
+  type GiftAskResult,
+  GiftAskResultSchema,
+  type GiftConfirmResult,
+  GiftConfirmResultSchema,
+  GiftKindSchema,
+  type GiftOverride,
+  GiftOverrideSchema,
+  type GiftPicture,
+  GiftPictureSchema,
+  type GiftPinRequest,
+  GiftPinRequestSchema,
+  type GiftQuoteRequest,
+  GiftQuoteRequestSchema,
+  GiftQuoteSchema,
+  type GiftQuoteView,
+  GiftStatusSchema,
+  type GiftUnpinRequest,
+  GiftUnpinRequestSchema,
+  type GiftViewItem,
+  GiftViewSchema,
+  type MyGifts,
+  MyGiftsSchema,
+  type PublicGiftItem,
+  PublicGiftSchema,
+  type PublicGifts,
+  PublicGiftsSchema,
+} from "./gifts.js";
+export {
+  type GithubLinkView,
+  GithubLinkViewSchema,
+  type GithubMentionRequest,
+  GithubMentionRequestSchema,
+} from "./github-link.js";
 export {
   type AgendaItem,
   AgendaItemSchema,
@@ -445,18 +552,29 @@ export {
   KaraokeVoiceStateSchema,
 } from "./karaoke.js";
 export {
+  KARAOKE_CHEERS,
   KARAOKE_ROOM_CODE,
   type KaraokeAudioReply,
   KaraokeAudioReplySchema,
   type KaraokeBoardLine,
   KaraokeBoardLineSchema,
+  type KaraokeCheerEvent,
+  KaraokeCheerEventSchema,
+  type KaraokeCheerKind,
+  KaraokeCheerKindSchema,
+  type KaraokeCheerReply,
+  KaraokeCheerReplySchema,
   type KaraokeClockReply,
   KaraokeClockReplySchema,
   KaraokeClockSchema,
+  type KaraokeLiveEvent,
+  KaraokeLiveEventSchema,
   type KaraokePitch,
   KaraokePitchSchema,
   type KaraokeRoomAir,
   KaraokeRoomAirSchema,
+  type KaraokeRoomCheer,
+  KaraokeRoomCheerSchema,
   type KaraokeRoomEvent,
   KaraokeRoomEventSchema,
   type KaraokeRoomJoin,
@@ -855,6 +973,36 @@ export {
   PublicTodaySchema,
 } from "./public.js";
 export {
+  MEMBER_PUSH_TOPICS,
+  PUBLIC_PUSH_TOPICS,
+  PUSH_MAX_TOPICS,
+  PUSH_PARAM,
+  type PushEvent,
+  PushEventSchema,
+  PushQuerySchema,
+  type PushTopic,
+  PushTopicSchema,
+} from "./push.js";
+export {
+  NODE_REPORTS,
+  type ReportApproveRequest,
+  ReportApproveRequestSchema,
+  type ReportCommentRequest,
+  ReportCommentRequestSchema,
+  type ReportDraftView,
+  ReportDraftViewSchema,
+  type ReportDuplicateRequest,
+  ReportDuplicateRequestSchema,
+  type ReportList,
+  ReportListSchema,
+  type ReportMentionRequest,
+  ReportMentionRequestSchema,
+  type ReportRejectRequest,
+  ReportRejectRequestSchema,
+  type ReportStatus,
+  ReportStatusSchema,
+} from "./reports.js";
+export {
   type AssignRoleRequest,
   AssignRoleRequestSchema,
   type AuthScope,
@@ -917,7 +1065,17 @@ export {
   type SettingValue,
   SettingValueSchema,
 } from "./settings.js";
-export { type ContextKeyIn, ContextKeyInSchema } from "./shared.js";
+export { type ContextKeyIn, ContextKeyInSchema, SpaceQuery, type SpaceQueryIn } from "./shared.js";
+export {
+  type AdminSpace,
+  AdminSpaceSchema,
+  type AdminSpaces,
+  AdminSpacesSchema,
+  type MemberSpaces,
+  MemberSpacesSchema,
+  type Space,
+  SpaceSchema,
+} from "./spaces.js";
 export {
   type TelemetryLlm,
   TelemetryLlmSchema,
@@ -960,6 +1118,8 @@ export {
   BoardChoiceSchema,
   type BoardRequest,
   BoardRequestSchema,
+  BoardScopeQuery,
+  type BoardScopeQueryIn,
   type CheckinRequest,
   CheckinRequestSchema,
   type CheckinResult,
@@ -984,6 +1144,8 @@ export {
   HungerSchema,
   type LedgerLine,
   LedgerLineSchema,
+  type MemberBoard,
+  MemberBoardSchema,
   type ScreenRequest,
   ScreenRequestSchema,
   type ShopItem,
@@ -1025,7 +1187,7 @@ export const contract = {
   people: { ...people, ...peopleEconomy },
   // The settings routes first: `/api/modules/{id}/settings` before `/api/modules/{id}/{action}`.
   modules: { list: modules.list, ...moduleSettings, action: modules.action },
-  places,
+  places: { ...places, ...placesSpaces },
   decisions,
   events,
   llm,
@@ -1057,7 +1219,8 @@ export const contract = {
   workspace,
   skills,
   public: publicView,
-  member,
+  push,
+  member: { ...member, ...memberSpaces },
   cards,
   cardsAdmin,
   wallet,
@@ -1065,9 +1228,18 @@ export const contract = {
   fortune,
   market,
   marketAdmin,
+  exchange,
+  exchangeAdmin,
+  gifts,
+  giftsAdmin,
+  giftsPublic,
   karaoke,
   karaokeAdmin,
   karaokeRooms,
+  reports,
+  githubLink,
+  memberFiles,
+  filesAdmin,
   eval: evalRoutes,
 };
 

@@ -9,7 +9,8 @@
 // | where                            | today                                   | the check  |
 // |----------------------------------|-----------------------------------------|------------|
 // | `[llm]`, `[speech]`, `[mcp]`,    | the reader throws `ConfigError` while   | error      |
-// | `[memory.embedding]`             | Core is built: Core does not start      |            |
+// | `[memory.embedding]`,            | Core is built: Core does not start      |            |
+// | `[character]`                    |                                         |            |
 // | `[modules.<id>]`, module on      | the module fails its start (and is      | warning    |
 // |                                  | retried); the rest runs                 |            |
 // | `[modules.<id>]`, module off, or | never read (an empty token disables the | ignored    |
@@ -28,6 +29,7 @@ import { ActivityConfigSchema, ActivityModule } from "@miyoria/brain/activity";
 import { AgentConfigSchema, AgentModule } from "@miyoria/brain/agent";
 import { ArbiterConfigSchema, ArbiterModule } from "@miyoria/brain/arbiter";
 import { DirectiveConfigSchema, DirectiveModule } from "@miyoria/brain/directive";
+import { ReportConfigSchema, ReportModule } from "@miyoria/brain/report";
 import { ClusterConfigSchema, ClusterModule } from "@miyoria/cluster";
 import { CommandsConfigSchema, CommandsModule } from "@miyoria/commands";
 import { DiscordBotModule, DiscordConfigSchema } from "@miyoria/discord";
@@ -51,6 +53,7 @@ import {
 import { EmbeddingConfigSchema, MemoryConfigSchema, MemoryModule } from "@miyoria/memory/memory";
 import { WorldConfigSchema, WorldModule } from "@miyoria/memory/world";
 import { CardsConfigSchema, CardsModule } from "@miyoria/play/cards";
+import { ExchangeConfigSchema, ExchangeModule } from "@miyoria/play/exchange";
 import {
   GameChatConfigSchema,
   GameChatModule,
@@ -68,6 +71,7 @@ import {
 } from "@miyoria/plugin-host/ext-host";
 import { McpConfigSchema, McpModule } from "@miyoria/plugin-host/mcp";
 import {
+  CharacterSectionSchema,
   Config,
   type ConfigPolicy,
   type ConfigProblem,
@@ -146,6 +150,7 @@ export const MODULE_CONFIG_SCHEMAS: ReadonlyMap<string, ConfigSchema | null> = n
   [EconomyModule.ID, EconomyConfigSchema],
   [CardsModule.ID, CardsConfigSchema],
   [MarketModule.ID, MarketConfigSchema],
+  [ExchangeModule.ID, ExchangeConfigSchema],
   [KaraokeModule.ID, KaraokeConfigSchema],
   [WebModule.ID, WebConfigSchema],
   [SandboxModule.ID, SandboxConfigSchema],
@@ -154,6 +159,7 @@ export const MODULE_CONFIG_SCHEMAS: ReadonlyMap<string, ConfigSchema | null> = n
   [LiveModule.ID, LiveConfigSchema],
   [PartyModule.ID, PartyConfigSchema],
   [EvalModule.ID, EvalConfigSchema],
+  [ReportModule.ID, ReportConfigSchema],
   [ExtensionsModule.ID, HostConfigSchema],
   [DiscordBotModule.ID, DiscordConfigSchema],
   [ReplayRecorderModule.ID, ReplayConfigSchema],
@@ -170,6 +176,7 @@ export const MODULE_CONFIG_SCHEMAS: ReadonlyMap<string, ConfigSchema | null> = n
  */
 export const CONFIG_SECTIONS: Readonly<Record<string, ConfigSection>> = {
   core: CoreSectionSchema,
+  character: CharacterSectionSchema,
   llm: LlmConfigSchema,
   speech: SpeechConfigSchema,
   memory: { embedding: EmbeddingConfigSchema },
@@ -205,7 +212,7 @@ function coreRoot(): ConfigSchema {
 }
 
 /** Sections whose reader throws while Core is built, so a problem there stops the start. */
-const FATAL_SECTIONS = new Set(["llm", "speech", "mcp"]);
+const FATAL_SECTIONS = new Set(["llm", "speech", "mcp", "character"]);
 
 /**
  * Whether the file lets module `id` start: enabled, and with a token when it needs one (Core

@@ -5,6 +5,7 @@
 //   is the artifact's own (the place it was made caps who may see it), so no default here.
 // - `artifact.expired`: an artifact passed its expiry and was marked deleted; its shares went too.
 // - `artifact.taken_down`: the owner took one down.
+// - `artifact.deleted`: its own person deleted it on the member page; its shares went too.
 // - `artifact.swept`: one per collection run that removed anything, with the counts (the daily
 //   count of what the sweep unlinked, instead of one event per file).
 // - `share.created`, `share.revoked`: a share token made or withdrawn (who asked is the envelope's
@@ -98,6 +99,17 @@ export const ArtifactTakenDownSchema = z
   })
   .meta({ id: "EventsArtifactTakenDown" });
 export type ArtifactTakenDownData = z.output<typeof ArtifactTakenDownSchema>;
+
+/** An `artifact.deleted` payload: its own person deleted it (the member page). */
+export const ArtifactDeletedSchema = z
+  .object({
+    artifact_id: z.string(),
+    /** Who deleted it (`person:<id>`). */
+    by: z.string(),
+    shares_revoked: z.number().int().min(0),
+  })
+  .meta({ id: "EventsArtifactDeleted" });
+export type ArtifactDeletedData = z.output<typeof ArtifactDeletedSchema>;
 
 /** An `artifact.swept` payload: what one collection run removed. */
 export const ArtifactSweptSchema = z
@@ -193,6 +205,14 @@ export const ArtifactTakenDown = defineEvent({
   tier: "keep",
 });
 
+export const ArtifactDeleted = defineEvent({
+  type: "artifact.deleted",
+  v: 1,
+  data: ArtifactDeletedSchema,
+  scope: "owner",
+  tier: "keep",
+});
+
 export const ArtifactSwept = defineEvent({
   type: "artifact.swept",
   v: 1,
@@ -238,6 +258,7 @@ export const ARTIFACT_EVENTS = [
   ArtifactCreated,
   ArtifactExpired,
   ArtifactTakenDown,
+  ArtifactDeleted,
   ArtifactSwept,
   ArtifactShared,
   ShareCreated,

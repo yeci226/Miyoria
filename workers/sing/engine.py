@@ -193,7 +193,7 @@ def ydl_options(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     # Its cache lives with the songs (SING_YTDLP_CACHE): when it cannot write to its default
     # ~/.cache/yt-dlp, Python's tempfile retries forever on Windows and the lookup never returns.
     cache = os.environ.get("SING_YTDLP_CACHE")
-    return {
+    opts: dict[str, Any] = {
         **({"cachedir": cache} if cache else {}),
         "quiet": True,
         "no_warnings": True,
@@ -204,8 +204,22 @@ def ydl_options(extra: dict[str, Any] | None = None) -> dict[str, Any]:
         "js_runtimes": {r.strip(): {} for r in os.environ.get("SING_JS_RUNTIMES", "deno,node").split(",") if r.strip()},
         # Every request asks for a byte range: bilibili's CDN answers a plain GET with HTTP 567.
         "http_chunk_size": 10 * 1024 * 1024,
-        **(extra or {}),
     }
+    # A signed-in session's cookies: YouTube asks some machines to confirm they are not a bot, and only
+    # signed-in requests get past it. SING_YTDLP_COOKIES, else cookies.txt next to this file (never committed).
+    cookie_file = os.environ.get("SING_YTDLP_COOKIES")
+    if cookie_file and Path(cookie_file).is_file():
+        opts["cookiefile"] = cookie_file
+    elif (Path(__file__).resolve().parent / "cookies.txt").is_file():
+        opts["cookiefile"] = str(Path(__file__).resolve().parent / "cookies.txt")
+
+    browser = os.environ.get("SING_YTDLP_COOKIES_FROM_BROWSER")
+    if browser:
+        opts["cookiesfrombrowser"] = (browser,)
+
+    if extra:
+        opts.update(extra)
+    return opts
 
 
 def fresh_info(src: Source) -> dict[str, Any] | None:

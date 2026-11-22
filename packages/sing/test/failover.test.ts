@@ -786,3 +786,128 @@ describe("a list that was empty when it was made", () => {
     expect(await failover.health()).toBeNull();
   });
 });
+
+describe("dispatch through the registry (v5-hostd §15)", () => {
+  interface Unit {
+    id: string;
+    what: string | undefined;
+    accepted: boolean;
+    done: { ok?: boolean; run_ms?: number } | null;
+  }
+
+  /**
+   * Two workers listed as a registry lists `job` work: fewest units counted first. The registry's
+   * part is played by the hooks: `reserve` counts a unit until it is done, `refresh` lists again.
+   */
+  function dispatching(options: { place?: string } = {}) {
+    const workers = { a: new FakeWorker("a"), b: new FakeWorker("b") };
+    const clock = { t: 1_000_000 };
+    const counts = new Map<string, number>([
+      ["a", 0],
+      ["b", 0],
+    ]);
+    const units: Unit[] = [];
+    const takes = new Set(["a", "b"]);
+    const list = () =>
+      [...counts.entries()]
+        .sort((x, y) => x[1] - y[1] || x[0].localeCompare(y[0]))
+        .map(([id]) => ({
+          id,
+          name: id,
+          worker: workers[id as "a" | "b"],
+          takesWork: takes.has(id),
+        }));
+    const worker: FailoverSingWorker = new FailoverSingWorker(list(), {
+      retryMs: RETRY,
+      now: () => clock.t,
+      refresh: () => worker.update(list()),
+      reserve: (id, what) => {
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+        const unit: Unit = { id, what, accepted: false, done: null };
+        units.push(unit);
+        return {
+          accepted: () => {
+            unit.accepted = true;
+          },
+          done: (outcome = {}) => {
+            unit.done = outcome;
+            counts.set(id, (counts.get(id) ?? 0) - 1);
+          },
+        };
+      },
+      ...(options.place !== undefined ? { openSession: () => options.place ?? null } : {}),
+    });
+    return { ...workers, worker, clock, units, takes };
+  }
+
+  it("sends two songs asked together to two workers", async () => {
+    const { worker, units } = dispatching();
+    const [one, two] = await Promise.all([
+      worker.submit({ query: "one" }),
+      worker.submit({ query: "two" }),
+    ]);
+    expect([one.id.split("-")[0], two.id.split("-")[0]]).toEqual(["a", "b"]);
+    expect(units.map((u) => [u.id, u.what, u.accepted])).toEqual([
+      ["a", "one", true],
+      ["b", "two", true],
+    ]);
+  });
+
+  it("ends a song's unit with its run time when its job ends", async () => {
+    const { worker, a, clock, units } = dispatching();
+    const job = await worker.submit({ query: "one" });
+    Object.assign(a.jobs.get(job.id) ?? {}, { state: "running" });
+    await worker.job(job.id);
+    clock.t += 60_000;
+    a.finish(job.id, "song-1");
+    await worker.job(job.id);
+    expect(units[0]?.done).toEqual({ ok: true, run_ms: 60_000 });
+    // A later poll of the same job changes nothing.
+    await worker.job(job.id);
+    expect(units).toHaveLength(1);
+  });
+
+  it("teaches nothing from a job never seen running, a cancel, or a worker that does not answer", async () => {
+    const { worker, a, b, units } = dispatching();
+    const cached = await worker.submit({ query: "cached" });
+    a.finish(cached.id, "song-c");
+    await worker.job(cached.id);
+    expect(units[0]?.done).toEqual({ ok: false });
+
+    const cancelled = await worker.submit({ query: "cancelled" });
+    await worker.cancel(cancelled.id);
+    expect(units[1]?.done).toEqual({ ok: false });
+
+    a.up = false;
+    b.up = true;
+    const moved = await worker.submit({ query: "moved" });
+    expect(moved.id.startsWith("b-")).toBe(true);
+    expect(units.filter((u) => u.id === "a").at(-1)?.done).toEqual({ ok: false });
+    expect(units.at(-1)).toMatchObject({ id: "b", accepted: true, done: null });
+  });
+
+  it("gives a worker that takes no new work no song, and still fetches what it holds", async () => {
+    const { worker, a, takes } = dispatching();
+    const made = await worker.submit({ query: "made earlier" });
+    a.finish(made.id, "song-a");
+    await worker.job(made.id);
+    takes.delete("a");
+    const fresh = await worker.submit({ query: "new" });
+    expect(fresh.id.startsWith("b-")).toBe(true);
+    expect(worker.current()).toBe("b");
+    // The song made on `a` is still played from there, and its job still found there.
+    expect(await worker.audio("song-a", "play_mix.pcm")).toEqual(new Int16Array([1]));
+    expect((await worker.job(made.id)).state).toBe("done");
+    // Nobody takes new work: a request says so, as one no worker answers.
+    takes.delete("b");
+    const refused = await rejection(worker.submit({ query: "nobody" }));
+    expect(refused.unreachable).toBe(true);
+    expect(refused.message).toMatch(/takes new work/);
+  });
+
+  it("starts a karaoke room's streams where the registry places the session", async () => {
+    const { worker, b } = dispatching({ place: "b" });
+    await worker.karaokeStream({ room: "r1", batches: [] } as never);
+    expect(b.streamed).toEqual(["r1"]);
+  });
+});

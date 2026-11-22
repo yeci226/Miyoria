@@ -19,6 +19,11 @@ export interface Endpoint {
   headers: Record<string, string>;
   healthy: boolean;
   version: string | null;
+  /**
+   * Set on what a `direct` query returned from a host with several routes: its requests travel
+   * only over routes fit for real-time work, never a tunnel or the control link.
+   */
+  direct_only?: boolean;
 }
 
 export interface EndpointQuery {
@@ -28,6 +33,19 @@ export interface EndpointQuery {
   entry?: string;
   /** An endpoint that failed lately keeps its place instead of going last. */
   ignoreResting?: boolean;
+  /**
+   * Also the endpoints that take no new work now (drained, excluded, another variant, her speech
+   * host for a job that yields to it), after the others: for work an endpoint already holds.
+   */
+  all?: boolean;
+}
+
+/** One unit of `job` work handed to an endpoint (v5-hostd §15): it counts there until done. */
+export interface EndpointUnit {
+  /** The endpoint took it (its answer came). */
+  accepted(): void;
+  /** It ended; `run_ms` how long it ran there, `bytes` its results; `ok: false` teaches nothing. */
+  done(outcome?: { ok?: boolean; run_ms?: number; bytes?: number }): void;
 }
 
 /** Core's endpoint registry, as far as a module uses it. */
@@ -42,6 +60,15 @@ export interface EndpointSource {
   request(endpoint: Endpoint, path: string, init?: RequestInit): Promise<Response>;
   /** Calls `onChange` whenever the endpoints of `capability` change; returns the dispose. */
   watch(capability: string, onChange: () => void): () => void;
+  /**
+   * A unit of work is sent to `endpoint`: the next one goes elsewhere while the host's report
+   * does not show it yet. Optional: a source without job dispatch leaves it out.
+   */
+  reserve?(endpoint: Endpoint, unit?: { what?: string; sizeBytes?: number }): EndpointUnit;
+  /** Starts a session of `capability` under `key` where it should run (and stay). Optional. */
+  openSession?(capability: string, key: string): Endpoint | null;
+  /** The session `key` ended. Optional. */
+  closeSession?(capability: string, key: string): void;
 }
 
 /** How a module finds the registry once it starts (Core's wiring passes it). */

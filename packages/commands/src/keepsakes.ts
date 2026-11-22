@@ -15,6 +15,10 @@
 
 import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import {
+  CharacterKey,
+  CurrencyKey,
+  DEFAULT_CHARACTER,
+  DEFAULT_CURRENCY,
   type KeepsakeCard,
   type KeepsakeCardBook,
   type KeepsakeCardImage,
@@ -57,8 +61,9 @@ export const CLEAR_WISHES = "清空";
 /** The button of a card she dropped in a channel: `mi:cards:drop:<id>` (`@miyoria/play/cards`). */
 export const CARD_DROP_ROUTE = "cards:drop";
 
-/** Under a keepsake card given on the first look. */
-const KEEPSAKE_NOTE = "在有卡片之前你就在了，這張是她給你的紀念卡，不用魚幣。";
+/** Under a keepsake card given on the first look; `coin` and `her` are the profile's words. */
+const keepsakeNote = (coin: string, her: string): string =>
+  `在有卡片之前你就在了，這張是${her}給你的紀念卡，不用${coin}。`;
 
 /** What it cost, under the card. */
 function paidLine(charged: number, balance: number | null): CardBlock | null {
@@ -192,6 +197,8 @@ function refusal(result: Extract<KeepsakeResult<unknown>, { ok: false }>): Comma
 }
 
 export function registerKeepsakes(registry: CommandRegistry, services: ServiceLookup): void {
+  const coin = services.get(CurrencyKey) ?? DEFAULT_CURRENCY;
+  const her = (services.get(CharacterKey) ?? DEFAULT_CHARACTER).pronoun;
   const who = (inv: Invocation) => ({
     account: inv.invoker,
     name: inv.invoker_display_name,
@@ -220,25 +227,29 @@ export function registerKeepsakes(registry: CommandRegistry, services: ServiceLo
   };
 
   registry.register(
-    commandSpec("me card", "她給你的每日卡：今天還沒有就發一張（要花魚幣），有了就看今天的", {
-      permission: CARD_NODE,
-      ephemeral: true,
-      args: [
-        argSpec(
-          "action",
-          `${CARD_NEW}：今天再發一張；${CARD_DEX}：你集到的部件和稱號；${CARD_ODDS}：公開機率；${CARD_PITY}：保底計數；${CARD_WISH}：標記想要的部件`,
-          ArgKind.choice([CARD_NEW, CARD_DEX, CARD_ODDS, CARD_PITY, CARD_WISH]),
-          { required: false },
-        ),
-        argSpec("foil", "新卡做成閃卡（要多花魚幣）", ArgKind.boolean, { required: false }),
-        argSpec(
-          "wish",
-          `願望單：最多三個部件名稱，用頓號分開；${CLEAR_WISHES} 就清掉`,
-          ArgKind.string,
-          { required: false },
-        ),
-      ],
-    }),
+    commandSpec(
+      "me card",
+      `${her}給你的每日卡：今天還沒有就發一張（要花${coin}），有了就看今天的`,
+      {
+        permission: CARD_NODE,
+        ephemeral: true,
+        args: [
+          argSpec(
+            "action",
+            `${CARD_NEW}：今天再發一張；${CARD_DEX}：你集到的部件和稱號；${CARD_ODDS}：公開機率；${CARD_PITY}：保底計數；${CARD_WISH}：標記想要的部件`,
+            ArgKind.choice([CARD_NEW, CARD_DEX, CARD_ODDS, CARD_PITY, CARD_WISH]),
+            { required: false },
+          ),
+          argSpec("foil", `新卡做成閃卡（要多花${coin}）`, ArgKind.boolean, { required: false }),
+          argSpec(
+            "wish",
+            `願望單：最多三個部件名稱，用頓號分開；${CLEAR_WISHES} 就清掉`,
+            ArgKind.string,
+            { required: false },
+          ),
+        ],
+      },
+    ),
     (inv) =>
       guard(async () => {
         const keepsakes = services.get(KeepsakesKey);
@@ -289,12 +300,13 @@ export function registerKeepsakes(registry: CommandRegistry, services: ServiceLo
               : "願望單清空了。",
           );
         }
-        const key = `discord:${newId()}`;
+        // Idempotency key on the invoker's own platform (no default platform, v5-architecture §6).
+        const key = `${inv.invoker.platform}:${newId()}`;
         const today = await keepsakes.cardsToday(inv.invoker);
         // The first look of someone from before the cards: their keepsake, and nothing charged.
         if (today.keepsake !== undefined) {
           const blocks = cardText(today.keepsake);
-          blocks.push({ type: "muted", text: KEEPSAKE_NOTE });
+          blocks.push({ type: "muted", text: keepsakeNote(coin, her) });
           blocks.push({ type: "muted", text: todayHint(today) });
           return cardWithPicture(keepsakes, today.keepsake.serial, blocks, {
             accent: "neutral",

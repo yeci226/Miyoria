@@ -13,13 +13,17 @@ import {
   Supervisor,
   SupervisorKey,
 } from "@miyoria/runtime/kernel";
-import { openStore, type Store, StoreKey } from "@miyoria/store";
+import { type Identity, openStore, type Store, StoreKey } from "@miyoria/store";
 import {
   DirectivesKey,
   type Envelope,
   Events,
   HandleDirectoryKey,
   is,
+  KERNEL_MODULE,
+  type PersonId,
+  PlaceConfigKey,
+  PlacesKey,
   PlatformSinksKey,
   Principals,
   toTimestamp,
@@ -120,6 +124,36 @@ describe("going down", () => {
     await built.start();
     await built.stop();
     expect(seen).toEqual(["shutdown", "module stopped"]);
+  });
+});
+
+describe("places", () => {
+  it("provides Places and PlaceConfig, and marks a member who leaves a server", async () => {
+    const store = await openStore("memory://");
+    core = await buildCoreWith(catalog(), config(), { store, discord: false, api: false });
+    const places = core.services.get(PlacesKey);
+    expect(places).toBe(store.places);
+    expect(core.services.get(PlaceConfigKey)).toBeDefined();
+    const persons = (store as unknown as { persons: Identity }).persons;
+    const account = { platform: "discord", id: "7" };
+    const place = persons.resolve(
+      { platform: "discord", scope: "g", channel: "c", kind: "channel" },
+      { account, display_name: "Owen" },
+    );
+    const person = persons.personOf(account)?.id as PersonId;
+    const space = place.space_id as string;
+    expect(places?.isMember(person, space)).toBe(true);
+    const left = (gone: boolean) =>
+      core?.bus.publish(KERNEL_MODULE, Events.PlatformMember, {
+        platform: "discord",
+        guild: "g",
+        account,
+        display_name: "Owen",
+        is_bot: false,
+        left: gone,
+      });
+    left(true);
+    await vi.waitFor(() => expect(places?.isMember(person, space)).toBe(false));
   });
 });
 

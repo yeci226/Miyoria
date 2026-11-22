@@ -20,7 +20,7 @@ import {
   type RegisterOptions,
 } from "@miyoria/commands";
 import { type ActuatorRegistry, deniedText } from "@miyoria/gate/actions";
-import { type JsonObject, Principals } from "@miyoria/types";
+import { DEFAULT_CURRENCY, type JsonObject, Principals } from "@miyoria/types";
 import type { SingPermissions } from "./config.js";
 import {
   BACKING_LABELS,
@@ -137,6 +137,8 @@ export function registerCommands(
   perms: SingPermissions,
   actuators: ActuatorRegistry,
   singer: Singer,
+  /** The coins' name of the running profile. */
+  coin: string = DEFAULT_CURRENCY,
 ): string[] {
   const paths: string[] = [];
   const add = (spec: CommandSpec, handler: CommandHandler, options: RegisterOptions = {}) => {
@@ -157,7 +159,7 @@ export function registerCommands(
         ),
         argSpec(
           "priority",
-          "用一張點歌優先券(花魚幣,一天有上限):排到沒用券的歌前面;沒唱成就退回",
+          `用一張點歌優先券(花${coin},一天有上限):排到沒用券的歌前面;沒唱成就退回`,
           ArgKind.boolean,
           { required: false },
         ),

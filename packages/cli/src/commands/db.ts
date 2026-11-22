@@ -421,6 +421,22 @@ export async function doctorCommand(configPath: string, file: string | undefined
     println(`  人 ${r.counts.persons}、帳號 ${r.counts.accounts}、${events} ${r.counts.events}`);
     println(`  最新的事件:${r.counts.newest_event ?? "無"}`);
   }
+  if (r.spaces !== null) {
+    section("伺服器");
+    if (r.spaces.length === 0) note("還沒有任何伺服器");
+    for (const s of r.spaces) {
+      const tags = [
+        s.primary ? (r.primary_pending ? "會成為主要的" : "主要的") : null,
+        s.left ? "她已經離開" : null,
+      ].filter((t) => t !== null);
+      println(
+        `  ${s.name}  ${dim(`${s.platform}:${s.external_id}`)}  成員 ${s.members}${tags.length > 0 ? `  ${tags.join("、")}` : ""}`,
+      );
+    }
+    if (r.primary_pending && r.spaces.length > 1) {
+      warn("主要的伺服器還沒定:Core 下次啟動時(identity v2)會選上面標的那個");
+    }
+  }
   if (r.layout === "v4") {
     section("import-links 會帶過來的(匯入一個空的資料庫時)");
     if (r.import !== null) for (const line of countLines(r.import)) println(`  ${line}`);

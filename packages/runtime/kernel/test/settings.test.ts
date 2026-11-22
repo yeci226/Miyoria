@@ -7,6 +7,8 @@ import {
   type Module,
   type ModuleContext,
   manifestJson,
+  placeConfig,
+  placeFields,
   Supervisor,
   setting,
   settingFields,
@@ -105,6 +107,72 @@ describe("settingFields", () => {
     expect(settingFields(json.config_schema).fields).toHaveLength(6);
     expect(json.icon).toBe("coins");
     expect(json.category).toBe("system");
+  });
+
+  it("reads a field's place scope and merge; union only for a list", () => {
+    const Places = z.object({
+      mode: z
+        .enum(["quiet", "normal"])
+        .default("normal")
+        .meta(setting({ kind: "select", label: "模式", scope: "room", merge: "union" })),
+      forbidden: z
+        .array(z.string())
+        .default([])
+        .meta(setting({ kind: "multi", label: "不能用", scope: "room", merge: "union" })),
+      channel: z
+        .string()
+        .default("")
+        .meta(setting({ kind: "channel", label: "頻道", scope: "space", ref: "id" })),
+      secret: z
+        .string()
+        .default("")
+        .meta(setting({ kind: "text", label: "金鑰", scope: "space", secret: true })),
+      plain: z
+        .number()
+        .default(1)
+        .meta(setting({ kind: "number", label: "數字" })),
+    });
+    const by = Object.fromEntries(
+      settingFields(configJsonSchema(Places)).fields.map((f) => [f.path, f]),
+    );
+    expect(by.mode).toMatchObject({ scope: "room", merge: "replace" });
+    expect(by.forbidden).toMatchObject({ scope: "room", merge: "union" });
+    expect(by.channel).toMatchObject({ scope: "space", merge: "replace" });
+    expect(by.plain).toMatchObject({ scope: "cluster", merge: "replace" });
+    // What `placeConfig` overlays: the place fields, never a secret.
+    expect(placeFields(Places)).toEqual([
+      { keys: ["mode"], scope: "room", merge: "replace", channel: null },
+      { keys: ["forbidden"], scope: "room", merge: "union", channel: null },
+      {
+        keys: ["channel"],
+        scope: "space",
+        merge: "replace",
+        channel: { ref: "id", multiple: false },
+      },
+    ]);
+  });
+});
+
+describe("placeConfig without Core's service", () => {
+  it("gives every place the module's own section", () => {
+    const Places = z.object({
+      channel: z
+        .string()
+        .default("")
+        .meta(setting({ kind: "channel", label: "頻道", scope: "space", ref: "id" })),
+    });
+    const ctx = {
+      id: "x",
+      rawConfig: { channel: "1" },
+      services: { get: () => undefined },
+    } as unknown as ModuleContext;
+    const cfg = placeConfig(ctx, Places);
+    expect(cfg.base()).toEqual({ channel: "1" });
+    expect(cfg.for({ space_id: "s" })).toBe(cfg.base());
+    expect(cfg.onChange(() => {})).toBeTypeOf("function");
+    expect(() =>
+      placeConfig({ ...ctx, rawConfig: { channel: 5 } } as unknown as ModuleContext, Places),
+    ).toThrow(/modules\.x/);
   });
 });
 

@@ -11,10 +11,27 @@
 //   number shown while singing: the score of the song so far).
 // - `voice.ts`: placing a recording of the singer in song time, and the checks of its voice.
 // - `stream.ts`: `StreamScore`, a room singer's official score while their voice streams in.
+// - `judge.ts`: `NoteJudge`, each reference note as someone watching sees it go by (perfect, good
+//   or miss by the same frame credit, the combo, a clean phrase): for the stream's lanes.
 
 export { cleanPitch, cleanTrack } from "./clean.js";
 export type { Span } from "./curve.js";
 export type { Expression } from "./expression.js";
+export {
+  foldedCents,
+  JUDGE_GOOD,
+  JUDGE_KNOWN,
+  JUDGE_MIN_FRAMES,
+  JUDGE_PERFECT,
+  type Judgement,
+  type JudgeNote,
+  NoteJudge,
+  noteCredit,
+  PHRASE_CREDIT,
+  PHRASE_NOTES,
+  type Verdict,
+  verdictOf,
+} from "./judge.js";
 export { LiveScore, RunningScore } from "./live.js";
 export {
   alignSung,

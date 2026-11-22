@@ -10,8 +10,13 @@ import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import {
   type Artifact,
   ArtifactAttachments,
+  type ArtifactCleaner,
+  ArtifactCleanerKey,
   type ArtifactInput,
   ArtifactStoreKey,
+  CLEAN_PLUGIN,
+  type FileLinks,
+  FileLinksKey,
   SqliteStore,
 } from "@miyoria/store";
 import {
@@ -554,5 +559,125 @@ describe("share: the registered capability", () => {
     expect(cap?.tool?.meta).toMatchObject({ effect: "say", group: "files" });
     expect(tools.names()).toContain("share");
     expect(registry.config.share.max_bytes).toBe(10_485_760);
+  });
+});
+
+describe("share: with a file origin and the image cleaner", () => {
+  /** A link service over the real store's shares, as the `api` module's would issue them. */
+  function links(scoped = true) {
+    const asked: { audience: string; ttlMs?: number | null; person_id?: string | null }[] = [];
+    const service: FileLinks = {
+      available: (audience) => audience === "link" || scoped,
+      issue: async (request) => {
+        asked.push(request);
+        const { share, token } = artifacts().shares.create(request.artifact_id, {
+          audience: request.audience,
+          person_id: request.person_id ?? null,
+          space_id: request.space_id ?? null,
+          ...(request.ttlMs == null ? {} : { ttlMs: request.ttlMs }),
+        });
+        return {
+          ok: true,
+          url: `https://files.test/f/${token}`,
+          share_id: share.id,
+          artifact_id: request.artifact_id,
+          audience: share.audience,
+          expires_at: share.expires_at,
+          metadata_stripped: false,
+        };
+      },
+    };
+    services.provide("api", FileLinksKey, service);
+    return asked;
+  }
+
+  it("attaches the file with a link for the person who asked, for as long as she says", async () => {
+    const asked = links();
+    const a = await make(text("她寫的一段話。\n"), ROOM, OWEN);
+    const result = await exec(OWEN, ROOM, { artifact: a.id, hours: 48 } as never);
+    const url = (result.data as { url?: string }).url ?? "";
+    expect(url).toMatch(/^https:\/\/files\.test\/f\/[A-Za-z0-9_-]{43}$/);
+    expect(result.text).toContain(url);
+    expect(asked[0]).toMatchObject({
+      audience: "person",
+      person_id: ownerPerson,
+      ttlMs: 48 * HOUR,
+    });
+    expect(sink.sent[0]?.message.text).toBe(url);
+    expect(sink.sent[0]?.message.attachments).toEqual([{ artifact_id: a.id }]);
+  });
+
+  it("links for the server's members with `here`, and never from a DM", async () => {
+    const asked = links();
+    const a = await make(text("頻道裡做的。\n"), ROOM, OWEN);
+    const result = await exec(OWEN, ROOM, { artifact: a.id, to: "here" });
+    expect(result.data).toMatchObject({ ok: true });
+    expect(asked[0]).toMatchObject({ audience: "space", person_id: null });
+    const d = await make(text("私訊裡做的。\n"), OWEN_DM, OWEN);
+    const fromDm = await exec(OWEN, OWEN_DM, { artifact: d.id, to: "here" });
+    expect(refusal(fromDm)).toBe("wider_than_origin");
+  });
+
+  it("sends the link alone where no attachment fits", async () => {
+    links();
+    const a = await make(text("x\n"), ROOM, OWEN);
+    sink.limit = null;
+    const result = await exec(OWEN, ROOM, { artifact: a.id });
+    expect(result.data).toMatchObject({ ok: true });
+    expect(sink.sent[0]?.message.attachments).toEqual([]);
+    expect(sink.sent[0]?.message.text).toMatch(/^https:\/\/files\.test\/f\//);
+  });
+
+  it("revokes the link when the hand-over is refused", async () => {
+    links();
+    const a = await make(
+      text("token = sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"),
+      ROOM,
+      OWEN,
+    );
+    const result = await exec(OWEN, ROOM, { artifact: a.id });
+    expect(refusal(result)).toBe("secret");
+    expect(artifacts().shares.live(a.id)).toEqual([]);
+  });
+
+  it("makes no scoped link without the login, and still attaches", async () => {
+    const asked = links(false);
+    const a = await make(text("x\n"), ROOM, OWEN);
+    const result = await exec(OWEN, ROOM, { artifact: a.id });
+    expect(result.data).toMatchObject({ ok: true });
+    expect((result.data as { url?: string }).url).toBeUndefined();
+    expect(asked).toEqual([]);
+  });
+
+  it("sends an image's cleaned copy when the cleaner is there, and says it was stripped", async () => {
+    const a = await make(PNG, ROOM, OWEN, { filename: "cat.png" });
+    let copy: Artifact | null = null;
+    const cleaner: ArtifactCleaner = {
+      handOut: async (artifact) => {
+        copy ??= await artifacts().ingest(PNG, {
+          source: artifact.source,
+          plugin: CLEAN_PLUGIN,
+          filename: artifact.filename,
+          place: {
+            session: artifact.origin_session,
+            space_id: artifact.space_id,
+            room_id: artifact.room_id,
+          },
+          scope: artifact.scope,
+          made_for: artifact.made_for as never,
+          derived_from: artifact.id,
+        });
+        return { artifact: copy, stripped: true };
+      },
+    };
+    services.provide("api", ArtifactCleanerKey, cleaner);
+    const result = await exec(OWEN, ROOM, { artifact: a.id });
+    expect(result.data).toMatchObject({ ok: true, artifact_id: a.id, metadata_stripped: true });
+    expect(sink.sent[0]?.message.attachments).toEqual([
+      { artifact_id: (copy as Artifact | null)?.id },
+    ]);
+    expect(events.find((e) => e.type === "artifact.shared")?.data).toMatchObject({
+      metadata_stripped: true,
+    });
   });
 });

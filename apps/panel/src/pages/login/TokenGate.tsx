@@ -5,6 +5,7 @@ import { ApiClient, type ApiConfig, describeError, isApiError } from "@/api/http
 import { useConnection } from "@/app/connection";
 import { isSameOrigin, loginErrorMessage, loginNext } from "@/app/session";
 import { Logo } from "@/components/logo";
+import { SITE_NAME } from "@/lib/site-name";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/label";
@@ -161,7 +162,7 @@ export function TokenGate({
         <div className="login-form grid content-center gap-6 p-6 md:min-h-[30rem] md:p-8">
           <div className="flex items-center gap-3">
             <Logo className="size-5 text-primary" />
-            <h1 className="text-[15px] font-semibold">Miyoria</h1>
+            <h1 className="text-[15px] font-semibold">{SITE_NAME}</h1>
           </div>
           {notice && (
             <div

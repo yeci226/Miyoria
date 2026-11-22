@@ -36,6 +36,7 @@ import {
   contextKeyString,
   type JsonObject,
   newId,
+  PlacesKey,
   PlatformSinksKey,
   Principals,
   VoiceSinkKey,
@@ -44,6 +45,7 @@ import { os } from "./contract.js";
 import { runModuleAction } from "./core.js";
 import { ApiError } from "./errors.js";
 import { isQueueNotFound, MCP_MODULE_ID } from "./services.js";
+import { adminSpace } from "./space-param.js";
 import { type ApiContext, type ApiState, actorOf, toJson } from "./state.js";
 
 const log = getLogger("api.ops");
@@ -175,10 +177,11 @@ async function mcpAction(
 
 // ---- request queue ----------------------------------------------------------------------
 
-function queueState(queue: RequestQueue): QueueState {
+/** One Space's queue (identity's id; `null`: the default, the primary's). */
+function queueState(queue: RequestQueue, space: string | null): QueueState {
   return {
-    paused: queue.isPaused(),
-    items: queue.list().map((i) => ({
+    paused: queue.isPaused(space),
+    items: queue.list(space).map((i) => ({
       id: String(i.id),
       kind: i.kind,
       context: i.context,
@@ -198,16 +201,30 @@ function queueError(error: unknown): ApiError {
     : ApiError.conflict(errorMessage(error));
 }
 
-function queue(state: ApiState): QueueState {
-  return queueState(state.service(RequestQueueKey, "request queue"));
+/** The Space `?space=` names (checked: `404` for one she is not in); `null`: the default. */
+function queueSpace(state: ApiState, requested: string | undefined): string | null {
+  if (state.optional(PlacesKey) === undefined) return null;
+  return adminSpace(state, requested)?.id ?? null;
 }
 
-async function setPaused(state: ApiState, c: ApiContext, paused: boolean): Promise<QueueState> {
+function queue(state: ApiState, requested: string | undefined): QueueState {
+  const space = queueSpace(state, requested);
+  return queueState(state.service(RequestQueueKey, "request queue"), space);
+}
+
+async function setPaused(
+  state: ApiState,
+  c: ApiContext,
+  paused: boolean,
+  requested: string | undefined,
+): Promise<QueueState> {
   const q = state.service(RequestQueueKey, "request queue");
-  if (paused) q.pause();
-  else q.resume();
-  await state.audit(c, paused ? "queue.pause" : "queue.resume", "queue", {}, true);
-  return queueState(q);
+  const space = queueSpace(state, requested);
+  if (paused) q.pause(space);
+  else q.resume(space);
+  const detail: JsonObject = space === null ? {} : { space };
+  await state.audit(c, paused ? "queue.pause" : "queue.resume", "queue", detail, true);
+  return queueState(q, space);
 }
 
 /** `POST /api/queue/{id}/skip` and `POST /api/queue/{id}/move` (to `position`). */
@@ -222,6 +239,8 @@ async function queueItemAction(
   const digits = id.trim().replace(/^#+/, "");
   if (!/^\+?\d+$/.test(digits)) throw ApiError.notFound(`no item #${id}`);
   const item = Number.parseInt(digits, 10);
+  // The answer is the queue the item is in, whichever Space's.
+  const space = q.get(item)?.space ?? null;
   let failure: unknown = null;
   let detail: Record<string, unknown>;
   if (action === "skip") {
@@ -233,7 +252,7 @@ async function queueItemAction(
     }
   } else {
     // The listing puts active items first; `moveItem` counts pending items only.
-    const active = q.list().filter((i) => i.state === "active").length;
+    const active = q.list(space).filter((i) => i.state === "active").length;
     detail = { position };
     try {
       q.moveItem(item, Math.max(position - active, 0));
@@ -246,7 +265,7 @@ async function queueItemAction(
     await state.audit(c, `queue.${action}`, String(item), toJson(detail), failure === null);
   }
   if (failure !== null) throw queueError(failure);
-  return queueState(q);
+  return queueState(q, space);
 }
 
 // ---- stage ------------------------------------------------------------------------------
@@ -505,9 +524,13 @@ export const opsRpc = {
     ),
   },
   queue: {
-    list: os.queue.list.handler(({ context }) => queue(context.state)),
-    pause: os.queue.pause.handler(({ context }) => setPaused(context.state, context.c, true)),
-    resume: os.queue.resume.handler(({ context }) => setPaused(context.state, context.c, false)),
+    list: os.queue.list.handler(({ input, context }) => queue(context.state, input?.query?.space)),
+    pause: os.queue.pause.handler(({ input, context }) =>
+      setPaused(context.state, context.c, true, input?.query?.space),
+    ),
+    resume: os.queue.resume.handler(({ input, context }) =>
+      setPaused(context.state, context.c, false, input?.query?.space),
+    ),
     skip: os.queue.skip.handler(({ input, context }) =>
       queueItemAction(context.state, context.c, input.params.id, "skip", 0),
     ),

@@ -15,6 +15,11 @@ export default defineConfig({
       "@miyoria/play/karaoke/lyrics": fileURLToPath(
         new URL("../../packages/play/karaoke/src/lyrics/index.ts", import.meta.url),
       ),
+      // The karaoke score, shared with the member page and Core the same way (plain TS, no
+      // imports outside its folder): the lanes judge the notes with its frame credit.
+      "@miyoria/play/karaoke/score": fileURLToPath(
+        new URL("../../packages/play/karaoke/src/score/index.ts", import.meta.url),
+      ),
     },
   },
   build: { outDir: "dist", emptyOutDir: true, target: "es2022", sourcemap: false },

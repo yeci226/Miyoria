@@ -33,14 +33,16 @@ import {
   HOST_NOTIFICATION,
   HOST_PROTOCOL_VERSION,
   HOST_RELAY_PROTOCOL_ERROR,
+  type HostCheckout,
   type HostClusterContext,
   type HostHello,
   HostHelloSchema,
   type HostLinks,
+  type HostRemoteUpdate,
   type HostReport,
   HostReportSchema,
-  HostResolveSchema,
   HostServiceEventSchema,
+  type HostUpgradeJob,
   type HostWelcome,
   RelaySocketSink,
 } from "@miyoria/contracts/host";
@@ -77,6 +79,12 @@ export interface HostConnection {
   readonly approved: boolean;
   /** Epoch ms. */
   readonly since: number;
+  /** What its last report says of its checkout; `undefined` from a daemon older than that. */
+  readonly checkout?: HostCheckout | null;
+  /** Whether it takes `host.upgrade`; `undefined` from an older daemon (it does not). */
+  readonly remoteUpdate?: HostRemoteUpdate;
+  /** Its running or last update. */
+  readonly upgrade?: HostUpgradeJob | null;
 }
 
 export interface ClusterLinkOptions {
@@ -126,6 +134,11 @@ interface Conn {
   contextSent: boolean;
 }
 
+/** Whether a socket's remote address is this machine. */
+export function isLoopbackAddress(address: string): boolean {
+  return address === "::1" || address.startsWith("127.") || address.startsWith("::ffff:127.");
+}
+
 /** Starts the close handshake; drops the socket if the other side does not answer in time. */
 export function closeSocket(ws: WebSocket, code: number, reason: string): void {
   if (ws.readyState === WebSocket.CLOSED) return;
@@ -169,13 +182,16 @@ export class ClusterLink {
   /** The hosts connected now, by name. */
   connected(): HostConnection[] {
     return [...this.#conns.values()]
-      .map(({ id, name, platform, version, approved, since }) => ({
+      .map(({ id, name, platform, version, approved, since, report }) => ({
         id,
         name,
         platform,
         version,
         approved,
         since,
+        ...(report?.checkout !== undefined ? { checkout: report.checkout } : {}),
+        ...(report?.remote_update !== undefined ? { remoteUpdate: report.remote_update } : {}),
+        ...(report?.upgrade !== undefined ? { upgrade: report.upgrade } : {}),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -299,8 +315,11 @@ export class ClusterLink {
     }
   }
 
-  /** Runs the protocol on a freshly upgraded socket. */
-  serve(ws: WebSocket): void {
+  /**
+   * Runs the protocol on a freshly upgraded socket. `remote`: the address it came from, which
+   * tells a host on Core's own machine from one elsewhere (v5-hostd §15).
+   */
+  serve(ws: WebSocket, from: { remote?: string | undefined } = {}): void {
     const o = this.#o;
     let phase: "hello" | "open" | "done" = "hello";
     const helloTimer = setTimeout(
@@ -334,7 +353,7 @@ export class ClusterLink {
       }
       phase = "open";
       endHello();
-      this.#open(ws, outcome.hello, outcome.host);
+      this.#open(ws, outcome.hello, outcome.host, from.remote);
     };
     const onEarlyClose = () => {
       if (phase !== "hello") return;
@@ -379,7 +398,7 @@ export class ClusterLink {
     return { ok: true, hello, host };
   }
 
-  #open(ws: WebSocket, hello: HostHello, host: HostRecord): void {
+  #open(ws: WebSocket, hello: HostHello, host: HostRecord, remote: string | undefined): void {
     const o = this.#o;
     const approved = host.status === "approved";
     const welcome: HostWelcome = {
@@ -451,6 +470,7 @@ export class ClusterLink {
       this.#shutdown(old, HOST_LINK_CLOSE.REPLACED, "replaced by a newer connection");
     }
     o.registry.setHost(host.name, approved ? host.capabilities : null);
+    if (remote !== undefined) o.registry.setLink(host.name, { local: isLoopbackAddress(remote) });
     o.log.info({ host: host.name, approved, platform: hello.platform }, "host connected");
     o.publish(Events.ClusterHostConnected, {
       host: host.name,
@@ -492,9 +512,19 @@ export class ClusterLink {
       }, o.config.peer_timeout_secs * 1000);
     };
     bump();
+    // The round trip of each ping, for the hosts nearest Core (v5-hostd §15).
+    let pingAt: number | null = null;
     const ping = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.ping();
+      if (ws.readyState !== WebSocket.OPEN) return;
+      pingAt = o.now();
+      ws.ping();
     }, o.config.ping_secs * 1000);
+    const onPong = () => {
+      if (pingAt === null) return;
+      o.registry.setLink(conn.name, { rttMs: Math.max(0, o.now() - pingAt) });
+      pingAt = null;
+    };
+    ws.on("pong", onPong);
     const onAbort = () => this.#shutdown(conn, HOST_LINK_CLOSE.GOING_AWAY, "core shutting down");
     o.signal.addEventListener("abort", onAbort, { once: true });
     // Any traffic, control frames too, shows the host is alive.
@@ -508,6 +538,7 @@ export class ClusterLink {
       ws.off("message", bump);
       ws.off("ping", bump);
       ws.off("pong", bump);
+      ws.off("pong", onPong);
     };
   }
 
@@ -548,16 +579,31 @@ export class ClusterLink {
         );
         return { states };
       }
-      case HOST_METHOD.ClusterResolve: {
-        const parsed = HostResolveSchema.safeParse(params);
-        if (!parsed.success) throw RpcError.invalidParams(parsed.error.message);
-        if (!this.#conns.get(name)?.approved) {
-          throw new RpcError(HOST_ERROR_CODE.NotAllowed, "this host is not approved yet");
+      case HOST_METHOD.ClusterResolve:
+        // Endpoints carry their tokens: only for what the asking service was granted (`uses`).
+        if (o.calls === undefined) {
+          throw new RpcError(HOST_ERROR_CODE.NotAllowed, "Core resolves nothing for hosts");
         }
-        return { endpoints: o.registry.candidates(parsed.data.capability) };
-      }
+        return o.calls.resolve(this.#caller(name), params);
     }
     throw new RpcError(EXT_ERROR_CODE.MethodNotFound, `unknown method "${method}"`);
+  }
+
+  /** Logs an update of the host that ended since its last report (v5-hostd §14). */
+  #upgradeEnded(conn: Conn, before: HostUpgradeJob | null, after: HostUpgradeJob | null): void {
+    if (after === null || after.finished_at === undefined) return;
+    if (before !== null && before.id === after.id && before.finished_at !== undefined) return;
+    const fields = {
+      host: conn.name,
+      job: after.id,
+      state: after.state,
+      from: after.from,
+      target: after.target,
+      commit: after.commit ?? null,
+      error: after.error ?? null,
+    };
+    if (after.state === "done") this.#o.log.info(fields, "a host finished its update");
+    else this.#o.log.warn(fields, "a host's update did not finish");
   }
 
   #onNotification(conn: Conn, method: string, params: unknown): void {
@@ -570,6 +616,7 @@ export class ClusterLink {
           return;
         }
         if (this.#conns.get(conn.name) !== conn) return;
+        this.#upgradeEnded(conn, conn.report?.upgrade ?? null, parsed.data.upgrade ?? null);
         conn.report = parsed.data;
         o.registry.report(conn.name, parsed.data);
         this.#catchUpContext(conn);

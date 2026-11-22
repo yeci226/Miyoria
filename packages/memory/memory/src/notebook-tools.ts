@@ -36,6 +36,8 @@ export interface NotebookBackend {
   read(path: string, where: NotebookWhere): NotebookPage | null;
   write(path: string, text: string, mode: WriteMode, where: NotebookWhere): Promise<WriteResult>;
   remove(path: string, where: NotebookWhere): Promise<boolean>;
+  /** Lines in use of the page that were written somewhere else than `where` (her documents). */
+  elsewhere?(path: string, where: NotebookWhere): number;
 }
 
 function arg(args: JsonValue, key: string): JsonValue | undefined {
@@ -132,7 +134,11 @@ export class NotebookWriteTool implements Tool {
     const mode = arg(args, "mode") === "replace" ? "replace" : "append";
     try {
       const r = await this.store.write(path, content, mode, whereOf(ctx));
-      return `${r.created ? "新增" : "更新"}了「${r.path}」(現在 ${r.chars} 字)。`;
+      const done = `${r.created ? "新增" : "更新"}了「${r.path}」(現在 ${r.chars} 字)。`;
+      const rest = r.elsewhere ?? 0;
+      return mode === "replace" && rest > 0
+        ? `${done}這頁另外還有 ${rest} 行是在別的地方寫的,這裡改不到,所以還留著。`
+        : done;
     } catch (error) {
       if (error instanceof NotebookError) return `沒有寫進去:${error.message}`;
       throw error;
@@ -157,9 +163,15 @@ export class NotebookDeleteTool implements Tool {
     const path = text(args, "path");
     if (path === "") return "要給 path。";
     try {
-      return (await this.store.remove(path, whereOf(ctx)))
-        ? `刪掉了「${path}」。`
-        : `這裡沒有「${path}」這一頁。`;
+      const where = whereOf(ctx);
+      const removed = await this.store.remove(path, where);
+      const rest = this.store.elsewhere?.(path, where) ?? 0;
+      if (rest > 0) {
+        return removed
+          ? `刪掉了「${path}」在這裡寫的部分;另外還有 ${rest} 行是在別的地方寫的,這裡刪不到。`
+          : `「${path}」的 ${rest} 行都是在別的地方寫的,這裡刪不到。`;
+      }
+      return removed ? `刪掉了「${path}」。` : `這裡沒有「${path}」這一頁。`;
     } catch (error) {
       if (error instanceof NotebookError) return `沒有刪:${error.message}`;
       throw error;

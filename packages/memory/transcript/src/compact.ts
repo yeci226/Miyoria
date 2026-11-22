@@ -7,6 +7,7 @@
 // longer-lived memory layers before the entries are summarised (v5-architecture §7.4).
 
 import { timestampMs } from "@miyoria/types";
+import { type SpeakerNames, speakerNamesOf } from "./convert.js";
 import { splitsPair } from "./pairing.js";
 import type { TranscriptStore } from "./store.js";
 import type { TranscriptEntry, TranscriptSummary, TranscriptTail } from "./types.js";
@@ -21,10 +22,13 @@ export interface CompactionBudget {
 /**
  * Writes the summary that stands for `entries` (oldest first, tombstones included) and for
  * `previous`, the summary before them (`null`: none, or it was stale and is being made again).
+ * `names`: her handles for the speakers, so the summary names people the way her prompt does
+ * (`nameSpeakers`); `null`: not known.
  */
 export type Summarise = (
   entries: readonly TranscriptEntry[],
   previous: string | null,
+  names?: SpeakerNames | null,
 ) => Promise<string>;
 
 /**
@@ -149,12 +153,18 @@ export async function compactIfNeeded(
 ): Promise<TranscriptSummary | null> {
   const tail = store.tail(session);
   const meta = { turn: options.turn ?? null };
+  const names = speakerNamesOf(store);
+  // Only when known: a summariser of two arguments is called as before.
+  const summarise = (entries: readonly TranscriptEntry[], previous: string | null) =>
+    names === null
+      ? options.summarise(entries, previous)
+      : options.summarise(entries, previous, names);
   const unchanged = () => (store.summaries(session)[0]?.id ?? null) === (tail.summary?.id ?? null);
 
   if (tail.summary?.stale === true) {
     const covered = store.covered(session);
     const tokens = covered.reduce((n, e) => n + e.tokens, 0);
-    const text = await options.summarise(covered, null);
+    const text = await summarise(covered, null);
     if (!unchanged()) return null;
     return store.compact(session, tail.summary.upto_seq, text, { ...meta, tokensReplaced: tokens });
   }
@@ -163,7 +173,7 @@ export async function compactIfNeeded(
   if (upto === null) return null;
   if (options.before) await options.before(upto).catch(() => undefined);
   const old = tail.entries.filter((e) => e.seq <= upto);
-  const text = await options.summarise(old, tail.summary?.summary ?? null);
+  const text = await summarise(old, tail.summary?.summary ?? null);
   if (!unchanged()) return null;
   return store.compact(session, upto, text, meta);
 }

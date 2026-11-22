@@ -28,6 +28,7 @@ import {
   type AccountRef,
   type AdminProfilePicture,
   accountRefString,
+  DEFAULT_CURRENCY,
   type PersonId,
   type Pictures,
   type RelationshipLabel,
@@ -121,6 +122,8 @@ export function registerCommands(
   screen: ScreenCallName = async () => null,
   images: RingImages = () => undefined,
   pictures: PictureSource = () => undefined,
+  /** The profile's coin name and pronoun (the first character's by default). */
+  words: { coin: string; her: string } = { coin: DEFAULT_CURRENCY, her: "她" },
 ): void {
   const callRoutes: AnyComponentRoute[] = [
     {
@@ -160,9 +163,9 @@ export function registerCommands(
   ];
 
   registry.register(
-    commandSpec("me profile", "查看她對你的印象與她怎麼稱呼你", {
+    commandSpec("me profile", `查看${words.her}對你的印象與${words.her}怎麼稱呼你`, {
       args: [
-        argSpec("week", "看你這一週的回顧（聊天、點歌、抽卡、魚幣）", ArgKind.boolean, {
+        argSpec("week", `看你這一週的回顧（聊天、點歌、抽卡、${words.coin}）`, ArgKind.boolean, {
           required: false,
         }),
         argSpec("picture", "附上圖（預設附上；false 只要文字）", ArgKind.boolean, {

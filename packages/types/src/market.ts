@@ -113,11 +113,16 @@ export interface SongPriorityTerms {
 export interface SongPriority {
   /** The price and the day's limit; `null` when the ticket is not on sale. */
   terms(): SongPriorityTerms | null;
-  /** Takes one ticket from `account` under `key`; a sentence for them when it cannot. */
+  /**
+   * Takes one ticket from `account` under `key`; a sentence for them when it cannot. `space`: the
+   * Space (identity's id) whose queue the song is in, recorded with the ticket; the price and the
+   * day's limit are the same everywhere.
+   */
   charge(
     account: AccountRef,
     key: string,
     ref: string,
+    space?: string | null,
   ): Promise<{ ok: true; balance: number } | { ok: false; message: string }>;
   /**
    * Gives the ticket of `key` back, once: the coins given back (0: nothing to give back). Throws

@@ -156,13 +156,17 @@ const PICTOGRAPH =
   /\p{Extended_Pictographic}(?:[\u{1F3FB}-\u{1F3FF}️]|‍\p{Extended_Pictographic})*/gu;
 /** A server emoji written `:name:` (docs/design/server-emoji.md). */
 const SHORTCODE = /(?<!\w):\w{2,32}:(?!\w)/g;
+/** A server sticker written `[貼圖: 名字]` (docs/design/server-emoji.md): never said aloud. */
+const STICKER = /\[\s*(?:貼圖|sticker)\s*[:：][^[\]\n]{0,60}\]/gi;
 
 /**
- * Removes what a voice cannot say: emoji (`😤`, `👍🏻`) and server emoji shortcodes
- * (`:fanfan:`), then collapses whitespace.
+ * Removes what a voice cannot say: emoji (`😤`, `👍🏻`), server emoji shortcodes (`:fanfan:`)
+ * and sticker tokens (`[貼圖: 貓咪鞠躬]`), then collapses whitespace.
  */
 export function stripEmoji(text: string): string {
-  return collapseWhitespace(text.replace(SHORTCODE, " ").replace(PICTOGRAPH, " ").replace(/️/g, ""));
+  return collapseWhitespace(
+    text.replace(STICKER, " ").replace(SHORTCODE, " ").replace(PICTOGRAPH, " ").replace(/️/g, ""),
+  );
 }
 
 const TAG_CHAR = /^[A-Za-z0-9 :=_\-/."']*$/;

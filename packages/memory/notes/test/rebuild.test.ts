@@ -16,6 +16,7 @@ import {
   rebuildEpisodeSink,
   rebuildState,
   switched,
+  THINKING_REPLY_TOKENS,
 } from "../src/index.js";
 import { personSubject } from "../src/store.js";
 
@@ -157,6 +158,16 @@ describe("planning a rebuild", () => {
     expect(unknown.completion_tokens).toBeGreaterThan(0);
     const priced = estimateRebuild(plan, PRICE);
     expect(priced.usd).toBeGreaterThan(0);
+    // A model that thinks first is billed for the thinking too: about ten times the output.
+    const thinking = estimateRebuild(plan, PRICE, "medium");
+    expect(thinking.prompt_tokens).toBe(priced.prompt_tokens);
+    expect(thinking.completion_tokens).toBe(3 * THINKING_REPLY_TOKENS);
+    expect(thinking.completion_tokens).toBeGreaterThan(5 * priced.completion_tokens);
+    const output = { ...PRICE, output_per_mtok: 10_000 };
+    expect(estimateRebuild(plan, output, "medium").usd).toBeGreaterThan(
+      estimateRebuild(plan, output).usd ?? Number.POSITIVE_INFINITY,
+    );
+    expect(estimateRebuild(plan, PRICE, "off")).toEqual(priced);
 
     const later = await planRebuild(store.events, cursors, { since: toTimestamp(T0 + 45 * MIN) });
     expect(later.segments).toHaveLength(1);

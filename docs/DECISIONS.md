@@ -61,7 +61,7 @@ Phase 0 用你朋友在 Discord 的真實錄音測(台灣腔中文、夾日英�
 6. **記憶有隱私範圍**:跨伺服器共享人格,但不洩漏私人內容。
 7. **語音預設不存原始音訊**。
 8. **單一 CLI 多子指令**(`miyoria core|stage|chat|...`,npm 套件 `miyoria`):散佈、版本對齊都簡單;Core 與 Stage 的程式用動態 `import()` 延後載入,`init` / `config` 啟動很快。
-9. **Discord 雙帳號、單一大腦**(2026-11-01,擁有者決定並自負風險):bot 帳號負責文字與指令,self 帳號負責語音與 Go Live。兩條連線都不存狀態,資料全部在 Core;Scheduler 依 lane 路由動作。self 連線是可以拔掉的獨立節點,壞了只影響語音與 Go Live。
+9. **Discord 雙帳號、單一大腦**(2026-11-01,擁有者決定並自負風險;2026-11-07 重申,見 ADR 14):bot 帳號負責文字與指令,self 帳號負責語音與 Go Live。兩條連線都不存狀態,資料全部在 Core;Scheduler 依 lane 路由動作。self 連線是可以拔掉的獨立節點,壞了只影響語音與 Go Live。
 10. **角色 = profile,模型綁在 profile 上**:Miyoria 是框架,角色是 profile(人格 + LLM + 聲音 + 模型)。所有資料從第一天就帶 `profile_id`,之後加角色不用搬資料。
 11. **Minecraft 走客戶端模組**:她開真正的 Minecraft 客戶端,Fabric 橋接模組(Java)以 Baritone(+ AltoClef)提供技能與反射,透過本機 WebSocket 給 TS adapter 用;畫面就是她的遊戲視窗。mineflayer(fork minecraft-mcp-server)當備案。LLM 只下高階目標,不直接操作底層動作。
 12. **Profile = 一個完整角色**(人格 + LLM + 聲音 + Live2D);profile 內的人格段落可以在執行期修改(有版本紀錄)。LLM 的用途設定叫 `purposes`(避免跟對話 role、權限 role 混淆)。
@@ -70,13 +70,17 @@ Phase 0 用你朋友在 Discord 的真實錄音測(台灣腔中文、夾日英�
     - **Node 24 + pnpm 9**:Node 24 內建 `node:sqlite`、`fetch`、`AbortSignal.any`、`util.parseEnv`,少掉一批依賴;pnpm workspace 讓每個子系統是獨立套件(module 之間只能透過 `@miyoria/runtime/kernel` 的事件與 service registry 溝通),開發時 `tsx` 直接跑原始碼(`@miyoria/source` 匯出條件),發佈時用 esbuild 打成單一套件。
     - **SQLite 預設、Postgres 選用**:個人使用不必先架資料庫,資料是一個檔案(`data/miyoria.db`,好備份);`node:sqlite` 是內建的,不需要原生編譯。取代舊決策「只支援 Postgres」。2026-11-14 V5 再改成只留 SQLite(見 [design/v5-data.md](design/v5-data.md) D1)。
     - **WebSocket + JSON 連線**:voice link、stage link、Admin API 的 SSE 都是純文字 / JSON(音訊用二進位訊框),瀏覽器與 Node 都能直接用,不需要 protoc 或程式碼產生;協定文件在 `docs/protocols/`。
+14. **語音與 Go Live 留在 self 帳號,不移到 bot**(2026-11-07,擁有者決定並自負風險):重申並確定 ADR 9 的雙帳號做法。擁有者了解 Discord 禁止 self-bot、處分可能及於 bot 和 developer 帳號,仍然選擇維持現狀。
+    - **範圍**:V3 以後不做 bot 語音、不退役 self 帳號;她可以自己開 Go Live(自主開台維持現有做法)。ADR 9 與 R2 裡「bot 可用 songbird 接手只說不聽」的備案因此不是計畫,只是可能的退路。
+    - **失效時**:self 帳號失效時語音與 Go Live 一起停,文字 bot 與指令不受影響(self 連線是可拔掉的獨立節點)。
+    - **來源**:[design/v3-architecture.md](design/v3-architecture.md) §14.1、§19 第 1 項、§21;該版本的調查報告建議過移到 bot,這個建議被擁有者否決。
 
 ## 3. 風險
 
 | # | 風險 | 影響 | 對策 |
 |---|---|---|---|
 | R1 | **Discord 語音 E2EE(DAVE 協定)**:Discord 已經推行語音端對端加密,self-bot 函式庫收語音、推 Go Live 都要支援 | 語音與 Go Live 卡住 | Phase 0 第一個 spike 就驗證候選函式庫能不能在 DAVE 下分別接收每個人的音訊、送出音訊、推流。不行就評估其他函式庫或自己補 DAVE(`@discordjs/voice` 的實作可參考) |
-| R2 | **Self 帳號被封 / 函式庫失效**:self-bot 違反服務條款;Discord 改協定時函式庫常壞 | 語音與 Go Live 停擺 | 用專用小帳號、不用主帳號;self 帳號不發文字、行為保守;掉線時自動降級(文字照常,bot 可用 songbird 接手「只說不聽」);Go Live 同時可推 Twitch / YouTube 當備案。擁有者已知悉並自負風險 |
+| R2 | **Self 帳號被封 / 函式庫失效**:self-bot 違反服務條款;Discord 改協定時函式庫常壞 | 語音與 Go Live 停擺 | 用專用小帳號、不用主帳號;self 帳號不發文字、行為保守;掉線時自動降級(文字照常,bot 可用 songbird 接手「只說不聽」);Go Live 同時可推 Twitch / YouTube 當備案。擁有者已知悉並自負風險;2026-11-07 擁有者再次決定留在 self 帳號、不移到 bot(ADR 14),所以 bot 接手只是退路,不是計畫 |
 | R3 | **12GB VRAM 不夠**:遊戲 + OBS 編碼 + ASR + TTS 同時跑 | 卡頓、OOM | LLM 走雲端;ASR 選小模型(SenseVoice-Small 約 1GB 以內);TTS 實測 VRAM;OBS 用 NVENC;必要時 ASR 改在 server CPU 或雲端 |
 | R4 | **語音延遲**:split 部署時音訊要在兩台機器間來回 | 對話不自然 | self voice node 跟 ASR/TTS 放同一台直播機;全程串流;第一句先出聲 |
 | R9 | **Go Live 吃資源**:self voice node 用 ffmpeg 轉碼,跟遊戲、OBS 搶 GPU / CPU | 卡頓 | 盡量用 NVENC;直接吃 OBS 已編碼的串流避免重複編碼(spike 驗證) |

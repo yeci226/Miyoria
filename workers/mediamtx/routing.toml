@@ -1,0 +1,6 @@
+# [routing] of MediaMTX (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# single: it relays her one stream (OBS pushes to it, the voice node pulls from it); a second one in
+# the cluster is a conflict, never used.
+class = "single"
+latency = "realtime"

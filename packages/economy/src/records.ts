@@ -95,6 +95,13 @@ export interface CoinLedgerStore extends LedgerStatsStore {
    * `rule`, the balance.
    */
   post(entry: CoinEntry, rule?: CoinRule): Promise<CoinPost>;
+  /**
+   * Appends `rows` (one wallet, each with its own key) in one transaction: all of them or none.
+   * The first row's key decides a retry (`duplicate`, with that row); with `covered`, refused
+   * (`short`) when their sum would take the balance below zero. The exchange books a sale and its
+   * burned fee this way, so the fee is a row of its own without a moment the two disagree.
+   */
+  postAll?(rows: readonly CoinEntry[], rule?: { covered?: boolean }): Promise<CoinPost>;
   balance(profile: ProfileId, wallet: PersonId): Promise<number>;
   /** Rows of the wallet, newest first, at most `limit`; `reasons` and `since` narrow them. */
   entries(
@@ -195,6 +202,11 @@ export interface Bounty {
   closed_at: Timestamp | null;
   /** The account it was paid to, once awarded. */
   winner: AccountRef | null;
+  /**
+   * The Space (identity's `spaces.id`) it was posted in: where it is shown and who can win it.
+   * `null` when she knew of no Space (open to everyone she knows).
+   */
+  space: string | null;
 }
 
 /** What `BountyStore.transition` changes besides the status. */
@@ -210,10 +222,13 @@ export interface BountyStore {
   get(id: string): Promise<Bounty | null>;
   /** Changes the bounty only while its status is one of `from`; `false` when it was not. */
   transition(id: string, from: readonly BountyStatus[], patch: BountyPatch): Promise<boolean>;
-  /** Bounties newest first; `statuses` narrows them. */
+  /**
+   * Bounties newest first; `statuses` narrows them, and `spaces` to the ones of those Spaces (and
+   * the ones of no Space).
+   */
   list(
     profile: ProfileId,
-    filter: { statuses?: readonly BountyStatus[]; limit: number },
+    filter: { statuses?: readonly BountyStatus[]; spaces?: readonly string[]; limit: number },
   ): Promise<Bounty[]>;
 }
 
@@ -239,12 +254,19 @@ export interface EconomyDoc {
   data: JsonObject;
   created_at: Timestamp;
   updated_at: Timestamp;
+  /**
+   * The Space (identity's `spaces.id`) it belongs to: a prediction and its bets. `null` (or left
+   * out) for what belongs to no Space. Set when it is created; never changed.
+   */
+  space?: string | null;
 }
 
 export interface DocFilter {
   /** Only documents owned by one of these accounts. */
   owners?: readonly AccountRef[];
   statuses?: readonly string[];
+  /** Only documents of these Spaces, and the ones of no Space. */
+  spaces?: readonly string[];
   limit: number;
 }
 
@@ -278,6 +300,12 @@ export interface EconomyDocStore {
   ): Promise<boolean>;
   /** Newest first (by creation, the id breaking a tie), at most `filter.limit`. */
   list(profile: ProfileId, kind: string, filter: DocFilter): Promise<EconomyDoc[]>;
+  /**
+   * Deletes at most `limit` documents of `kind` created before `before`, oldest first; how many
+   * went. Only for kinds that are of use for a while and say nothing about coins (today's quest
+   * picks); what coins were paid for is never pruned.
+   */
+  prune(profile: ProfileId, kind: string, before: Timestamp, limit: number): Promise<number>;
 }
 
 // Service keys: Core provides the economy plugin's tables under them (`store.plugin`).

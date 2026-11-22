@@ -10,10 +10,11 @@
 //   or `download`. A song cover is never downloadable (v5-architecture §16 #11), so a share of one
 //   is `stream` only: the route step serves `stream` without `Content-Disposition: attachment`
 //   and without the save path.
-// - The audience is never wider than where the artifact was made (§11.2): a DM-made artifact is
-//   shared with its person only, a room's or a space's with that space or its members, and only a
-//   `public` artifact by link, unless the share says `widen` (its person, or the owner, asked for
-//   it; the route checks who is asking).
+// - The audience is never wider than where the artifact was made (§11.2, `share-policy.ts`): a
+//   DM-made artifact is shared with its person only, a room's or a space's with that space or its
+//   members, and only a `public` artifact by link, unless the share says `widen` (its person asked
+//   for the link themself; the route checks who is asking). Widening never opens a space or
+//   another person.
 // - `use` counts one use atomically (the one counter that changes, §5) and refuses a token that is
 //   revoked, expired or used up. Only a token's first use is an event (`share.opened`).
 
@@ -27,18 +28,20 @@ import {
   ShareRevoked,
 } from "@miyoria/contracts/events";
 import { newId, type PersonId, type Timestamp, toTimestamp } from "@miyoria/types";
-import { and, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { StoreError } from "../common.js";
 import type { Db } from "../db.js";
 import type { EventStore } from "../events/log.js";
-import { accounts, spaceMembers } from "../identity/schema.js";
+import { isSpaceMember } from "./membership.js";
 import {
   type ArtifactRow,
   type ArtifactShareRow,
+  artifactItems,
   artifactShares,
   SHARE_AUDIENCES,
   SHARE_MODES,
 } from "./schema.js";
+import { type AudienceRefusal, audienceAllowed } from "./share-policy.js";
 
 /** Where the share events are stamped from. */
 const SHARE_SOURCE = "artifact";
@@ -50,8 +53,15 @@ const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
 export type ArtifactShare = ArtifactShareRow;
 
-/** A share could not be made as asked. */
-export class ArtifactShareError extends StoreError {}
+/** A share could not be made as asked; `reason` names the audience rule when it was one. */
+export class ArtifactShareError extends StoreError {
+  readonly reason: AudienceRefusal | null;
+
+  constructor(message: string, reason: AudienceRefusal | null = null) {
+    super(message);
+    this.reason = reason;
+  }
+}
 
 export interface ShareInput {
   audience: ShareAudience;
@@ -69,8 +79,9 @@ export interface ShareInput {
   requested_by?: PersonId | null;
   turn?: string | null;
   /**
-   * Share wider than where the artifact was made. Only its person, or the owner, may ask for this;
-   * the caller checks who is asking.
+   * Its person asked for the link audience themself (owner 2026-11-22: only they may widen their
+   * own item). Opens `link` for an artifact made for a person in a DM, a room or a space, and
+   * nothing else (`share-policy.ts`). The caller checks who is asking.
    */
   widen?: boolean;
 }
@@ -121,42 +132,55 @@ export class ArtifactShares {
     return this.#db.clock.now();
   }
 
-  /** Whether `person` is a member of `space` through one of their accounts. */
-  #isMember(person: PersonId, space: string): boolean {
-    const row = this.#db.orm
-      .select({ space_id: spaceMembers.space_id })
-      .from(spaceMembers)
-      .innerJoin(accounts, eq(accounts.id, spaceMembers.account_id))
-      .where(
-        and(
-          eq(spaceMembers.space_id, space),
-          eq(accounts.person_id, person),
-          isNull(spaceMembers.left_at),
-        ),
-      )
-      .get();
-    return row !== undefined;
+  /** Whether `person` is a member of `space` (`membership.ts`). */
+  isMember(person: PersonId, space: string): boolean {
+    return isSpaceMember(this.#db, person, space);
   }
 
-  /** Throws when the audience would be wider than where `artifact` was made. */
+  /** Throws when the audience would be wider than where `artifact` was made (`share-policy.ts`). */
   #checkAudience(artifact: ArtifactRow, input: ShareInput): void {
-    if (input.widen === true || artifact.scope === "public") return;
-    const local = artifact.scope === "space" || artifact.scope === "room";
-    switch (input.audience) {
-      case "person": {
-        const person = input.person_id as PersonId;
-        if (person === artifact.made_for && artifact.scope !== "owner") return;
-        if (local && artifact.space_id !== null && this.#isMember(person, artifact.space_id)) {
-          return;
-        }
-        throw new ArtifactShareError("that person is outside where the artifact was made");
-      }
-      case "space":
-        if (local && artifact.space_id === input.space_id) return;
-        throw new ArtifactShareError("that space is wider than where the artifact was made");
-      case "link":
-        throw new ArtifactShareError("only a public artifact is shared by link (or widened)");
+    const verdict = audienceAllowed(
+      artifact,
+      input,
+      (person, space) => this.isMember(person, space),
+      input.widen === true,
+    );
+    if (!verdict.ok) throw new ArtifactShareError(verdict.message, verdict.reason);
+  }
+
+  /**
+   * How many shares of artifacts made for `person` were created since `since` (revoked ones
+   * included): the per-person daily quota counts what was handed out, not what is still live.
+   */
+  countFor(person: PersonId, since: Timestamp): number {
+    this.#db.ensureOpen();
+    const row = this.#db.orm
+      .select({ n: sql<number>`count(*)` })
+      .from(artifactShares)
+      .innerJoin(artifactItems, eq(artifactItems.id, artifactShares.artifact_id))
+      .where(and(eq(artifactItems.made_for, person), gte(artifactShares.created_at, since)))
+      .get();
+    return Number(row?.n ?? 0);
+  }
+
+  /** The shares of an artifact that still open something now (not revoked, expired, used up). */
+  live(artifactId: string): ArtifactShare[] {
+    const nowMs = this.#now();
+    return this.list(artifactId).filter(
+      (s) =>
+        s.revoked_at === null &&
+        (s.expires_at === null || Date.parse(s.expires_at) > nowMs) &&
+        (s.max_uses === null || s.uses < s.max_uses),
+    );
+  }
+
+  /** Revokes every live share of an artifact; one `share.revoked` each. Returns how many. */
+  revokeAll(artifactId: string, reason: string, by: PersonId | null = null): number {
+    let n = 0;
+    for (const share of this.list(artifactId)) {
+      if (share.revoked_at === null && this.revoke(share.id, reason, by)) n++;
     }
+    return n;
   }
 
   /**

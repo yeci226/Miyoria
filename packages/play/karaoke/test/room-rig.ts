@@ -14,7 +14,7 @@ import { openTestDb, type TestDb } from "@miyoria/store/testing";
 import type { AccountRef, PersonId } from "@miyoria/types";
 import { type KaraokeConfig, KaraokeConfigSchema } from "../src/config.js";
 import { karaokeSchema } from "../src/migrations.js";
-import { RoomDesk, type RoomNotice } from "../src/rooms.js";
+import { RoomDesk, type RoomNotice, type RoomPlaces } from "../src/rooms.js";
 import { type KaraokeNote, KaraokeService } from "../src/service.js";
 import { KaraokeStore } from "../src/store.js";
 import { FakeKaraokeWallet, FakeKaraokeWorker, referenceOf, synthSong } from "../src/testing.js";
@@ -62,8 +62,18 @@ export interface Rig {
   restart(): RoomDesk;
 }
 
-export async function makeRig(overrides: Partial<KaraokeConfig> = {}): Promise<Rig> {
-  const raw = openTestDb({ plugins: [karaokeSchema] });
+/** Rooms in servers (phase 6): the desk's places, and her voice per server. */
+export interface RigPlaces {
+  places?: RoomPlaces;
+  /** Whether she is in voice in `space` (`null`: anywhere); default: `voice.on`. */
+  inVoice?: (space: string | null) => boolean;
+}
+
+export async function makeRig(
+  overrides: Partial<KaraokeConfig> = {},
+  where: RigPlaces = {},
+): Promise<Rig> {
+  const raw = openTestDb({ identity: true, plugins: [karaokeSchema] });
   const store = new KaraokeStore(raw.db, raw.events);
   const worker = new FakeKaraokeWorker();
   const notes: KaraokeNote[] = [];
@@ -99,7 +109,8 @@ export async function makeRig(overrides: Partial<KaraokeConfig> = {}): Promise<R
       service,
       worker: () => worker,
       wallet: () => (hasWallet.on ? wallet : null),
-      inVoice: () => voice.on,
+      inVoice: where.inVoice ?? (() => voice.on),
+      ...(where.places === undefined ? {} : { places: where.places }),
       who,
       tell: (note) => notes.push(note),
       together: () => {},

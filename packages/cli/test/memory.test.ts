@@ -112,6 +112,16 @@ describe("miyoria memory rebuild", () => {
     expect(text()).toMatch(/預估費用:\$/);
     expect(text()).not.toContain("價格未知");
     expect(priced.asked).toHaveLength(0);
+
+    // A pass that thinks first: the output counts the thinking, and the line says so.
+    out = [];
+    const thinking = model(PRICE);
+    await rebuildCommand(
+      cfg,
+      { ...options, file: db },
+      { model: async () => ({ ...thinking.model, reasoning: "medium" }), held: free },
+    );
+    expect(text()).toMatch(/輸出 6,600 tokens.*含思考,推理 medium/);
   });
 
   it("leaves out what is before --since", async () => {

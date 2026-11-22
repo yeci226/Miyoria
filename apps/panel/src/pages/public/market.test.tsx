@@ -3,7 +3,7 @@
 
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuctionView, LotteryView, LotView, MarketHistory, MyBids, MyTickets, WalletView } from "@miyoria/contracts/api";
 import { mockFetch, renderPage, renderRoute } from "@/test/render";
 import { Market } from "./Market";
@@ -455,5 +455,57 @@ describe("經濟 / 市集", () => {
     expect(posts).toEqual([]);
     await userEvent.click(within(dialog).getByRole("button", { name: "開獎" }));
     await waitFor(() => expect(posts).toEqual([{ path: "/api/market/settle", body: { what: "lottery" } }]));
+  });
+});
+
+describe("市集: one per server", () => {
+  afterEach(() => window.localStorage.clear());
+
+  it("someone in two servers picks which; every view and bid then goes to that server", async () => {
+    const user = userEvent.setup();
+    const spaces = [
+      { id: "A", platform: "discord", external_id: "gA", name: "本來的伺服器", primary: true },
+      { id: "B", platform: "discord", external_id: "gB", name: "第二個伺服器", primary: false },
+    ];
+    const asked: string[] = [];
+    const posts: { path: string; space: string | null }[] = [];
+    mockFetch((method, url) => {
+      const path = url.pathname;
+      const space = url.searchParams.get("space");
+      if (path === "/api/member/spaces") return { body: { spaces, default: "A" } };
+      if (!path.startsWith("/api/member/market/")) return undefined;
+      if (method === "POST") posts.push({ path, space });
+      else asked.push(`${path.slice("/api/member/market/".length)}:${space ?? "-"}`);
+      const top = space === "B" ? { amount: 300, name: "第二家的人" } : { amount: 120, name: "小魚乾" };
+      if (path === "/api/member/market/auction") return { body: auction({ lot: lot({ top }) }) };
+      if (path === "/api/member/market/lottery" && method === "GET") return { body: lottery() };
+      if (path === "/api/member/market/bids") return { body: BIDS };
+      if (path === "/api/member/market/tickets") return { body: TICKETS };
+      if (path === "/api/member/market/bid") return { body: { amount: 310, ends_at: at(HOUR), extended: false, balance: 0 } };
+      return undefined;
+    });
+    renderPage(<Market />);
+    await waitFor(() => expect(part("這一週的拍賣")).toHaveTextContent("120 · 小魚乾"));
+    // The default (the original server) is asked for by its id once the servers are known.
+    expect(asked).toContain("auction:A");
+    await user.click(screen.getByRole("radio", { name: "第二個伺服器" }));
+    await waitFor(() => expect(part("這一週的拍賣")).toHaveTextContent("300 · 第二家的人"));
+    expect(asked).toEqual(expect.arrayContaining(["auction:B", "lottery:B", "bids:B", "tickets:B"]));
+    await user.click(within(part("這一週的拍賣")).getByRole("button", { name: "出價" }));
+    await waitFor(() => expect(posts).toEqual([{ path: "/api/member/market/bid", space: "B" }]));
+  });
+
+  it("someone in one server sees no picker, and the page asks as it always did", async () => {
+    mockFetch((_m, url) => {
+      if (url.pathname === "/api/member/spaces") return { body: { spaces: [], default: null } };
+      if (url.pathname === "/api/member/market/auction") {
+        expect(url.searchParams.has("space")).toBe(false);
+        return { body: auction() };
+      }
+      return url.pathname === "/api/member/market/lottery" ? { body: lottery() } : undefined;
+    });
+    renderPage(<Market />);
+    await waitFor(() => expect(part("這一週的拍賣")).toHaveTextContent("120 · 小魚乾"));
+    expect(screen.queryByRole("radiogroup")).toBeNull();
   });
 });

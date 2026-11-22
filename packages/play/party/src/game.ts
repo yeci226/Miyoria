@@ -118,6 +118,11 @@ export interface Game {
    */
   leak?(text: string): GameSecretLeak | null;
   timer(name: string): void;
+  /**
+   * A game with a single answer to find (turtle soup): whether it was found before the game
+   * ended; unset: no such answer.
+   */
+  solved?(): boolean;
   /** What she should know once it is over (the answer still hidden, the story so far). */
   finish(reason: EndReason): string[];
 }

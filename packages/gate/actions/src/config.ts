@@ -1,6 +1,7 @@
 // `[modules.actions]`: the guardrails. Her judgment is not configured here, only the lines she
 // cannot cross and how often she may do medium-risk things.
 
+import { setting } from "@miyoria/runtime/kernel";
 import { z } from "zod";
 
 /** Limits of one capability. `null` fields fall back to the tier defaults. */
@@ -54,8 +55,23 @@ export const ActionsConfigSchema = z.object({
   paused: z.boolean().default(false),
   /** How long one step of the emergency stop may take before the next one runs. */
   emergency_step_ms: z.number().int().positive().default(20_000),
-  /** Capabilities nobody may use (`"voice.join"`, `"stream.*"`, `"*"`). */
-  forbidden: z.array(z.string()).default([]),
+  /**
+   * Capabilities nobody may use (`"voice.join"`, `"stream.*"`, `"*"`). Per place too
+   * (docs/design/v5-places.md): a Space's and a room's lists add to this one and never lift
+   * anything from it (union).
+   */
+  forbidden: z
+    .array(z.string())
+    .default([])
+    .meta(
+      setting({
+        kind: "multi",
+        scope: "room",
+        merge: "union",
+        label: "不能用的功能",
+        help: "這裡(和整個伺服器、全部)列的功能她都不能用;只能加,不能解開上一層禁止的",
+      }),
+    ),
   /** Allow her and chat requests to act in another guild than the one they came from. */
   cross_guild: z.boolean().default(false),
   /** Allow DMs to people she barely knows (familiarity below `stranger_familiarity`). */

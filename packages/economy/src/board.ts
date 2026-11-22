@@ -1,8 +1,16 @@
 // The sponsor board (docs/design/economy.md §13): everyone she knows who spent coins on her lately,
 // ranked by how much. On by default, and anyone can leave; never a balance. A person is one wallet
 // and one line (their linked accounts, and whoever they absorbed), and leaving takes them off.
+// There is one board for everyone, and the same board narrowed to one server's members (phase 6):
+// the spending is the same global wallet either way, only who is listed differs.
 
-import { type AccountRef, CARD_REASONS, safeName, toTimestamp } from "@miyoria/types";
+import {
+  type AccountRef,
+  CARD_REASONS,
+  type PersonId,
+  safeName,
+  toTimestamp,
+} from "@miyoria/types";
 import type { EconomyService } from "./economy.js";
 import { type BoardLine, PAID_ITEMS } from "./types.js";
 
@@ -15,6 +23,8 @@ import { type BoardLine, PAID_ITEMS } from "./types.js";
 export const BOARD_REASONS: readonly string[] = [
   ...new Set([
     "feed",
+    // A gift named in words (gifts.ts); one she said no to was refunded, so it does not count.
+    "gift",
     "frame",
     CARD_REASONS.daily,
     ...PAID_ITEMS,
@@ -35,8 +45,15 @@ const DAY_MS = 86_400_000;
 const MAX_LEFT = 5_000;
 const MAX_SPENDERS = 5_000;
 
-/** The board, biggest spender first; people who spent nothing in the window are not listed. */
-export async function sponsorBoard(e: EconomyService, limit = DEFAULT_BOARD): Promise<BoardLine[]> {
+/**
+ * The board, biggest spender first; people who spent nothing in the window are not listed.
+ * `members`: only these persons (a server's members, `Places.members`); everyone without.
+ */
+export async function sponsorBoard(
+  e: EconomyService,
+  limit = DEFAULT_BOARD,
+  members?: ReadonlySet<PersonId>,
+): Promise<BoardLine[]> {
   const places = Math.min(Math.max(Math.trunc(limit) || DEFAULT_BOARD, 1), MAX_BOARD);
   const ledger = e.ledger();
   const since = toTimestamp(e.now() - e.config.board_days * DAY_MS);
@@ -52,6 +69,7 @@ export async function sponsorBoard(e: EconomyService, limit = DEFAULT_BOARD): Pr
     if (!who || seen.has(who.person.id)) continue;
     seen.add(who.person.id);
     if (left.has(who.wallet)) continue;
+    if (members && !members.has(who.person.id)) continue;
     if (total > 0) people.push({ name: safeName(who.name), spent: total });
   }
   people.sort((a, b) => b.spent - a.spent || a.name.localeCompare(b.name));

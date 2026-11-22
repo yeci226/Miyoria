@@ -14,6 +14,14 @@
 // Between the phases (lobby, countdown, singing, settling, results) every piece enters and leaves
 // with the overlay's one motion (`present`: a fade and a small move); the pitch lanes are their own
 // canvases (src/lanes-view.ts), the join QR code an SVG made here from src/qr.ts.
+//
+// Spectating (「卡拉 OK 第二次實測留下的」): the countdown is the round's intro (which song, who
+// sings it, one by one); while it is sung every singer has a lane with their notes judged, the board
+// counts each score up to the next and slides rows to their new places, a line at the screen's top
+// right says who came in or left, who took the lead and who sang a line clean, cheers float up from
+// the singer they are for, and under the board is the song that comes next. The results come in
+// from the last place up, each total counting up, the winner last. Only transforms and opacity
+// move; under reduced motion nothing moves but the numbers.
 // Names and titles are untrusted: they only ever go in as text.
 
 import type { WorkersKaraokeLineV2, WorkersKaraokeLyricsV2 } from "@miyoria/contracts/workers";
@@ -42,16 +50,26 @@ import {
   boardRows,
   clockText,
   countdownLeft,
+  countUp,
+  freshCheers,
+  happenings,
+  happeningText,
   heard,
+  initialOf,
+  type KaraokeHappening,
   type KaraokeMode,
   karaokeBlocks,
   karaokeMode,
   karaokePhase,
   lobbyMembers,
   lobbyStatus,
+  lineKey,
+  lineup,
   lyricsFor,
   memberSwatch,
   memberTag,
+  nextUp,
+  phraseNames,
   PARTS,
   qrPixels,
   qrPlace,
@@ -60,18 +78,27 @@ import {
   resultsDensity,
   resultsTitle,
   roundsLeftText,
+  scoreText,
   settlingText,
   songProgress,
 } from "./karaoke.js";
 import { KaraokePlayer } from "./karaoke-player.js";
 import { laneSingers } from "./lanes.js";
 import { LanesView } from "./lanes-view.js";
-import { present, reflow, remPx } from "./motion.js";
+import { present, reflow, remPx, removeAfterExit } from "./motion.js";
 import { qrMatrix, qrSvgPath } from "./qr.js";
 import { SongClock } from "./song-clock.js";
 
 /** Lobby members listed before 「還有 N 人」. */
 const LOBBY_SHOWN = 8;
+/** Lines the feed shows at once, and how long each stays (ms). */
+const FEED_SHOWN = 4;
+const FEED_MS = 4_200;
+/** A score on the board counts up to a new one over this long (ms). */
+const BOARD_COUNT_MS = 700;
+/** The results: a row comes in this long after the one below it, its total counts up this long (ms). */
+const RESULT_STEP_MS = 140;
+const RESULT_COUNT_MS = 900;
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -99,6 +126,14 @@ function swatch(color: number, parent: Element): HTMLElement {
   const s = el("i", `k-swatch k-swatch--${slot}${hollow ? " is-hollow" : ""}`, parent);
   s.setAttribute("aria-hidden", "true");
   return s;
+}
+
+/** A singer's mark: the first letter of their name in their colour (a ring for colours six to eight). */
+function avatar(color: number, name: string, parent: Element): HTMLElement {
+  const { slot, hollow } = memberSwatch(color);
+  const a = el("span", `k-avatar k-avatar--${slot}${hollow ? " is-hollow" : ""}`, parent, initialOf(name));
+  a.setAttribute("aria-hidden", "true");
+  return a;
 }
 
 function prefersReduced(): boolean {
@@ -221,6 +256,46 @@ class LyricsView {
     }
     return out;
   }
+}
+
+// ---- what happens ------------------------------------------------------------------------------
+
+/** The scene's running line of what happens (top right of the screen): a few at a time, each a while. */
+class Feed {
+  readonly el: HTMLElement;
+
+  constructor(parent: Element) {
+    this.el = el("ol", "k-feed", parent);
+    this.el.setAttribute("aria-label", "房間裡發生的事");
+  }
+
+  add(h: KaraokeHappening): void {
+    const li = el("li", `k-feed__item k-plate is-${h.kind} is-out`, this.el);
+    avatar(h.color, h.name, li);
+    // Names are untrusted: text only.
+    el("span", "k-feed__name", li, h.name);
+    el("span", "k-feed__what", li, happeningText(h));
+    reflow(li);
+    li.classList.remove("is-out");
+    while (this.el.children.length > FEED_SHOWN) this.el.firstElementChild?.remove();
+    setTimeout(() => {
+      li.classList.add("is-out");
+      removeAfterExit(li);
+    }, FEED_MS);
+  }
+
+  clear(): void {
+    this.el.replaceChildren();
+  }
+}
+
+/** A number on the page counting up to its latest value. */
+interface Count {
+  el: HTMLElement;
+  from: number;
+  to: number | null;
+  since: number;
+  ms: number;
 }
 
 // ---- the round's video -------------------------------------------------------------------------
@@ -362,7 +437,10 @@ export class KaraokeLayer {
   readonly #titleFill: HTMLElement;
   readonly #titleTime: HTMLElement;
   readonly #count: HTMLElement;
+  readonly #introHead: HTMLElement;
   readonly #countN: HTMLElement;
+  readonly #feed: Feed;
+  readonly #next: HTMLElement;
   readonly #lyricsView: LyricsView;
   readonly #lanes: LanesView;
   readonly #board: HTMLElement;
@@ -390,6 +468,17 @@ export class KaraokeLayer {
   #shownLeft: number | null = null;
   #shownTime = "";
   #shownFill = -1;
+  #introKey = "";
+  /** Singers who just sang a line clean (called out together a moment later). */
+  #cleanLine: { name: string; color: number }[] = [];
+  #boardKey = "";
+  /** Cheers already shown (by id), for this room. */
+  #cheersSeen = new Set<string>();
+  /** The numbers counting up now (board scores, result totals). */
+  readonly #counts = new Map<string, Count>();
+  /** The lobby's people last drawn (a new one comes in). */
+  #lobbyPeople = new Set<string>();
+  #phrasesOf: { lyrics: WorkersKaraokeLyricsV2 | null; spans: { start: number; end: number }[] } = { lyrics: null, spans: [] };
 
   /**
    * `under`: where the screen goes (under every other piece of the page); `over`: the plates.
@@ -430,10 +519,13 @@ export class KaraokeLayer {
     // The pitch lanes, under the countdown and the words.
     this.#lanes = new LanesView(this.#stage);
 
-    this.#count = block("div", "k-count", this.#stage);
+    // The countdown is the round's intro: which song, who sings it, and the seconds.
+    this.#count = block("div", "k-count k-intro", this.#stage);
     this.#count.setAttribute("role", "timer");
-    this.#countN = el("span", "k-count__n", this.#count);
-    el("span", "k-count__label", this.#count, "秒後開始");
+    const card = el("div", "k-intro__card k-plate", this.#count);
+    this.#introHead = el("div", "k-intro__head", card);
+    this.#countN = el("span", "k-count__n", card);
+    el("span", "k-count__label", card, "秒後開始");
 
     this.#lyricsView = new LyricsView(this.#stage);
     this.#lyricsView.el.classList.add("is-out");
@@ -445,6 +537,21 @@ export class KaraokeLayer {
     this.#boardList = el("ol", "k-board__list", this.#board);
     this.#boardEmpty = el("p", "k-board__empty", this.#board, "開始唱之後會出現");
     this.#air = el("p", "k-air", this.#board);
+    this.#next = el("p", "k-next", this.#board);
+    this.#next.hidden = true;
+    this.#feed = new Feed(this.#stage);
+    // Everyone who sang the same line clean is called out once, together.
+    this.#lanes.onPhrase = (who) => {
+      this.#cleanLine.push(who);
+      if (this.#cleanLine.length === 1) {
+        setTimeout(() => {
+          const names = this.#cleanLine.map((w) => w.name);
+          const first = this.#cleanLine[0];
+          this.#cleanLine = [];
+          if (first !== undefined) this.#feed.add({ kind: "phrase", name: phraseNames(names), color: first.color });
+        }, 400);
+      }
+    };
 
     this.#settling = block("div", "k-settling k-plate", this.#stage);
     this.#settling.setAttribute("role", "status");
@@ -488,15 +595,29 @@ export class KaraokeLayer {
     if (!sameRound) {
       this.#ranks = new Map();
       this.#resultsKey = "";
+      this.#boardKey = "";
       this.#lanes.clear();
     }
+    if (before?.room !== scene?.room) {
+      this.#cheersSeen = new Set();
+      this.#feed.clear();
+    }
     if (scene?.state === "singing") this.#lanes.take(scene.board);
+    // Who came, left, took the lead (only what changed in this room, on the round's screen).
+    if (scene !== null && karaokeMode(scene, true) === "stage") {
+      for (const h of happenings(before, scene)) this.#feed.add(h);
+    }
     // Remember what the round sings: by its results the scene names the next song.
     if (scene !== null && scene.song !== null && (scene.state === "countdown" || scene.state === "singing")) {
       this.#sung = { room: scene.room, round: scene.round, title: scene.song.title, artist: scene.song.artist };
     }
     this.#setMode(karaokeMode(scene, true));
     this.#render();
+    // Cheers float up from the singer they are for, each once.
+    if (scene !== null && (scene.state === "countdown" || scene.state === "singing")) {
+      const reduced = prefersReduced();
+      for (const c of freshCheers(this.#cheersSeen, scene.cheers)) this.#lanes.cheer(c, reduced);
+    }
     this.#player.sync();
   }
 
@@ -521,9 +642,18 @@ export class KaraokeLayer {
     const left = phase === "countdown" ? countdownLeft(ms) : null;
     if (left !== this.#shownLeft) {
       this.#shownLeft = left;
-      if (left !== null) this.#countN.textContent = String(left);
+      if (left !== null) {
+        this.#countN.textContent = String(left);
+        if (!reduced) {
+          this.#countN.animate([{ opacity: 0.25, transform: "scale(1.18)" }, { opacity: 1, transform: "none" }], {
+            duration: 420,
+            easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+          });
+        }
+      }
       present(this.#count, left !== null);
     }
+    this.#tickCounts(now, reduced);
     const duration = scene.song?.durationMs ?? null;
     const fill = Math.round(songProgress(ms, duration) * 1000) / 1000;
     if (fill !== this.#shownFill) {
@@ -580,8 +710,9 @@ export class KaraokeLayer {
     present(this.#lyricsView.el, show.lyrics);
     // A lane per singer while the round counts down and is sung.
     const singers = show.lanes ? laneSingers(scene.members, scene.board) : [];
-    if (show.lanes) this.#lanes.set(singers, words?.notes ?? [], this.#lyricsView.ruby);
+    if (show.lanes) this.#lanes.set(singers, words?.notes ?? [], this.#lyricsView.ruby, this.#phrases(words?.lyrics ?? null));
     present(this.#lanes.el, singers.length > 0);
+    if (scene.state === "countdown") this.#renderIntro(scene);
     this.#video.set(live ? (words?.video ?? null) : null, () => {
       const ms = this.#songMs(performance.now());
       const s = this.#scene;
@@ -600,6 +731,63 @@ export class KaraokeLayer {
     this.#renderCorner(scene, show.qr === "corner");
   }
 
+  /** The lyric lines' spans of a round's words (for judging whole phrases), kept per words. */
+  #phrases(lyrics: WorkersKaraokeLyricsV2 | null): { start: number; end: number }[] {
+    if (lyrics !== this.#phrasesOf.lyrics) {
+      this.#phrasesOf = {
+        lyrics,
+        spans: (lyrics?.lines ?? []).map((l) => ({ start: l.start, end: sungEnd(l) ?? l.end ?? l.start + 8 })),
+      };
+    }
+    return this.#phrasesOf.spans;
+  }
+
+  /** The intro while the round counts down: the round, its song, and who sings it, one after another. */
+  #renderIntro(scene: KaraokeScene): void {
+    const people = lineup(scene);
+    const key = JSON.stringify([scene.room, scene.round, scene.song?.title, scene.song?.artist, people]);
+    if (key === this.#introKey) return;
+    this.#introKey = key;
+    const head = this.#introHead;
+    head.replaceChildren();
+    el("div", "k-intro__kicker", head, `第 ${scene.round} 首 · 房間 ${scene.room}`);
+    el("div", "k-intro__song", head, scene.song?.title ?? "—");
+    if (scene.song?.artist) el("div", "k-intro__artist", head, scene.song.artist);
+    if (people.length > 0) {
+      const ul = el("ul", "k-lineup", head);
+      people.forEach((p, i) => {
+        const li = el("li", "k-lineup__who", ul);
+        li.style.setProperty("--i", String(i));
+        avatar(p.color, p.name, li);
+        el("span", "k-lineup__name", li, p.name);
+      });
+    }
+  }
+
+  /** `key`'s number counts up to `to` from what it shows now (`ms` long, after `delay`). */
+  #countTo(key: string, node: HTMLElement, to: number | null, ms: number, delay = 0, from?: number): void {
+    const now = performance.now();
+    const c = this.#counts.get(key);
+    if (c !== undefined && c.el === node && c.to === to) return;
+    const shown = c?.el === node && c.to !== null ? countUp(c.from, c.to, (now - c.since) / c.ms) : null;
+    this.#counts.set(key, { el: node, from: from ?? shown ?? to ?? 0, to, since: now + delay, ms });
+    if (to === null) node.textContent = scoreText(null);
+  }
+
+  /** Every number on its way, one step (the last one lands exactly on its value). */
+  #tickCounts(now: number, reduced: boolean): void {
+    for (const [key, c] of this.#counts) {
+      if (!c.el.isConnected) {
+        this.#counts.delete(key);
+        continue;
+      }
+      if (c.to === null) continue;
+      const k = reduced ? 1 : (now - c.since) / c.ms;
+      const text = scoreText(k >= 1 ? c.to : countUp(c.from, c.to, Math.max(0, k)));
+      if (c.el.textContent !== text) c.el.textContent = text;
+    }
+  }
+
   /** The small QR code in the screen's top right corner, with the room code beside its caption. */
   #renderCorner(scene: KaraokeScene, on: boolean): void {
     const url = on ? scene.joinUrl : null;
@@ -613,6 +801,8 @@ export class KaraokeLayer {
         el("span", "k-qr__room", caption, scene.room);
       }
       present(this.#corner, code !== null);
+      // The feed makes room for the corner's code.
+      this.#feed.el.classList.toggle("is-beside-qr", code !== null);
     }
   }
 
@@ -669,10 +859,13 @@ export class KaraokeLayer {
     }
 
     const people = lobbyMembers(scene.members);
+    const before = this.#lobbyPeople;
+    this.#lobbyPeople = new Set(people.map((m) => lineKey(m)));
+    const fresh = (m: (typeof people)[number]) => before.size > 0 && !before.has(lineKey(m));
     if (people.length > 0) {
       const ul = el("ul", "k-lobby__people", box);
       for (const m of people.slice(0, LOBBY_SHOWN)) {
-        const li = el("li", "k-person", ul);
+        const li = el("li", `k-person${fresh(m) ? " is-new" : ""}`, ul);
         swatch(m.color, li);
         el("span", "k-person__name", li, m.name);
         el("span", "k-person__tag", li, memberTag(m));
@@ -709,12 +902,28 @@ export class KaraokeLayer {
 
   /** The live board: rows keyed by singer, sliding to their new places (FLIP) when ranks change. */
   #renderBoard(scene: KaraokeScene): void {
-    const rows = boardRows(scene.board, this.#ranks);
-    this.#ranks = boardRanks(rows);
-    this.#boardEmpty.hidden = rows.length > 0;
+    const next = nextUp(scene);
+    const nextText = next === null ? "" : next.by === null ? next.title : `${next.title} · ${next.by}`;
+    if (this.#next.dataset.text !== nextText) {
+      this.#next.dataset.text = nextText;
+      this.#next.replaceChildren();
+      if (next !== null) {
+        el("span", "k-next__label", this.#next, "下一首");
+        el("span", "k-next__title", this.#next, next.title);
+        if (next.by !== null) el("span", "k-next__by", this.#next, next.by);
+      }
+      this.#next.hidden = next === null;
+    }
     const air = airText(scene.air);
     this.#air.textContent = air ?? "";
     this.#air.hidden = air === null;
+    // The pitch moves a few times a second; the rows only when a rank or a score does.
+    const rows = boardRows(scene.board, this.#ranks);
+    const key = JSON.stringify(rows.map(({ moved: _, ...r }) => r));
+    if (key === this.#boardKey) return;
+    this.#boardKey = key;
+    this.#ranks = boardRanks(rows);
+    this.#boardEmpty.hidden = rows.length > 0;
     const list = this.#boardList;
     const before = new Map<HTMLElement, number>();
     for (const li of this.#rows.values()) before.set(li, li.getBoundingClientRect().top);
@@ -734,6 +943,8 @@ export class KaraokeLayer {
         this.#rows.set(row.key, li);
       }
       updateRow(li, row);
+      const score = li.querySelector<HTMLElement>(".k-row__score");
+      if (score !== null) this.#countTo(`board:${row.key}`, score, row.total, BOARD_COUNT_MS);
       if (row.moved) flash.push(li);
       const at: ChildNode | null = prev ? prev.nextSibling : list.firstChild;
       if (at !== li) list.insertBefore(li, at);
@@ -792,9 +1003,12 @@ export class KaraokeLayer {
       el("span", "k-results__col", cols, "總分");
       el("span", "k-results__col", cols, scene.currency || "獎勵");
       const ol = el("ol", "k-results__list", table);
+      const reduced = prefersReduced();
       rows.forEach((row, i) => {
         const li = el("li", `k-result${row.winner ? " is-winner" : ""}${row.finished ? "" : " is-unfinished"}`, ol);
-        li.style.setProperty("--i", String(i));
+        // From the last place up: the winner comes in last.
+        const order = rows.length - 1 - i;
+        li.style.setProperty("--i", String(order));
         el("span", "k-result__rank", li, row.rank === null ? "—" : String(row.rank));
         const who = el("span", "k-result__who", li);
         swatch(row.color, who);
@@ -810,7 +1024,10 @@ export class KaraokeLayer {
             el("i", "", bar).style.transform = `scaleX(${part.share})`;
           }
         }
-        el("span", "k-result__score", li, row.score);
+        const score = el("span", "k-result__score", li, reduced || row.total === null ? row.score : scoreText(0));
+        if (!reduced && row.total !== null) {
+          this.#countTo(`result:${row.key}`, score, row.total, RESULT_COUNT_MS, order * RESULT_STEP_MS, 0);
+        }
         el("span", `k-result__tail${row.coins > 0 ? " is-coins" : ""}`, li, row.tail);
       });
     }
@@ -853,7 +1070,8 @@ function updateRow(li: HTMLElement, row: BoardRow): void {
   if (rank) rank.textContent = row.rank === null ? "—" : String(row.rank);
   if (air) air.hidden = !row.onAir;
   if (estimate) estimate.hidden = !row.estimate;
-  if (score) score.textContent = row.score;
+  // The score itself counts up to `row.total` (the layer's counts).
+  if (score && score.textContent === "") score.textContent = row.score;
   if (move) {
     move.textContent = row.move === "up" ? "↑" : row.move === "down" ? "↓" : "";
     move.dataset.move = row.move;

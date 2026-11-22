@@ -11,12 +11,15 @@ import {
   HostInfoSchema,
   HostLinksSchema,
   HostLlmSchema,
+  HostRoutingSchema,
   HostServiceInstallResultSchema,
   HostServiceInstallSchema,
   HostServiceLogsSchema,
   HostServiceRemoveSchema,
   HostServiceSchema,
   HostServiceStatusSchema,
+  HostUpgradeJobSchema,
+  HostUpgradeSchema,
 } from "../src/index.js";
 
 const full = {
@@ -177,8 +180,17 @@ describe("HostConfigSchema", () => {
       paths: { state: "data/host" },
       network: { bind: "127.0.0.1" },
       gpu: { reserve_mb: 0, arbiter: "worker" },
+      update: { allow_remote: true },
       services: {},
     });
+    // On without the table and with an empty one; `false` opts out.
+    expect(HostConfigSchema.parse({ name: "m", update: {} }).update).toEqual({
+      allow_remote: true,
+    });
+    expect(HostConfigSchema.parse({ name: "m", update: { allow_remote: false } }).update).toEqual({
+      allow_remote: false,
+    });
+    expect(HostConfigSchema.safeParse({ name: "m", update: { allow: true } }).success).toBe(false);
     expect(HostConfigSchema.parse({ name: "m", services: { a: {} } }).services.a).toEqual({
       enabled: true,
       env: {},
@@ -280,6 +292,36 @@ describe("methods and constants", () => {
     expect(HostFetchSchema.safeParse({ ...fetch, method: "post" }).success).toBe(false);
   });
 
+  it("reads an update request and job, and an old report without them", () => {
+    const sha = "a".repeat(40);
+    expect(HostUpgradeSchema.parse({ commit: sha })).toEqual({ commit: sha });
+    expect(HostUpgradeSchema.safeParse({ commit: "abc123" }).success).toBe(false);
+    expect(HostUpgradeSchema.safeParse({ commit: sha.toUpperCase() }).success).toBe(false);
+    expect(HostUpgradeSchema.safeParse({ commit: sha, wait_s: -1 }).success).toBe(false);
+    const job = HostUpgradeJobSchema.parse({
+      id: "u1",
+      target: sha,
+      from: null,
+      state: "waiting",
+      step: "wait",
+      steps: [{ step: "check", state: "done", at: 1 }],
+      waiting_for: "sing 正在做歌",
+      started_at: 1,
+    });
+    expect(job.state).toBe("waiting");
+    const old = {
+      name: "m",
+      version: "0",
+      platform: "linux",
+      protocol: 1,
+      gpu: null,
+      services: [],
+    };
+    const parsed = HostInfoSchema.parse(old);
+    expect(parsed.checkout).toBeUndefined();
+    expect(parsed.remote_update).toBeUndefined();
+  });
+
   it("reads cluster.links: each link optional, a port in range", () => {
     const voice = { port: 7879, path: "/voice-link", token: "t" };
     expect(HostLinksSchema.parse({ links: { voice } })).toEqual({ links: { voice } });
@@ -288,5 +330,68 @@ describe("methods and constants", () => {
       false,
     );
     expect(HostLinksSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("routing (v5-hostd §15)", () => {
+  const status = {
+    name: "sing",
+    kind: "worker",
+    provides: ["sing"],
+    state: "running",
+    since: 1,
+    healthy: true,
+    restarts: 0,
+  };
+
+  it("takes [routing] in a descriptor with its defaults, and refuses an unknown key", () => {
+    const base = { name: "sing", kind: "worker", run: { command: ["x"] } };
+    const parsed = HostServiceSchema.parse({ ...base, routing: { class: "job" } });
+    expect(parsed.routing).toEqual({
+      class: "job",
+      latency: "interactive",
+      concurrency: 1,
+      queue: false,
+      needs: { files: [] },
+      yields_to: [],
+    });
+    expect(HostServiceSchema.parse(base).routing).toBeUndefined();
+    expect(
+      HostServiceSchema.safeParse({ ...base, routing: { class: "job", weight: 2 } }).success,
+    ).toBe(false);
+    expect(HostRoutingSchema.safeParse({ class: "pool" }).success).toBe(false);
+  });
+
+  it("reads a status with routing and load, and one from an older hostd without them", () => {
+    const routing = {
+      class: "job",
+      latency: "batch",
+      concurrency: 1,
+      queue: true,
+      yields_to: ["tts", "asr"],
+      ready: true,
+      variant: "0123456789abcdef",
+      accept: true,
+    };
+    const load = { running: 1, queued: 2, age_ms: 300 };
+    const parsed = HostServiceStatusSchema.parse({ ...status, routing, load });
+    expect(parsed.routing).toEqual(routing);
+    expect(parsed.load).toEqual(load);
+    const old = HostServiceStatusSchema.parse(status);
+    expect(old.routing).toBeUndefined();
+    expect(old.load).toBeUndefined();
+  });
+
+  it("keeps a host.toml without accept and concurrency as before", () => {
+    const parsed = HostConfigSchema.parse({ name: "h", services: { sing: { enabled: true } } });
+    expect(parsed.services.sing?.accept).toBeUndefined();
+    const limited = HostConfigSchema.parse({
+      name: "h",
+      services: { sing: { accept: false, concurrency: 1 } },
+    });
+    expect(limited.services.sing).toMatchObject({ accept: false, concurrency: 1 });
+    expect(
+      HostConfigSchema.safeParse({ name: "h", services: { sing: { concurrency: 0 } } }).success,
+    ).toBe(false);
   });
 });

@@ -1,0 +1,288 @@
+{
+  "spark": {
+    "result": [
+      {
+        "symbol": "6488.TWO",
+        "response": [
+          {
+            "meta": {
+              "currency": "TWD",
+              "symbol": "6488.TWO",
+              "exchangeName": "TWO",
+              "fullExchangeName": "Taipei Exchange",
+              "instrumentType": "EQUITY",
+              "firstTradeDate": 1414630800,
+              "regularMarketTime": 1795152605,
+              "hasPrePostMarketData": false,
+              "gmtoffset": 28800,
+              "timezone": "CST",
+              "exchangeTimezoneName": "Asia/Taipei",
+              "regularMarketPrice": 441.5,
+              "regularMarketChangePercent": -9.898,
+              "fulldayPrice": 441.5,
+              "fulldayChange": -48.5,
+              "fulldayChangePercent": -9.898,
+              "fiftyTwoWeekHigh": 1600,
+              "fiftyTwoWeekLow": 333,
+              "regularMarketDayHigh": 461.5,
+              "regularMarketDayLow": 441,
+              "regularMarketVolume": 7958762,
+              "longName": "GlobalWafers Co., Ltd.",
+              "shortName": "GLOBALWAFERS CO LTD",
+              "chartPreviousClose": 490,
+              "previousClose": 490,
+              "scale": 3,
+              "priceHint": 2,
+              "currentTradingPeriod": {
+                "pre": {
+                  "timezone": "CST",
+                  "end": 1795136400,
+                  "start": 1795136400,
+                  "gmtoffset": 28800
+                },
+                "regular": {
+                  "timezone": "CST",
+                  "end": 1795152600,
+                  "start": 1795136400,
+                  "gmtoffset": 28800
+                },
+                "post": {
+                  "timezone": "CST",
+                  "end": 1795152600,
+                  "start": 1795152600,
+                  "gmtoffset": 28800
+                }
+              },
+              "tradingPeriods": [
+                [
+                  {
+                    "timezone": "CST",
+                    "end": 1795152600,
+                    "start": 1795136400,
+                    "gmtoffset": 28800
+                  }
+                ]
+              ],
+              "dataGranularity": "5m",
+              "range": "1d",
+              "validRanges": [
+                "1d",
+                "5d",
+                "1mo",
+                "3mo",
+                "6mo",
+                "1y",
+                "2y",
+                "5y",
+                "10y",
+                "ytd",
+                "max"
+              ]
+            },
+            "timestamp": [
+              1795147500, 1795147800, 1795148100, 1795148400, 1795148700, 1795149300, 1795149900,
+              1795150200, 1795150500, 1795151100, 1795152000, 1795152600
+            ],
+            "indicators": {
+              "quote": [
+                {
+                  "close": [
+                    444, 444.5, 442, 441.5, 441.5, 442.5, 442.5, 441.5, 442, 441, 441, 441.5
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "symbol": "2330.TW",
+        "response": [
+          {
+            "meta": {
+              "currency": "TWD",
+              "symbol": "2330.TW",
+              "exchangeName": "TAI",
+              "fullExchangeName": "Taiwan",
+              "instrumentType": "EQUITY",
+              "firstTradeDate": 946947600,
+              "regularMarketTime": 1795152601,
+              "hasPrePostMarketData": false,
+              "gmtoffset": 28800,
+              "timezone": "CST",
+              "exchangeTimezoneName": "Asia/Taipei",
+              "regularMarketPrice": 2000,
+              "regularMarketChangePercent": -4.762,
+              "fulldayPrice": 2000,
+              "fulldayChange": -100,
+              "fulldayChangePercent": -4.762,
+              "fiftyTwoWeekHigh": 2590,
+              "fiftyTwoWeekLow": 1375,
+              "regularMarketDayHigh": 2060,
+              "regularMarketDayLow": 1970,
+              "regularMarketVolume": 87546393,
+              "longName": "Taiwan Semiconductor Manufacturing Company Limited",
+              "shortName": "TAIWAN SEMICONDUCTOR MANUFACTUR",
+              "chartPreviousClose": 2100,
+              "previousClose": 2100,
+              "scale": 3,
+              "priceHint": 2,
+              "currentTradingPeriod": {
+                "pre": {
+                  "timezone": "CST",
+                  "end": 1795136400,
+                  "start": 1795136400,
+                  "gmtoffset": 28800
+                },
+                "regular": {
+                  "timezone": "CST",
+                  "end": 1795152600,
+                  "start": 1795136400,
+                  "gmtoffset": 28800
+                },
+                "post": {
+                  "timezone": "CST",
+                  "end": 1795152600,
+                  "start": 1795152600,
+                  "gmtoffset": 28800
+                }
+              },
+              "tradingPeriods": [
+                [
+                  {
+                    "timezone": "CST",
+                    "end": 1795152600,
+                    "start": 1795136400,
+                    "gmtoffset": 28800
+                  }
+                ]
+              ],
+              "dataGranularity": "5m",
+              "range": "1d",
+              "validRanges": [
+                "1d",
+                "5d",
+                "1mo",
+                "3mo",
+                "6mo",
+                "1y",
+                "2y",
+                "5y",
+                "10y",
+                "ytd",
+                "max"
+              ]
+            },
+            "timestamp": [
+              1795147800, 1795148100, 1795148400, 1795148700, 1795149300, 1795149600, 1795150200,
+              1795151100, 1795151400, 1795151700, 1795152000, 1795152600
+            ],
+            "indicators": {
+              "quote": [
+                {
+                  "close": [2010, 2005, 1995, 2000, 2000, 1990, 1990, 1975, 1985, 1975, 1985, 2000]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "symbol": "AAPL",
+        "response": [
+          {
+            "meta": {
+              "currency": "USD",
+              "symbol": "AAPL",
+              "exchangeName": "NMS",
+              "fullExchangeName": "NasdaqGS",
+              "instrumentType": "EQUITY",
+              "firstTradeDate": 345479400,
+              "regularMarketTime": 1795208402,
+              "hasPrePostMarketData": true,
+              "gmtoffset": -18000,
+              "timezone": "EST",
+              "exchangeTimezoneName": "America/New_York",
+              "regularMarketPrice": 342.56,
+              "regularMarketChangePercent": -1.904,
+              "fulldayPrice": 342.56,
+              "fulldayChange": -4.34,
+              "fulldayChangePercent": -1.243,
+              "fiftyTwoWeekHigh": 360.83,
+              "fiftyTwoWeekLow": 243.42,
+              "regularMarketDayHigh": 354.3,
+              "regularMarketDayLow": 340.56,
+              "regularMarketVolume": 80692545,
+              "longName": "Apple Inc.",
+              "shortName": "Apple Inc.",
+              "chartPreviousClose": 349.21,
+              "previousClose": 349.21,
+              "scale": 3,
+              "priceHint": 2,
+              "currentTradingPeriod": {
+                "pre": {
+                  "timezone": "EST",
+                  "end": 1795185000,
+                  "start": 1795165200,
+                  "gmtoffset": -18000
+                },
+                "regular": {
+                  "timezone": "EST",
+                  "end": 1795208400,
+                  "start": 1795185000,
+                  "gmtoffset": -18000
+                },
+                "post": {
+                  "timezone": "EST",
+                  "end": 1795222800,
+                  "start": 1795208400,
+                  "gmtoffset": -18000
+                }
+              },
+              "tradingPeriods": [
+                [
+                  {
+                    "timezone": "EST",
+                    "end": 1795208400,
+                    "start": 1795185000,
+                    "gmtoffset": -18000
+                  }
+                ]
+              ],
+              "dataGranularity": "5m",
+              "range": "1d",
+              "validRanges": [
+                "1d",
+                "5d",
+                "1mo",
+                "3mo",
+                "6mo",
+                "1y",
+                "2y",
+                "5y",
+                "10y",
+                "ytd",
+                "max"
+              ]
+            },
+            "timestamp": [
+              1795205100, 1795205400, 1795205700, 1795206000, 1795206300, 1795206600, 1795206900,
+              1795207200, 1795207500, 1795207800, 1795208100, 1795208400
+            ],
+            "indicators": {
+              "quote": [
+                {
+                  "close": [
+                    344.22, 344.36, 344.57, 344.07, 343.34, 342.3, 343.03, 342.695, 344.62, 342.96,
+                    342.68, 342.56
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "error": null
+  }
+}

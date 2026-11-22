@@ -118,8 +118,8 @@ export interface KaraokeNoticeInput {
   rooms: readonly RoomBrief[];
   /** The caller is a panel admin (karaoke is theirs to try while closed). */
   admin: boolean;
-  /** What the caller types for this command (`/me play karaoke` on Discord). */
-  command?: string;
+  /** What the caller types for this command on their platform (`/me play karaoke` on Discord). */
+  command: string;
 }
 
 /** The caller may open a room now: it is open to them, they are in none, they have the coins. */
@@ -131,8 +131,7 @@ export function mayOpen(overview: KaraokeRooms): boolean {
 
 /** The answer of `/me play karaoke` (only the caller sees it). */
 export function karaokeNotice(input: KaraokeNoticeInput): CommandReply {
-  const { config, overview, rooms, admin } = input;
-  const command = input.command ?? typedCommand("me karaoke", "discord");
+  const { config, overview, rooms, admin, command } = input;
   const blocks: CardBlock[] = [];
   const mine =
     overview.mine === null ? null : (rooms.find((r) => r.code === overview.mine) ?? null);
@@ -387,8 +386,19 @@ async function answer(inv: Invocation, d: KaraokeCommandDeps): Promise<CommandRe
     const admin = await inv.allowed(PANEL_ACCESS);
     const raw = inv.str("song")?.trim() ?? "";
     if (raw !== "") return await songAnswer(inv, d, desk, raw, admin);
-    const overview = await desk.overview(inv.invoker, admin);
-    return karaokeNotice({ config: d.config(), overview, rooms: desk.briefs(), admin, command });
+    // The rooms of the server it was asked in (a DM: the primary's), and their own wherever it is.
+    const space = desk.spaceAt(inv.context);
+    const overview = await desk.overview(inv.invoker, admin, space);
+    const rooms = desk.briefs(space);
+    const own = desk.briefs().find((r) => r.code === overview.mine);
+    if (own !== undefined && !rooms.some((r) => r.code === own.code)) rooms.unshift(own);
+    return karaokeNotice({
+      config: d.config(),
+      overview,
+      rooms,
+      admin,
+      command,
+    });
   } catch (error) {
     return refusal(error, "/me play karaoke");
   }
@@ -459,7 +469,7 @@ function routes(d: KaraokeCommandDeps): AnyComponentRoute[] {
         if (desk === null) return ComponentResult.reply(notice("info", OFF));
         try {
           const admin = await inv.allowed(PANEL_ACCESS);
-          const overview = await desk.overview(inv.invoker, admin);
+          const overview = await desk.overview(inv.invoker, admin, desk.spaceAt(inv.context));
           if (!overview.available) {
             return ComponentResult.reply(notice("info", overview.reason ?? OFF));
           }
@@ -492,7 +502,14 @@ function routes(d: KaraokeCommandDeps): AnyComponentRoute[] {
         if (desk === null) return ComponentResult.reply(notice("info", OFF));
         try {
           const admin = await inv.allowed(PANEL_ACCESS);
-          const room = await desk.open(inv.invoker, inv.invoker_display_name, null, 0, admin);
+          const room = await desk.open(
+            inv.invoker,
+            inv.invoker_display_name,
+            null,
+            0,
+            admin,
+            desk.spaceAt(inv.context),
+          );
           const command = typedCommand("me karaoke", inv.invoker.platform);
           return ComponentResult.update(openedCard(d.config(), room.code, command));
         } catch (error) {

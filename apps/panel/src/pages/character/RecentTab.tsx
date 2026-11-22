@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { ContextKey } from "@miyoria/contracts/wire";
 import type { JustNowKind } from "@miyoria/contracts/api";
-import { useChannelLevels } from "@/app/queries";
+import { useSpaceChannelLevels } from "@/app/queries-channels";
 import { useRecent } from "@/app/queries";
 import { ModuleQuery } from "@/components/module-query";
 import { EmptyLine, ErrorLine } from "@/components/query-state";
@@ -51,9 +51,12 @@ function RecentList({ context }: { context: ContextKey }) {
   );
 }
 
-/** The "just now" timeline as she reads it from one channel: what she did and what happened around her. */
+/**
+ * The "just now" timeline as she reads it from one channel: what she did and what happened around
+ * her. The channels are those of the server the page is about (`?space=`).
+ */
 export function RecentTab() {
-  const levels = useChannelLevels();
+  const levels = useSpaceChannelLevels();
   const channels = useMemo(() => (levels.data?.channels ?? []).filter((c) => c.context.kind !== "dm"), [levels.data]);
   const [picked, setPicked] = useState<string | null>(null);
   const current = channels.find((c) => contextKeyString(c.context) === picked) ?? channels.find((c) => c.context.kind === "voice") ?? channels[0] ?? null;

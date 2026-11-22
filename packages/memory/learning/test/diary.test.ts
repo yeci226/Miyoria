@@ -3,6 +3,7 @@ import type { LlmRouter } from "@miyoria/llm/llm";
 import type { SettingsStore } from "@miyoria/store";
 import {
   type ContextKey,
+  type ConversationState,
   type OutgoingMessage,
   type PlatformSink,
   PlatformSinks,
@@ -11,7 +12,14 @@ import {
 } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { reflectConfig } from "../src/config.js";
-import { Diary, diaryCapability, diaryMaterial, diaryRules, fitEntry } from "../src/diary.js";
+import {
+  Diary,
+  diaryCapability,
+  diaryMaterial,
+  diaryRecaps,
+  diaryRules,
+  fitEntry,
+} from "../src/diary.js";
 
 const run = (over: Partial<ReflectionRun> = {}): ReflectionRun => ({
   id: "r1",
@@ -153,5 +161,48 @@ describe("diary", () => {
     const cut = fitEntry(long, 40);
     expect([...cut].length).toBeLessThanOrEqual(40);
     expect(cut.endsWith("。")).toBe(true);
+  });
+
+  it("leaves_out_what_was_said_in_other_servers", async () => {
+    const state = (
+      scope: string | null,
+      channel: string,
+      recap: string,
+      at = "2026-11-10T20:00:00.000Z",
+    ) =>
+      ({
+        context: { platform: "discord", scope, channel, kind: scope === null ? "dm" : "channel" },
+        updated_at: at,
+        recap,
+      }) as unknown as ConversationState;
+    const where: ContextKey = { platform: "discord", scope: "1", channel: "2", kind: "channel" };
+    const at = Date.parse("2026-11-10T21:00:00.000Z");
+    // Only the diary's server (and DMs, which the rules keep out): the reflection's summary.
+    expect(diaryRecaps(where, [state("1", "3", "唱歌"), state(null, "d", "私事")], at)).toBeNull();
+    // Another server too: only the diary server's recaps.
+    const states = [
+      state("1", "3", "大家在聊唱歌"),
+      state("9", "4", "另一個伺服器的秘密"),
+      state("9", "5", "很久以前的事", "2026-11-01T00:00:00.000Z"),
+    ];
+    expect(diaryRecaps(where, states, at)).toEqual(["大家在聊唱歌"]);
+    const material = diaryMaterial(run(), diaryRecaps(where, states, at));
+    expect(material).not.toContain("今天陪大家唱了三首歌");
+    expect(material).not.toContain("另一個伺服器的秘密");
+    expect(material).toContain("大家在聊唱歌");
+    expect(material).toContain("開心");
+
+    const { sinks } = sinkThatRecords();
+    const asked: string[] = [];
+    const diary = new Diary(reflectConfig({ diary: { channel: "discord:1:2" } }).diary, {
+      router: () => routerSaying("今天很好。", asked),
+      sinks: () => sinks,
+      persona: () => "",
+      name: "Miyo",
+      conversations: () => states,
+    });
+    expect(await diary.write(run())).toBe("今天很好。");
+    expect(asked[0]).not.toContain("另一個伺服器的秘密");
+    expect(asked[0]).not.toContain("今天陪大家唱了三首歌");
   });
 });

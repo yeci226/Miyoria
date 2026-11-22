@@ -111,6 +111,7 @@ export {
   type RestLike,
   type RestRequest,
   type SinkAttachments,
+  type SinkStickers,
 } from "./sink.js";
 export {
   buildTree,

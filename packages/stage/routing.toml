@@ -1,0 +1,5 @@
+# [routing] of Stage (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# single: it drives her one VTube Studio and OBS; a second one is a conflict, never used.
+class = "single"
+latency = "realtime"

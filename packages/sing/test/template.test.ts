@@ -32,6 +32,8 @@ describe("config templates", () => {
       const sing = SingConfigSchema.strict().parse(config.module("sing").config ?? {});
       expect(sing.url).toBe("http://127.0.0.1:8005");
       expect(sing.start).toBe("decide");
+      expect(sing.video_source).toBe("worker");
+      expect(sing.ytdlp_path).toBe("yt-dlp");
     });
   }
 });

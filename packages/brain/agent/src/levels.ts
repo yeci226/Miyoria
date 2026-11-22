@@ -127,7 +127,27 @@ export function modeLabel(mode: ChannelMode): string {
  * The level of a text channel for her situation notes (system: the owner's setting, nothing
  * derived from others); `null` where there is nothing to say (voice, DMs, `always`).
  */
-export function levelHint(mode: ChannelMode, context: ContextKey): string | null {
+export function levelHint(
+  mode: ChannelMode,
+  context: ContextKey,
+  language: string | null = null,
+): string | null {
+  const level = modeHint(mode, context);
+  const lang = languageHint(language);
+  return level === null ? lang : lang === null ? level : `${level}\n${lang}`;
+}
+
+/**
+ * The language set for a place (`language`, docs/design/v5-places.md), as a line of her
+ * situation notes; `null` when none is set. The value is the owner's: one short line, quoted.
+ */
+export function languageHint(language: string | null): string | null {
+  const text = language?.replace(/\s+/g, " ").trim() ?? "";
+  if (text === "") return null;
+  return `這裡的人用「${[...text].slice(0, 40).join("")}」聊天:你在這裡也用這個語言說話。`;
+}
+
+function modeHint(mode: ChannelMode, context: ContextKey): string | null {
   if (context.kind === "voice" || context.kind === "dm") return null;
   const adjust =
     "有人請你安靜點、少講話或多聊一點時,用 channel_activeness 自己決定要調多少、多久(這個等級是上限)。";
@@ -179,6 +199,18 @@ export const RhythmConfigSchema = z.object({
   pace_ms_per_char: z.number().nonnegative().default(40),
   pace_min_ms: z.number().int().nonnegative().default(300),
   pace_max_ms: z.number().int().nonnegative().default(1800),
+  /**
+   * A line said to her that is only a plain thank-you or goodbye ("謝謝", "掰掰", "thanks",
+   * "おやすみ") may get just an emoji and no run (v5-architecture §9.5; `selfhost/courtesy.ts`).
+   * Never with a question, an attachment, a mention of someone else, a party game or a job of
+   * hers waiting there, or a run going in that place. The reaction counts toward
+   * `reactions_per_hour` too.
+   */
+  courtesy_react: z.boolean().default(true),
+  /** How often such a line gets only the reaction (the rest wake her as before). */
+  courtesy_chance: z.number().min(0).max(1).default(0.35),
+  /** Reaction-only answers per channel per hour, at most. */
+  courtesy_per_hour: z.number().int().nonnegative().default(3),
 });
 export type RhythmConfig = z.output<typeof RhythmConfigSchema>;
 

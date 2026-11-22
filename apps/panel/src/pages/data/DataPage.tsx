@@ -20,6 +20,7 @@ import { Field } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fmtDateTime, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
+import { FilesCard } from "./FilesCard";
 import { breakdownText, CATEGORY_LABEL, NOTE_TEXT, VIEW_LINK, withRequired } from "./labels";
 
 /** Hands a downloaded file to the browser. */
@@ -360,6 +361,7 @@ function DataSections({ inventory }: { inventory: DataInventoryView }) {
       <CategoryCard title="她的資料" categories={own} {...props} />
       <CategoryCard title="共用資料" categories={shared} {...props} />
       <CategoryCard title="保留的資料" categories={kept} {...props} />
+      <FilesCard />
       {canDelete && <DangerZone profile={inventory.profile} />}
       <DeleteDialog target={target} inventory={inventory} onClose={() => setTarget(null)} />
     </>

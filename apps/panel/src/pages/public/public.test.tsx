@@ -141,6 +141,12 @@ interface Options {
   screen?: { status?: number; body: unknown };
   /** Today's slip already drawn. */
   slip?: boolean;
+  /** What `GET /api/member/quests` answers; absent: a Core without the route. */
+  quests?: unknown;
+  /** The predictions `GET /api/member/predictions` lists; absent: a Core without the route. */
+  predictions?: unknown[];
+  /** Their servers (`GET /api/member/spaces`); absent: a Core without the route (one server). */
+  spaces?: { id: string; name: string }[];
 }
 
 const CARD: IssuedCard = {
@@ -173,16 +179,30 @@ function core(o: Options = {}) {
   let wallet: WalletView = o.wallet ?? WALLET;
   let slip: IssuedFortune | null = o.slip ? SLIP : null;
   const keys: (string | null)[] = [];
+  /** What the GETs asked, with their query (`/api/member/board?scope=all`). */
+  const gets: string[] = [];
   const fn = mockFetch((method, url, body, headers) => {
     const path = url.pathname;
     if (method === "POST") {
       posts.push({ path, body });
       keys.push(headers.get("Idempotency-Key"));
+    } else gets.push(`${path}${url.search}`);
+    if (path === "/api/member/spaces" && o.spaces !== undefined) {
+      const spaces = o.spaces.map((s, i) => ({ ...s, platform: "discord", external_id: s.id, primary: i === 0 }));
+      return { body: { spaces, default: spaces[0]?.id ?? null } };
     }
     if (path.startsWith("/api/member/") && o.wallet === null) {
       if (["wallet", "checkin", "feed", "frame"].includes(path.slice(12))) return undefined;
     }
     if (path === "/api/member/wallet") return { body: wallet };
+    if (path === "/api/member/quests" && o.quests !== undefined) return { body: o.quests };
+    if (path === "/api/member/predictions" && o.predictions !== undefined) {
+      return { body: { currency: "魚幣", predictions: o.predictions } };
+    }
+    if (path === "/api/member/bet") {
+      const b = body as { option: string; amount: number };
+      return { body: { prediction: "abc123", question: "q", option: b.option, amount: b.amount, balance: 70, duplicate: false } };
+    }
     if (path === "/api/member/checkin") {
       const withSlip = (body as { fortune?: boolean }).fortune === true;
       // A day checked in already can only buy the slip: no reward.
@@ -219,6 +239,14 @@ function core(o: Options = {}) {
     if (path === "/api/member/transfer") {
       wallet = { ...wallet, balance: wallet.balance - 20 };
       return { body: { sent: 20, fee: 1, balance: wallet.balance, to: "Bob" } };
+    }
+    if (path === "/api/member/board" && method === "GET") {
+      // One server's members (theirs by default, `?space=` another), or everyone (`scope=all`).
+      const all = url.searchParams.get("scope") === "all" || o.spaces === undefined;
+      const id = url.searchParams.get("space") ?? o.spaces?.[0]?.id ?? null;
+      const space = all ? null : (o.spaces?.find((s) => s.id === id) ?? null);
+      const entries = [{ rank: 1, name: space ? `${space.name} 的小明` : "小明", spent: 340 }, { rank: 2, name: "匿名", spent: 120 }];
+      return { body: { space, entries } };
     }
     if (path === "/api/member/board") {
       const on = (body as { on: boolean }).on;
@@ -275,7 +303,7 @@ function core(o: Options = {}) {
     if (path.startsWith("/api/public/card/")) return { status: 404, body: { error: "這張卡不存在或已經作廢" } };
     return undefined;
   });
-  return { fn, posts, keys };
+  return { fn, posts, keys, gets };
 }
 
 const paths = (fn: ReturnType<typeof mockFetch>) =>
@@ -319,12 +347,15 @@ describe("an anonymous visitor", () => {
     renderApp();
     await screen.findAllByRole("link", { name: "用 Discord 登入" });
     await waitFor(() => expect(paths(fn)).toContain("/api/public/songs"));
+    // Her state and songs come by the public push stream too (it answers 404 here: polling).
+    await waitFor(() => expect(paths(fn)).toContain("/api/public/stream"));
     expect([...new Set(paths(fn))].sort()).toEqual([
       "/api/auth/methods",
       "/api/auth/session",
       "/api/member/session",
       "/api/public/songs",
       "/api/public/status",
+      "/api/public/stream",
     ]);
   });
 
@@ -934,6 +965,144 @@ describe("the newer places to spend", () => {
     await waitFor(() => expect(toggle).toBeChecked());
     await userEvent.click(toggle);
     await waitFor(() => expect(posts.filter((p) => p.path === "/api/member/board")[1]?.body).toEqual({ on: false }));
+  });
+
+  it("shows their server's board by default, another of theirs or everyone's when picked", async () => {
+    // The server picked last is remembered by the browser.
+    writeStorage("miyoria.member.space", null);
+    const { gets } = core({
+      member: USER,
+      spaces: [
+        { id: "SA", name: "甲服" },
+        { id: "SB", name: "乙服" },
+      ],
+    });
+    renderApp();
+    const section = await screen.findByRole("region", { name: "贊助排行榜" });
+    expect(await within(section).findByText("甲服 的小明")).toBeInTheDocument();
+    expect(gets).toContain("/api/member/board?space=SA");
+    const scope = within(section).getByRole("radiogroup", { name: "範圍" });
+    expect(within(scope).getByRole("radio", { name: "這個伺服器" })).toBeChecked();
+    await userEvent.click(within(section).getByRole("radio", { name: "乙服" }));
+    expect(await within(section).findByText("乙服 的小明")).toBeInTheDocument();
+    await userEvent.click(within(scope).getByRole("radio", { name: "全部" }));
+    expect(await within(section).findByText("小明")).toBeInTheDocument();
+    expect(gets).toContain("/api/member/board?scope=all");
+    // Everyone's list has no server to pick.
+    expect(within(section).queryByRole("radio", { name: "乙服" })).toBeNull();
+  });
+
+  it("lists today's quests in the rail, with the one she thought of", async () => {
+    core({
+      member: USER,
+      quests: {
+        currency: "魚幣",
+        quests: [
+          { id: "new_topic", label: "跟她聊一件新的事", hint: "她判斷", done: true, by: null },
+          { id: "together", label: "和大家一起玩一場", hint: "派對遊戲", done: false, by: null },
+          { id: "her_pick", label: "跟她說說新家整理好了沒", hint: "她想的", done: false, by: "her" },
+        ],
+        reward: 10,
+        bonus: 15,
+        bonus_done: false,
+        earned_today: 10,
+        cap: 45,
+      },
+    });
+    renderApp();
+    const section = await screen.findByRole("region", { name: "今天的任務" });
+    expect(await within(section).findByText("跟她說說新家整理好了沒")).toBeInTheDocument();
+    expect(within(section).getByText("完成")).toBeInTheDocument();
+    expect(within(section).getAllByText("+10")).toHaveLength(2);
+    expect(within(section).getByText(/三個都完成再加 15/)).toBeInTheDocument();
+  });
+
+  it("leaves the quests out on a Core without them, or for someone she does not know", async () => {
+    core({ member: USER });
+    renderApp();
+    await screen.findByRole("region", { name: "錢包" });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "今天的任務" })).toBeNull());
+  });
+
+  it("lists the predictions, how each settles, and takes a stake with a fresh key", async () => {
+    const open = {
+      id: "abc123",
+      question: "這碗湯會被猜中嗎",
+      options: [
+        { label: "猜中", staked: 30, backers: 1, multiplier: 1.6 },
+        { label: "沒猜中", staked: 0, backers: 0, multiplier: null },
+      ],
+      total: 30,
+      closes_at: new Date(Date.now() + 120_000).toISOString(),
+      status: "open",
+      winner: null,
+      settles: { kind: "soup", label: "照這碗海龜湯的結果自動結算" },
+      settled_by: null,
+      my_bet: null,
+    };
+    const done = {
+      ...open,
+      id: "def456",
+      question: "她做得到嗎",
+      status: "resolved",
+      winner: "做到",
+      options: [{ label: "做到", staked: 20, backers: 1, multiplier: 0.95 }],
+      settles: { kind: "goal", label: "照她的遊戲目標「蓋房子」的結果自動結算" },
+      settled_by: { by: "auto", note: "她做到了目標「蓋房子」", at: "2026-11-08T04:00:00Z", who: null },
+      my_bet: { option: "做到", amount: 20, outcome: "won", payout: 19 },
+    };
+    const { posts, keys } = core({ member: USER, predictions: [open, done] });
+    renderApp();
+    const section = await screen.findByRole("region", { name: "預測" });
+    expect(within(section).getByText("照這碗海龜湯的結果自動結算")).toBeInTheDocument();
+    expect(within(section).getByText("她做到了目標「蓋房子」")).toBeInTheDocument();
+    expect(section).toHaveTextContent("你押了「做到」20 魚幣 · 猜中,拿回 19 魚幣");
+    const bet = within(section).getByRole("button", { name: "押" });
+    expect(bet).toBeDisabled();
+    await userEvent.click(within(section).getByRole("radio", { name: "沒猜中" }));
+    await userEvent.click(bet);
+    await waitFor(() =>
+      expect(posts.find((p) => p.path === "/api/member/bet")?.body).toEqual({ prediction: "abc123", option: "沒猜中", amount: 10 }),
+    );
+    expect(keys.at(-1)).toBeTruthy();
+  });
+
+  it("asks for the predictions and bounties of the server they picked", async () => {
+    const one = {
+      id: "abc123",
+      space: { id: "SB", name: "乙服" },
+      question: "乙服的題",
+      options: [{ label: "甲", staked: 0, backers: 0, multiplier: null }],
+      total: 0,
+      closes_at: new Date(Date.now() + 120_000).toISOString(),
+      status: "open",
+      winner: null,
+      settles: { kind: "her", label: "她公布結果" },
+      settled_by: null,
+      my_bet: null,
+    };
+    writeStorage("miyoria.member.space", null);
+    const { gets } = core({
+      member: USER,
+      predictions: [one],
+      spaces: [
+        { id: "SA", name: "甲服" },
+        { id: "SB", name: "乙服" },
+      ],
+    });
+    renderApp();
+    const section = await screen.findByRole("region", { name: "預測" });
+    await waitFor(() => expect(gets).toContain("/api/member/predictions?space=SA"));
+    await userEvent.click(within(section).getByRole("radio", { name: "乙服" }));
+    await waitFor(() => expect(gets).toContain("/api/member/predictions?space=SB"));
+    await waitFor(() => expect(gets.some((g) => g.startsWith("/api/member/bounties?space="))).toBe(true));
+  });
+
+  it("leaves the predictions out when there are none", async () => {
+    core({ member: USER, predictions: [] });
+    renderApp();
+    await screen.findByRole("region", { name: "錢包" });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "預測" })).toBeNull());
   });
 
   it("lists her open bounties and says she judges them", async () => {

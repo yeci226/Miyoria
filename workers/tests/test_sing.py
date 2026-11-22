@@ -374,6 +374,23 @@ def test_yt_dlp_keeps_its_cache_where_the_worker_says(monkeypatch):
     assert "cachedir" not in ydl_options()
 
 
+def test_yt_dlp_uses_the_cookies_it_is_given(monkeypatch, tmp_path):
+    import engine
+    from engine import ydl_options
+
+    monkeypatch.delenv("SING_YTDLP_COOKIES_FROM_BROWSER", raising=False)
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File" + chr(10))
+    monkeypatch.setenv("SING_YTDLP_COOKIES", str(cookies))
+    assert ydl_options()["cookiefile"] == str(cookies)
+    monkeypatch.setenv("SING_YTDLP_COOKIES", str(tmp_path / "missing.txt"))
+    monkeypatch.setattr(engine, "__file__", str(tmp_path / "sing" / "engine.py"))  # no cookies.txt beside it
+    assert "cookiefile" not in ydl_options()
+    monkeypatch.setenv("SING_YTDLP_COOKIES_FROM_BROWSER", "firefox")
+    assert ydl_options()["cookiesfrombrowser"] == ("firefox",)
+    assert ydl_options({"cookiefile": "other.txt"})["cookiefile"] == "other.txt"
+
+
 def test_a_lookup_that_never_returns_fails_instead_of_holding_the_queue():
     import server
     from engine import JobError

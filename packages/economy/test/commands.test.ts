@@ -11,7 +11,7 @@ import {
 import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import { type AccountRef, type ContextKey, type Keepsakes, KeepsakesKey } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
-import { EconomyCommands, PATHS, walletText } from "../src/commands.js";
+import { EconomyCommands, PATHS, TRANSFER_SMALL_PRINT, walletText } from "../src/commands.js";
 import { STRANGER } from "../src/economy.js";
 import {
   type BountyView,
@@ -119,6 +119,8 @@ function fake(): Fake {
       };
     },
     bounties: async () => state.bounties,
+    // No identity here: no server filter.
+    spacesFor: async () => undefined,
     setOnBoard: async (_a: AccountRef, on: boolean) => {
       calls.push(`on_board:${on}`);
       state.view = { ...state.view, on_board: on };
@@ -393,11 +395,22 @@ describe("wallet commands", () => {
       ["簽到", "me checkin", undefined],
       ["餵一碗", "me feed", { item: "rice" }],
       ["餵鋼盆", "me feed", { item: "big_bowl" }],
+      ["送她別的", "me feed", undefined],
       ["留言上大螢幕", "me screen", undefined],
       ["發彈幕", "me danmaku", undefined],
       ["轉給別人", "me give", undefined],
       ["排行榜", "me board", undefined],
     ]);
+    // The form's one field is the argument `/me feed` reads a named gift from.
+    const gift = page?.actions.find((a) => a.id === "gift");
+    expect(gift?.ask?.fields.map((f) => f.arg)).toEqual(["thing"]);
+    const f = fake();
+    const registry = new CommandRegistry(Permissions.fromStrings([]));
+    const services = new ServiceRegistry();
+    services.provide("test", EconomyKey, f.economy);
+    new EconomyCommands().install(registry, services);
+    const feed = registry.get(["me", "feed"]);
+    expect(feed?.args.map((a) => a.name)).toContain("thing");
     const screen = page?.actions.find((a) => a.id === "screen");
     expect(screen?.ask?.fields.map((f) => f.arg)).toEqual(["text"]);
     const danmaku = page?.actions.find((a) => a.id === "danmaku");
@@ -472,7 +485,11 @@ describe("wallet commands", () => {
     const spec = registry.get(["me", "give"]);
     expect(spec?.ephemeral).toBe(true);
     const reply = await run(registry, "me give", { user: "77", amount: 25 });
-    expect(reply.text).toBe("轉了 25 魚幣給 Bob，另付手續費 2（燒掉），剩 90。");
+    expect(reply.text).toBe(
+      `轉了 25 魚幣給 Bob，另付手續費 2（燒掉），剩 90。
+-# ${TRANSFER_SMALL_PRINT}`,
+    );
+    expect(TRANSFER_SMALL_PRINT).toContain("禁止用真錢");
     expect(reply.card?.accent).toBe("neutral");
     expect(calls[0]).toMatch(/^transfer:discord:77:25:discord:/);
     // Another platform's account is not someone one can reach, in the receiver's usual words.

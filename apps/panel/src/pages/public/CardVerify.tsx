@@ -5,6 +5,7 @@ import { isApiError } from "@/api/http";
 import type { PublicCard } from "@miyoria/contracts/api";
 import { useApi } from "@/app/connection";
 import { Logo } from "@/components/logo";
+import { SITE_NAME } from "@/lib/site-name";
 import { SkeletonRows } from "@/components/query-state";
 import { Button } from "@/components/ui/button";
 import { notify } from "@/lib/notify";
@@ -156,7 +157,7 @@ export function CardVerify({ serial }: { serial: string }) {
       <div aria-hidden className="card-veil" />
       <a href="/" className="flex items-center gap-2.5">
         <Logo className="size-5 text-primary" />
-        <span className="text-[15px] font-semibold">Miyoria</span>
+        <span className="text-[15px] font-semibold">{SITE_NAME}</span>
       </a>
       {card.isPending ? (
         <main className="glass-float w-full max-w-sm rounded-lg p-5">

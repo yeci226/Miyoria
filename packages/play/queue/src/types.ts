@@ -15,6 +15,11 @@ export interface QueueItem {
   text: string;
   /** Where the request was made, for replying later. */
   context: ContextKey | null;
+  /**
+   * The Space whose queue it is in (identity's `spaces.id`); `null`: the default queue (the
+   * primary Space's, or the only queue there is without Spaces).
+   */
+  space: string | null;
   created_at: Timestamp;
   /** Moderator-set; higher goes first, ahead of fairness. */
   priority: number;
@@ -33,6 +38,8 @@ export interface SubmitRequest {
   kind: string;
   text: string;
   context?: ContextKey | null;
+  /** The Space whose queue it goes in; default: the Space of `context`, else the default queue. */
+  space?: string | null;
   priority?: number;
 }
 

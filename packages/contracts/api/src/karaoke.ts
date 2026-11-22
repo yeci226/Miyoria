@@ -13,6 +13,7 @@ import {
   WorkersKaraokeReferenceV2Schema,
 } from "../../workers/src/karaoke.js";
 import { route } from "./route.js";
+import { SpaceQuery } from "./shared.js";
 
 /** One prepared (or preparing) song as a member sees it. Title and artist are untrusted. */
 export const KaraokeSongViewSchema = z
@@ -307,6 +308,11 @@ export const KaraokeAdminResultsSchema = z
         calibrated: z.boolean(),
         browser: z.string(),
         at: z.string(),
+        /**
+         * The server of the room it was sung in (identity's `spaces.id`); `null`: sung alone (a
+         * person's own score, the same in every server) or in a room of no server.
+         */
+        space: z.string().nullable(),
       }),
     ),
   })
@@ -462,8 +468,13 @@ export const karaoke = {
 
 /** The owner's side. */
 export const karaokeAdmin = {
+  /**
+   * The latest results. `?space=` (`SpaceQuery`): only that server's rooms beside the results
+   * sung alone (those are everyone's in every server); left out: all of them.
+   */
   results: route
     .meta({ audience: "admin", permission: null })
     .route({ method: "GET", path: "/api/karaoke/results" })
+    .input(z.object({ query: SpaceQuery }).optional())
     .output(KaraokeAdminResultsSchema),
 };

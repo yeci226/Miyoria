@@ -7,13 +7,15 @@ import { RowActions } from "@/components/controls";
 import { Dot, StatusBadge } from "@/components/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/misc";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { fmtDateTime, fmtRelative } from "@/lib/format";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { ApproveDialog } from "./Dialogs";
 import { HostDetail } from "./HostDetail";
-import { HOST_STATUS } from "./labels";
+import { HOST_STATUS, updatable } from "./labels";
+import { UpgradeStatus, VersionLine } from "./Upgrade";
 
 /** Pending first (they wait for the owner), then by name. */
 export const sortHosts = (hosts: ClusterHostView[]): ClusterHostView[] =>
@@ -44,7 +46,21 @@ function Connection({ host, now }: { host: ClusterHostView; now: number }) {
   );
 }
 
-function HostRow({ host, now, open, onToggle }: { host: ClusterHostView; now: number; open: boolean; onToggle: () => void }) {
+function HostRow({
+  host,
+  now,
+  open,
+  onToggle,
+  selected,
+  onSelect,
+}: {
+  host: ClusterHostView;
+  now: number;
+  open: boolean;
+  onToggle: () => void;
+  selected: boolean;
+  onSelect: (on: boolean) => void;
+}) {
   const { remove } = useClusterMutations();
   const [approving, setApproving] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -52,6 +68,9 @@ function HostRow({ host, now, open, onToggle }: { host: ClusterHostView; now: nu
   const status = HOST_STATUS[host.status];
   const pending = host.status === "pending";
   const expandable = host.status === "approved" && host.connected;
+  const update = updatable(host);
+  // A box only where an update could ever be asked for: an approved host that reports a version.
+  const selectable = host.status === "approved" && host.connected && host.remote_update !== undefined;
 
   return (
     <li
@@ -60,6 +79,16 @@ function HostRow({ host, now, open, onToggle }: { host: ClusterHostView; now: nu
     >
       <div className="flex flex-wrap items-start gap-x-4 gap-y-2.5">
         <div className="flex min-w-0 flex-1 basis-72 gap-1.5">
+          {selectable ? (
+            <span className="flex size-7 shrink-0 items-center justify-center" title={update.ok ? undefined : update.reason}>
+              <Checkbox
+                aria-label={`選取 ${host.name}`}
+                checked={selected && update.ok}
+                disabled={!update.ok}
+                onCheckedChange={(v) => onSelect(v === true)}
+              />
+            </span>
+          ) : null}
           {expandable ? (
             <Button
               size="icon-sm"
@@ -86,6 +115,8 @@ function HostRow({ host, now, open, onToggle }: { host: ClusterHostView; now: nu
                 <span className="font-mono text-xs text-muted-foreground">{[host.platform, host.version].filter(Boolean).join(" · ")}</span>
               )}
             </div>
+            <VersionLine host={host} />
+            <UpgradeStatus host={host} now={now} />
             {host.status === "approved" && (
               <div className="flex flex-wrap gap-1">
                 {host.capabilities.map((c) => (
@@ -158,7 +189,15 @@ function useMinuteClock(): number {
   return now;
 }
 
-export function HostList({ hosts }: { hosts: ClusterHostView[] }) {
+export function HostList({
+  hosts,
+  selected,
+  onSelect,
+}: {
+  hosts: ClusterHostView[];
+  selected: ReadonlySet<string>;
+  onSelect: (name: string, on: boolean) => void;
+}) {
   const now = useMinuteClock();
   // Connected hosts start open: the point of the page is to see what runs.
   const [toggled, setToggled] = useState<Set<string>>(new Set());
@@ -170,6 +209,8 @@ export function HostList({ hosts }: { hosts: ClusterHostView[] }) {
           host={h}
           now={now}
           open={!toggled.has(h.name)}
+          selected={selected.has(h.name)}
+          onSelect={(on) => onSelect(h.name, on)}
           onToggle={() =>
             setToggled((t) => {
               const next = new Set(t);

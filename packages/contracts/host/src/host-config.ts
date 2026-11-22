@@ -12,6 +12,13 @@ export const HostServiceConfigSchema = z
     extras: z.array(z.string()).optional(),
     /** Overrides the descriptor's `[gpu] policy`. */
     gpu: z.object({ policy: HostGpuPolicySchema }).strict().optional(),
+    /**
+     * `false`: the service runs here, but Core sends it no work (v5-hostd §15.6). The host's
+     * owner decides; Core cannot change it. An older hostd rejects this key: update it first.
+     */
+    accept: z.boolean().optional(),
+    /** At most this many units at once from Core, below the descriptor's `[routing] concurrency`. */
+    concurrency: z.number().int().positive().optional(),
   })
   .strict()
   .meta({ id: "HostServiceConfig" });
@@ -61,6 +68,17 @@ export const HostConfigSchema = z
       })
       .strict()
       .default({ reserve_mb: 0, arbiter: "worker" }),
+    update: z
+      .object({
+        /**
+         * Core may ask this host to update itself (`host.upgrade`): fast-forward its checkout to a
+         * commit of the branch it tracks, install, restart. On by default, also when the table is
+         * not there; `false` opts out, and a host that opted out still reports its version.
+         */
+        allow_remote: z.boolean().default(true),
+      })
+      .strict()
+      .default({ allow_remote: true }),
     services: z.record(z.string(), HostServiceConfigSchema).default({}),
   })
   .strict()

@@ -4,6 +4,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SqliteStore } from "@miyoria/store";
 import { v4File } from "@miyoria/store/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { COMMANDS, helpText, parseArgs } from "../src/cli.js";
@@ -107,6 +108,18 @@ describe("miyoria db doctor", () => {
     expect(text()).toContain("Core 會拒絕開啟這個檔案");
     expect(text()).toContain("import-links 會帶過來的");
     expect(text()).toContain("人 5、帳號 6、事件(log_events) 1");
+  });
+
+  it("lists a V5 file's servers, their members and the primary", async () => {
+    const path = join(root, "core.db");
+    const store = await SqliteStore.open(path);
+    store.places.seen("discord", "111", "魚缸");
+    store.places.seen("discord", "222", "第二");
+    await store.close();
+    await doctorCommand(join(root, "none.toml"), path);
+    expect(text()).toContain("伺服器");
+    expect(text()).toMatch(/魚缸 {2}.*discord:111.* {2}成員 0 {2}主要的/);
+    expect(text()).toMatch(/第二 {2}.*discord:222.* {2}成員 0\n/);
   });
 
   it("fails on a file that is not a database", async () => {

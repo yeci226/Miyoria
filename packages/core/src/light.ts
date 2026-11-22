@@ -9,6 +9,22 @@ export {
   OPT_IN_MODULES,
 } from "./module-ids.js";
 export {
+  databaseDir,
+  isProfileFolderName,
+  listProfileFolders,
+  type MachineSource,
+  machineSource,
+  PROFILE_CONFIG_FILE,
+  PROFILE_ENV,
+  type ProfileFolder,
+  ProfileSelectError,
+  type ProfileSource,
+  peekConfig,
+  type ResolvedProfile,
+  readDotenv,
+  resolveProfile,
+} from "./profiles.js";
+export {
   type CoreLogLevel,
   DEFAULT_DATABASE_URL,
   DEFAULT_PROFILE,

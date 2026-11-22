@@ -54,6 +54,8 @@ export interface GoLiveState {
   state: GoLiveFact;
   error: string | null;
   reason: string | null;
+  /** The platform the event named; `null` for an event without one. */
+  platform?: string | null;
 }
 
 export interface StageFact {
@@ -153,7 +155,12 @@ export class Facts {
           return false;
         }
         const guild = str(data.guild) ?? "";
-        const fact: GoLiveState = { state, error: str(data.error), reason: str(data.reason) };
+        const fact: GoLiveState = {
+          state,
+          error: str(data.error),
+          reason: str(data.reason),
+          platform: str(data.platform),
+        };
         this.goliveLast.set(guild, fact);
         if (state === "stopped" || state === "failed") this.golive.delete(guild);
         else this.golive.set(guild, fact);

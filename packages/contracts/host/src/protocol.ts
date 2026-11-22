@@ -19,6 +19,14 @@ export const HOST_METHOD = {
   ServiceInstall: "service.install",
   ServiceRemove: "service.remove",
   HostUpdate: "host.update",
+  /**
+   * Core only, and only to a host that has not opted out (`[update] allow_remote = false`): fast-forward to a commit
+   * of the tracked upstream, install, restart, report (v5-hostd §14). Answers at once with the job;
+   * its steps arrive in `host.report`. Not the same as `host.update`, the local re-sync.
+   */
+  HostUpgrade: "host.upgrade",
+  /** Cancels an update that is still waiting, before it changed anything. */
+  HostUpgradeCancel: "host.upgrade_cancel",
   /** Local API only: stop every service, then the daemon. */
   HostShutdown: "host.shutdown",
   /** Local API only: read `[cluster]` and `<state>/host.key` again and dial Core with them. */

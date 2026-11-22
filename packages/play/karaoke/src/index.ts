@@ -23,11 +23,14 @@ export {
   KaraokeModule,
   type KaraokeModuleOptions,
   KaraokeRoomsKey,
+  NOT_SET_UP,
+  NOT_THERE,
   ROOM_TICK_MS,
+  roomPlaces,
   TICK_MS,
 } from "./module.js";
 export { type NoteInput, resultNote, roomOpenedNote, roundResultNote } from "./notes.js";
-export { MAX_AUDIO_BYTES, type RoomDeps, RoomDesk } from "./rooms.js";
+export { MAX_AUDIO_BYTES, type RoomDeps, RoomDesk, type RoomPlaces } from "./rooms.js";
 export {
   COMMENT_WAIT_MS,
   EDIT_BACKING_ROUTE,

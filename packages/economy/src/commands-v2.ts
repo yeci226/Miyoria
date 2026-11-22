@@ -17,8 +17,9 @@ import {
 import { errorMessage, getLogger, type ServiceLookup } from "@miyoria/runtime/kernel";
 import { newId } from "@miyoria/types";
 import { STRANGER, WALLET_NODE } from "./economy.js";
-import { EconomyError } from "./types.js";
+import { EconomyError, EconomyKey } from "./types.js";
 import { type Economy2, Economy2Key } from "./v2-types.js";
+import { coinName, pronounOf } from "./words.js";
 
 const log = getLogger("economy.commands.v2");
 
@@ -31,11 +32,21 @@ const UNAVAILABLE = "錢包現在打不開";
  * `/me play` (it allows 25 subcommands per command), other places keep `/me <name>`.
  */
 const typed = (inv: Invocation, path: string): string => typedCommand(path, inv.invoker.platform);
-/** The same for static texts (descriptions), which are what Discord shows. */
+/**
+ * The same for static texts (descriptions): they are registered once, before anyone invokes, and
+ * the platform that shows command descriptions is Discord.
+ */
 const onDiscord = (path: string): string => typedCommand(path, "discord");
+/** A fresh idempotency key for a press, on the invoker's platform (`discord:<ulid>` on Discord). */
+const pressKey = (inv: Invocation): string => `${inv.context.platform}:${newId()}`;
 
 class Handler2 {
   constructor(readonly services: ServiceLookup) {}
+
+  /** The servers a list shown where `inv` was run covers (`spaces.ts`); `undefined`: all. */
+  async spaces(inv: Invocation): Promise<string[] | undefined> {
+    return this.services.get(EconomyKey)?.spacesFor(inv.context, inv.invoker);
+  }
 
   /** An answer: refusals are plain information, not errors. */
   async guard(run: (e: Economy2) => Promise<CommandReply>): Promise<CommandReply> {
@@ -54,24 +65,33 @@ class Handler2 {
 
   quests(inv: Invocation): Promise<CommandReply> {
     return this.guard(async (e) => {
-      const view = await e.quests(inv.invoker);
+      const view = await e.quests(inv.invoker, { pick: true });
       if (view.quests.length === 0) return notice("info", STRANGER);
-      const lines = view.quests.map((q) => `${q.done ? "✅" : "⬜"} ${q.label}`);
+      const lines = view.quests.map(
+        (q) =>
+          `${q.done ? "✅" : "⬜"} ${q.id === "her_pick" ? `她替你想的：${q.label}` : q.label}`,
+      );
       const blocks: CardBlock[] = [
         { type: "text", text: lines.join("\n") },
         {
           type: "muted",
-          text: `每個 ${view.reward}，三個都完成再加 ${view.bonus}${view.bonus_done ? "（已拿到）" : ""}；今天任務賺了 ${view.earned_today} / ${view.cap}。「聊一件新的事」由她判斷。`,
+          text: `每個 ${view.reward}，三個都完成再加 ${view.bonus}${view.bonus_done ? "（已拿到）" : ""}；今天任務賺了 ${view.earned_today} / ${view.cap}。「聊一件新的事」和她替你想的那件由她判斷；「一起玩」要和別人一起玩完一場派對遊戲，或在語音裡一起聽她唱完一首歌。`,
         },
       ];
       return cardReply(blocks, { accent: "neutral", title: "今天的任務" });
     });
   }
 
-  /** `/me predictions`: what is open to stake on, and how the stakes lie. */
+  /**
+   * `/me predictions`: what is open to stake on, and how the stakes lie: this server's (in a DM,
+   * those of the servers the invoker is in, each named when there are several).
+   */
   predictions(inv: Invocation): Promise<CommandReply> {
     return this.guard(async (e) => {
-      const list = await e.predictions(inv.invoker);
+      const spaces = await this.spaces(inv);
+      const list = await e.predictions(inv.invoker, spaces);
+      const servers = new Set(list.map((p) => p.space?.id ?? null));
+      const named = inv.context.scope === null && servers.size > 1;
       if (list.length === 0) {
         return cardReply([{ type: "text", text: "現在沒有預測" }], { accent: "neutral" });
       }
@@ -84,18 +104,23 @@ class Handler2 {
               : p.status === "resolved"
                 ? `結果：${p.winner}`
                 : "取消了";
+        const how =
+          p.status === "open" || p.status === "closed"
+            ? p.settles.label
+            : (p.settled_by?.note ?? "");
         const options = p.options
           .map((o, i) => `${i + 1}. ${o.label}　${o.staked}（${o.backers} 人）`)
           .join("\n");
         const mine = p.my_bet ? `\n你押了 ${p.my_bet.amount} 在「${p.my_bet.option}」` : "";
-        return `**[${p.id}] ${p.question}**　${state}\n${options}${mine}`;
+        const server = named && p.space?.name ? `\n-# 在「${p.space.name}」` : "";
+        return `**[${p.id}] ${p.question}**　${state}${server}${how ? `\n-# ${how}` : ""}\n${options}${mine}`;
       });
       return cardReply(
         [
           { type: "text", text: lines.join("\n\n") },
           {
             type: "muted",
-            text: `猜中的人平分大家押的，不是她出錢；沒人猜中或取消就全部退回。用 ${typed(inv, "me bet")} 押。`,
+            text: `猜中的人平分大家押的（抽一點燒掉），不是她出錢；沒人猜中、取消或看不出結果就全部退回。用 ${typed(inv, "me bet")} 押。`,
           },
         ],
         { accent: "neutral", title: "預測" },
@@ -112,7 +137,7 @@ class Handler2 {
       if (prediction === "" || option === "" || amount === null) {
         return notice("warn", "要押哪個預測的哪個選項、押多少？");
       }
-      const r = await e.placeBet(inv.invoker, prediction, option, amount, `discord:${newId()}`);
+      const r = await e.placeBet(inv.invoker, prediction, option, amount, pressKey(inv));
       const line = `押了「${r.question}」的「${r.option}」${r.amount} ${e.currency}，剩 ${r.balance}。`;
       return cardReply([{ type: "text", text: line }], { accent: "neutral" });
     });
@@ -124,7 +149,7 @@ class Handler2 {
       const item = inv.str("item")?.trim() ?? "";
       const amount = inv.int("amount");
       if (item !== "" && amount !== null) {
-        const r = await e.fundRoom(inv.invoker, item, amount, `discord:${newId()}`);
+        const r = await e.fundRoom(inv.invoker, item, amount, pressKey(inv));
         const left = r.item.placed
           ? "湊齊了，放進她的房間了"
           : `${r.item.funded} / ${r.item.price}`;
@@ -183,9 +208,13 @@ export function unregisterV2(registry: CommandRegistry): void {
 
 export function registerV2(registry: CommandRegistry, services: ServiceLookup): void {
   const handler = new Handler2(services);
+  const coin = coinName(services);
+  const her = pronounOf(services);
   registry.register(
-    commandSpec("me quests", "今天的三個小任務：聊新的事、玩遊戲、聽完一首歌", {
+    commandSpec("me quests", "今天的三個小任務：聊新的事、和大家一起玩、她替你想的一件事", {
       permission: WALLET_NODE,
+      // Her pick comes from what she remembers of them: only for whoever asked.
+      ephemeral: true,
     }),
     (inv) => handler.quests(inv),
   );
@@ -196,11 +225,11 @@ export function registerV2(registry: CommandRegistry, services: ServiceLookup): 
     (inv) => handler.predictions(inv),
   );
   registry.register(
-    commandSpec("me bet", "押魚幣猜預測的結果（猜中的人平分大家押的）", {
+    commandSpec("me bet", `押${coin}猜預測的結果（猜中的人平分大家押的）`, {
       args: [
         argSpec("prediction", `預測的代號（${onDiscord("me predictions")} 看）`, ArgKind.string),
         argSpec("option", "選項的號碼或名字", ArgKind.string),
-        argSpec("amount", "押多少魚幣", ArgKind.integer),
+        argSpec("amount", `押多少${coin}`, ArgKind.integer),
       ],
       permission: WALLET_NODE,
       ephemeral: true,
@@ -208,12 +237,12 @@ export function registerV2(registry: CommandRegistry, services: ServiceLookup): 
     (inv) => handler.bet(inv),
   );
   registry.register(
-    commandSpec("me room", "看她的房間大家湊到哪了，或出魚幣一起佈置", {
+    commandSpec("me room", `看${her}的房間大家湊到哪了，或出${coin}一起佈置`, {
       args: [
         argSpec("item", "要出錢的東西（名字或代號），不填就只看", ArgKind.string, {
           required: false,
         }),
-        argSpec("amount", "出多少魚幣", ArgKind.integer, { required: false }),
+        argSpec("amount", `出多少${coin}`, ArgKind.integer, { required: false }),
       ],
       permission: WALLET_NODE,
     }),

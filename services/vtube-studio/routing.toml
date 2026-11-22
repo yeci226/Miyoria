@@ -1,0 +1,5 @@
+# [routing] of vtube-studio (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# single: her one stream's program; it provides no capability Core calls, so nothing is routed to it.
+class = "single"
+latency = "realtime"

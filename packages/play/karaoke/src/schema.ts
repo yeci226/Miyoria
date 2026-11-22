@@ -18,7 +18,7 @@
 // No foreign key to `persons`: a person who asks to be forgotten loses their sessions, tracks and
 // results through the plugin's hook; a song stays (it is nobody's).
 
-import { micros } from "@miyoria/store";
+import { micros, spaces } from "@miyoria/store";
 import { sql } from "drizzle-orm";
 import {
   check,
@@ -178,6 +178,9 @@ export const karaokeResults = sqliteTable(
  * - `sung`: a round of it was sung through (results settled): then the opening is never given back.
  * - `refund`: `none`, `due` (to give back: written with the room's end, in the same transaction),
  *   `done`.
+ * - `space_id` (migration 6, docs/design/v5-places.md §10): the server the room was opened in
+ *   (identity's `spaces.id`); its list, its notice and her comments are that server's. Rooms from
+ *   before have the primary Space; `null` only without any Space (a store without identity).
  */
 export const karaokeRooms = sqliteTable(
   "karaoke_rooms",
@@ -197,6 +200,7 @@ export const karaokeRooms = sqliteTable(
     close_reason: text(),
     created_at: micros().notNull(),
     closed_at: micros(),
+    space_id: text().references(() => spaces.id),
   },
   (t) => [
     index("karaoke_rooms_state_idx").on(t.state, t.created_at),

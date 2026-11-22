@@ -92,4 +92,74 @@ describe("inspectDatabase", () => {
     }
     expect(byPlugin.get("economy")).toMatchObject({ applied: [], pending: [1] });
   });
+
+  it("lists a V5 file's Spaces with their members and which is primary, or would be", async () => {
+    const path = join(dir, "core.db");
+    const store = await SqliteStore.open(path);
+    store.places.seen("discord", "111", "一號");
+    store.places.seen("discord", "222", "二號");
+    store.places.seen("discord", "333", "走了");
+    store.places.left("discord", "333");
+    for (const id of ["1", "2", "3"]) store.persons.see({ platform: "discord", id }, `p${id}`);
+    await store.close();
+    // Two members in 二號, one in 一號.
+    const raw = new DatabaseSync(path);
+    const space = (guild: string) =>
+      (raw.prepare("SELECT id FROM spaces WHERE external_id = ?").get(guild) as { id: string }).id;
+    const accounts = (
+      raw.prepare("SELECT id FROM accounts ORDER BY id").all() as { id: string }[]
+    ).map((a) => a.id);
+    const member = raw.prepare(
+      "INSERT INTO space_members (space_id, account_id, roles, last_seen) VALUES (?, ?, '[]', 1)",
+    );
+    member.run(space("222"), accounts[0] as string);
+    member.run(space("222"), accounts[1] as string);
+    member.run(space("111"), accounts[2] as string);
+    raw.close();
+
+    // The first Space an install sees is primary, whatever the counts say.
+    const report = inspectDatabase(path);
+    expect(report.primary_pending).toBe(false);
+    expect(report.spaces).toEqual([
+      {
+        platform: "discord",
+        external_id: "111",
+        name: "一號",
+        members: 1,
+        left: false,
+        primary: true,
+      },
+      {
+        platform: "discord",
+        external_id: "222",
+        name: "二號",
+        members: 2,
+        left: false,
+        primary: false,
+      },
+      {
+        platform: "discord",
+        external_id: "333",
+        name: "走了",
+        members: 0,
+        left: true,
+        primary: false,
+      },
+    ]);
+
+    // A file from before identity v2: the one v2 would pick, the most members.
+    const old = new DatabaseSync(path);
+    old.exec(
+      "DROP INDEX spaces_primary_idx; ALTER TABLE spaces DROP COLUMN is_primary; " +
+        "DELETE FROM _migrations WHERE plugin = 'identity' AND version = 2",
+    );
+    old.close();
+    const before = inspectDatabase(path);
+    expect(before.primary_pending).toBe(true);
+    expect(before.spaces?.map((s) => [s.name, s.primary])).toEqual([
+      ["二號", true],
+      ["一號", false],
+      ["走了", false],
+    ]);
+  });
 });

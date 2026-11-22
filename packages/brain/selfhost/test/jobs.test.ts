@@ -242,6 +242,16 @@ describe("the nightly reflection", () => {
     expect(rig.host?.jobs?.delegator.jobs().map((j) => [j.kind, j.state])).toEqual([
       ["reflect", "done"],
     ]);
+    // Another nightly pass names its own row and writes its summary.
+    await guard?.run(async () => 3, undefined, {
+      goal: "整理筆記",
+      summarise: (n) => `整理了 ${n} 組`,
+    });
+    expect(rig.host?.jobs?.delegator.jobs()[0]).toMatchObject({
+      kind: "reflect",
+      goal: "整理筆記",
+      summary: "整理了 3 組",
+    });
 
     const off = await Rig.create({ config: { delegate: { enabled: false } } });
     expect(off.host?.jobs).toBeNull();

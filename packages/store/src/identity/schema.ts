@@ -118,9 +118,24 @@ export const spaces = sqliteTable(
     external_id: text().notNull(),
     name: text().notNull(),
     joined_at: micros().notNull(),
+    /** She left it (or was removed); `null` while she is there. */
     left_at: micros(),
+    /**
+     * The install's original server (identity v2): the default where no Space is given. At most
+     * one row (a partial unique index); set once, never moved by itself.
+     */
+    is_primary: integer({ mode: "boolean" }).notNull().default(false),
+    /**
+     * A server she was in before servers were told apart (identity v4), or the first one of a
+     * fresh install: it goes on with the cluster's settings. A Space first seen later is not, and
+     * starts quiet until it is set up. Set once, never cleared.
+     */
+    established: integer({ mode: "boolean" }).notNull().default(false),
   },
-  (t) => [unique("spaces_platform_external_id_key").on(t.platform, t.external_id)],
+  (t) => [
+    unique("spaces_platform_external_id_key").on(t.platform, t.external_id),
+    uniqueIndex("spaces_primary_idx").on(t.is_primary).where(sql`${t.is_primary} = 1`),
+  ],
 );
 
 /** A channel, thread, voice room or DM. */
@@ -183,7 +198,11 @@ export const spaceMembers = sqliteTable(
     left_at: micros(),
     last_seen: micros().notNull(),
   },
-  (t) => [primaryKey({ name: "space_members_pk", columns: [t.space_id, t.account_id] })],
+  (t) => [
+    primaryKey({ name: "space_members_pk", columns: [t.space_id, t.account_id] }),
+    // A person's Spaces (`Places.spacesOf`), the members still there.
+    index("space_members_account_idx").on(t.account_id).where(sql`${t.left_at} IS NULL`),
+  ],
 );
 
 export type PersonRow = typeof persons.$inferSelect;

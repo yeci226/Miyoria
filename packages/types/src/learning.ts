@@ -292,10 +292,15 @@ export const ReflectionKey = serviceKey<Reflection>("Reflection");
  * not there.
  */
 export interface ReflectGuard {
-  /** Runs `run`; `ran` is `false` when nothing ran, with `why` (the nightly figure is used up). */
+  /**
+   * Runs `run`; `ran` is `false` when nothing ran, with `why` (the nightly figure is used up).
+   * `options.goal` names the job row (default: the daily reflection); `options.summarise` writes
+   * its summary from the result.
+   */
   run<T>(
     run: (signal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
+    options?: { goal?: string; summarise?: (result: T) => string },
   ): Promise<{ ran: boolean; result: T | null; why: string | null }>;
 }
 

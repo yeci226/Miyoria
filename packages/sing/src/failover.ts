@@ -8,6 +8,13 @@
 // its id (or its URL, when only the id changed), and one that is no longer listed counts as gone,
 // as one unreachable for too long. With a single worker none of the failover rules apply: it is
 // used as it is.
+//
+// The list comes in the registry's order, which for the `job` class is its dispatch order
+// (docs/design/v5-hostd.md §15): the worker that would have a new song back soonest first. A worker
+// may be listed without taking new work (`takesWork: false`: drained, excluded, her speech host):
+// it gets no new song, but the songs, jobs and karaoke files it holds are still fetched from it.
+// Each new song is a unit the registry counts against its worker (`reserve`) until its job ends,
+// so two songs asked together go to two idle workers.
 
 import type {
   WorkersKaraokeKeyReply,
@@ -24,6 +31,7 @@ import {
   type SongTrack,
   type WorkerJob,
 } from "./client.js";
+import type { EndpointUnit } from "./endpoints.js";
 
 export interface FailoverOptions {
   /**
@@ -40,6 +48,13 @@ export interface FailoverOptions {
    * not there yet) would otherwise stay empty, since nothing else asks again.
    */
   refresh?: () => void;
+  /**
+   * A new unit goes to the worker of this id (a song, a recording to read): the registry counts
+   * it there until `done`. `null`: nothing is counted.
+   */
+  reserve?: (id: string, what?: string) => EndpointUnit | null;
+  /** Where a karaoke room's voice streams should run: the id of a listed worker, or `null`. */
+  openSession?: (room: string) => string | null;
 }
 
 /** One worker of the list. */
@@ -51,6 +66,8 @@ export interface FailoverEntry {
   /** Where it is now: a worker listed under a new id at the same URL is the same worker. */
   url?: string;
   worker: SingWorker;
+  /** It takes new work now (default `true`); otherwise only what it holds is asked of it. */
+  takesWork?: boolean;
 }
 
 interface Endpoint {
@@ -64,7 +81,11 @@ interface Endpoint {
   lastFail: number;
   /** No longer listed: whatever it holds counts as gone. */
   gone: boolean;
+  takesWork: boolean;
 }
+
+/** Job states after which a job's unit is over. */
+const ENDED: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
 
 function sameUrl(url: string): string {
   return url.trim().replace(/\/+$/, "").toLowerCase();
@@ -78,6 +99,12 @@ export class FailoverSingWorker implements SingWorker {
   readonly #now: () => number;
   readonly #failed: ((id: string, error: unknown) => void) | null;
   #refresh: (() => void) | null = null;
+  readonly #reserve: FailoverOptions["reserve"] | null;
+  readonly #openSession: FailoverOptions["openSession"] | null;
+  /** The registry's count of each job Core sent, until the job ends. */
+  readonly #units = new Map<string, EndpointUnit>();
+  /** When each of those jobs was first seen running (its run time is from there to its end). */
+  readonly #running = new Map<string, number>();
   /** Which worker took a job / has a song, as answers come in (lost on restart, then searched). */
   readonly #jobs = new Map<string, Endpoint>();
   readonly #songs = new Map<string, Endpoint>();
@@ -92,6 +119,8 @@ export class FailoverSingWorker implements SingWorker {
     this.#retryMs = options.retryMs;
     this.#now = options.now ?? Date.now;
     this.#failed = options.failed ?? null;
+    this.#reserve = options.reserve ?? null;
+    this.#openSession = options.openSession ?? null;
     this.update(workers);
     this.#refresh = options.refresh ?? null;
   }
@@ -131,6 +160,7 @@ export class FailoverSingWorker implements SingWorker {
           downSince: null,
           lastFail: 0,
           gone: false,
+          takesWork: w.takesWork !== false,
         };
         this.#known.set(id, ep);
       } else {
@@ -138,6 +168,7 @@ export class FailoverSingWorker implements SingWorker {
         ep.url = w.url ?? null;
         ep.worker = w.worker;
         ep.gone = false;
+        ep.takesWork = w.takesWork !== false;
       }
       if (!next.includes(ep)) next.push(ep);
     }
@@ -150,26 +181,66 @@ export class FailoverSingWorker implements SingWorker {
     return this.#all.length > 1;
   }
 
-  /** Where new work goes now: the first worker that answers. */
+  /** Where new work goes now: the first worker that answers and takes new work. */
   current(): string | null {
-    return this.#list().find((ep) => ep.downSince === null)?.name ?? null;
+    return this.#list().find((ep) => ep.downSince === null && ep.takesWork)?.name ?? null;
   }
 
   async submit(query: SongQuery, signal?: AbortSignal): Promise<WorkerJob> {
     let last: unknown = null;
-    for (const ep of this.#candidates()) {
+    for (const ep of this.#fresh()) {
+      // Counted there before the request goes out: a song asked at the same moment goes elsewhere.
+      const unit =
+        this.#reserve?.(ep.id, query.title ?? query.query ?? query.url ?? undefined) ?? null;
       try {
         const job = await this.#attempt(ep, (w) => w.submit(query, signal));
+        unit?.accepted();
         this.#own(ep, job);
+        if (unit !== null) this.#units.set(job.id, unit);
+        this.#settle(job);
         return job;
       } catch (error) {
+        unit?.done({ ok: false });
         // A timed-out request may have reached the worker: sending it to the next one could make
         // the song twice, so the singer hears about it as with a single worker.
         if (!isUnreachable(error) || maybeReceived(error)) throw error;
         last = error;
       }
     }
-    throw last ?? unreachable(this.#all.length === 0 ? NO_WORKER : "no song worker answers");
+    throw last ?? unreachable(this.#noWorker());
+  }
+
+  /** Why there is nobody to send new work to. */
+  #noWorker(): string {
+    if (this.#all.length === 0) return NO_WORKER;
+    if (!this.#all.some((ep) => ep.takesWork)) return "no song worker takes new work now";
+    return "no song worker answers";
+  }
+
+  /**
+   * What a poll says of a job Core sent: when it started running, and once it ended its unit is
+   * over, with how long it ran (from the first poll that saw it running, so to a poll's interval).
+   */
+  #settle(job: WorkerJob): void {
+    const unit = this.#units.get(job.id);
+    if (unit === undefined) return;
+    if (job.state === "running" && !this.#running.has(job.id)) {
+      this.#running.set(job.id, this.#now());
+    }
+    if (!ENDED.has(job.state)) return;
+    const since = this.#running.get(job.id);
+    this.#units.delete(job.id);
+    this.#running.delete(job.id);
+    const ran = since === undefined ? 0 : this.#now() - since;
+    // A job never seen running (a cached song, one that failed at once) teaches nothing.
+    unit.done(job.state === "done" && ran > 0 ? { ok: true, run_ms: ran } : { ok: false });
+  }
+
+  /** A job Core gave up on (cancelled, lost): its unit is over without a time. */
+  #drop(id: string): void {
+    this.#units.get(id)?.done({ ok: false });
+    this.#units.delete(id);
+    this.#running.delete(id);
   }
 
   async job(id: string, signal?: AbortSignal): Promise<WorkerJob> {
@@ -177,6 +248,7 @@ export class FailoverSingWorker implements SingWorker {
     if (owner === undefined) {
       const [ep, job] = await this.#find(this.#all, (w) => w.job(id, signal));
       this.#own(ep, job);
+      this.#settle(job);
       return job;
     }
     if (this.#dead(owner)) {
@@ -190,6 +262,7 @@ export class FailoverSingWorker implements SingWorker {
     try {
       const job = await this.#attempt(owner, (w) => w.job(id, signal));
       this.#own(owner, job);
+      this.#settle(job);
       return job;
     } catch (error) {
       if (isUnreachable(error) && this.#dead(owner)) throw this.#lose(id, owner, error);
@@ -200,6 +273,7 @@ export class FailoverSingWorker implements SingWorker {
   async cancel(id: string): Promise<void> {
     const owner = this.#jobs.get(id);
     this.#jobs.delete(id);
+    this.#drop(id);
     try {
       await this.#forJob(id, owner, (w) => w.cancel(id));
     } catch (error) {
@@ -290,15 +364,20 @@ export class FailoverSingWorker implements SingWorker {
     signal?: AbortSignal,
   ): Promise<WorkersKaraokeVoicePitch> {
     let last: unknown = null;
-    for (const ep of this.#candidates()) {
+    for (const ep of this.#fresh()) {
+      const unit = this.#reserve?.(ep.id, "karaoke voice") ?? null;
       try {
-        return await this.#attempt(ep, (w) => w.karaokeVoice(bytes, type, signal));
+        const pitch = await this.#attempt(ep, (w) => w.karaokeVoice(bytes, type, signal));
+        // Counted while it runs; a recording's few seconds say nothing of a song's time.
+        unit?.done({ ok: false });
+        return pitch;
       } catch (error) {
+        unit?.done({ ok: false });
         if (!isUnreachable(error) || maybeReceived(error)) throw error;
         last = error;
       }
     }
-    throw last ?? unreachable(this.#all.length === 0 ? NO_WORKER : "no song worker answers");
+    throw last ?? unreachable(this.#noWorker());
   }
 
   /**
@@ -317,8 +396,11 @@ export class FailoverSingWorker implements SingWorker {
       }
       return this.#attempt(owner, (w) => w.karaokeStream(request, signal));
     }
-    const [ep] = this.#candidates();
-    if (ep === undefined) throw unreachable(NO_WORKER);
+    const fresh = this.#fresh();
+    // Where the registry says the room's session should run, else the first that takes work.
+    const placed = this.#openSession?.(request.room) ?? null;
+    const ep = fresh.find((e) => e.id === placed) ?? fresh[0];
+    if (ep === undefined) throw unreachable(this.#noWorker());
     this.#streams.set(request.room, ep);
     while (this.#streams.size > MAX_STREAM_ROOMS) {
       this.#streams.delete(this.#streams.keys().next().value as string);
@@ -344,7 +426,18 @@ export class FailoverSingWorker implements SingWorker {
 
   // ----- routing -----
 
-  /** Workers for new work: those not passed over right now, or all of them when none is left. */
+  /**
+   * Workers for new work: those that take it and are not passed over right now, or all that take
+   * it when none of them is left.
+   */
+  #fresh(): Endpoint[] {
+    const now = this.#now();
+    const taking = this.#list().filter((ep) => ep.takesWork);
+    const up = taking.filter((ep) => !this.#resting(ep, now));
+    return up.length > 0 ? up : taking;
+  }
+
+  /** Workers to ask about what they hold: those not passed over right now, or all of them. */
   #candidates(): Endpoint[] {
     const now = this.#now();
     const all = this.#list();
@@ -403,6 +496,7 @@ export class FailoverSingWorker implements SingWorker {
   /** The job counts as gone (404: the singer asks again); cancelled once its worker is back. */
   #lose(id: string, owner: Endpoint, cause?: unknown): SingWorkerError {
     this.#jobs.delete(id);
+    this.#drop(id);
     this.#abandoned.set(id, owner);
     return new SingWorkerError(
       owner.gone

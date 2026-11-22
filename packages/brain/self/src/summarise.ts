@@ -3,7 +3,12 @@
 // (`toMessages`: names and other people's text made inert), inside data blocks.
 
 import { contentText, systemMessage, userMessage } from "@miyoria/llm/llm";
-import { type Summarise, type TranscriptEntry, toMessages } from "@miyoria/memory/transcript";
+import {
+  type SpeakerNames,
+  type Summarise,
+  type TranscriptEntry,
+  toMessages,
+} from "@miyoria/memory/transcript";
 import { dataBlock } from "@miyoria/types";
 import {
   SUMMARY_CALL,
@@ -18,11 +23,15 @@ import type { RunModel } from "./types.js";
 /** One tool result is shown up to this many characters: the summary needs what it said, not all of it. */
 const MAX_RESULT_CHARS = 1200;
 
-/** `entries` as plain text, oldest first. */
-export function summaryText(entries: readonly TranscriptEntry[]): string {
+/** `entries` as plain text, oldest first; people by her handles for them when `names` knows. */
+export function summaryText(
+  entries: readonly TranscriptEntry[],
+  names: SpeakerNames | null = null,
+): string {
   const session = entries[0]?.session ?? "";
   const lines: string[] = [];
-  for (const m of toMessages({ session, summary: null, entries: [...entries] }, { gapMs: 0 })) {
+  const tail = { session, summary: null, entries: [...entries] };
+  for (const m of toMessages(tail, { gapMs: 0, names })) {
     const text = contentText(m.content).trim();
     if (m.role === "assistant") {
       if (text !== "") lines.push(`${SUMMARY_SELF}: ${text}`);
@@ -42,12 +51,12 @@ export function summaryText(entries: readonly TranscriptEntry[]): string {
 
 /** A `Summarise` that asks `model`. An empty answer throws: no summary is better than a blank one. */
 export function modelSummarise(model: RunModel, signal?: AbortSignal): Summarise {
-  return async (entries, previous) => {
+  return async (entries, previous, names) => {
     const blocks: string[] = [];
     if (previous !== null && previous.trim() !== "") {
       blocks.push(dataBlock("transcript", SUMMARY_PREVIOUS, previous));
     }
-    blocks.push(dataBlock("transcript", SUMMARY_ENTRIES, summaryText(entries)));
+    blocks.push(dataBlock("transcript", SUMMARY_ENTRIES, summaryText(entries, names ?? null)));
     const response = await model.complete(
       "summarizer",
       {

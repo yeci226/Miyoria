@@ -1,0 +1,81 @@
+{
+  "chart": {
+    "result": [
+      {
+        "meta": {
+          "currency": "TWD",
+          "symbol": "2330.TW",
+          "exchangeName": "TAI",
+          "fullExchangeName": "Taiwan",
+          "instrumentType": "EQUITY",
+          "firstTradeDate": 946947600,
+          "regularMarketTime": 1795152601,
+          "hasPrePostMarketData": false,
+          "gmtoffset": 28800,
+          "timezone": "CST",
+          "exchangeTimezoneName": "Asia/Taipei",
+          "regularMarketPrice": 2000,
+          "regularMarketChangePercent": -4.762,
+          "fulldayPrice": 2000,
+          "fulldayChange": -100,
+          "fulldayChangePercent": -4.762,
+          "fiftyTwoWeekHigh": 2590,
+          "fiftyTwoWeekLow": 1375,
+          "regularMarketDayHigh": 2060,
+          "regularMarketDayLow": 1970,
+          "regularMarketVolume": 87546393,
+          "longName": "Taiwan Semiconductor Manufacturing Company Limited",
+          "shortName": "TAIWAN SEMICONDUCTOR MANUFACTUR",
+          "chartPreviousClose": 1025,
+          "priceHint": 2,
+          "currentTradingPeriod": {
+            "pre": {
+              "timezone": "CST",
+              "start": 1795136400,
+              "end": 1795136400,
+              "gmtoffset": 28800
+            },
+            "regular": {
+              "timezone": "CST",
+              "start": 1795136400,
+              "end": 1795152600,
+              "gmtoffset": 28800
+            },
+            "post": {
+              "timezone": "CST",
+              "start": 1795152600,
+              "end": 1795152600,
+              "gmtoffset": 28800
+            }
+          },
+          "dataGranularity": "1wk",
+          "range": "2y",
+          "validRanges": ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"]
+        },
+        "timestamp": [
+          1791129600, 1791734400, 1792339200, 1792944000, 1793548800, 1794153600, 1794758400,
+          1795152601
+        ],
+        "indicators": {
+          "quote": [
+            {
+              "high": [2590, 2550, 2435, 2430, 2345, 2395, 2350, 2060],
+              "low": [2545, 2420, 2385, 2360, 2020, 2190, 1970, 1970],
+              "volume": [
+                77343774, 160006325, 86048332, 100381767, 250878329, 164332072, 265609588, 87546393
+              ],
+              "open": [2550, 2510, 2395, 2385, 2310, 2210, 2340, 2035],
+              "close": [2550, 2420, 2385, 2370, 2135, 2350, 2000, 2000]
+            }
+          ],
+          "adjclose": [
+            {
+              "adjclose": [2550, 2420, 2385, 2370, 2135, 2350, 2000, 2000]
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

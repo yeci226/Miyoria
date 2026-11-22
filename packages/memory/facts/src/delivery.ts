@@ -77,6 +77,7 @@ export class DeliveryLedgerView implements DeliveryLedger, Projection {
       channel: line.channel,
       said: line.said,
       audience: [...(line.audience ?? [])],
+      ...(line.to === undefined ? {} : { to: [...line.to] }),
       turn: line.turn ?? null,
     };
     const event = this.#log.append({
@@ -102,6 +103,7 @@ export class DeliveryLedgerView implements DeliveryLedger, Projection {
       said: line.said,
       delivered_at: toTimestamp(this.#clock.now()),
       audience: [...line.audience],
+      ...(line.to === undefined ? {} : { to: [...line.to] }),
       answered_by: [],
       line: id,
     };
@@ -246,6 +248,7 @@ export class DeliveryLedgerView implements DeliveryLedger, Projection {
       context: event.context,
       said: body.said,
       audience: body.audience,
+      ...(Array.isArray(body.to) ? { to: body.to } : {}),
       turn: body.turn,
       state: "pending",
       at: event.at,

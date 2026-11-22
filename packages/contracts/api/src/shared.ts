@@ -33,3 +33,15 @@ export const DigitsQuery = z.string().regex(/^\+?\d+$/, "invalid digit found in 
 export const FlagQuery = z.enum(["true", "false"], {
   error: "provided string was not `true` or `false`",
 });
+
+/**
+ * Which Space a route is about, as a query (`?space=<id>`, identity's `spaces.id`): absent means
+ * the route's default (a member's own Space, preferring the primary; on the admin side the
+ * primary). The server checks it (`packages/api/src/space-param.ts`: 404 for an unknown Space, 403
+ * for one the member is not in). A route spreads it into its own query:
+ * `query: z.object({ ...SpaceQuery.shape, limit: DigitsQuery.optional() })`, or `query: SpaceQuery`.
+ */
+export const SpaceQuery = z
+  .object({ space: z.string().min(1).max(64).optional() })
+  .meta({ id: "ApiSpaceQuery" });
+export type SpaceQueryIn = z.input<typeof SpaceQuery>;

@@ -2,7 +2,7 @@
 
 這份文件講「怎麼把 Miyoria 跑起來並維持運作」:選部署型態、第一次設定、服務的安裝與啟動(hostd)、多台電腦、Discord 設定、升級、備份、日誌、安全與疑難排解。第一次從零架一套,先看 [SETUP.md](SETUP.md)。架構背景見 [ARCHITECTURE.md](ARCHITECTURE.md) §1、§16。
 
-> 狀態:Phase 0–8 的程式都已實作(TypeScript,Node 24);Discord 文字、DeepSeek、語音模型和 Minecraft 已經實際跑過(見 [design/v4-plan.md](design/v4-plan.md) §1、[design/minecraft-findings.md](design/minecraft-findings.md));VTube Studio、OBS、Go Live 的實測進度見 [ROADMAP.md](ROADMAP.md) 各 phase 的「實測」項目。
+> 狀態:V5 階段 0 到 5 已合併,線上在跑(Discord 文字、語音、Go Live、唱歌、VTube Studio、OBS、DeepSeek 經 OpenCode),各階段和還沒做的事見 [design/v5-architecture.md](design/v5-architecture.md) §15 與 [design/backlog.md](design/backlog.md);Minecraft 暫停,見 [design/minecraft-findings.md](design/minecraft-findings.md)。[ROADMAP.md](ROADMAP.md) 的舊 phase 清單是歷史。
 >
 > 指令寫法:下面的 `miyoria <指令>` 在 repository 裡是 `pnpm dev <指令>`(在 repo 根目錄)。`miyoria` 套件還沒有發佈到 npm(見 [SETUP.md](SETUP.md)),發佈之後才能用 `pnpm dlx miyoria <指令>`(npm 是 `npx miyoria <指令>`)。
 >
@@ -330,9 +330,42 @@ advertise = "100.64.0.7"       # Core 怎麼連到這台;沒寫就沒有人能�
 
 並且只對 Core 那台放行(Tailscale ACL 或防火牆);hostd 啟動的 worker 會檢查 token(見下面),但 token 不是加密。翻唱、生圖、歌詞不需要這個設定。
 
-**Core 怎麼挑服務。**每種能力(`asr`、`sing` ...)Core 依登記處挑第一個健康的:依 `[modules.cluster.order]`(例如 `sing = ["friend-pc", "main-pc"]`,主機名字),沒列到的排在後面,健康的排在不健康的前面。失敗的服務先被跳過 `retry_secs`(預設 30 秒)。**沒有 hostd 管的服務**(例如還沒升級的朋友那台翻唱 worker)才在 `miyoria.toml` 寫位址:`[modules.cluster.static.<名字>]` 的 `provides` 和 `url`(有 token 時加 `token = "${FRIEND_SING_TOKEN}"`);`speech.*.url`、`[modules.voice] turn_url`、`[modules.sing] url` 與 `fallback_urls`、`[modules.imagegen] url` 也是同樣的用途。其中 `turn_url`、`sing.url`、`imagegen.url` **沒有預設值**:沒寫就是沒有,由 hostd 回報的服務補上。設定檔寫的位址和 hostd 回報的位址要**寫法一致**(`localhost` 和 `127.0.0.1` 不算同一個)才會被當成同一個。
+**Core 怎麼挑服務。**每個服務在 `routing.toml`(放在 `service.toml` 旁邊)宣告它怎麼分派,詳細見 [v5-hostd.md](design/v5-hostd.md) §15:
+
+| 類別 | 服務 | Core 怎麼挑 |
+|---|---|---|
+| `single`(唯一) | core、voice-node、stage、mediamtx、OBS、VTube Studio | 整個叢集只用第一個出現的那個;第二個是衝突,面板和日誌會寫出來,不會被用 |
+| `session`(工作階段) | tts、asr、turn | 和以前一樣:依 `[modules.cluster.order]`(例如 `tts = ["main-pc"]`),沒列到的排後面,健康的排前面 |
+| `job`(工作) | sing、lyrics、ComfyUI | 每個工作送到「做完並傳回 Core 最快」的那台:排隊、那台的速度、傳回的時間,加上懲罰(剛失敗、顯卡被別的服務借走、不知道它忙不忙、她的語音在那台、`order` 排後面一位 +30 秒),除以權重 |
+
+沒有 `routing.toml` 的服務(和比較舊的 hostd 回報的)照舊:依 `order` 的第一個健康的。失敗的服務先被跳過 `retry_secs`(預設 30 秒)。不接新工作的(沒準備好、聲音模型和別台不同、被排除、被清空、那台的主人設 `accept = false`)不會被挑,但已經在那台做好的歌照樣從那台拿。**沒有 hostd 管的服務**(例如還沒升級的朋友那台翻唱 worker)才在 `miyoria.toml` 寫位址:`[modules.cluster.static.<名字>]` 的 `provides` 和 `url`(有 token 時加 `token = "${FRIEND_SING_TOKEN}"`);`speech.*.url`、`[modules.voice] turn_url`、`[modules.sing] url` 與 `fallback_urls`、`[modules.imagegen] url` 也是同樣的用途。其中 `turn_url`、`sing.url`、`imagegen.url` **沒有預設值**:沒寫就是沒有,由 hostd 回報的服務補上。設定檔寫的位址和 hostd 回報的位址要**寫法一致**(`localhost` 和 `127.0.0.1` 不算同一個)才會被當成同一個。
 
 **token。**hostd 每次啟動 Python 服務都給它一個新的 token,Core 呼叫時帶上;worker 對每個路徑(包括 `/health`)檢查 `Authorization: Bearer`。**自己手動跑的 worker 沒有檢查**,和以前一樣。同一台電腦的服務之間(翻唱 worker 叫 TTS 和 ASR 讓出顯卡)用另一個每次啟動 hostd 才換的共用 token。
+
+### 工作分到多台電腦
+
+同一個 `job` 服務(例如 sing)可以裝在好幾台電腦上,Core 會自己分。面板「電腦」頁的「誰負責什麼」列出每個能力的類別、每台的分數(和怎麼算出來的)、正在做和排隊的數量、Core 量到的「一個工作要多久」和「傳回多快」,以及最近幾個工作為什麼送到哪台。
+
+**她的語音所在的電腦。**翻唱會把 TTS 和 ASR 擠出顯卡,所以預設不送到正在跑她語音的那台(`allow_on_speech_host = "never"`)。要讓這台在她閒著時也做歌:
+
+```toml
+[modules.cluster.routing]
+allow_on_speech_host = "when_idle"   # never(預設)| when_idle | always
+idle_minutes = 10                    # when_idle:多久沒人說話才算閒著
+```
+
+**擁有者的控制**(面板「電腦」頁,需要 `owner.cluster.route`,只有擁有者角色有;每次都記進稽核紀錄),也可以寫在設定檔(面板上會標「設定檔」,不能在面板改):
+
+| 控制 | 面板 | 設定檔 |
+|---|---|---|
+| 釘選:這個能力只送這台 | 只用這台 | `[modules.cluster.routing.capabilities.sing] pin = "friend-pc"` |
+| 排除:這台不接這個能力 | 排除 | `... exclude = ["laptop"]` |
+| 權重:分數除以它(2 = 大約兩倍的工作) | 權重 | `[modules.cluster.routing.weights] friend-pc = 2` |
+| 清空:做完手上的,不接新的 | 清空 | `[modules.cluster.routing] drain = ["old-pc"]` |
+
+從面板更新一台電腦時,Core 會在更新期間自動清空它,所以它的排隊會做完,更新的「等她忙完」才等得到。
+
+**別台電腦的主人自己限制**(他的 `host.toml`,Core 改不了):`[services.sing]` 的 `accept = false`(服務照跑,不接 Core 的新工作)和 `concurrency = 1`(同時最多幾個)。這兩個鍵比較舊的 hostd 看不懂,會拒絕整個 `host.toml`:**先更新那台,再寫**。
 
 ### 搬舊的設定
 
@@ -579,7 +612,8 @@ Stage 要直接碰 VTube Studio / OBS / 遊戲,所以原生在直播機執行,�
 公開頁(`[modules.api.public]`,預設開):
 
 - 根網址對沒登入的人顯示她現在在做什麼、歌單和今天的統計,API 在 `/api/public/*`;登入的成員多看到她眼中的自己、下載資料、請她忘記、點歌,API 在 `/api/member/*`。管理用的 token 表單在 `#/login`,頁面上沒有連結。
-- 放在 Cloudflare tunnel 後面時,請求都從本機進來,速率限制看 `CF-Connecting-IP`。Core 綁在 `127.0.0.1` 才能信這個標頭;綁到其他位址時,非本機的連線一律用連線位址。
+- 放在 Cloudflare tunnel 後面時,請求都從本機進來,速率限制看 `CF-Connecting-IP`。Core 綁在 `127.0.0.1` 才能信這個標頭;綁到其他位址時,非本機的連線一律用連線位址,不管設定的是哪個標頭。
+- 前面換成這台電腦上別的反向代理(nginx、Caddy)時,用 `[modules.api.public] client_ip_header` 指定它帶訪客位址的標頭:`x-real-ip`,或 `x-forwarded-for`(取最後一個,也就是代理自己加上的那個)。代理要自己設這個標頭,不能照轉訪客送來的,否則訪客可以自己挑速率限制看的位址。沒設定時照預設讀 `CF-Connecting-IP`,而 nginx 預設會把訪客送的這個標頭原樣轉進來:用 nginx 或 Caddy 一定要設 `client_ip_header`,或在代理把 `CF-Connecting-IP` 清掉(nginx:`proxy_set_header CF-Connecting-IP "";`)。設成空字串就不讀任何標頭,所有從本機來的請求算同一個人。
 - `identify` 不能證明對方是伺服器成員:任何 Discord 帳號都能登入成員頁,但什麼資料都沒有,而且她不認識的帳號不能點歌。
 - 公開頁會把 `apps/panel/dist` 裡的預設背景圖傳給所有訪客。那張圖是遊戲 CG,對外開放前先確認授權,或把 `public/background.local.jpg` 拿掉後重新建置面板(`pnpm build:web`),面板會退回暮色漸層。
 
@@ -609,6 +643,27 @@ miyoria doctor --deep
 `--dry-run` 只列出會做的事。`doctor --deep` 會比對執行中的 Core 版本和這份 CLI,不同時提醒重啟。
 
 npm 安裝的版本沒有 git 資料夾可以 pull:`update` 會告訴你先用套件管理員升級(`npm update -g miyoria`,pnpm 是 `pnpm update -g miyoria`),再重新執行 `miyoria update` 同步環境和重啟服務。
+
+### 從面板更新別台電腦
+
+面板「電腦」頁的每台電腦都會顯示版本(分支 · 提交)、和 Core 那台比是落後幾個提交、相同、比較新還是分岔。勾選幾台按「更新」,那幾台會自己快轉到 **Core 那台現在的提交**、需要時 `pnpm install`、同步變了的 Python 環境、重啟有變動的服務,每一步都顯示在那台底下。只有擁有者能按(權限節點 `owner.cluster.update`,admin 和 moderator 角色沒有;擁有者可以在自訂角色裡把這個節點給別人),每台都會記進稽核紀錄。
+
+- **預設是開的**:跑 worker 的電腦一旦加入某個 Core,那個 Core 的擁有者就能把這台的 checkout 更新到它追蹤的分支上的提交。不用寫任何設定。
+- **要關掉**:在那台的 `host.toml` 加
+
+  ```toml
+  [update]
+  allow_remote = false
+  ```
+
+  一分鐘內生效,不用重啟(`miyoria init` 新寫的 `host.toml` 最後有這兩行,註解掉的)。關掉的電腦一樣會回報版本,但不接受更新,面板會寫出原因。
+- **跑 Core 的那台不能從面板更新**(會重啟 Core 自己),照舊在那台 `miyoria update`。
+- 那台只會在它**自己追蹤的分支**(通常是 `origin/main`)上**快轉**:有未提交的變更、分岔、比 Core 新、或 Core 的提交還沒推上去,都會拒絕,什麼都不動。
+- 她在做歌、唱歌或直播時,那台會先**等**(面板顯示「等她忙完」和在等什麼,最多 30 分鐘,可以取消)。更新期間 Core 不送新工作給那台(自動清空),所以它的排隊做完就會往下走。
+- 中途裝套件或同步環境失敗,會退回原本的提交、把停掉的服務帶回來。更新後沒起來的服務會列出來,不會自動退回。
+- **不會下載模型**:新版需要的模型檔缺了會列在結果裡,請那台的主人在那台執行 `miyoria doctor --fix` 或 `miyoria models pull`。
+- 遠端更新**不建置**面板、overlay、SDK 和擴充,hostd 自己也還是舊的程式,直到那台 `miyoria down` 再 `miyoria up`;要這些的話在那台 `miyoria update`。結果裡會提醒。
+- 那台的 hostd 太舊時面板寫「版本不明」,不能從這裡更新:先在那台手動更新一次。
 
 ### 其他方式
 
@@ -692,7 +747,7 @@ miyoria core                                     # 8. 第一次啟動:其餘的�
 - **刪除時會發生什麼**:快取這份資料的模組(memory、social、mood、self、agent、initiative、world、queue、sandbox 中相關的)先停下來,同一個交易裡刪除,再把模組啟動;頻道設定同時從 agent 的記憶體裡清掉,權限刪除後 auth 會重新載入。少數東西要重新啟動 Core 才完全生效:Persona 修改刪除後,執行中的人格要等 Core 重啟才回到 profile 檔案的內容;模組開關刪除後,下次啟動才回到設定檔的預設。語音同意有最多一分鐘的快取。
 - **回到初始狀態**(危險區):刪除上表「她的資料」與「共用資料」的所有內容,回到剛安裝的狀態。流程:按「下載備份」→ Core 產生完整備份(含稽核紀錄)並下載到瀏覽器,同時發一個 15 分鐘內有效、只能用一次的憑證 → 輸入 profile id → 確認。沒有這個憑證 Core 會拒絕重設,所以不可能跳過備份。重設會保留稽核紀錄(並新增 `data.backup`、`data.reset` 兩筆)、LLM 用量與面板登入;角色與權限回到內建角色,設定檔 `[modules.commands] owners` 的擁有者仍是擁有者。
 - **API**:`GET /api/data`、`GET /api/data/export?categories=a,b`、`POST /api/data/wipe`(`{ categories, confirm }`)、`POST /api/data/backup`(回應標頭 `x-miyoria-backup-token`)、`POST /api/data/reset`(`{ confirm, backup_token }`)。每次匯出、刪除與重設都寫進稽核紀錄。
-- **從備份還原尚未支援**:面板的 JSON 備份是給人看與留存的(不含記憶的 embedding 與搜尋 token);要整個復原,請用上面的資料庫備份(SQLite 檔案或 `scripts/backup`)。重設前先做一次資料庫備份最保險。
+- **從備份還原尚未支援**:面板的 JSON 備份是給人看與留存的(不含記憶的 embedding 與搜尋 token);要整個復原,請用上面的資料庫備份(SQLite 檔案)。重設前先做一次資料庫備份最保險。
 - 這個頁面只處理目前的 profile;共用資料會影響同一個資料庫裡的其他角色(多角色的節點要注意)。
 
 ## 8. 日誌

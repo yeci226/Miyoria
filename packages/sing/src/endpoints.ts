@@ -4,5 +4,6 @@ export {
   type EndpointQuery,
   type EndpointSource,
   type EndpointsOption,
+  type EndpointUnit,
   firstEndpoint,
 } from "@miyoria/runtime/kernel";

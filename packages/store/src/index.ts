@@ -3,6 +3,18 @@
 // URL names.
 
 export {
+  type ArtifactCleaner,
+  ArtifactCleanerKey,
+  CLEAN_PLUGIN,
+  type FileLinkRefusal,
+  type FileLinkRequest,
+  type FileLinkResult,
+  type FileLinks,
+  FileLinksKey,
+  type HandOut,
+  isCleanCopy,
+} from "./artifacts/handout.js";
+export {
   ArtifactTypeError,
   decideType,
   MEDIA_TYPES,
@@ -12,6 +24,7 @@ export {
   sniff,
   TextCheck,
 } from "./artifacts/media.js";
+export { isSpaceMember, type SpaceMembership, spaceMembership } from "./artifacts/membership.js";
 export { artifactSchema } from "./artifacts/migrations.js";
 export { ArtifactAttachments } from "./artifacts/outgoing.js";
 export {
@@ -41,6 +54,13 @@ export {
   SHARE_MODES,
   SONG_COVER_SOURCE,
 } from "./artifacts/schema.js";
+export {
+  type AudienceRefusal,
+  type AudienceVerdict,
+  audienceAllowed,
+  type ShareableArtifact,
+  type ShareTarget,
+} from "./artifacts/share-policy.js";
 export {
   type ArtifactShare,
   ArtifactShareError,
@@ -103,6 +123,7 @@ export { configSchema } from "./config/migrations.js";
 export { PersonaOverrides } from "./config/persona.js";
 export {
   type PlaceSetting,
+  type PlaceSettingChange,
   type PlaceSettingFilter,
   PlaceSettings,
   type PlaceSettingsOptions,
@@ -295,11 +316,14 @@ export {
   HOME_SESSION,
   Identity,
   linkCodeHash,
+  onPlaceRows,
   type Place,
   type PlaceAuthor,
+  type PlaceRowChange,
   type ResolveOptions,
 } from "./identity/identity.js";
 export { identitySchema } from "./identity/migrations.js";
+export { isMemberOf, SpacePlaces } from "./identity/places.js";
 export {
   type AccountRow,
   // The Drizzle tables other plugins' foreign keys point at.
@@ -363,6 +387,7 @@ export {
   type PersonRequestResult,
 } from "./person-data.js";
 export type { PluginContext, SettingsFamily, StorePlugin } from "./plugin.js";
+export { openPluginDatabase, type PluginDatabaseOptions } from "./plugin-db.js";
 export {
   type Account,
   type AuditEntry,

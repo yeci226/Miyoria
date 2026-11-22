@@ -14,7 +14,9 @@ import {
   type ActivitySnapshot,
   type BusEvent,
   type ContextKey,
+  CurrencyKey,
   contextKeyString,
+  DEFAULT_CURRENCY,
   EventLogKey,
   Events,
   GameSecretsKey,
@@ -25,6 +27,7 @@ import {
   is,
   isJsonObject,
   type JsonValue,
+  PartyOutcomesKey,
   PartyOverviewKey,
   PartyRewardsKey,
   PartyStatusKey,
@@ -101,9 +104,23 @@ class Notes implements PartyOutput {
     }
   }
 
-  /** Everyone who played it is evidence for her nightly reflection on them (`played_together`). */
+  /**
+   * How it came out goes to whoever settles on it (`PartyOutcomes`: the economy's predictions),
+   * and everyone who played it is evidence for her nightly reflection on them (`played_together`).
+   */
   ended(info: PartyEnded): void {
     const services = this.ctx.services;
+    try {
+      services.get(PartyOutcomesKey)?.ended({
+        session: info.session,
+        game: info.game,
+        context: info.context,
+        reason: info.reason,
+        solved: info.solved,
+      });
+    } catch (error) {
+      log.warn({ err: errorMessage(error) }, "cannot tell how the game came out");
+    }
     const heart = services.get(HeartKey);
     const people = services.get(SocialSignalsKey);
     if (heart?.evidence === undefined || people === undefined) return;
@@ -181,6 +198,7 @@ export class PartyModule implements Module {
       random: this.#random,
       output: new Notes(ctx),
       rewards: () => services.get(PartyRewardsKey) ?? null,
+      currency: () => services.get(CurrencyKey) ?? DEFAULT_CURRENCY,
       clips: () => services.get(SongClipsKey) ?? null,
       judge: () => (services.has(LlmRouterKey) ? judge : null),
       warn: (message, detail) => log.warn({ err: errorMessage(detail) }, message),

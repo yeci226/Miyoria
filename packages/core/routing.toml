@@ -1,0 +1,4 @@
+# [routing] of Core (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# single: there is one Core; another host that reports one is a conflict, never used.
+class = "single"

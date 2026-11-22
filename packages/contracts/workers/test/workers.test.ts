@@ -385,7 +385,7 @@ describe("sing", () => {
     expect(roundTrip(WorkersSingOkSchema, { ok: true })).toEqual({ ok: true });
   });
 
-  it("reads a finished song, without the keys nobody reads", () => {
+  it("reads a finished song and its link, without the keys nobody reads", () => {
     const meta = roundTrip(WorkersSingSongMetaSchema, song);
     expect(meta).toMatchObject({
       id: "yt-abc123-k0",
@@ -396,7 +396,7 @@ describe("sing", () => {
       beats: { bpm: 128, times: [0.5, 0.97] },
       play: { sample_rate: 48000, samples: 10195200 },
     });
-    expect(meta).not.toHaveProperty("source");
+    expect(meta.source).toEqual({ kind: "youtube", url: "https://youtu.be/abc123" });
     expect(meta.lyrics).toEqual({ synced: true, lines: song.lyrics.lines });
   });
 
@@ -417,12 +417,16 @@ describe("sing", () => {
       video: null,
     });
     expect(
-      WorkersSingSongMetaSchema.parse({ ...song, beats: "x", lyrics: 3, title: 5 }),
+      WorkersSingSongMetaSchema.parse({ ...song, beats: "x", lyrics: 3, title: 5, source: 7 }),
     ).toMatchObject({
       title: "",
       lyrics: null,
       beats: null,
+      source: null,
     });
+    expect(
+      WorkersSingSongMetaSchema.parse({ ...song, source: { kind: "library", url: 9 } }).source,
+    ).toEqual({ kind: "library", url: null });
     expect(WorkersSingSongMetaSchema.safeParse({ id: "s" }).success).toBe(false);
   });
 

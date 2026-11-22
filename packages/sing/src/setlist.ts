@@ -45,6 +45,12 @@ export interface SongEntry {
   /** Where it was asked for. */
   context: ContextKey | null;
   /**
+   * The server (its guild id) it is sung in when it was asked for outside one (a DM, the member
+   * page): the requester's own. `null` (or absent, a list of before phase 6) with no `context`
+   * either: any server she is in voice in.
+   */
+  guild?: string | null;
+  /**
    * Sung as soon as she is free once ready (a command or the request queue asked; commands are
    * forced overrides). Otherwise she picks the moment.
    */
@@ -82,7 +88,10 @@ export type NewSong = Pick<
   "query" | "key" | "requester" | "requester_name" | "context"
 > &
   Partial<
-    Pick<SongEntry, "backing" | "forced" | "practice" | "queue_item" | "priority" | "priority_key">
+    Pick<
+      SongEntry,
+      "backing" | "forced" | "practice" | "queue_item" | "priority" | "priority_key" | "guild"
+    >
   >;
 
 export class SetListError extends Error {
@@ -90,6 +99,14 @@ export class SetListError extends Error {
 }
 
 const OPEN: readonly SongState[] = ["preparing", "ready", "playing"];
+
+/**
+ * The server a song is sung in: the guild of where it was asked for, else the one it was given;
+ * `null`: any (a song of before there were several servers).
+ */
+export function songGuild(e: Pick<SongEntry, "context" | "guild">): string | null {
+  return e.context?.scope ?? e.guild ?? null;
+}
 
 /** One line naming a song for her or for a card: `「title」- artist`, escaped and short. */
 export function songLabel(e: SongEntry): string {
@@ -117,6 +134,7 @@ const StoredEntrySchema = z.object({
   requester: AccountSchema.nullable().catch(null),
   requester_name: z.string().catch("觀眾"),
   context: ContextSchema.nullable().catch(null),
+  guild: z.string().nullable().optional().catch(null),
   forced: z.boolean().catch(false),
   practice: z.boolean().catch(false),
   state: z.enum(["preparing", "ready", "playing", "done", "failed", "cancelled"]),
@@ -246,6 +264,7 @@ export class SetList {
       requester,
       requester_name: song.requester_name,
       context: song.context,
+      ...(song.guild == null ? {} : { guild: song.guild }),
       forced: song.forced ?? false,
       practice: song.practice ?? false,
       state: "preparing",

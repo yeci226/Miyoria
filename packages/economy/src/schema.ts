@@ -20,7 +20,7 @@
 // the person's accounts. Coins are never kept outside the ledger: these tables say what the coins
 // were for and where the thing stands.
 
-import { accounts, micros, persons } from "@miyoria/store";
+import { accounts, micros, persons, spaces } from "@miyoria/store";
 import type { JsonObject } from "@miyoria/types";
 import { sql } from "drizzle-orm";
 import {
@@ -115,9 +115,15 @@ export const economyBounties = sqliteTable(
     closed_at: micros(),
     /** The account the reward was paid to. */
     winner_account_id: text().references(() => accounts.id, { onDelete: "set null" }),
+    /**
+     * The Space (identity's `spaces.id`) it was posted in, where it is shown and can be won; `null`
+     * only before phase 6 found it one (economy v6 gave the old ones the primary Space).
+     */
+    space_id: text().references(() => spaces.id),
   },
   (t) => [
     index("economy_bounties_status_idx").on(t.status, t.created_at),
+    index("economy_bounties_space_idx").on(t.space_id, t.status, t.created_at),
     check("economy_bounties_status_check", sql`${t.status} IN (${oneOf(BOUNTY_STATUSES)})`),
   ],
 );
@@ -138,9 +144,16 @@ export const economyDocs = sqliteTable(
     data: text({ mode: "json" }).$type<JsonObject>().notNull(),
     created_at: micros().notNull(),
     updated_at: micros().notNull(),
+    /**
+     * The Space (identity's `spaces.id`) a prediction and its bets belong to: who sees it and may
+     * bet. `null` for what belongs to no Space (her room, the retired kinds), and for a prediction
+     * opened while she knew of no Space at all (open to everyone she knows).
+     */
+    space_id: text().references(() => spaces.id),
   },
   (t) => [
     primaryKey({ name: "economy_docs_pk", columns: [t.kind, t.id] }),
+    index("economy_docs_space_idx").on(t.kind, t.space_id, t.created_at),
     index("economy_docs_recent_idx").on(t.kind, t.created_at, t.id),
     index("economy_docs_owner_idx").on(t.kind, t.owner_account_id, t.created_at),
   ],

@@ -5,8 +5,9 @@ the punctuation, closing quotes and brackets attached to the sentence they end. 
 
 * pieces with fewer than ``min_chars`` speakable characters are merged into the next piece
   (the last one into the previous), so we never synthesise a lone "哼!" as its own clip;
-* pieces longer than ``max_chars`` are cut at the last comma-like mark before the limit
-  (hard cut if there is none), because very long single generations delay the first audio.
+* pieces longer than ``max_chars`` are cut at the last comma-like mark before the limit, else at
+  the last space (hard cut if there is neither), because very long single generations delay the
+  first audio.
 
 Concatenating the result (minus whitespace) always equals the input (minus whitespace).
 """
@@ -59,6 +60,9 @@ def _cut_long(piece: str, max_chars: int) -> list[str]:
     while len(piece) > max_chars:
         window = piece[:max_chars]
         cut = max((window.rfind(c) for c in SOFT_BREAKS), default=-1)
+        if cut <= max_chars // 3:
+            # No comma to cut at: a space, so that a word or a number is never said in two halves.
+            cut = max((i for i, ch in enumerate(window) if ch.isspace()), default=-1)
         cut = cut + 1 if cut > max_chars // 3 else max_chars
         out.append(piece[:cut].strip())
         piece = piece[cut:].strip()

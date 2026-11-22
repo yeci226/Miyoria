@@ -1,8 +1,10 @@
 // Module `market` (docs/design/v5-play.md §4.5, §11.4): the owner of the `market` plugin's tables.
-// It puts `[modules.market]` in force and provides `MarketKey` (`MarketService`: the auction, the
-// lottery, their views and the owner's controls) and `SongPriorityKey` (the song priority ticket
-// the singer asks for). Coins go through `MarketWalletKey`, which the economy provides; without it
-// nothing that costs anything goes through.
+// It puts `[modules.market]` in force, per Space (`placeConfig`: channels, days, times and the
+// time zone may differ per server), and provides `MarketKey` (`Markets`: each Space's
+// `MarketService`, the auction, the lottery, their views and the owner's controls; `markets.ts`)
+// and `SongPriorityKey` (the song priority ticket the singer asks for, the same everywhere). Coins
+// go through `MarketWalletKey`, which the economy provides; without it nothing that costs anything
+// goes through.
 //
 // It posts in Discord through the platform's `ReplySink` (the lot, the results, the lottery's week
 // and its draw, each with its picture from `PicturesKey` above the text when one can be drawn),
@@ -31,29 +33,38 @@ import {
   type Module,
   type ModuleCard,
   type ModuleContext,
+  placeConfig,
 } from "@miyoria/runtime/kernel";
 import { StoreKey } from "@miyoria/store";
 import {
+  CharacterKey,
   type Clock,
   type ContextKey,
+  CurrencyKey,
+  DEFAULT_CHARACTER,
+  DEFAULT_CURRENCY,
   EventLogKey,
   HandleDirectoryKey,
   MarketWalletKey,
   ModerationKey,
   type PersonId,
   PicturesKey,
+  PlacesKey,
   SongPriorityKey,
   SongTicketsKey,
+  type SpaceRef,
   serviceKey,
 } from "@miyoria/types";
 import { marketCard } from "./card.js";
 import { registerCommands, unregisterCommands } from "./commands.js";
 import { MarketConfigSchema } from "./config.js";
 import { LlmLotPicker } from "./lots.js";
-import { type CallNames, MarketService } from "./service.js";
+import { MarketRegistry, type Markets, type SharedMarketDeps } from "./markets.js";
+import type { CallNames } from "./service.js";
 import { marketTables } from "./store.js";
 
-export const MarketKey = serviceKey<MarketService>("Market");
+/** The market of each Space (`Markets.of(space)`), and the song priority ticket. */
+export const MarketKey = serviceKey<Markets>("Market");
 
 /** How often the pass runs. */
 export const TICK_MS = 30_000;
@@ -84,21 +95,23 @@ export class MarketModule implements Module {
   });
   readonly #options: MarketModuleOptions;
   #mount: CommandMount | null = null;
-  /** The running service and its clock, for the card on the panel. */
-  #running: { service: MarketService; clock: Clock } | null = null;
+  /** The running markets and their clock, for the card on the panel. */
+  #running: { markets: MarketRegistry; clock: Clock } | null = null;
 
   constructor(options: MarketModuleOptions = {}) {
     this.#options = options;
   }
 
   async start(ctx: ModuleContext): Promise<void> {
-    const config = ctx.config(MarketConfigSchema);
+    const placed = placeConfig(ctx, MarketConfigSchema);
+    const config = placed.base();
     const store = ctx.services.get(StoreKey);
     if (store === undefined) {
       ctx.log.warn("no store: no market");
       return;
     }
     const tables = store.plugin(marketTables);
+    const places = ctx.services.get(PlacesKey) ?? null;
     const heart = store.plugin(heartTables).people;
     const clock = this.#options.clock ?? ctx.clock;
     const names: CallNames = {
@@ -111,9 +124,7 @@ export class MarketModule implements Module {
         return row !== null && (hasTag(row, BLOCKED_TAG) || labelOf(row) === "很討厭");
       },
     };
-    const service = new MarketService({
-      config,
-      store: tables,
+    const shared: SharedMarketDeps = {
       wallet: () => ctx.services.get(MarketWalletKey) ?? null,
       now: () => clock.now(),
       isSelf: (account) => ctx.services.get(PeopleDirectoryKey)?.isSelf(account) ?? false,
@@ -134,20 +145,33 @@ export class MarketModule implements Module {
         () => ctx.services.get(LlmRouterKey) ?? null,
         config.auction_purpose,
         PICK_TIMEOUT_MS,
+        () => ctx.services.get(CurrencyKey) ?? DEFAULT_CURRENCY,
       ),
-      post: (channel, reply) => post(ctx, channel, reply),
       tell: (summary, key, person) => tell(ctx, summary, key, person),
       log: ctx.log,
       pictures: () => ctx.services.get(PicturesKey) ?? null,
       songTickets: () => ctx.services.get(SongTicketsKey) ?? null,
       ...(this.#options.randomInt === undefined ? {} : { randomInt: this.#options.randomInt }),
+    };
+    const markets = new MarketRegistry({
+      shared,
+      store: tables,
+      config: placed,
+      places,
+      post: (space, channel, reply) => post(ctx, space, channel, reply),
     });
-    ctx.provide(MarketKey, service);
-    ctx.provide(SongPriorityKey, service.songPriority);
-    this.#running = { service, clock };
+    ctx.provide(MarketKey, markets);
+    ctx.provide(SongPriorityKey, markets.songPriority);
+    this.#running = { markets, clock };
     this.#mount = new CommandMount(
       "market",
-      (registry) => registerCommands(registry, () => service),
+      (registry) =>
+        registerCommands(
+          registry,
+          (context) => markets.at(context),
+          ctx.services.get(CurrencyKey) ?? DEFAULT_CURRENCY,
+          (ctx.services.get(CharacterKey) ?? DEFAULT_CHARACTER).pronoun,
+        ),
       unregisterCommands,
     );
     this.#mount.attach(ctx);
@@ -155,7 +179,7 @@ export class MarketModule implements Module {
     ctx.spawn("pass", async (signal) => {
       const pass = async () => {
         try {
-          await service.tick(signal);
+          await markets.tick(signal);
         } catch (error) {
           ctx.log.warn({ err: errorMessage(error) }, "market: the pass failed");
         }
@@ -165,11 +189,13 @@ export class MarketModule implements Module {
     });
   }
 
-  /** The week's auction and lottery (`card.ts`); nothing without a store. */
+  /** The primary Space's auction and lottery this week (`card.ts`); nothing without a store. */
   async card(): Promise<ModuleCard> {
     const running = this.#running;
     if (running === null) return { facts: [] };
-    const { service, clock } = running;
+    const { markets, clock } = running;
+    const service = markets.of(null);
+    if (service === null) return { facts: [] };
     const [auction, lottery] = await Promise.all([
       service.auctionView(null),
       service.lotteryView(null),
@@ -184,16 +210,28 @@ export class MarketModule implements Module {
   }
 }
 
-/** Posts a notice in a Discord channel; its message id, or `null` (logged) when it could not. */
+/**
+ * Posts a notice in a channel of `space`, through its platform's sink; its message id, or `null`
+ * (logged) when it could not. Without a Space (no identity) the one server's channel, on the
+ * platform the sink is.
+ */
 async function post(
   ctx: ModuleContext,
+  space: SpaceRef | null,
   channel: string,
   reply: CommandReply,
 ): Promise<string | null> {
   const sink = ctx.services.get(ReplySinkKey);
-  const context: ContextKey = { platform: "discord", scope: null, channel, kind: "channel" };
-  if (!sink?.sendCard || sink.platform !== context.platform) {
-    ctx.log.info({ channel }, "market: no Discord to post in");
+  if (!sink?.sendCard) {
+    ctx.log.info({ channel }, "market: no platform to post in");
+    return null;
+  }
+  const context: ContextKey =
+    space === null
+      ? { platform: sink.platform, scope: null, channel, kind: "channel" }
+      : { platform: space.platform, scope: space.external_id, channel, kind: "channel" };
+  if (sink.platform !== context.platform) {
+    ctx.log.info({ channel, platform: context.platform }, "market: no sink for that platform");
     return null;
   }
   try {

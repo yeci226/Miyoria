@@ -37,6 +37,7 @@ import {
   type Reminder,
   type ReminderDesk,
   repairHandleText,
+  safeName,
   sameAccount,
   toTimestamp,
   type Wish,
@@ -167,6 +168,11 @@ export interface ReminderBookOptions {
   publish?: (reminder: Reminder, state: "set" | "fired" | "held" | "done" | "cancelled") => void;
   /** What she wants to ask whom (the arbiter's `WishesKey`), when it runs. */
   wishes?: () => Wishes | null;
+  /**
+   * The handle of the one person a name she wrote means (`directoryMatch`), `null`: nobody or
+   * more than one. Unset: a name that may be a handle is taken as written.
+   */
+  handleOf?: (name: string) => string | null;
 }
 
 /** Her timers: `ReminderDeskKey`. Reads answer from memory; writes persist in the background. */
@@ -267,8 +273,15 @@ export class ReminderBook implements ReminderDesk {
       throw new ReminderError(`這個人已經有 ${perPerson} 個提醒在等了,先取消一個`);
     }
     const id = newId();
+    const named = input.person?.trim() ?? "";
     const person =
-      input.person !== null && isValidHandle(input.person.trim()) ? input.person.trim() : null;
+      named === ""
+        ? null
+        : this.#o.handleOf !== undefined
+          ? this.#o.handleOf(named)
+          : isValidHandle(named)
+            ? named
+            : null;
     const wish =
       person === null
         ? null
@@ -470,7 +483,10 @@ export function remindCapability(book: ReminderBackend): Capability {
         in_minutes: { type: "integer", description: "幾分鐘後" },
         at: { type: "string", description: '"HH:MM" 或 "YYYY-MM-DD HH:MM"(當地時間)' },
         daily: { type: "boolean", description: "每天同一時間(預設 false)" },
-        person: { type: "string", description: "跟誰有關(可省略)" },
+        person: {
+          type: "string",
+          description: "跟誰有關(可省略):他的名字(對話紀錄每行開頭那個),或他現在的顯示名",
+        },
         id: { type: "string", description: "cancel 時要取消的提醒(例如 R7XK2P)" },
       },
     },
@@ -518,8 +534,13 @@ export function remindCapability(book: ReminderBackend): Capability {
             });
             // Only set: 「好了」 alone read as the reminder going off, and she told Owen at 07:30
             // that a 10:30 reminder had rung (2026-11-12 23:38).
+            const who = args.person?.trim() ?? "";
+            const unknown =
+              who !== "" && r.person === null
+                ? `(不知道「${safeName(who)}」是誰,這個提醒沒有記在誰身上)`
+                : "";
             return {
-              text: `提醒設好了,還沒到時間,到時候才會提醒你:${line(r, offset)}`,
+              text: `提醒設好了,還沒到時間,到時候才會提醒你:${line(r, offset)}${unknown}`,
               data: { id: r.id, key: r.key, due: r.due },
             };
           } catch (error) {

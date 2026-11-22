@@ -1,0 +1,14 @@
+# [routing] of the TTS worker (docs/design/v5-hostd.md §15), beside service.toml for older hostds.
+#
+# session: her speech is a stream of sentences that stays on one worker; another host is only a
+# failover between sessions. Realtime: the host nearest Core first, never placed by queue length.
+class = "session"
+latency = "realtime"
+
+[needs]
+files = ["workers/voices/{voice}/ref.wav", "workers/voices/{voice}/ref.txt"]
+
+[variant]
+# Her voice must sound the same wherever it is made: the reference audio and the model settings.
+files = ["workers/voices/{voice}/ref.wav", "workers/voices/{voice}/ref.txt"]
+env = ["TTS_DEFAULT_VOICE", "TTS_MODEL", "TTS_BACKEND", "TTS_MODE", "TTS_CLONE_MODE"]

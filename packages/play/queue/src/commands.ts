@@ -3,6 +3,9 @@
 // The list is a public card with Next / Done / Skip / Pause buttons (they need the manage
 // node); a vote is a public card with one button per option (they need the vote node).
 // Removing an item and clearing the queue ask with a red confirm card first.
+//
+// Every command and button works on the queue of the server it is used in (phase 6: each Space
+// has its own); a DM's is the default one (the primary Space's).
 
 import {
   type AnyComponentRoute,
@@ -27,7 +30,7 @@ import {
   notice,
   type RegisterOptions,
 } from "@miyoria/commands";
-import type { RequestQueue } from "./queue.js";
+import type { QueueView, RequestQueue } from "./queue.js";
 import {
   type ItemId,
   QueueError,
@@ -41,7 +44,7 @@ const LIST_LIMIT = 10;
 /** Vote buttons per card (4 rows of 5, room left for the rest of the card). */
 const MAX_VOTE_BUTTONS = 20;
 
-type Handler = (queue: RequestQueue, inv: Invocation) => CommandReply | Promise<CommandReply>;
+type Handler = (queue: QueueView, inv: Invocation) => CommandReply | Promise<CommandReply>;
 
 const R = {
   next: "queue:list:next",
@@ -59,12 +62,15 @@ const R = {
 /**
  * Registers the queue commands. Returns the registered paths (for unregistering).
  */
-export function registerCommands(registry: CommandRegistry, queue: RequestQueue): string[] {
-  const perms = queue.config.permissions;
+export function registerCommands(registry: CommandRegistry, all: RequestQueue): string[] {
+  const perms = all.config.permissions;
   const paths: string[] = [];
+  /** The queue of the server a command or a button is used in. */
+  const at = (inv: { context: Invocation["context"] }): QueueView =>
+    all.of(all.spaceAt(inv.context));
   const add = (spec: CommandSpec, handler: Handler, options: RegisterOptions = {}): void => {
     paths.push(commandName(spec));
-    const wrapped: CommandHandler = (inv) => handler(queue, inv);
+    const wrapped: CommandHandler = (inv) => handler(at(inv), inv);
     registry.register(spec, wrapped, options);
   };
 
@@ -89,31 +95,32 @@ export function registerCommands(registry: CommandRegistry, queue: RequestQueue)
       }),
   );
 
-  const after = (q: RequestQueue, note: CommandReply): ComponentResult => {
+  const after = (q: QueueView, note: CommandReply): ComponentResult => {
     if (note.tone === "warn" || note.tone === "error") return ComponentResult.reply(note);
     return ComponentResult.update(listCard(q, note.text));
   };
   const listRoutes: AnyComponentRoute[] = [
-    { route: R.refresh, handle: () => ComponentResult.update(listCard(queue)) },
+    { route: R.refresh, handle: (inv) => ComponentResult.update(listCard(at(inv))) },
     {
       route: R.next,
       permission: perms.manage,
-      handle: () => after(queue, callNext(queue)),
+      handle: (inv) => after(at(inv), callNext(at(inv))),
     },
     {
       route: R.done,
       permission: perms.manage,
-      handle: () => after(queue, finish(queue, null, "done")),
+      handle: (inv) => after(at(inv), finish(at(inv), null, "done")),
     },
     {
       route: R.skip,
       permission: perms.manage,
-      handle: () => after(queue, finish(queue, null, "skip")),
+      handle: (inv) => after(at(inv), finish(at(inv), null, "skip")),
     },
     {
       route: R.pause,
       permission: perms.manage,
-      handle: () => {
+      handle: (inv) => {
+        const queue = at(inv);
         queue.pause();
         return after(queue, notice("success", "已暫停叫號。"));
       },
@@ -121,7 +128,8 @@ export function registerCommands(registry: CommandRegistry, queue: RequestQueue)
     {
       route: R.resume,
       permission: perms.manage,
-      handle: () => {
+      handle: (inv) => {
+        const queue = at(inv);
         queue.resume();
         return after(queue, notice("success", "已恢復叫號。"));
       },
@@ -152,6 +160,7 @@ export function registerCommands(registry: CommandRegistry, queue: RequestQueue)
           route: R.cast,
           parse: (p) => intParam(p[0]),
           handle: (inv, index) => {
+            const queue = at(inv);
             const vote = queue.voteStatus();
             const option = vote?.options[index];
             if (!vote || option === undefined) {
@@ -207,7 +216,7 @@ export function registerCommands(registry: CommandRegistry, queue: RequestQueue)
           parse: (p) => intParam(p[0]),
           handle: (_inv, id) =>
             ComponentResult.update(
-              attempt(() => notice("success", `已移除 #${queue.remove(id).id}。`)),
+              attempt(() => notice("success", `已移除 #${all.remove(id).id}。`)),
             ),
         }),
         { route: R.cancel, handle: () => ComponentResult.update(cancelled()) },
@@ -231,8 +240,8 @@ export function registerCommands(registry: CommandRegistry, queue: RequestQueue)
       components: [
         {
           route: R.clear,
-          handle: () =>
-            ComponentResult.update(notice("success", `已清空 ${queue.clear()} 個項目。`)),
+          handle: (inv) =>
+            ComponentResult.update(notice("success", `已清空 ${at(inv).clear()} 個項目。`)),
         },
       ],
     },
@@ -330,14 +339,14 @@ function targetArg(inv: Invocation): number | null {
   return Object.hasOwn(inv.args, "id") ? (inv.int("id") ?? -1) : null;
 }
 
-function callNext(q: RequestQueue): CommandReply {
+function callNext(q: QueueView): CommandReply {
   const item = q.next();
   if (item) return notice("success", `輪到 ${describe(item)}`);
   return q.isPaused() ? notice("warn", "叫號已暫停。") : notice("info", "目前沒有人在排隊。");
 }
 
 /** Done / skip of `id`, or of the active item when `id` is `null`. */
-function finish(q: RequestQueue, id: number | null, op: "done" | "skip"): CommandReply {
+function finish(q: QueueView, id: number | null, op: "done" | "skip"): CommandReply {
   const target = id ?? q.current()?.id ?? null;
   if (target === null) return notice("warn", "請指定編號，或先叫號讓一個項目進行中。");
   return attempt(() => {
@@ -356,7 +365,7 @@ function describe(item: QueueItem): string {
 }
 
 /** Plain-text list (also the card's text). */
-export function formatList(q: RequestQueue): string {
+export function formatList(q: QueueView): string {
   const items = q.list();
   if (items.length === 0) return "佇列是空的。";
   const lines: string[] = [];
@@ -370,7 +379,7 @@ export function formatList(q: RequestQueue): string {
   return lines.join("\n");
 }
 
-function listCard(q: RequestQueue, note: string | null = null): CommandReply {
+function listCard(q: QueueView, note: string | null = null): CommandReply {
   const blocks: CardBlock[] = [{ type: "text", text: formatList(q) }];
   const vote = q.voteStatus();
   if (vote) {
@@ -400,7 +409,7 @@ function listCard(q: RequestQueue, note: string | null = null): CommandReply {
   });
 }
 
-function voteCard(q: RequestQueue, seconds: number | null): CommandReply {
+function voteCard(q: QueueView, seconds: number | null): CommandReply {
   const vote = q.voteStatus();
   if (!vote) return notice("info", "目前沒有進行中的投票。");
   const counts = tallies(vote);

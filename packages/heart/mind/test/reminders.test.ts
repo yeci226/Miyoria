@@ -102,6 +102,20 @@ describe("her timers", () => {
     expect((await store.list("p", REMINDER_PREFIX)).size).toBe(0);
   });
 
+  it("keep the handle of the one person a name means, and nobody for a name nobody has", () => {
+    const named = new ReminderBook({
+      store: null,
+      profile: "p",
+      clock,
+      limits: LIMITS,
+      offsetMinutes: 480,
+      deliver: async () => ({ status: "delivered", detail: "" }),
+      handleOf: (name) => (name === "Model-9 Lumen" || name === "Nobu" ? "Nobu" : null),
+    });
+    expect(named.set(input({ person: "Model-9 Lumen" })).person).toBe("Nobu");
+    expect(named.set(input({ person: "Lumen" })).person).toBeNull();
+  });
+
   it("come due once, with a stable attention key, then end", async () => {
     const delivered: [Reminder, number][] = [];
     const b = book(async (r, late) => {

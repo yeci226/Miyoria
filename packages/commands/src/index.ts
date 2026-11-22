@@ -22,6 +22,13 @@
 // nodes are written to the `AuditLog` service when there is one.
 
 export {
+  BOARD_SCOPE_ARG,
+  BOARD_SCOPES,
+  type BoardScope,
+  boardScope,
+  boardScopeArg,
+} from "./board-scope.js";
+export {
   type AnyComponentRoute,
   type AutocompleteHandler,
   type Choice,

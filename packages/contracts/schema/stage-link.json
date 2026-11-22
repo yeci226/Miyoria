@@ -779,6 +779,66 @@
         "rate"
       ]
     },
+    "StageLinkKaraokeCheer": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cheer",
+            "nice",
+            "wow",
+            "encore"
+          ]
+        },
+        "to": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "color": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7
+            }
+          },
+          "required": [
+            "name",
+            "color"
+          ]
+        },
+        "by": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "color": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 7
+            }
+          },
+          "required": [
+            "name",
+            "color"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "to",
+        "by"
+      ]
+    },
     "StageLinkKaraokeLine": {
       "type": "object",
       "properties": {
@@ -919,6 +979,12 @@
               "type": "null"
             }
           ]
+        },
+        "cheers": {
+          "default": 0,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "required": [
@@ -1286,6 +1352,14 @@
             }
           ]
         },
+        "cheers": {
+          "default": [],
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StageLinkKaraokeCheer"
+          }
+        },
         "type": {
           "type": "string",
           "const": "karaoke"
@@ -1491,6 +1565,14 @@
               "type": "null"
             }
           ]
+        },
+        "cheers": {
+          "default": [],
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StageLinkKaraokeCheer"
+          }
         }
       },
       "required": [

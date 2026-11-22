@@ -1,3 +1,4 @@
+import { configJsonSchema, placeFields, settingFields } from "@miyoria/runtime/kernel";
 import type { ContextKey } from "@miyoria/types";
 import { describe, expect, it } from "vitest";
 import { DelegateConfigSchema, MainLineConfigSchema, WorkConfigSchema } from "../src/config.js";
@@ -99,6 +100,11 @@ describe("config", () => {
       channels: {},
       default_activeness: null,
       activeness: {},
+      mode: null,
+      activeness_level: null,
+      language: null,
+      session_usd_per_hour: 1,
+      session_tokens_per_hour: 3_000_000,
       respond_to_bots: false,
       reply_ttl_ms: 120_000,
       max_message_chars: 1900,
@@ -123,6 +129,8 @@ describe("config", () => {
         turn_debounce_ms: 100,
         max_debounce_ms: 2500,
         default_mode: "normal",
+        mode: null,
+        activeness_level: null,
         question_window_ms: 8000,
         speak_ttl_ms: 30_000,
         text_chat: true,
@@ -183,5 +191,18 @@ describe("config", () => {
       },
     });
     expect(() => AgentConfigSchema.parse({ channels: { c: "loud" } })).toThrow();
+  });
+
+  it("the_levels_differ_per_room", () => {
+    expect(settingFields(configJsonSchema(AgentConfigSchema)).skipped).toEqual([]);
+    expect(placeFields(AgentConfigSchema).map((f) => [f.keys.join("."), f.scope])).toEqual([
+      ["mode", "room"],
+      ["activeness_level", "room"],
+      ["language", "room"],
+      ["voice.mode", "room"],
+      ["voice.activeness_level", "room"],
+      ["session_usd_per_hour", "room"],
+      ["session_tokens_per_hour", "room"],
+    ]);
   });
 });

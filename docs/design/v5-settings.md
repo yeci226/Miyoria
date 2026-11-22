@@ -415,3 +415,57 @@ interface Module {
 - 範例檔的同步測試做了(`core/test/module-settings.test.ts`:每個面板欄位在範例檔的那個表格裡都有)。
 
 還沒做:`check_only`、`GET /api/places/roles`(身分組、人物選擇器)、`GET|PUT /api/config/overrides`、`config set --clear-override`、`scope: "space"` 寫 `place_settings`(欄位已經標了)、模組熱套用(`ctx.onConfig`)、派對和拍賣的快速動作(沒有經 gate 的 capability 可以用)。
+
+## 13. 每個地方的設定和整份設定進資料庫(2026-11-22,階段 6 P2)
+
+v5-places.md 是 Space、Room 和 `PlaceConfig` 怎麼解析;這一節是面板、API、CLI 怎麼讀寫每個地方的值,以及 `miyoria.toml` 怎麼匯入資料庫。單一伺服器的安裝升級後什麼都不用做,行為照舊:匯入是 owner 自己下的指令,Core 開機不會做。
+
+### 13.1 每個地方的值
+
+| 部分 | 在哪 | 做什麼 |
+|---|---|---|
+| Core | `core/src/module-settings.ts` | `describe(id, { space, room })` 給每個 `scope: "space" \| "room"` 欄位多一份 `place`:這個地方自己的值、拿掉它之後的值(`inherited`)、那個值從哪來;`value` 是這個地方實際用的(照 v5-places §3 解析,頻道不在這個伺服器的就不算)。`save` 帶 `place` 時寫 `place_settings`(作者照舊是 `panel:<平台>:<帳號>`),不寫設定版本、不重啟模組,結果是 `applied: "immediate"`;`reset` 是拿掉這個地方自己的值。`placeHistory` 從 `settings.changed` 事件列出這個伺服器(和它的頻道)或一個頻道的變更 |
+| 規則 | 同上 | `space` 欄位只能設在伺服器;`room` 欄位可以設在伺服器(那個伺服器沒自己設的頻道跟它)或頻道。`union` 的欄位要是清單。頻道欄位設了別的伺服器的頻道就拒絕(「這個頻道不在 X」)。值照模組的 schema 檢查,錯了一樣回到欄位底下。她還沒看過的頻道,設值時在 identity 建那個 room |
+| API | `api/src/settings.ts`、`contracts/api/src/settings.ts` | `GET/PUT /api/modules/{id}/settings` 和 `.../history` 收 `?space=<identity 的 id>&room=<頻道 id>`;沒有 `space` 就是整個安裝,和以前一樣。不認得的伺服器 404,只給 `room` 是 400 |
+| 權限 | 同上 | 改整個安裝要 `admin.settings.<id>`(owner、admin 本來就有);改一個伺服器的值,這個節點也可以來自**指派在那個伺服器**的角色(權限頁的指派,範圍選那個伺服器)。進面板本身照舊要全域的 `admin.panel.access`。Discord 身分組對應到的角色在面板上還不算:面板不知道登入的人在那個伺服器有哪些 Discord 身分組(要平台把成員的身分組交給 API,之後再接) |
+| 面板 | `app/Shell.tsx`、`pages/system/ModulePage.tsx` | 頁首的伺服器切換(`?space=`,只有一個伺服器時不畫)。模組頁在有欄位可以每個伺服器不同、而且不只一個伺服器時(或有欄位可以每個頻道不同時)多一個「範圍」:全部伺服器、這個伺服器、一個頻道(選頻道)。選了伺服器或頻道,表單只列能在那裡不同的欄位,每個欄位底下說「這個伺服器設的 · 拿掉後是 X」或「沿用全部的值」,按鈕是「儲存到 X」,存了立刻生效。變更紀錄跟著範圍,伺服器的紀錄沒有「復原這次」 |
+| 權限頁 | `pages/access/*` | 平台和伺服器從 `GET /api/places/spaces` 來(她在的伺服器,用名字選);一個伺服器都還沒有的安裝照舊是 discord 和手打 id |
+
+### 13.2 疊加層的 `${NAME}` 和「從哪來」
+
+- 疊加層(`config_revisions` 的 `modules.<id>`)裡的字串也可以有 `${NAME}`:開機、面板和重啟模組時都像檔案一樣從環境變數展開,模組永遠拿不到字面上的 `${...}`。環境變數沒設(也沒有 `:-` 預設值)的那個鍵略過並警告,和不合 schema 的值一樣,用檔案或預設值。面板存的值照舊不能含 `${`。
+- 疊加層的值和檔案一樣時,來源算「檔案」:匯入之後疊加層就是整份檔案,不會每個欄位都顯示「面板改過」。不一樣才是「面板改過 · 檔案:X」。
+- `miyoria config get <鍵>` 說值從哪來:檔案、資料庫第幾版(誰、何時;和檔案一樣時說一樣),再列出每個伺服器、每個頻道自己的值。
+
+### 13.3 `miyoria config import`
+
+把 `miyoria.toml` 寫成資料庫裡的下一版設定(作者 `import`):
+
+- **和目前那一版合併**:面板改過的鍵(`modules.<id>.*`,`enabled` 以外)蓋在檔案的值上,所以模組用的值不變。之前在面板或指令關掉的模組照舊是關的;檔案的 `enabled = false` 也一起進去。
+- `${NAME}` 照原樣存(§13.2 會展開);檔案裡有字面上的密碼(`token`、`api_key`、`password` 這類鍵)就整個拒絕、什麼都不寫,並說是哪幾個鍵:先用 `miyoria config set <鍵> <值>` 把它搬到 `.env`(它會自動改成 `${NAME}`),再匯入。
+- `[modules.agent]` 的 `channels`、`activeness` 裡寫著伺服器或頻道的項目搬到那個地方的設定;裸的頻道 id 和私訊的留在原處。
+- `scope: "space"` 的頻道欄位(拍賣、樂透頻道、卡拉 OK 的留言頻道這類)把全部伺服器那一層的值**複製**到擁有那個頻道的伺服器:context key 自己寫著伺服器,裸的 id 查 identity 看過的頻道;沒人知道的頻道只留在全部那一層。全部那一層的值不刪(頻道規則本來就不讓它跑到別的伺服器)。
+- 一個地方已經有自己的值,保留,不蓋掉。
+- 只做一次:已經匯入過,再跑就什麼都不寫並說已經匯入過。`--replace` 用檔案原樣蓋掉資料庫的設定(面板之後改的值拿掉,版本紀錄裡還在;每個地方的值也照檔案蓋),已經匯入過也照做。
+- `--dry-run` 只印會怎樣:第幾版、和目前不同的路徑、保留的面板值、會寫進哪個伺服器或頻道(新建的標出來)、保留的地方值、留在全部那一層的。沒有 `--yes` 時會問;不在終端機裡又沒有 `--yes` 就不寫。
+- 匯入之後:`[modules.*]` 以資料庫為準,檔案再改的鍵會被資料庫的蓋過(開機 log、`config get`、`config set` 會說);`[core]`、`[llm]` 這些頂層段落照舊只讀檔案。要讓檔案再成為唯一的來源:`miyoria config bake`。檔案的 `enabled = false` 進了資料庫,之後在檔案拿掉它不會把模組打開,要用面板或 `miyoria module enable <id>`。
+
+**升級步驟(owner 自己做)**:
+
+1. `miyoria db doctor`:看資料庫在哪、遷移都套用了、「伺服器」那一段的主要伺服器是原本那個。
+2. 停掉 Core。
+3. 備份:把 `db doctor` 印的資料庫檔,連同旁邊的 `-wal`、`-shm`(有的話)一起複製到別的資料夾。
+4. `miyoria config import --dry-run`:讀一遍。被拒絕(檔案裡有密碼)就照訊息把它們搬到 `.env` 再試。
+5. `miyoria config import`:確認後寫入(腳本裡用 `--yes`)。
+6. 抽查:`miyoria config get modules.market.auction_channel` 這類,看來源和每個伺服器的值。
+7. 啟動 Core。log 裡不應該有「the panel's value overrides miyoria.toml」是你沒改過的鍵。
+
+退回:停掉 Core,把第 3 步的檔案放回去。
+
+### 13.4 和計畫不一樣的地方
+
+- 計畫寫「首次開機匯入一次」;owner 2026-11-15 改成手動指令,開機不呼叫(`core/src/boot.ts` 只把 Places 交給設定層)。
+- 計畫的「一個伺服器裡對應到 `admin.settings.<id>` 的身分組」:面板上只認指派在那個伺服器的角色,見 §13.1。
+- 檔案的 `enabled` 也進了匯入的那一版(原本的測試就是這樣),所以匯入後在檔案打開模組要多一步,見 §13.3。
+
+還沒做:Discord 身分組對應的權限(§13.1)、伺服器值的「復原這次」、一次存多個伺服器、把 `[core]` 以外的頂層段落也從資料庫讀。

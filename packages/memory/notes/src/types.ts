@@ -103,6 +103,14 @@ export type NoteOp =
     }
   | { op: "outdate"; line: string; reason: string };
 
+/** Lines put together into one (`NotesStore.merge`). */
+export interface MergeInput {
+  /** The lines it takes the place of: ids, or `#` and the last characters of one. */
+  from: readonly string[];
+  /** The line written instead; its scope must be the scope of every line of `from`. */
+  line: LineInput;
+}
+
 /** Who makes a change set, and from what. */
 export interface ChangeMeta {
   author: NoteAuthor;
@@ -182,7 +190,8 @@ export type NotesErrorCode =
   | "document_full"
   | "section_full"
   | "outdated"
-  | "duplicate";
+  | "duplicate"
+  | "mixed_people";
 
 /** Size limits, so a prompt card stays bounded. */
 export interface NotesLimits {

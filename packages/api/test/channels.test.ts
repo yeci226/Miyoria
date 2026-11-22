@@ -6,6 +6,9 @@ import { Supervisor, SupervisorKey } from "@miyoria/runtime/kernel";
 import {
   type ContextKey,
   contextKeyString,
+  type Places,
+  PlacesKey,
+  type SpaceRef,
   type WorldSnapshot,
   type WorldState,
   WorldStateKey,
@@ -24,20 +27,59 @@ function fakeHandle() {
     [contextKeyString(set), "lively"],
     ["discord:g1:voice:v1", "mention-only"],
   ]);
+  const spaces = new Map<string, ChannelMode>();
   return {
-    channelMode: (c: ContextKey) => modes.get(contextKeyString(c)) ?? "quiet",
+    channelMode: (c: ContextKey) =>
+      modes.get(contextKeyString(c)) ?? spaces.get(c.scope ?? "") ?? "quiet",
     channelModeOverride: (c: ContextKey) => modes.get(contextKeyString(c)) ?? null,
-    configuredChannelMode: () => "quiet",
+    configuredChannelMode: (c: ContextKey) => spaces.get(c.scope ?? "") ?? "quiet",
     channelModeOverrides: () => [...modes.entries()],
-    setChannelMode: async (c: ContextKey, mode: ChannelMode | null) => {
-      if (mode === null) modes.delete(contextKeyString(c));
-      else modes.set(contextKeyString(c), mode);
+    spaceChannelMode: (c: ContextKey) => spaces.get(c.scope ?? "") ?? null,
+    configuredSpaceMode: (c: ContextKey) => (c.scope === "g2" ? "mention-only" : "quiet"),
+    setChannelMode: async (
+      c: ContextKey,
+      mode: ChannelMode | null,
+      options: { scope?: string } = {},
+    ) => {
+      const key = options.scope === "space" ? (c.scope ?? "") : contextKeyString(c);
+      const map = options.scope === "space" ? spaces : modes;
+      if (mode === null) map.delete(key);
+      else map.set(key, mode);
     },
   };
 }
 
+/** Two Spaces: S1 (guild g1, primary) and S2 (guild g2). */
+function twoSpaces(): Places {
+  const list: SpaceRef[] = [
+    {
+      id: "S1",
+      platform: "discord",
+      external_id: "g1",
+      name: "一號",
+      primary: true,
+      established: true,
+    },
+    {
+      id: "S2",
+      platform: "discord",
+      external_id: "g2",
+      name: "二號",
+      primary: false,
+      established: false,
+    },
+  ];
+  return {
+    primary: () => list[0] ?? null,
+    spaces: () => list,
+    space: (id: string) => list.find((s) => s.id === id) ?? null,
+  } as unknown as Places;
+}
+
+const other: ContextKey = { platform: "discord", scope: "g2", channel: "c9", kind: "channel" };
 const world = {
-  snapshot: () => ({ channels: [{ context: seen }] }) as unknown as WorldSnapshot,
+  snapshot: () =>
+    ({ channels: [{ context: seen }, { context: other }] }) as unknown as WorldSnapshot,
 } as unknown as WorldState;
 
 const sups: Supervisor[] = [];
@@ -79,8 +121,11 @@ describe("channel levels", () => {
     // The voice override is not a text channel.
     expect(view.channels).toEqual([
       { context: seen, label: null, mode: "quiet", custom: false, default: "quiet" },
+      { context: other, label: null, mode: "quiet", custom: false, default: "quiet" },
       { context: set, label: null, mode: "lively", custom: true, default: "quiet" },
     ]);
+    // Without Spaces there is no server level.
+    expect(view.space).toBeNull();
 
     // The old name still works; `null` resets.
     let res = await h.call("PUT", "/api/channels/level", { context: seen, mode: "ambient" });
@@ -92,5 +137,40 @@ describe("channel levels", () => {
     const voice = { ...seen, kind: "voice" };
     res = await h.call("PUT", "/api/channels/level", { context: voice, mode: "quiet" });
     expect(res.status).toBe(400);
+  });
+
+  it("show one Space's channels and its own level, and set the level of a whole Space", async () => {
+    const h = await harness();
+    h.sup.services.provide("agent", AgentHandleKey, fakeHandle() as never);
+    h.sup.services.provide("world", WorldStateKey, world);
+    h.sup.services.provide("kernel", PlacesKey, twoSpaces());
+
+    let view = (await h.call("GET", "/api/channels/levels")).body as ChannelLevelsView;
+    expect(view.channels.map((c) => c.context.channel)).toEqual(["c1", "c2"]);
+    expect(view.space).toEqual({
+      id: "S1",
+      name: "一號",
+      mode: "quiet",
+      custom: false,
+      default: "quiet",
+    });
+    view = (await h.call("GET", "/api/channels/levels?space=S2")).body as ChannelLevelsView;
+    expect(view.channels.map((c) => c.context.channel)).toEqual(["c9"]);
+    expect(view.space).toMatchObject({ id: "S2", mode: "mention-only", custom: false });
+
+    let res = await h.call("PUT", "/api/channels/space-level?space=S2", { mode: "normal" });
+    expect(res.body).toEqual({
+      id: "S2",
+      name: "二號",
+      mode: "normal",
+      custom: true,
+      default: "mention-only",
+    });
+    view = (await h.call("GET", "/api/channels/levels?space=S2")).body as ChannelLevelsView;
+    expect(view.channels[0]).toMatchObject({ mode: "normal", custom: false, default: "normal" });
+    res = await h.call("PUT", "/api/channels/space-level?space=S2", { mode: null });
+    expect(res.body).toMatchObject({ mode: "mention-only", custom: false });
+    expect((await h.call("GET", "/api/channels/levels?space=nope")).status).toBe(404);
+    expect((await h.call("PUT", "/api/channels/space-level", { mode: "loud" })).status).toBe(400);
   });
 });

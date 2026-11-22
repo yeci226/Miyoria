@@ -2,6 +2,24 @@
 
 > 每個 phase 結束時都要有**實際能用的東西**。順序依你說的重點排:先讓她在 Discord 文字頻道活起來,再加語音,最後才是直播與遊戲。架構細節見 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
+## V5(現在)
+
+規劃與現況在 [design/v5-architecture.md](design/v5-architecture.md)(各階段的 PR 和日期在 §15),還沒做的事和等 owner 決定的事在 [design/backlog.md](design/backlog.md)。
+
+- [x] 階段 0 清場(2026-11-14)
+- [x] 階段 1 契約與瘦身(PR #53,2026-11-15):`contracts`、套件整併、新的資料庫與事件紀錄、刪 V2 管線
+- [x] 階段 2 管家(PR #55,2026-11-16):`service.toml`、hostd、登記處;線上由 hostd 管理
+- [x] 階段 3 大腦(PR #56,2026-11-17):新的回合跑者、提示詞版面、子代理、記憶分層
+- [x] 階段 4 心(PR #63,2026-11-17):人物模型、`<feel>`、每晚反思、人物頁
+- [x] 階段 5 玩(PR #64、#67 起到 #93,2026-11-17 到 11-21,分批合併):每日卡、經濟的去處、每日任務、派對遊戲、直播彈幕、唱 K 第 1 步
+- [ ] 階段 5 剩下的:深海交易所([design/exchange.md](design/exchange.md));生圖卡等模型選定([design/v5-play.md](design/v5-play.md))
+- [ ] 階段 6 很多地方(Space / Room、每個 Space 的設定、檔案網域):還沒開始
+- [ ] 階段 7 身體(活動契約、Neuro SDK、表演者與渲染器分開、Minecraft):還沒開始;Minecraft 暫停,筆記在 [design/minecraft-findings.md](design/minecraft-findings.md)
+
+## 歷史:V5 之前的階段清單
+
+下面的 Phase 0–8、TypeScript 改寫、v2、v4 是當時的清單,勾選狀態停在當時,不再更新;裡面提到的模組有些已經被取代或移除(例如 `@miyoria/initiative`、`@miyoria/heart/social`、TurnCoordinator、Attention、PostgreSQL)。現在還沒做的事以 [design/backlog.md](design/backlog.md) 為準。
+
 ## Phase 0:地基與技術驗證(spikes)
 
 先把最大的不確定性消掉,再開始寫正式的程式碼。
@@ -24,7 +42,7 @@
 - [x] `@miyoria/store`(SQLite、migrations)、`deploy/docker-compose.yml`(V5 拿掉了沒測過的 Postgres)
 - [x] `@miyoria/llm/llm`(OpenAI 相容供應者 + DeepSeek 專屬處理:推理內容過濾、前綴快取友善的 prompt 順序;依用途路由、成本記錄)
 - [x] `@miyoria/runtime/profile`(載入、驗證、執行期修改人格段落;所有資料帶 `profile_id`)+ 把 `profiles/deepseek-chan/` 定案
-- [x] `@miyoria/brain/agent`:Stimulus、Conversation Session(working memory)、TurnCoordinator(debounce / 合併)、Attention 第一、二層、Expression Parser(文字部分)
+- [x] (歷史,V5 階段 3 換掉)`@miyoria/brain/agent`:Stimulus、Conversation Session(working memory)、TurnCoordinator(debounce / 合併)、Attention 第一、二層、Expression Parser(文字部分)
 - [x] `@miyoria/runtime/scheduler`:`text` lane
 - [x] `@miyoria/discord`:文字收發、輸入中、反應、rate limit(尚未連真的 Discord 測)
 - [x] `@miyoria/commands` 框架 + `/ping`、`/admin module ...`
@@ -59,9 +77,9 @@
 
 - [x] `@miyoria/memory/memory`:Episode / Fact / Self note / Followup、背景 consolidation、混合檢索(全文 + 向量 + 新舊 + 重要度 + 在場者)、隱私範圍(私訊內容不外流)、jieba 斷詞、可選 embeddings、遺忘
 - [x] `/memory show / forget / export`;工具 `remember` / `recall`
-- [x] `@miyoria/heart/social`:Person / Account、`/link`、Relationship、Appraisal(規則 + LLM)、每日上限與報酬遞減、`/me`、`/admin person …`
+- [x] (歷史,現為 `@miyoria/heart/person`)`@miyoria/heart/social`:Person / Account、`/link`、Relationship、Appraisal(規則 + LLM)、每日上限與報酬遞減、`/me`、`/admin person …`
 - [x] Mood 模組(往基準值回歸、日夜曲線、事件推動)
-- [x] `@miyoria/initiative`:冷場、followup、打招呼、有人進語音;每日上限、沒人理就退避、安靜時段
+- [x] (歷史:V2 換成 Arbiter,V5 換成 `@miyoria/brain/selfhost` 的 initiative)`@miyoria/initiative`:冷場、followup、打招呼、有人進語音;每日上限、沒人理就退避、安靜時段
 - [x] `@miyoria/auth`:RBAC(owner / admin / moderator / trusted / user / restricted / blocked)、全域 / 伺服器 / 頻道範圍、Discord 角色對應、防越權、稽核紀錄
 - [x] LLM 價格、每日 / 每月預算、降級與停止、用量持久化
 - [ ] 實測:真的 DeepSeek 上 consolidation 的 JSON 品質、好感變化是否合理
@@ -71,7 +89,7 @@
 
 ## Phase 4:Admin API + Panel
 
-- [x] `@miyoria/api`:REST + SSE、bearer token、稽核;人物、記憶、權限、擴充、MCP、佇列、Stage、語音、花費等路由(型別見 `packages/api/src/types.ts`)
+- [x] `@miyoria/api`:REST + SSE、bearer token、稽核;人物、記憶、權限、擴充、MCP、佇列、Stage、語音、花費等路由(型別現在在 `packages/contracts/api`)
 - [x] Core 直接提供面板網頁(`panel_dir`)
 - [x] `apps/panel`:深色極簡(impeccable)、總覽、子系統、決策追蹤、人格編輯 + 歷史、即時事件、人物與好感、記憶、權限、擴充、MCP、佇列、Stage、語音監控
 - [x] CLI 透過 API 操作執行中的 core
@@ -131,7 +149,7 @@
 ## Phase 8:強化與維運
 
 - [x] `deploy/Dockerfile.core`(Node 24)、compose(core profile)、CI(TS / Python / Docker build / compose 驗證)
-- [x] 備份 / 還原腳本、`docs/OPERATIONS.md`
+- [x] `docs/OPERATIONS.md`(備份 / 還原腳本已不在,資料庫備份見 OPERATIONS §7)
 - [x] SIGTERM 正常關機;Windows 上 `Ctrl+C`(以及 Ctrl+Break、關掉主控台視窗)也驗證過會正常關機
 - [x] Prometheus metrics:`GET /metrics`(bus 事件、LLM 首 token 延遲與用量等)
 - [ ] OpenTelemetry
@@ -151,7 +169,7 @@ Phase 0–8 先用 Rust 寫成原型(留在 git 歷史裡),之後整個改寫成
 
 ## v2 架構重整
 
-設計與 review 見 [design/v2-architecture.md](design/v2-architecture.md),實作紀錄見 [design/v2-implementation.md](design/v2-implementation.md)。
+設計與 review 見 [design/v2-architecture.md](design/v2-architecture.md)。
 
 - [x] 階段 0–1:對話管線(回合擁有權、選擇性 barge-in、延遲、prompt 編譯器、推理分級、人設重寫)
 - [x] 階段 2:Arbiter(Impulse、唯一底線、Ledger;取代 initiative)

@@ -108,7 +108,7 @@ describe("session", () => {
 // ---- oauth ---
 
 function login(at: number): PendingLogin {
-  return { verifier: "v", next: "/", redirect: new URL("http://127.0.0.1/cb"), at };
+  return { verifier: "v", next: "/", redirect: new URL("http://127.0.0.1/cb"), binding: "b", at };
 }
 
 describe("oauth", () => {
@@ -368,8 +368,19 @@ describe("config and helpers", () => {
         rate_per_minute: 60,
         rate_total_per_minute: 3000,
         utc_offset_minutes: 480,
+        client_ip_header: "cf-connecting-ip",
       },
       picture_background: "",
+      public_bind: "",
+      files: {
+        origin: "",
+        bind: "127.0.0.1:7886",
+        site: "",
+        links_per_person_per_day: 20,
+        per_ip_per_minute: 60,
+        per_link_per_minute: 120,
+        public_cache_secs: 300,
+      },
     });
   });
 

@@ -17,6 +17,7 @@ import {
 } from "@miyoria/types";
 import { SONG_ID } from "./audio.js";
 import type { SingWorker, SongMeta, SongTrack } from "./client.js";
+import { type LocalVideoFetcher, songSourceUrl } from "./local-video.js";
 
 const log = getLogger("sing");
 
@@ -108,12 +109,18 @@ export async function* paced(
 /**
  * Makes sure the song's video is in `videoDir` (the song worker may run on another machine, so
  * Core fetches it from the worker once). The path to show, or `null` when there is none.
+ *
+ * `local` (`[modules.sing] video_source = "local"`): the video is first downloaded on this
+ * machine from the song's link, and the worker is asked only when that fails (not when `signal`
+ * aborted). Only for a song the worker has a video for, and has an `http(s)` link: the worker's
+ * word is what tells a source with a video from an audio-only one.
  */
 export async function ensureVideo(
   worker: SingWorker,
   videoDir: string | null,
   song: SongMeta,
   signal: AbortSignal,
+  local: LocalVideoFetcher | null = null,
 ): Promise<string | null> {
   if (videoDir === null) return null;
   const path = songVideoPath(videoDir, song);
@@ -123,7 +130,23 @@ export async function ensureVideo(
     await access(path);
     return path;
   } catch {
-    // not here yet: ask the worker
+    // not here yet: fetch it
+  }
+  const url = local === null || !path.endsWith(".mp4") ? null : songSourceUrl(song);
+  if (local !== null && url !== null) {
+    const t0 = performance.now();
+    try {
+      const bytes = await local(url, path, signal);
+      const seconds = Math.round((performance.now() - t0) / 100) / 10;
+      log.info({ song: song.id, bytes, seconds }, "song video fetched locally");
+      return path;
+    } catch (error) {
+      if (signal.aborted) return null;
+      log.warn(
+        { song: song.id, err: String(error) },
+        "song video not fetched locally: asking the worker",
+      );
+    }
   }
   try {
     await worker.download(song.id, file, path, signal);
@@ -160,7 +183,9 @@ export async function singSong(
     { levels: vocals !== null },
   );
   const onAbort = () => handle.stop(d.fadeMs);
-  signal.addEventListener("abort", onAbort, { once: true });
+  // A stop that came while the playback was being set up fires no event any more.
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
   const lyricsDone = new AbortController();
   const durationMs = Math.round((mix.length / rate) * 1000);
   const lyrics = cueLyrics(

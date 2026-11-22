@@ -1,0 +1,31 @@
+# [routing] of the sing worker (docs/design/v5-hostd.md §15). Kept beside service.toml rather than in
+# it: an older hostd rejects an unknown table in service.toml and would disable the worker.
+#
+# job: every cover (and every karaoke song) is a unit of its own; Core sends each to the host that
+# would have it back soonest. One at a time per worker; its /health says busy and queued.
+class = "job"
+latency = "batch"
+concurrency = 1
+queue = true
+# A cover takes the card from her voice (the GPU lease evicts tts and asr): Core never sends one to a
+# host whose tts or asr carry her voice, unless [modules.cluster.routing] allow_on_speech_host says so.
+yields_to = ["tts", "asr"]
+# Until Core has measured them on a host: about five minutes, and the two play tracks plus the stems.
+unit_s = 300
+result_mb = 90
+
+[needs]
+# The worker refuses to start without these (workers/sing/engine.py), whichever voice chain is used.
+files = ["workers/models/seed-vc", "workers/voices/deepseek-chan/ref.wav"]
+# The descriptor's peak is 7500 MB; a smaller card would run the stages on the CPU.
+vram_gb = 7.5
+
+[variant]
+# Her voice: the RVC model (its default file, workers/sing/rvcpass.py) and the reference voice, and
+# the settings that choose them. Two hosts with another model are not interchangeable: their covers
+# sound different. Only the model file itself, so training leftovers beside it do not count.
+files = [
+  "workers/models/applio/logs/miyoria-deepseek-48k/miyoria-deepseek-48k_40e_11000s.pth",
+  "workers/voices/deepseek-chan/ref.wav",
+]
+env = ["SING_VOICE", "SING_RVC_MODEL", "SING_RVC_INDEX", "SING_REF"]

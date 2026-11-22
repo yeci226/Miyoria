@@ -149,6 +149,8 @@ export interface WriteResult {
   path: string;
   chars: number;
   created: boolean;
+  /** Lines in use of the page that were written somewhere else, which this write did not touch. */
+  elsewhere?: number;
 }
 
 export class NotebookStore implements Notebook {

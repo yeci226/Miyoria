@@ -32,7 +32,7 @@ import { EconomyError, GIFT_EXPRESSIONS, type GiftExpression } from "./types.js"
 /** The platform of the purse's account. */
 export const PURSE_PLATFORM = "self";
 /** Ledger reasons whose price she gets a share of. */
-export const SHARED_REASONS: readonly string[] = ["feed", "screen_message"];
+export const SHARED_REASONS: readonly string[] = ["feed", "screen_message", "gift"];
 const MAX_ROWS = 2_000;
 const MAX_NEWS = 6;
 const NOT_ENOUGH = "你的錢包不夠";
