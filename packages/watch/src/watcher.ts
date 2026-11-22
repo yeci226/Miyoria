@@ -184,6 +184,7 @@ export class Watcher {
           answerRequest({
             name: run.target.name,
             persona: this.#deps.persona(),
+            detail: this.#cfg.image_detail,
             notes: run.notes.notes(),
             transcript: run.notes.transcript(),
             jpeg,
@@ -381,6 +382,7 @@ export class Watcher {
             lookRequest({
               name: run.target.name,
               persona: this.#deps.persona(),
+              detail: this.#cfg.image_detail,
               notes: run.notes.notes(),
               transcript: run.notes.transcript(),
               jpeg,

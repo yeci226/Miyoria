@@ -13,6 +13,11 @@ import { z } from "zod";
 export const WatchConfigSchema = z.object({
   /** Seconds between two looks, counted from the end of the last one. */
   snapshot_secs: z.number().positive().default(30),
+  /**
+   * How much of each picture the model sees: `high` reads the text on screen (titles, names), `low`
+   * (about 512 px, a third of the tokens) does not.
+   */
+  image_detail: z.enum(["low", "high", "auto"]).default("high"),
   /** Least seconds between two things she says on her own. */
   speak_min_secs: z.number().nonnegative().default(60),
   /** She stays quiet when someone spoke within this many seconds. */

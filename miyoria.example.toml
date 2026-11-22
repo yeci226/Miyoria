@@ -430,6 +430,7 @@ dirs = ["extensions"]
 # [modules.watch]
 # enabled = false
 # snapshot_secs = 30           # 兩次看畫面的間隔(從上一次看完算起)
+# image_detail = "high"        # 圖給模型看多細:high 讀得到畫面上的字;low 約 512 px,只要三分之一的 token,但讀不到字
 # speak_min_secs = 60          # 她自己開口講直播的事,兩句至少隔幾秒
 # quiet_secs = 10              # 有人剛講過話(語音頻道裡別人)這麼久內她不插嘴
 # notes_keep = 10              # 留幾則畫面筆記(看完這場就丟,不存檔)

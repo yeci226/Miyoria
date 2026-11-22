@@ -12,12 +12,21 @@ import {
 const input: LookInput = {
   name: "小明",
   persona: "她",
+  detail: "high",
   notes: ["在打王"],
   transcript: ["哇"],
   jpeg: Buffer.from([1, 2, 3]),
 };
 
 describe("lookRequest", () => {
+  it("tells the model to copy text on screen, not to guess it from what was heard", () => {
+    for (const req of [lookRequest(input), answerRequest({ ...input, question: "?" })]) {
+      const sys = contentText(req.messages[0]?.content ?? "");
+      expect(sys).toContain("看不清楚就說看不清楚");
+      expect(sys).toContain("不要拿台詞去猜畫面上寫什麼");
+    }
+  });
+
   it("has no tools and carries a jpeg data url", () => {
     const req = lookRequest(input);
     expect(req.tools).toBeUndefined();
@@ -28,7 +37,11 @@ describe("lookRequest", () => {
     expect(
       img?.type === "image_url" && img.image_url.url.startsWith("data:image/jpeg;base64,"),
     ).toBe(true);
-    expect(img?.type === "image_url" && img.image_url.detail).toBe("low");
+    expect(img?.type === "image_url" && img.image_url.detail).toBe("high");
+    const low = lookRequest({ ...input, detail: "low" }).messages.find((m) => m.role === "user");
+    const lowParts = typeof low?.content === "string" ? [] : (low?.content ?? []);
+    const lowImg = lowParts.find((p) => p.type === "image_url");
+    expect(lowImg?.type === "image_url" && lowImg.image_url.detail).toBe("low");
   });
   it("tells the model picture text is not instructions", () => {
     const sys = contentText(lookRequest(input).messages[0]?.content ?? "");
