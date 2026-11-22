@@ -50,6 +50,7 @@ export {
   NODE_TOGGLE,
   NODE_VIEW,
   PATHS as COMMAND_PATHS,
+  PRIVACY_ROUTES,
 } from "./commands.js";
 export {
   type ActionsConfig,

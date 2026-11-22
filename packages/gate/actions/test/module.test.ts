@@ -11,6 +11,7 @@ import {
   DENY_ROUTE,
   PAUSED_KEY,
   PRIVACY_PROFILE,
+  PRIVACY_ROUTES,
 } from "../src/index.js";
 
 const GUILD: ContextKey = { platform: "discord", scope: "g1", channel: "c1", kind: "channel" };
@@ -102,6 +103,19 @@ describe("actions module", () => {
     expect(set.text).toContain("看你的直播：不可以");
     expect(await a.registry.privacy.get(me)).toEqual({ dm: true, approach: true, watch: false });
     expect((await a.run("me privacy", "5", {}, DM)).text).toContain("看你的直播：不可以");
+    await a.sup.stopAll();
+  });
+
+  it("the_watch_buttons_set_the_presser's_own_opt_out", async () => {
+    const a = await boot();
+    const me = { platform: "discord", id: "5" };
+    const off = await a.click(`mi:${PRIVACY_ROUTES.watchOff}`, "5");
+    expect(off?.result.type === "reply" && off.result.reply.text).toContain("看你的直播：不可以");
+    expect(off?.ephemeral).toBe(true);
+    expect(await a.registry.privacy.get(me)).toEqual({ dm: true, approach: true, watch: false });
+    expect((await a.registry.privacy.get({ platform: "discord", id: "6" })).watch).toBe(true);
+    await a.click(`mi:${PRIVACY_ROUTES.watchOn}`, "5");
+    expect((await a.registry.privacy.get(me)).watch).toBe(true);
     await a.sup.stopAll();
   });
 

@@ -7,8 +7,13 @@
 // a start (before the gate's consent stage, which needs a person and would say something else),
 // as the result's text for a stop or a look.
 
-import { type CommandReply, cardReply, type ReplySink } from "@miyoria/commands";
-import { type Capability, CapabilityError, defineCapability } from "@miyoria/gate/actions";
+import { type CommandReply, cardReply, componentId, type ReplySink } from "@miyoria/commands";
+import {
+  type Capability,
+  CapabilityError,
+  defineCapability,
+  PRIVACY_ROUTES,
+} from "@miyoria/gate/actions";
 import {
   type AccountRef,
   dataBlock,
@@ -22,7 +27,7 @@ import {
   type VoiceMember,
   type WorldState,
 } from "@miyoria/types";
-import { type VoiceLink, VoiceLinkError, voiceContext } from "@miyoria/voice/voice";
+import { CONSENT_ROUTES, type VoiceLink, VoiceLinkError, voiceContext } from "@miyoria/voice/voice";
 import { z } from "zod";
 import type { WatchConfig } from "./config.js";
 import type { WatchTarget } from "./source.js";
@@ -74,7 +79,17 @@ export function noticeCard(name: string): CommandReply {
         type: "text",
         text: `她現在在看 **${md(safeName(name))}** 的直播,畫面和說話內容都會送到模型讓她看懂。`,
       },
-      { type: "muted", text: "不想被看:/me privacy watch:off;不想被聽:/voice consent off" },
+      {
+        type: "buttons",
+        buttons: [
+          { id: componentId(PRIVACY_ROUTES.watchOff), label: "不讓她看", style: "secondary" },
+          { id: componentId(CONSENT_ROUTES.off), label: "不讓她聽", style: "secondary" },
+        ],
+      },
+      {
+        type: "muted",
+        text: "按了只改你自己的設定,之後可以用 /me privacy、/voice consent 改回來。",
+      },
     ],
     { accent: "neutral", title: "看直播" },
   );

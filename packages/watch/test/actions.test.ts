@@ -546,7 +546,11 @@ describe("the watch capabilities", () => {
     expect(reply.ephemeral).toBe(false);
     expect(reply.card?.title).toBe("看直播");
     expect(reply.text).toContain("小明");
-    expect(reply.text).toContain("/me privacy watch:off");
+    const buttons = reply.card?.blocks.find((b) => b.type === "buttons");
+    expect(buttons?.type === "buttons" && buttons.buttons.map((b) => [b.id, b.label])).toEqual([
+      ["mi:me:privacy:watch:off", "不讓她看"],
+      ["mi:voice:consent:off", "不讓她聽"],
+    ]);
   });
 
   it("the_card_keeps_markdown_out_of_the_name", () => {

@@ -45,9 +45,15 @@ const GOLIVE_STATE_TEXT: Record<GoLiveState, string> = {
   failed: "失敗",
 };
 
+/** Buttons that set the voice consent of whoever presses them, on any message (no session). */
+export const CONSENT_ROUTES = {
+  on: "voice:consent:on",
+  off: "voice:consent:off",
+} as const;
+
 const R = {
-  consentOn: "voice:consent:on",
-  consentOff: "voice:consent:off",
+  consentOn: CONSENT_ROUTES.on,
+  consentOff: CONSENT_ROUTES.off,
   goliveStart: "voice:golive:start",
   goliveStop: "voice:golive:stop",
 } as const;

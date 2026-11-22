@@ -28,7 +28,13 @@ export {
   type PlaybackInfo,
   type SpeakerRole,
 } from "./barge.js";
-export { joinAnnouncement, PATHS, registerCommands, unregisterCommands } from "./commands.js";
+export {
+  CONSENT_ROUTES,
+  joinAnnouncement,
+  PATHS,
+  registerCommands,
+  unregisterCommands,
+} from "./commands.js";
 export {
   type BargeInMode,
   BargeInModeSchema,

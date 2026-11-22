@@ -27,6 +27,15 @@ export const NODE_VIEW = "admin.autonomy.view";
 export const NODE_APPROVE = "owner.autonomy.approve";
 export const NODE_PRIVACY = "me.privacy";
 
+/**
+ * Buttons that set the `watch` opt-out of whoever presses them, on any message (the watch notice
+ * in a voice channel's chat): no session, so they work as long as the message is there.
+ */
+export const PRIVACY_ROUTES = {
+  watchOn: "me:privacy:watch:on",
+  watchOff: "me:privacy:watch:off",
+} as const;
+
 async function statusReply(registry: ActuatorRegistry): Promise<CommandReply> {
   const cfg = registry.config;
   const pending = registry.escalations.list();
@@ -131,6 +140,19 @@ export function registerCommands(
     { components: [answer(true), answer(false)] },
   );
 
+  const watchButton = (watch: boolean) =>
+    defineRoute({
+      route: watch ? PRIVACY_ROUTES.watchOn : PRIVACY_ROUTES.watchOff,
+      ephemeral: true,
+      handle: async (inv) => {
+        const next = await actuators().privacy.set(inv.invoker, { watch });
+        const book = presence();
+        const seen = book?.loaded ? book.presenceAllowed(inv.invoker) : null;
+        const text = privacyText(next.dm, next.approach, next.watch, seen);
+        return ComponentResult.reply(notice("success", `已更新。\n${text}`));
+      },
+    });
+
   const onOff = (name: string, description: string) =>
     argSpec(name, description, ArgKind.choice(["on", "off"]), { required: false });
   registry.register(
@@ -178,6 +200,7 @@ export function registerCommands(
         `已更新。\n${privacyText(next.dm, next.approach, next.watch, seen())}`,
       );
     },
+    { components: [watchButton(true), watchButton(false)] },
   );
 }
 
