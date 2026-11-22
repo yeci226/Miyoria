@@ -273,6 +273,9 @@ describe("WatchModule", () => {
     expect(section?.order).toBe(47);
     expect(section?.body).toContain("小明");
     expect(section?.body).toContain("note 1");
+    // How old the notes are, and to look again before saying what is on screen now.
+    expect(section?.body).toMatch(/最近一次看畫面是 \d+ 秒前/);
+    expect(section?.body).toContain("先用 watch_look 看一眼");
 
     expect(await rig.prompt(text)).toEqual([]);
     expect(await rig.prompt(voice("c9"))).toEqual([]);

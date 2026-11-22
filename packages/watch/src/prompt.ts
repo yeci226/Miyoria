@@ -32,6 +32,11 @@ export interface WatchPromptDeps {
 function watching(view: WatchView, now: number): string[] {
   const minutes = Math.max(0, Math.floor((now - view.startedAt) / 60_000));
   const lines = [`你正在看 ${safeName(view.target.name)} 的直播,看了 ${minutes} 分鐘。`];
+  const age =
+    view.lastLookAt === null
+      ? "你還沒看過畫面。"
+      : `最近一次看畫面是 ${Math.max(0, Math.round((now - view.lastLookAt) / 1000))} 秒前,下面的筆記可能已經過時。`;
+  lines.push(`${age}有人問直播現在的畫面,先用 watch_look 看一眼再回答,不要只靠筆記。`);
   const notes = view.notes.slice(-NOTES_SHOWN);
   if (notes.length > 0) lines.push("最近看到:", ...notes.map((n) => `- ${n}`));
   const said = view.transcript.slice(-LINES_SHOWN);

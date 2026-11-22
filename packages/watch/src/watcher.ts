@@ -57,6 +57,8 @@ export interface WatchView {
   target: WatchTarget;
   startedAt: number;
   notes: string[];
+  /** When the newest note was written; `null` before the first look. */
+  lastLookAt: number | null;
   transcript: string[];
 }
 
@@ -127,6 +129,7 @@ export class Watcher {
       target: run.target,
       startedAt: run.startedAt,
       notes: run.notes.notes(),
+      lastLookAt: run.notes.lastNoteAt,
       transcript: run.notes.transcript(),
     };
   }

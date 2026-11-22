@@ -4,6 +4,8 @@ import { cutNote } from "./look.js";
 /** What she saw and heard this watch. Memory only; it is dropped when the watch ends. */
 export class WatchNotes {
   private readonly noteList: string[] = [];
+  /** When the newest note was written; `null` before the first look. */
+  lastNoteAt: number | null = null;
   private readonly lines: { at: number; text: string }[] = [];
 
   constructor(
@@ -15,6 +17,7 @@ export class WatchNotes {
     const t = cutNote(text);
     if (t === "") return;
     this.noteList.push(t);
+    this.lastNoteAt = this.now();
     while (this.noteList.length > this.cfg.notes_keep) this.noteList.shift();
   }
 

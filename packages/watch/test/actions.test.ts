@@ -56,7 +56,7 @@ function member(id: string, name: string, over: Partial<VoiceMember> = {}): Voic
 }
 
 function viewOf(target: WatchTarget, startedAt: number): WatchView {
-  return { target, startedAt, notes: [], transcript: [] };
+  return { target, startedAt, notes: [], lastLookAt: null, transcript: [] };
 }
 
 class Rig {
