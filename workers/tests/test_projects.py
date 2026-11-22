@@ -35,6 +35,10 @@ FILES: dict[str, dict[str, str | None]] = {
     "lyrics": {"requirements.txt": None},
 }
 
+# Requirement files outside the uv project: the project locks Windows and Linux only, and these
+# install on macOS (requirements-mlx.txt: TTS_BACKEND=mlx on Apple silicon, no torch).
+UNLOCKED: dict[str, set[str]] = {"tts": {"requirements-mlx.txt"}}
+
 PIP_TORCH = re.compile(r"pip install ((?:(?!--)\S+\s+)+)--index-url\s+(\S+)")
 
 
@@ -104,7 +108,7 @@ def test_requirement_files_match_the_project(name: str) -> None:
     }
     url, from_index = torch_index(project)
 
-    on_disk = {p.name for p in (ROOT / name).glob("requirements*.txt")}
+    on_disk = {p.name for p in (ROOT / name).glob("requirements*.txt")} - UNLOCKED.get(name, set())
     assert on_disk == set(FILES[name]), "a requirement file without a mapping here"
     assert set(extras) == {e for e in FILES[name].values() if e}, "an extra without a file"
 
