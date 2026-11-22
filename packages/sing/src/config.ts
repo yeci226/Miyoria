@@ -53,7 +53,9 @@ export const SingConfigSchema = z
     /**
      * Where Core keeps the songs' audio once the worker made them (relative to the directory of
      * `miyoria.toml`): a song is ready once its audio is here, and is sung from here. A worker on
-     * this machine (`video_dir`) is read in place instead.
+     * this machine (`video_dir`) is read in place instead. While a worker answers, the songs it
+     * made are copied here too (within `audio_cache_mb`, none pushed out for them); while none
+     * answers, she can still sing the songs here (her prompt lists them), only no new ones.
      */
     audio_dir: z.string().default("data/song-audio"),
     /**

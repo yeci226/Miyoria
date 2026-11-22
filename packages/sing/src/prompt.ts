@@ -4,6 +4,7 @@
 
 import type { PromptContributor, PromptSection } from "@miyoria/types";
 import { DEFAULT_CURRENCY, safeName } from "@miyoria/types";
+import { keptLine } from "./library.js";
 import { type SongEntry, songLabel } from "./setlist.js";
 import type { Singer } from "./singer.js";
 
@@ -47,7 +48,8 @@ export class SingPrompt implements PromptContributor {
     const playing = list.playing();
     const ready = list.ready();
     const preparing = list.preparing();
-    if (!playing && ready.length === 0 && preparing.length === 0) return [];
+    const kept = this.singer.offlineSongs();
+    if (!playing && ready.length === 0 && preparing.length === 0 && kept === null) return [];
     const who = (name: string) => safeName(name, 24);
     const lines: string[] = [];
     if (playing && this.singer.starting()) {
@@ -73,6 +75,7 @@ export class SingPrompt implements PromptContributor {
     }
     const order = queueLine(list.open());
     if (order !== null) lines.push(order);
+    if (kept !== null) lines.push(keptLine(kept));
     if (!this.singer.voiceContext()) lines.push("你現在不在語音頻道;要唱歌得先進語音。");
     return [{ key: PROMPT_KEY, title: "你的歌單", body: lines.join("\n"), order: 46 }];
   }

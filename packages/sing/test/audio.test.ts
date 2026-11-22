@@ -80,6 +80,53 @@ function store(options: { maxBytes?: number; localDir?: string | null } = {}): D
 }
 
 describe("the songs' audio on Core", () => {
+  it("keeps_the_meta_beside_the_audio_and_lists_the_kept_songs_newest_first", async () => {
+    const a = store();
+    await a.fetch(meta("yt-a", 1000));
+    await a.fetch(meta("yt-b", 1000));
+    const old = new Date(Date.now() - 60_000);
+    await utimes(join(dir, "audio", "yt-a", "audio.json"), old, old);
+    // Core restarts with no worker: the songs are known from disk alone.
+    const again = store();
+    const kept = await again.library();
+    expect(kept.map((s) => s.id)).toEqual(["yt-b", "yt-a"]);
+    expect(again.ready(meta("yt-a", 1000))).toBe(true);
+    expect((await again.load(meta("yt-a", 1000), "play_mix.pcm"))[0]).toBe(100);
+  });
+
+  it("does_not_list_a_song_whose_audio_is_broken_or_without_meta", async () => {
+    const a = store();
+    await a.fetch(meta("yt-a", 1000));
+    await a.fetch(meta("yt-b", 1000));
+    await writeFile(join(dir, "audio", "yt-a", "play_vocals.pcm"), pcm(10, 1));
+    await rm(join(dir, "audio", "yt-b", "song.json"));
+    await mkdir(join(dir, "audio", "not a song"), { recursive: true });
+    expect(await store().library()).toEqual([]);
+  });
+
+  it("mirrors_the_worker's_songs_within_the_budget_and_pushes_none_out", async () => {
+    // Room for two songs (4000 bytes of audio each, and their small files).
+    const a = store({ maxBytes: 9000 });
+    const came = await a.mirror([meta("yt-a", 1000), meta("yt-b", 1000), meta("yt-c", 1000)]);
+    expect(came).toBe(2);
+    expect((await store().library()).map((s) => s.id).sort()).toEqual(["yt-a", "yt-b"]);
+    // Already here: nothing fetched again.
+    expect(await a.mirror([meta("yt-a", 1000)])).toBe(0);
+    expect(w.downloads).toHaveLength(4);
+  });
+
+  it("mirror_gives_a_song_on_disk_its_meta_even_when_the_budget_is_full", async () => {
+    await store().fetch(meta("yt-a", 1000));
+    // Fetched by a Core from before the meta was kept: no song.json, so it cannot be listed.
+    await rm(join(dir, "audio", "yt-a", "song.json"));
+    expect(await store().library()).toEqual([]);
+    // The budget holds what is there and no more.
+    const came = await store({ maxBytes: 4100 }).mirror([meta("yt-a", 1000)]);
+    expect(came).toBe(0);
+    expect((await store().library()).map((s) => s.id)).toEqual(["yt-a"]);
+    expect(w.downloads).toHaveLength(2);
+  });
+
   it("fetches a song once, and reads it from disk after", async () => {
     const a = store();
     const song = meta("yt-a", 1000);

@@ -311,6 +311,7 @@ export class SingModule implements Module {
     });
     await singer.restore();
     ctx.spawn("worker", (signal) => singer.run(signal));
+    ctx.spawn("library", (signal) => singer.keepLibrary(signal));
     // The main line changes a song that has not started through the ActivityManager's steer.
     const unroute =
       ctx.services.get(TaskSteerKey)?.registerRoute("sing", {

@@ -154,7 +154,11 @@ class FakeWorker implements SingWorker {
       : { ...song, source: { kind: "youtube", url: this.sourceUrl } };
   }
 
+  /** Switched off: new work and health checks fail as unreachable (the GPU machine is off). */
+  off = false;
+
   async submit(query: SongQuery): Promise<WorkerJob> {
+    if (this.off) throw new SingWorkerError("song worker unreachable", { unreachable: true });
     this.submitted.push(query);
     const id = `j${this.#next++}`;
     const title = query.query ?? query.url ?? "?";
@@ -272,7 +276,7 @@ class FakeWorker implements SingWorker {
   }
 
   async health(): Promise<string | null> {
-    return null;
+    return this.off ? "song worker unreachable" : null;
   }
 }
 
@@ -420,7 +424,17 @@ class Harness {
     h.module = new SingModule(() => h.worker, {
       endpoints: oneWorker(),
       // The audio in memory: a real file read does not finish while the clock is a fake one.
-      audio: (worker, tracks) => (h.audio = new MemorySongAudio(worker, tracks)),
+      // `h.kept`: the songs kept on Core, sung while no worker answers.
+      audio: (worker, tracks) => {
+        const audio = new MemorySongAudio(worker, tracks);
+        h.audio = audio;
+        return Object.assign(audio, {
+          library: async () => {
+            for (const song of h.kept) await audio.fetch(song);
+            return [...h.kept];
+          },
+        });
+      },
       // A yt-dlp that is not there: the local download fails and the worker is asked.
       videoSpawner: (command, args) => {
         h.spawned.push({ command, args });
@@ -520,6 +534,9 @@ class Harness {
       ];
     });
   }
+
+  /** The songs kept on Core (`SongAudio.library`). */
+  kept: SongMeta[] = [];
 
   async section(): Promise<string> {
     const request = { context: VOICE } as PromptRequest;
@@ -667,6 +684,37 @@ describe("sing module", () => {
     await settle(1800); // the fade-out
     expect(h.singer.playing()).toBeNull();
     expect(await h.singer.voteSkip(BOB)).toBeNull();
+  });
+
+  it("sings_a_song_kept_on_core_while_no_song_worker_answers", async () => {
+    h = await Harness.create();
+    h.worker.off = true;
+    h.kept = [meta("s-old", "夜に駆ける", 1), meta("s-older", "Lemon", 1)];
+    await h.join();
+    // Asked before the health check knew: the worker is tried, and the kept song sung.
+    expect(await h.command("queue song request", { song: "夜に駆ける" })).toContain("她馬上就唱");
+    expect(h.singer.list.get(1)?.song?.id).toBe("s-old");
+    await settle(6000 + 400);
+    expect(h.voice.plays).toHaveLength(1);
+    expect(h.worker.submitted).toHaveLength(0);
+  });
+
+  it("lists_the_kept_songs_and_refuses_a_new_one_while_no_worker_answers", async () => {
+    h = await Harness.create();
+    h.worker.off = true;
+    h.kept = [meta("s-old", "夜に駆ける", 1)];
+    await settle(60_000 + 200);
+    expect(h.singer.offlineSongs()?.map((s) => s.id)).toEqual(["s-old"]);
+    expect(await h.section()).toContain("歌曲工作站現在沒開,做不了新歌;能唱的是已經做好的這些");
+    expect(await h.section()).toContain("「夜に駆ける」 - Artist");
+    expect(await h.command("queue song request", { song: "A new song" })).toContain("沒開");
+    // A kept song in another key needs a worker too.
+    expect(await h.command("queue song request", { song: "夜に駆ける", key: 2 })).toContain("沒開");
+    // The worker is back: new songs are made again, and the prompt no longer lists them.
+    h.worker.off = false;
+    await settle(60_000 + 200);
+    expect(h.singer.offlineSongs()).toBeNull();
+    expect(await h.section()).not.toContain("歌曲工作站");
   });
 
   it("sings a commanded song as soon as it is ready and she is in voice", async () => {
@@ -930,6 +978,26 @@ describe("sing module", () => {
     await h.command("queue song request", { song: "Song MV" });
     await settle(6000 + 400 + 2000);
     expect(h.cues().find((c) => c.state === "started")).not.toHaveProperty("video");
+  });
+
+  it("a_kept_song_survives_a_restart_without_asking_a_worker", async () => {
+    const store = new MemorySettingsStore();
+    h = await Harness.create({}, true, { store });
+    h.worker.off = true;
+    h.kept = [meta("s-old", "夜に駆ける", 1)];
+    await h.command("queue song request", { song: "夜に駆ける" });
+    await settle(200);
+    expect(h.singer.list.get(1)).toMatchObject({ state: "ready", job: null });
+    await h.stop();
+
+    const worker = h.worker;
+    h = await Harness.create({}, true, { store, worker });
+    await settle(200);
+    expect(h.singer.list.get(1)).toMatchObject({ state: "ready", job: null });
+    await h.join();
+    await settle(6000 + 400);
+    expect(h.voice.plays).toHaveLength(1);
+    expect(worker.submitted).toHaveLength(0);
   });
 
   it("the set list survives a restart and re-attaches to the worker's jobs", async () => {

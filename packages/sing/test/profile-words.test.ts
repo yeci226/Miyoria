@@ -10,6 +10,7 @@ const playing = { no: 1, query: "夜に駆ける", requester_name: "Amy" } as un
 const singer = {
   list: { playing: () => playing, ready: () => [], preparing: () => [], open: () => [] },
   starting: () => false,
+  offlineSongs: () => null,
   voiceContext: () => ({ platform: "discord", scope: "g1", channel: "v", kind: "voice" }),
 } as unknown as Singer;
 

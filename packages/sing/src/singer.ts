@@ -89,6 +89,7 @@ import {
   type WorkerJob,
 } from "./client.js";
 import type { SingConfig } from "./config.js";
+import { findKept } from "./library.js";
 import type { LocalVideoFetcher } from "./local-video.js";
 import { ensureVideo, singSong, sleep, songVideoPath } from "./player.js";
 import {
@@ -105,6 +106,11 @@ import { parseSongPatch, songNo } from "./steer.js";
 const log = getLogger("sing");
 
 const TICK_MS = 100;
+/** How often `keepLibrary` asks whether a song worker answers. */
+const LIBRARY_EVERY_MS = 60_000;
+const HEALTH_TIMEOUT_MS = 5000;
+/** How often the songs a worker made are brought onto Core while it answers. */
+const MIRROR_EVERY_MS = 10 * 60_000;
 /** Settings key (profile `_global`) of the stored set list. */
 export const SETLIST_KEY = "sing:setlist";
 const STORE_PROFILE = "_global";
@@ -258,6 +264,10 @@ export class Singer implements VoiceFloor, SpeechPause {
   readonly #videos = new Set<string>();
   readonly #videoFetches = new Map<string, Promise<string | null>>();
   readonly #audio: SongAudio;
+  /** The songs on Core that can be sung without a worker (`SongAudio.library`), newest first. */
+  #kept: SongMeta[] = [];
+  /** Whether a song worker answered the last health check (`keepLibrary`); `null`: not asked yet. */
+  #workerUp: boolean | null = null;
 
   /**
    * `videoDir`: the worker's cache dir (absolute) when song videos are shown on stream
@@ -423,19 +433,106 @@ export class Singer implements VoiceFloor, SpeechPause {
       }
       throw new SingError(errorMessage(error), { cause: error });
     }
+    // Known to be off: a kept song is sung at once, without waiting for a worker to time out.
+    const known = this.#workerUp === false ? await this.#findKept(entry) : null;
+    if (known !== null) {
+      this.#singKept(entry, known);
+      return entry;
+    }
     try {
       const job = await this.worker.submit(this.#query(query, req.key, entry.backing), signal);
       entry.job = job.id;
       this.#apply(entry, job);
       this.#publishPrepare();
     } catch (error) {
+      const off = error instanceof SingWorkerError && error.unreachable;
+      const kept = off ? await this.#findKept(entry) : null;
+      if (kept !== null) {
+        this.#singKept(entry, kept);
+        return entry;
+      }
       // The caller hears about it from the error; no separate notice.
       this.#fail(entry, errorMessage(error), false);
+      if (off) {
+        throw new SingError(
+          `歌曲工作站現在沒開,做不了新歌;現在只能唱已經做好的歌(${errorMessage(error)})`,
+          { cause: error },
+        );
+      }
       throw new SingError(`could not ask the song worker: ${errorMessage(error)}`, {
         cause: error,
       });
     }
     return entry;
+  }
+
+  // ----- songs kept on Core -----
+
+  /** The songs she can sing while no song worker answers; `null` while one does (or not known). */
+  offlineSongs(): readonly SongMeta[] | null {
+    return this.#workerUp === false ? this.#kept : null;
+  }
+
+  /**
+   * The kept song an entry asks for, in the key and backing it was made in (a request for another
+   * key or backing needs a worker). Reads the library when none was read yet.
+   */
+  async #findKept(entry: SongEntry): Promise<SongMeta | null> {
+    if (entry.key !== 0 || (entry.backing ?? "keep") !== "keep") return null;
+    if (this.#kept.length === 0 && this.#audio.library) {
+      this.#kept = await this.#audio.library().catch(() => []);
+    }
+    return findKept(entry.query, this.#kept);
+  }
+
+  /** Sings a kept song: its audio is on Core already, no worker is asked. */
+  #singKept(entry: SongEntry, song: SongMeta): void {
+    log.info(
+      { no: entry.no, song: song.id },
+      "no song worker answers; singing a song kept on Core",
+    );
+    entry.song = song;
+    entry.stage = "done";
+    if (this.#audio.ready(song)) this.#ready(entry, false);
+    else this.#fetchAudio(entry, false);
+    this.#publishPrepare();
+  }
+
+  /**
+   * Keeps the songs on Core up to date (module task): every `LIBRARY_EVERY_MS` asks whether a
+   * song worker answers; while one does, brings what it has made onto Core (within the budget)
+   * when it came back and every `MIRROR_EVERY_MS`, so the songs can be sung when it is off.
+   */
+  async keepLibrary(signal: AbortSignal): Promise<void> {
+    let mirrored = Number.NEGATIVE_INFINITY;
+    while (!signal.aborted) {
+      const why = await this.worker
+        .health(AbortSignal.any([signal, AbortSignal.timeout(HEALTH_TIMEOUT_MS)]))
+        .catch((error: unknown) => errorMessage(error));
+      if (signal.aborted) return;
+      const up = why === null;
+      if (up !== this.#workerUp) {
+        if (up) log.info("a song worker answers");
+        else log.info({ why }, "no song worker answers; only the songs kept on Core can be sung");
+        if (up) mirrored = Number.NEGATIVE_INFINITY;
+      }
+      this.#workerUp = up;
+      const now = this.ctx.clock.now();
+      if (up && this.#audio.mirror && now - mirrored >= MIRROR_EVERY_MS) {
+        mirrored = now;
+        try {
+          const came = await this.#audio.mirror(await this.worker.songs(signal), signal);
+          if (came > 0) log.info({ came }, "songs kept on Core for when no worker answers");
+        } catch (error) {
+          if (signal.aborted) return;
+          log.debug({ err: errorMessage(error) }, "could not keep the worker's songs on Core");
+        }
+      }
+      if (this.#audio.library) {
+        this.#kept = await this.#audio.library().catch(() => this.#kept);
+      }
+      await sleep(LIBRARY_EVERY_MS, signal);
+    }
   }
 
   /**
@@ -1659,7 +1756,12 @@ export class Singer implements VoiceFloor, SpeechPause {
           if (songGuild(e) === null && e.practice !== true) e.guild = primary;
         }
       }
-      for (const e of this.list.preparing()) if (e.job === null) this.#orphans.add(e.no);
+      for (const e of this.list.preparing()) {
+        if (e.job !== null) continue;
+        // A kept song (sung while no worker answered) has no job: its audio is on Core.
+        if (e.song !== null) this.#fetchAudio(e, false);
+        else this.#orphans.add(e.no);
+      }
       // Ready means its audio is on Core: checked again (a disk cache finds it at once).
       for (const e of this.list.ready()) if (e.song !== null) this.#fetchAudio(e, true);
       if (n > 0) {

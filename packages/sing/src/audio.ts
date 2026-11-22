@@ -15,7 +15,7 @@
 import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { errorMessage, getLogger } from "@miyoria/runtime/kernel";
-import { pcmOf, type SingWorker, type SongMeta, type SongTrack } from "./client.js";
+import { pcmOf, type SingWorker, type SongMeta, SongMetaSchema, type SongTrack } from "./client.js";
 
 const log = getLogger("sing");
 
@@ -24,6 +24,8 @@ export const SONG_ID = /^[A-Za-z0-9_-]{1,96}$/;
 
 /** Which make of the song a dir's files are (written once they are all there). */
 const MARKER = "audio.json";
+/** The song's meta, beside its audio: what it is when no worker can be asked (`library`). */
+const META = "song.json";
 /** The make a dir is being filled with. */
 const PENDING = "pending.json";
 
@@ -40,6 +42,16 @@ export interface SongAudio {
   fetch(song: SongMeta, signal?: AbortSignal): Promise<void>;
   /** One track's samples. `SongAudioMissingError` when it is not on Core. */
   load(song: SongMeta, track: SongTrack, signal?: AbortSignal): Promise<Int16Array>;
+  /**
+   * The songs whose audio and meta are on Core, newest first, each one `ready` afterwards: what
+   * she can sing when no worker answers. Absent: none are kept.
+   */
+  library?(): Promise<SongMeta[]>;
+  /**
+   * Brings `songs` onto Core, newest first, as long as they fit the budget with what is there (none
+   * is pushed out for them): kept for when no worker answers. Resolves with how many came.
+   */
+  mirror?(songs: readonly SongMeta[], signal?: AbortSignal): Promise<number>;
 }
 
 /** What tells one make of a song from another: the worker's numbers about it, and the tracks. */
@@ -170,6 +182,8 @@ export class DiskSongAudio implements SongAudio {
     const marker = await readFile(join(dir, MARKER), "utf8").catch(() => null);
     if (marker === key && (await this.#complete(dir, song))) {
       this.#ready.set(id, { key, dir, cached: true });
+      // Fetched by a Core from before the meta was kept beside the audio.
+      await this.#writeMeta(dir, song);
       return;
     }
     // Another make of the song (or none yet): the dir starts over, and a part left by a broken
@@ -194,12 +208,104 @@ export class DiskSongAudio implements SongAudio {
         );
       }
     }
+    await this.#writeMeta(dir, song);
     await writeFile(join(dir, MARKER), key);
     await rm(join(dir, PENDING), { force: true });
     this.#ready.set(id, { key, dir, cached: true });
     await this.#prune().catch((error: unknown) =>
       log.warn({ err: errorMessage(error) }, "could not clean the songs' audio on Core"),
     );
+  }
+
+  async #writeMeta(dir: string, song: SongMeta): Promise<void> {
+    await writeFile(join(dir, META), JSON.stringify(song)).catch((error: unknown) =>
+      log.warn({ song: song.id, err: errorMessage(error) }, "could not keep the song's meta"),
+    );
+  }
+
+  async library(): Promise<SongMeta[]> {
+    let ids: string[];
+    try {
+      ids = await readdir(this.#o.dir);
+    } catch {
+      return [];
+    }
+    const found: { song: SongMeta; used: number }[] = [];
+    for (const id of ids) {
+      if (!SONG_ID.test(id)) continue;
+      const dir = join(this.#o.dir, id);
+      const [marker, raw] = await Promise.all([
+        readFile(join(dir, MARKER), "utf8").catch(() => null),
+        readFile(join(dir, META), "utf8").catch(() => null),
+      ]);
+      if (marker === null || raw === null) continue;
+      let song: SongMeta;
+      try {
+        song = SongMetaSchema.parse(JSON.parse(raw));
+      } catch {
+        continue;
+      }
+      const key = this.#key(song);
+      if (song.id !== id || marker !== key || !(await this.#complete(dir, song))) continue;
+      this.#ready.set(id, { key, dir, cached: true });
+      const used = (await stat(join(dir, MARKER)).catch(() => null))?.mtimeMs ?? 0;
+      found.push({ song, used });
+    }
+    return found.sort((a, b) => b.used - a.used).map((f) => f.song);
+  }
+
+  async mirror(songs: readonly SongMeta[], signal?: AbortSignal): Promise<number> {
+    let total = await this.#size();
+    let came = 0;
+    for (const song of songs) {
+      if (signal?.aborted) break;
+      if (!SONG_ID.test(song.id)) continue;
+      const expected = expectedBytes(song);
+      if (expected === null) continue;
+      if (this.ready(song)) continue;
+      const dir = join(this.#o.dir, song.id);
+      const marker = await readFile(join(dir, MARKER), "utf8").catch(() => null);
+      if (marker === this.#key(song) && (await this.#complete(dir, song))) {
+        // On disk already (counted in `total`), only not checked by this process: its meta is
+        // written beside it, nothing is downloaded.
+        await this.fetch(song, signal).catch(() => undefined);
+        continue;
+      }
+      const bytes = expected * this.#o.tracks.length;
+      // Never push a song out for one nobody asked for.
+      if (total + bytes > this.#o.maxBytes) continue;
+      try {
+        await this.fetch(song, signal);
+      } catch (error) {
+        if (signal?.aborted) break;
+        log.debug({ song: song.id, err: errorMessage(error) }, "could not keep a song on Core");
+        continue;
+      }
+      total += bytes;
+      came += 1;
+    }
+    return came;
+  }
+
+  /** Bytes in `dir` now. */
+  async #size(): Promise<number> {
+    let total = 0;
+    let ids: string[];
+    try {
+      ids = await readdir(this.#o.dir);
+    } catch {
+      return 0;
+    }
+    for (const id of ids) {
+      let files: string[];
+      try {
+        files = await readdir(join(this.#o.dir, id));
+      } catch {
+        continue;
+      }
+      for (const f of files) total += (await sizeOf(join(this.#o.dir, id, f))) ?? 0;
+    }
+    return total;
   }
 
   /** Over the budget: the songs used longest ago go, never one kept or being fetched. */
