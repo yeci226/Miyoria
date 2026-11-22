@@ -1,3 +1,4 @@
+import { ReplySinkKey } from "@miyoria/commands";
 import { actuatorsFor } from "@miyoria/gate/actions";
 import { LlmRouterKey } from "@miyoria/llm/llm";
 import {
@@ -172,6 +173,7 @@ export class WatchModule implements Module {
         pending,
         world: () => s.get(WorldStateKey),
         sink: (platform) => s.get(PlatformSinksKey)?.get(platform),
+        cards: () => s.get(ReplySinkKey),
         canLook,
         watchAllowed,
         hidden: (account) => hidden.has(accountRefString(account)),

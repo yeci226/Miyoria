@@ -7,6 +7,7 @@
 // a start (before the gate's consent stage, which needs a person and would say something else),
 // as the result's text for a stop or a look.
 
+import { type CommandReply, cardReply, type ReplySink } from "@miyoria/commands";
 import { type Capability, CapabilityError, defineCapability } from "@miyoria/gate/actions";
 import {
   type AccountRef,
@@ -51,9 +52,33 @@ export function streamers(room: VoiceChannelState): VoiceMember[] {
   return room.members.filter((m) => m.streaming && !m.is_self);
 }
 
-/** The card in the voice channel's text chat. */
+/** The notice as plain text: where no card can be sent, and the card's fallback text. */
 export function noticeText(name: string): string {
   return `她現在在看 ${safeName(name)} 的直播,畫面和說話內容都會送到模型讓她看懂。不想被看:/me privacy watch:off;不想被聽:/voice consent off`;
+}
+
+/** The plain-text notice as a message: never a ping. */
+function notice(name: string) {
+  const message = { text: noticeText(name), reply_to: null, mentions: false };
+  return message;
+}
+
+/** Display names come from people: no Markdown in them. */
+const md = (text: string): string => text.replace(/[\\*_`~|>#[\]()<@]/g, (c) => `\\${c}`);
+
+/** The notice as a card in the voice channel's text chat (Components V2 on Discord, no embed). */
+export function noticeCard(name: string): CommandReply {
+  const card = cardReply(
+    [
+      {
+        type: "text",
+        text: `她現在在看 **${md(safeName(name))}** 的直播,畫面和說話內容都會送到模型讓她看懂。`,
+      },
+      { type: "muted", text: "不想被看:/me privacy watch:off;不想被聽:/voice consent off" },
+    ],
+    { accent: "neutral", title: "看直播" },
+  );
+  return { ...card, ephemeral: false };
 }
 
 const noticeKey = (account: AccountRef): string => `${account.platform}:${account.id}`;
@@ -143,6 +168,8 @@ export interface WatchActionDeps {
   pending: PendingStart;
   world(): WorldState | undefined;
   sink(platform: PlatformId): PlatformSink | undefined;
+  /** Where a card goes (`ReplySinkKey`); without one the notice is plain text through `sink`. */
+  cards?(): Pick<ReplySink, "platform" | "sendCard"> | undefined;
   canLook(): boolean;
   watchAllowed(account: AccountRef): Promise<boolean>;
   /**
@@ -273,13 +300,18 @@ export function watchCapabilities(deps: WatchActionDeps): Capability[] {
    */
   async function notify(target: WatchTarget, signal: AbortSignal): Promise<boolean> {
     if (!deps.notices.due(target.account)) return false;
-    const sink = deps.sink(target.context.platform);
-    if (sink === undefined) throw new CapabilityError(NO_NOTICE);
+    const cards = deps.cards?.();
+    const card = cards?.sendCard && cards.platform === target.context.platform ? cards : undefined;
+    const sink = card === undefined ? deps.sink(target.context.platform) : undefined;
+    if (card === undefined && sink === undefined) throw new CapabilityError(NO_NOTICE);
     // On Discord a voice channel's text chat has the channel's own id.
     const chat = { ...target.context, kind: "channel" as const };
     try {
-      const message = { text: noticeText(target.name), reply_to: null, mentions: false };
-      const sent = sink.send(chat, message, signal).then(() => {
+      const posted =
+        card?.sendCard !== undefined
+          ? card.sendCard(chat, noticeCard(target.name), signal)
+          : (sink as PlatformSink).send(chat, notice(target.name), signal);
+      const sent = posted.then(() => {
         deps.notices.mark(target.account);
         deps.starts.add();
       });

@@ -1454,6 +1454,9 @@ importers:
 
   packages/watch:
     dependencies:
+      '@miyoria/commands':
+        specifier: workspace:*
+        version: link:../commands
       '@miyoria/gate':
         specifier: workspace:*
         version: link:../gate

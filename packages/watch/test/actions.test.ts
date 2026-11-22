@@ -1,3 +1,4 @@
+import type { CommandReply } from "@miyoria/commands";
 import { type ActionRequest, ActuatorRegistry, CapabilityError } from "@miyoria/gate/actions";
 import { ServiceRegistry } from "@miyoria/runtime/kernel";
 import {
@@ -16,6 +17,7 @@ import type { VoiceLink } from "@miyoria/voice/voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   NoticeBook,
+  noticeCard,
   noticeText,
   PendingStart,
   StartLog,
@@ -76,6 +78,14 @@ class Rig {
   cfg: WatchConfig = WatchConfigSchema.parse({});
   canLook = true;
   sinkMissing = false;
+  /** A card sink (`ReplySinkKey`) is there: the notice is a card, not text. */
+  cardSink = false;
+  cards: { context: ContextKey; reply: CommandReply }[] = [];
+  sendCard = vi.fn(async (context: ContextKey, reply: CommandReply) => {
+    this.order.push("notice");
+    this.cards.push({ context, reply });
+    return { context, id: "card" } as MessageRef;
+  });
   sent: { context: ContextKey; text: string; mentions: boolean | undefined }[] = [];
   order: string[] = [];
   send = vi.fn(async (context: ContextKey, message: { text: string; mentions?: boolean }) => {
@@ -139,6 +149,8 @@ class Rig {
     world: () => this.world,
     sink: () =>
       this.sinkMissing ? undefined : ({ platform: "discord", send: this.send } as never),
+    cards: () =>
+      this.cardSink ? ({ platform: "discord", sendCard: this.sendCard } as never) : undefined,
     canLook: () => this.canLook,
     watchAllowed: this.allowed,
     hidden: (a) => this.hidden.has(a.id),
@@ -521,6 +533,33 @@ describe("the watch capabilities", () => {
     rig.later(HOUR);
     expect((await rig.own()).status).toBe("done");
     expect(rig.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("the_notice_is_a_card_where_cards_can_be_sent", async () => {
+    rig.cardSink = true;
+    expect((await rig.own()).status).toBe("done");
+    expect(rig.order).toEqual(["notice", "start"]);
+    expect(rig.send).not.toHaveBeenCalled();
+    expect(rig.cards).toHaveLength(1);
+    const { context, reply } = rig.cards[0] as { context: ContextKey; reply: CommandReply };
+    expect(context).toEqual({ platform: "discord", scope: G, channel: "c1", kind: "channel" });
+    expect(reply.ephemeral).toBe(false);
+    expect(reply.card?.title).toBe("看直播");
+    expect(reply.text).toContain("小明");
+    expect(reply.text).toContain("/me privacy watch:off");
+  });
+
+  it("the_card_keeps_markdown_out_of_the_name", () => {
+    const reply = noticeCard("**粗體**_x_");
+    const block = reply.card?.blocks[0];
+    expect(block?.type === "text" && block.text).toContain("\\*\\*粗體\\*\\*\\_x\\_");
+  });
+
+  it("a_card_that_cannot_be_posted_means_no_watching", async () => {
+    rig.cardSink = true;
+    rig.sendCard.mockRejectedValueOnce(new Error("Missing Permissions"));
+    expect((await rig.own()).status).toBe("failed");
+    expect(rig.start).not.toHaveBeenCalled();
   });
 
   it("the_notice_says_how_to_opt_out_and_the_name_is_inert", () => {
