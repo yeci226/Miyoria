@@ -107,7 +107,10 @@ export function answerRequest(input: LookInput & { question: string }): ChatRequ
   return {
     messages: [
       systemMessage(system(input, task)),
-      userMessage([{ type: "text", text: context(input, input.question) }, image(input.jpeg, input.detail)]),
+      userMessage([
+        { type: "text", text: context(input, input.question) },
+        image(input.jpeg, input.detail),
+      ]),
     ],
     requires_images: true,
     max_tokens: 300,
