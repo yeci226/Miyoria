@@ -1,4 +1,4 @@
-import { ReplySinkKey } from "@miyoria/commands";
+import { CommandMount, ReplySinkKey } from "@miyoria/commands";
 import { actuatorsFor } from "@miyoria/gate/actions";
 import { LlmRouterKey } from "@miyoria/llm/llm";
 import {
@@ -32,6 +32,7 @@ import {
   watchCapabilities,
   watchLookCapability,
 } from "./actions.js";
+import { registerCommands, unregisterCommands } from "./commands.js";
 import { WatchConfigSchema } from "./config.js";
 import { DiscordSource } from "./discord.js";
 import { PROMPT_KEY, WatchPrompt } from "./prompt.js";
@@ -247,8 +248,16 @@ export class WatchModule implements Module {
       }
     });
 
+    const commands = new CommandMount(
+      "watch",
+      (registry) => registerCommands(registry, () => actuators),
+      unregisterCommands,
+    );
+    commands.attach(ctx);
+
     this.#running = {
       close: async () => {
+        commands.detach();
         for (const off of unregister) off();
         prompts?.unregister(PROMPT_KEY);
         await Promise.race([halt({ pending, watcher }, "module stopped"), sleep(STOP_WAIT_MS)]);

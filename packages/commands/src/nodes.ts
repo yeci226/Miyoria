@@ -77,6 +77,9 @@ const EVERYDAY: readonly string[] = [
   "voice.leave",
   "voice.mode.view",
   "voice.golive.view",
+  // Members may ask her to watch a Go Live in her voice channel; the streamer's privacy decides.
+  "watch.start",
+  "watch.stop",
   "channel.mode.view",
   "channel.activeness.view",
   "queue.request",

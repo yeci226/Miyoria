@@ -1,3 +1,10 @@
+import {
+  CommandRegistry,
+  CommandRegistryKey,
+  Invocation,
+  Permissions,
+  splitPath,
+} from "@miyoria/commands";
 import { ActuatorRegistry, ActuatorRegistryKey } from "@miyoria/gate/actions";
 import { LlmRouterKey } from "@miyoria/llm/llm";
 import { Supervisor } from "@miyoria/runtime/kernel";
@@ -55,6 +62,7 @@ class Rig {
   readonly sup = new Supervisor();
   readonly registry: ActuatorRegistry;
   readonly prompts = new PromptContributors();
+  readonly commands = new CommandRegistry(Permissions.fromStrings(["discord:owner"]));
   readonly sinks = new PlatformSinks();
   /** Every impulse of hers the module published. */
   readonly impulses: Impulse[] = [];
@@ -78,6 +86,7 @@ class Rig {
     });
     s.provide("app", ActuatorRegistryKey, this.registry);
     s.provide("app", PromptContributorsKey, this.prompts);
+    s.provide("app", CommandRegistryKey, this.commands);
     s.provide("app", PlatformSinksKey, this.sinks);
     this.sinks.register({ platform: "discord", send: this.send } as never);
     s.provide("llm", LlmRouterKey, {
@@ -161,6 +170,20 @@ class Rig {
       why: null,
       turn: null,
     });
+  }
+
+  /** A slash command from an everyday member in the server's text channel. */
+  command(path: string, args: Record<string, string> = {}) {
+    return this.commands.dispatch(
+      new Invocation({
+        path: splitPath(path),
+        args,
+        invoker: account("u9"),
+        invoker_display_name: "路人",
+        context: text,
+        invoker_is_guild_admin: false,
+      }),
+    );
   }
 
   watch(user = "小明") {
@@ -261,6 +284,27 @@ describe("WatchModule", () => {
     expect(reason(outcome)).toContain("還不能看直播");
     expect(reason(outcome)).not.toMatch(/[A-Za-z]{3}/);
     expect(reason(await rig.invoke("watch.stop"))).toBe("你現在沒有在看直播。");
+  });
+
+  it("watch_start_and_stop_commands_run_the_capabilities_through_the_gate", async () => {
+    rig = new Rig();
+    await rig.start();
+    expect((await rig.command("watch start")).tone).toBe("warn"); // two people stream
+    const started = await rig.command("watch start", { user: "小明" });
+    expect(started.tone).toBe("success");
+    expect(started.text).toContain("開始看 小明 的直播了");
+    expect(rig.watchStart).toHaveBeenCalledWith(G, "u1");
+    expect(rig.send).toHaveBeenCalledTimes(1); // the notice in the channel
+    const stopped = await rig.command("watch stop");
+    expect(stopped.tone).toBe("success");
+    expect(rig.watchStop).toHaveBeenCalled();
+    // The streamer's privacy still decides.
+    await rig.registry.privacy.set(account("u2"), { watch: false });
+    rig.skew += 60_000;
+    expect((await rig.command("watch start", { user: "阿華" })).tone).toBe("warn");
+    expect(rig.commands.get(["watch", "start"])).toBeDefined();
+    await rig.sup.stopAll();
+    expect(rig.commands.get(["watch", "start"])).toBeUndefined();
   });
 
   it("prompt_says_who_she_watches", async () => {
